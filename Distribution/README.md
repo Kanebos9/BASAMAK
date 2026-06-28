@@ -50,8 +50,8 @@ sync with the latest code.
 ## Versioning & updates
 
 The version comes from `project(DrumSequencer VERSION x.y.z)` in `CMakeLists.txt`
-(shown next to the `davulSEQ` logo). To ship an update: bump that version,
+(shown next to the `BASAMAK` logo). To ship an update: bump that version,
 rebuild/repackage, and ship the new zips. Because the user's library lives in
 `Documents/BASAMAK` — **separate from the plugin binary** — installing a new
-version simply replaces the binary and leaves all samples, sound mixes and
+version simply replaces the binary and leaves all samples, sounds and
 presets intact. The installers report the version they replace.

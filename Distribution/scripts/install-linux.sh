@@ -3,7 +3,7 @@
 # BASAMAK - Linux installer.  Run:  bash install-linux.sh
 #
 # Installs the VST3 for the current user and seeds the factory sample library.
-# Your samples/sound mixes/presets live in ~/Documents/BASAMAK and are never
+# Your samples/sounds/presets live in ~/Documents/BASAMAK and are never
 # touched, so this doubles as an in-place update.
 #==============================================================================
 set -e
@@ -14,7 +14,7 @@ DATA="$HOME/Documents/BASAMAK"
 SAMPLES_DST="$DATA/Samples"
 
 echo "==> Installing BASAMAK ..."
-mkdir -p "$VST3_DST" "$SAMPLES_DST" "$DATA/Sound Mixes" "$DATA/Presets"
+mkdir -p "$VST3_DST" "$SAMPLES_DST" "$DATA/Sound Bank" "$DATA/Presets"
 
 NEW_VER="unknown"; [ -f "$HERE/VERSION" ] && NEW_VER="$(cat "$HERE/VERSION")"
 

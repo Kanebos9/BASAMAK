@@ -37,10 +37,10 @@ Source/
     SpectrumTap.h         lock-free hand-off of a triggered audio block to the UI FFT
   plugin/
     PluginProcessor.{h,cpp}  audio callback, master FX, full state save/load
-    FactoryContent.{h,cpp}   read-only factory sound mixes + groove presets (code, not files)
+    FactoryContent.{h,cpp}   read-only factory sounds + groove presets (code, not files)
     UserPaths.h              where the user library lives on disk (+ first-run migration)
   ui/
-    PluginEditor.{h,cpp}     ALL the UI: components, layout, presets, sound mixes
+    PluginEditor.{h,cpp}     ALL the UI: components, layout, presets, sounds
     (SoundPad, WaveformDisplay, FrequencyDisplay, knobs, toggles live in PluginEditor.h)
   midi/
     MidiLearnManager, LaunchpadController
@@ -129,7 +129,7 @@ A `startTimerHz(24)` callback syncs the playhead, strip states, the live spectru
 
 ## 6. Factory content (`FactoryContent`)
 
-Factory **sound mixes** (14 Osc/Noise/FM sounds) and **presets** (6 grooves with
+Factory **sounds** (14 Osc/Noise/FM sounds) and **presets** (6 grooves with
 BPM + time signature + steps) are defined in **code**, so users can load and tweak
 them but never overwrite them — *Save* always writes a new file to the user
 library. The strip dropdown shows `Factory sounds` vs `Your sounds`; the preset
@@ -142,11 +142,11 @@ switching patterns shows the right name per lane.
 
 ## 7. State, presets & the "modified *" marker
 
-- **Whole‑plugin state** (used by the DAW *and* by `*.drumseq` presets) is a
+- **Whole‑plugin state** (used by the DAW *and* by `*.basamakpreset` presets) is a
   JUCE `ValueTree` written in `getStateInformation` / read in
   `setStateInformation`: every channel param, all 16 patterns, BPM, time
   signature, master FX/output, etc.
-- **Sound mixes** (`*.davulmix`) are single‑channel ValueTrees (`writeChannelMix`
+- **Saved sounds** (`*.basamaksound`) are single‑channel ValueTrees (`writeChannelMix`
   / `readChannelMix`). Samples are referenced by path, not embedded.
 - The **`*` indicator**: a cheap rolling hash of the channel's sound params
   (`channelSoundHash`) and of the whole instrument (`stateHash`) is compared each
@@ -162,7 +162,7 @@ One cross‑platform folder, **outside** the plugin binary, so updates/uninstall
 never touch it:
 
 ```
-<Documents>/BASAMAK/Samples       Sound Mixes       Presets
+<Documents>/BASAMAK/Samples       Sound Bank       Presets
 ```
 
 On first run each sub‑folder is seeded once by **copying** from the older,

@@ -3,7 +3,7 @@
 # BASAMAK - macOS installer.  Double-click this file in Finder to run.
 #
 # Installs the VST3 + Audio Unit for the current user and seeds the factory
-# sample library. Your own samples, sound mixes and presets are never touched
+# sample library. Your own samples, sounds and presets are never touched
 # (they live in ~/Documents/BASAMAK and are independent of the plugin binary),
 # so this also works as an in-place update.
 #==============================================================================
@@ -16,7 +16,7 @@ DATA="$HOME/Documents/BASAMAK"
 SAMPLES_DST="$DATA/Samples"
 
 echo "==> Installing BASAMAK ..."
-mkdir -p "$VST3_DST" "$AU_DST" "$SAMPLES_DST" "$DATA/Sound Mixes" "$DATA/Presets"
+mkdir -p "$VST3_DST" "$AU_DST" "$SAMPLES_DST" "$DATA/Sound Bank" "$DATA/Presets"
 
 # Report version change if a previous copy is installed (informational only).
 NEW_VER="unknown"; [ -f "$HERE/VERSION" ] && NEW_VER="$(cat "$HERE/VERSION")"

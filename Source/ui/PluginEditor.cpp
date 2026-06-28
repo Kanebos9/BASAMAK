@@ -3801,7 +3801,7 @@ void DrumSequencerEditor::setupComponents()
             proc.requestLaunchpadRefresh();
         };
 
-        content.addAndMakeVisible(strip.comboSound);  // now the "Sound mixes" selector
+        content.addAndMakeVisible(strip.comboSound);  // now the "Sound Bank" selector
         strip.comboSound.setLookAndFeel(&wideMenuLNF); // 3-column popup (no tall scroll)
         strip.comboSound.onChange = [this, ci] { handleSoundMixChange(ci); selectChannel(ci); };
 

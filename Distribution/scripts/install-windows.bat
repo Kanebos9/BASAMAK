@@ -3,7 +3,7 @@ REM ============================================================================
 REM BASAMAK - Windows installer.  Double-click this file to run.
 REM
 REM Installs the VST3 for all hosts and seeds the factory sample library.
-REM Your samples/sound mixes/presets live in Documents\BASAMAK and are never
+REM Your samples/sounds/presets live in Documents\BASAMAK and are never
 REM touched, so this also works as an in-place update.
 REM ============================================================================
 setlocal
@@ -17,16 +17,16 @@ echo ==^> Installing BASAMAK ...
 REM Installing to the shared VST3 folder needs admin rights. Re-launch elevated
 REM if we can't write there.
 mkdir "%VST3_DST%" 2>nul
-echo test> "%VST3_DST%\.davulseq_write_test" 2>nul
-if not exist "%VST3_DST%\.davulseq_write_test" (
+echo test> "%VST3_DST%\.basamak_write_test" 2>nul
+if not exist "%VST3_DST%\.basamak_write_test" (
   echo Requesting administrator rights to write to %VST3_DST% ...
   powershell -Command "Start-Process -Verb RunAs -FilePath '%~f0'"
   exit /b
 )
-del "%VST3_DST%\.davulseq_write_test" 2>nul
+del "%VST3_DST%\.basamak_write_test" 2>nul
 
 mkdir "%SAMPLES_DST%"        2>nul
-mkdir "%DATA%\Sound Mixes"   2>nul
+mkdir "%DATA%\Sound Bank"    2>nul
 mkdir "%DATA%\Presets"       2>nul
 
 REM Replace any previous plugin binary (user data is elsewhere, left intact).

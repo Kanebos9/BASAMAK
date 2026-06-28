@@ -1058,7 +1058,7 @@ private:
         NumDragButton numBtn;
         std::unique_ptr<LearnableButton> btnMute;
         std::unique_ptr<LearnableButton> btnSolo;
-        juce::ComboBox   comboSound;     // the "Sound mixes" selector
+        juce::ComboBox   comboSound;     // the "Sound Bank" selector
         juce::TextButton btnTest { "TEST" };
         LearnableButton btnPoly { "OV" }; // overlap / polyphony (MIDI-learnable)
         LearnableButton btnInfluence { "I" }; // arm step-influence for this channel (MIDI-learnable)

@@ -2,7 +2,7 @@
 
 BASAMAK is a VST3 / Audio Unit drum & sample sequencer. Pick your operating
 system below. Installing always replaces any older version and **never deletes
-your samples, sound mixes or presets** — those live in a separate folder
+your samples, sounds or presets** — those live in a separate folder
 (`Documents/BASAMAK`) that the installer leaves alone.
 
 ---
@@ -49,8 +49,8 @@ Everything you make or add lives in **`Documents/BASAMAK/`**:
 ```
 Documents/BASAMAK/
     Samples/        your audio samples (factory set is seeded here on install)
-    Sound Mixes/    sounds you save from a channel  (*.davulmix)
-    Presets/        whole-kit presets you save       (*.drumseq)
+    Sound Bank/     sounds you save from a channel   (*.basamaksound)
+    Presets/        whole-kit presets you save       (*.basamakpreset)
 ```
 
 These are kept across updates and uninstalls. To move BASAMAK to another
