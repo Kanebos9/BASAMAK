@@ -1267,6 +1267,7 @@ private:
     WideMenuLNF wideMenuLNF;               // 3-column popup for the sound-mix menu
     BigComboLNF bigComboLNF;               // larger font for the sample chooser
     LogoStepMeter logoMeter;              // live master-volume meter built into the logo step ramp
+    juce::HyperlinkButton verLink;        // clickable version next to the logo -> opens the Releases page
     DropButtonLNF dropBtnLNF;             // down-triangle for the play-mode + routing "dropdown" buttons
     IconButtonLNF iconBtnLNF;             // play / stop / undo / redo glyphs
     std::vector<LearnableKnob*> allKnobs;  // for clean LNF teardown

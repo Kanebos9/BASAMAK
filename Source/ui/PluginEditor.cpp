@@ -3416,6 +3416,14 @@ void DrumSequencerEditor::setupComponents()
                          "- you're moving a control that sends CC (some pads/keys send NOTES instead, "
                          "which toggle steps rather than being MIDI-learnable)");
 
+    // Clickable version next to the logo -> opens the GitHub Releases page (check for updates).
+    content.addAndMakeVisible(verLink);
+    verLink.setButtonText("v" DAVULSEQ_VERSION);
+    verLink.setURL(juce::URL("https://github.com/Kanebos9/BASAMAK/releases/latest"));
+    verLink.setFont(juce::Font(11.5f, juce::Font::bold), false, juce::Justification::centredLeft);
+    verLink.setColour(juce::HyperlinkButton::textColourId, juce::Colour(0xffe8bf4d));   // brand gold - inviting
+    verLink.setTooltip("BASAMAK v" DAVULSEQ_VERSION " - click to check GitHub for the latest version & updates");
+
     content.addAndMakeVisible(btnClearMidi);
     btnClearMidi.setTooltip("Clear ALL MIDI assignments (every knob, button and step). Asks first. "
                             "Use this to start your MIDI mapping over from scratch.");
@@ -5665,11 +5673,7 @@ void DrumSequencerEditor::paintContent(juce::Graphics& g)
         const juce::Rectangle<float> logoRect(8.0f, 1.0f, 150.0f, 22.0f);
         if (logoDrawable != nullptr)
             logoDrawable->drawWithin(g, logoRect, juce::RectanglePlacement::xLeft | juce::RectanglePlacement::yMid, 1.0f);
-
-        g.setFont(juce::Font(11.5f, juce::Font::bold));
-        g.setColour(juce::Colour(0xff8090b0));
-        g.drawText(DAVULSEQ_VERSION, (int) logoRect.getRight() + 12, 12, 56, 16,
-                   juce::Justification::centredLeft, false);
+        // version is now the clickable `verLink` HyperlinkButton (set up in setupComponents / positioned in layoutContent)
     }
     // (The Channels/Patterns count toggles moved to the pattern row, by the loop dropdown - no top-bar boxes now.)
 
@@ -5816,6 +5820,7 @@ void DrumSequencerEditor::layoutContent()
 
     // Top toolbar (logo + version are painted in paintContent; leave room for them)
     titleLabel.setBounds  (0, 0, 0, 0); // logo painted directly, not a label
+    verLink.setBounds     (166, 11, 48, 18);   // clickable version, just right of the logo wordmark
     btnDawSync.setBounds  (210, 7, 72,  26);
     btnPlay.setBounds     (288, 7, 30,  26);   // ▶ icon
     btnStop.setBounds     (320, 7, 30,  26);   // ■ icon
