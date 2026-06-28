@@ -3413,8 +3413,8 @@ void DrumSequencerEditor::setupComponents()
                          "If it stays grey while you move a control, MIDI isn't getting here yet - check:\n"
                          "- the track is record-armed (or input-monitoring) in your host\n"
                          "- your controller is enabled as a MIDI input device in the host\n"
-                         "- you're moving a control that sends CC (Launchpad pads send notes, which "
-                         "toggle steps instead of being learnable)");
+                         "- you're moving a control that sends CC (some pads/keys send NOTES instead, "
+                         "which toggle steps rather than being MIDI-learnable)");
 
     content.addAndMakeVisible(btnClearMidi);
     btnClearMidi.setTooltip("Clear ALL MIDI assignments (every knob, button and step). Asks first. "
