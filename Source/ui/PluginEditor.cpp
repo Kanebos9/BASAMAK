@@ -4718,8 +4718,7 @@ void DrumSequencerEditor::rebuildSlotMenus()
         juce::PopupMenu sampleSub;
         addFolderToMenu(sampleSub, getSamplesFolder());
         sampleSub.addSeparator();
-        sampleSub.addItem(ID_BROWSE,      "Browse Library...");
-        sampleSub.addItem(ID_LOAD_SAMPLE, "Load Sample...");
+        sampleSub.addItem(ID_LOAD_SAMPLE, "Load Sample...");      // "Browse Library..." removed (redundant with Load + the inline list)
         sampleSub.addItem(ID_OPEN_FOLDER, "Open Samples Folder");
         root->addSubMenu("Sample", sampleSub);
         root->addItem(3, "Noise"); root->addItem(4, "Analog + FM");   // Depth 0 = analog, raise it for FM (resonator removed)
