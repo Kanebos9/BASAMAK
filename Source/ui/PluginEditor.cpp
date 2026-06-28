@@ -3462,6 +3462,7 @@ void DrumSequencerEditor::setupComponents()
     lblEditMode.setFont(juce::Font(11.0f, juce::Font::bold));
     lblEditMode.setColour(juce::Label::textColourId, juce::Colour(0xff7799cc));
     lblEditMode.setJustificationType(juce::Justification::centredRight);
+    lblEditMode.setMinimumHorizontalScale(0.7f);   // squeeze "Edit:" rather than clip it ("Ed...") on wider fonts
     for (auto* b : { &btnModeVel, &btnModePitch, &btnModeProb, &btnModeRoll, &btnModePan })
     {
         content.addAndMakeVisible(*b);
@@ -5827,8 +5828,8 @@ void DrumSequencerEditor::layoutContent()
     lblBarSlash.setBounds (512, 12, 8,  21);
     barSigY.setBounds     (520, 12, 20, 21);
     lblBarResult.setBounds(546, 8,  66, 24);   // bar length (seconds)
-    lblPreset.setBounds   (618, 8, 40,  24);
-    comboPreset.setBounds (658, 7, 108, 26);
+    lblPreset.setBounds   (0, 0, 0, 0);          // empty caption removed - the combo's "Presets" placeholder is the label
+    comboPreset.setBounds (614, 7, 152, 26);     // wider so "Presets" never clips (Windows renders fonts wider than macOS)
     btnRoute.setBounds    (772, 7, 80,  26);   // routing dropdown (▼ drawn by DropButtonLNF)
     btnUndo.setBounds     (858, 7, 28,  26);   // ↶ icon
     btnRedo.setBounds     (888, 7, 28,  26);   // ↷ icon
@@ -5840,7 +5841,7 @@ void DrumSequencerEditor::layoutContent()
     btnTooltips.setBounds(1172, 7, 66, 26);
     btnFollow.setBounds  (1242, 7, 66, 26);   // moved up from the pattern row (it's a GLOBAL setting)
     btnKeys.setBounds     (W - 190, 7, 62, 26);   // right-anchored, just left of Drag MIDI
-    dragMidi.setBounds    (W - 116, 7, 108, 26);
+    dragMidi.setBounds    (W - 108, 7, 100, 26);  // slightly smaller per request
 
     // Pattern row: a window of the pattern buttons (16 visible; 24/32 scroll via patternBar).
     lblPatterns.setBounds(6, PAT_Y + 8, 60, 18);
@@ -5861,7 +5862,7 @@ void DrumSequencerEditor::layoutContent()
             patternBar.setCurrentRange((double) firstPatternCol, (double) shown, juce::dontSendNotification);
         }
     }
-    patModeBtn.setBounds(696, PAT_Y + 8, 160, 26);   // a bit wider now it can show "Chain P2(4)>P3(2)"
+    patModeBtn.setBounds(664, PAT_Y + 8, 160, 26);   // nudged left; wide enough to show "Chain P2(4)>P3(2)"
     lblLoopCount.setBounds(0, 0, 0, 0);              // loop-count meter REMOVED (loops are picked in the play-mode popup now)
     sliderPatN.setBounds(0, 0, 0, 0);
     // Channel-count (8/16) + pattern-count (16/32) toggles, right next to the loop dropdown (Follow moved to the top bar).
@@ -5870,10 +5871,10 @@ void DrumSequencerEditor::layoutContent()
     lblChannels.setBounds(858, PAT_Y + 8, 20, 24);   btnCh8.setBounds (880, PAT_Y + 10, 25, 21); btnCh16.setBounds(905, PAT_Y + 10, 25, 21);
     lblNumPat.setBounds  (930, PAT_Y + 8, 22, 24);   btnPat16.setBounds(954, PAT_Y + 10, 25, 21); btnPat32.setBounds(979, PAT_Y + 10, 25, 21);
     lblSwing.setBounds   (1018, PAT_Y + 8, 46, 22);  // swing is per-pattern -> pattern row
-    sliderSwing.setBounds(1064, PAT_Y + 8, 98, 26);
+    sliderSwing.setBounds(1064, PAT_Y + 8, 86, 26);
     // Step edit-mode radio buttons at the right end of the pattern row.
     // Edit-mode group: evenly spaced (8px gaps) so it spans flush to the right edge - Clear ends ~1504 (no weird gap).
-    lblEditMode.setBounds (1164, PAT_Y + 8, 26, 24);
+    lblEditMode.setBounds (1152, PAT_Y + 8, 42, 24);   // wider so "Edit:" fits in Windows' wider font
     btnModeVel.setBounds  (1198, PAT_Y + 8, 54, 24);   // wider for "Vel/Len"
     btnModePitch.setBounds(1260, PAT_Y + 8, 38, 24);
     btnModeProb.setBounds (1306, PAT_Y + 8, 38, 24);
