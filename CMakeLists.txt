@@ -39,7 +39,7 @@ else()
 endif()
 
 juce_add_plugin(DrumSequencer
-    COMPANY_NAME "OpenDrum"
+    COMPANY_NAME "OZ"
     VERSION ${PROJECT_VERSION}
     IS_SYNTH TRUE
     NEEDS_MIDI_INPUT TRUE
