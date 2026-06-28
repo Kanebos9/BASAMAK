@@ -9,7 +9,15 @@ REM ============================================================================
 setlocal
 set "HERE=%~dp0"
 set "VST3_DST=%CommonProgramFiles%\VST3"
-set "DATA=%USERPROFILE%\Documents\BASAMAK"
+
+REM Resolve the REAL Documents folder the SAME way the plugin does. With OneDrive
+REM "Known Folder" backup enabled, Documents is redirected (e.g. ...\OneDrive\Documents),
+REM and a plain %USERPROFILE%\Documents points at the WRONG, empty folder - so the
+REM seeded samples would never appear in the plugin. GetFolderPath('MyDocuments')
+REM honors the redirection exactly like JUCE's userDocumentsDirectory in the plugin.
+for /f "usebackq delims=" %%D in (`powershell -NoProfile -Command "[Environment]::GetFolderPath('MyDocuments')"`) do set "DOCS=%%D"
+if not defined DOCS set "DOCS=%USERPROFILE%\Documents"
+set "DATA=%DOCS%\BASAMAK"
 set "SAMPLES_DST=%DATA%\Samples"
 
 echo ==^> Installing BASAMAK ...
