@@ -1,11 +1,13 @@
 name: Build BASAMAK
 
-# Builds installable plugins for macOS, Windows and Linux on every push/tag and
-# uploads them as downloadable artifacts. Tagging a commit `v1.0.0` also drafts
-# a GitHub Release with the three zips attached.
+# Builds installable plugins for macOS, Windows and Linux on every push and
+# uploads them as downloadable artifacts. When you PUBLISH a GitHub Release,
+# it also builds all three OSes and attaches their zips to that Release.
 on:
   push:
   workflow_dispatch:
+  release:
+    types: [published]   # publishing a Release auto-builds + attaches all 3 OS zips
 
 env:
   JUCE_TAG: 8.0.13
@@ -63,6 +65,9 @@ jobs:
           else
             cp Distribution/scripts/install-linux.sh "$OUT/"; chmod +x "$OUT/install-linux.sh"
           fi
+          # Zip on the native runner so executable bits + the .app's symlinks survive
+          # (this is what the manual artifact-download method loses on macOS).
+          zip -r -y "$OUT.zip" "$OUT"
 
       - name: Stage package (Windows)
         if: matrix.name == 'Windows'
@@ -77,9 +82,28 @@ jobs:
           Copy-Item Resources/Samples "$out\Samples" -Recurse        # bundled CC0 sample library
           Copy-Item Distribution/scripts/install-windows.bat "$out\"
           Copy-Item Distribution/INSTALL.md "$out\" -ErrorAction SilentlyContinue
+          Compress-Archive -Path $out -DestinationPath "$out.zip" -Force
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: BASAMAK-${{ matrix.name }}
-          path: BASAMAK-${{ matrix.name }}
+          path: BASAMAK-${{ matrix.name }}.zip
+
+  # When you publish a GitHub Release, this builds all three OSes and attaches
+  # the platform zips to that Release automatically (no manual download/upload).
+  release:
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write          # lets the action upload assets to the Release
+    steps:
+      - name: Download the built zips
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Attach zips to the Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**/*.zip
