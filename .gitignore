@@ -1,0 +1,25 @@
+# Build output
+/build/
+/build-release/
+/build-*/
+*.o
+*.obj
+
+# Local backups / snapshots
+/backups/
+
+# JUCE (cloned separately - see README; not vendored here)
+/JUCE/
+
+# macOS / editor cruft
+.DS_Store
+*.swp
+.idea/
+.vscode/
+*.user
+
+# The review scratch doc (internal)
+/CODE_REVIEW.md
+
+# Internal working notes (kept local, not published)
+/CLAUDE.md

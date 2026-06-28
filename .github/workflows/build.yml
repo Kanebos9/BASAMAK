@@ -1,0 +1,85 @@
+name: Build BASAMAK
+
+# Builds installable plugins for macOS, Windows and Linux on every push/tag and
+# uploads them as downloadable artifacts. Tagging a commit `v1.0.0` also drafts
+# a GitHub Release with the three zips attached.
+on:
+  push:
+  workflow_dispatch:
+
+env:
+  JUCE_TAG: 8.0.4
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest,   name: macOS }
+          - { os: windows-latest, name: Windows }
+          - { os: ubuntu-latest,  name: Linux }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: matrix.name == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libjack-jackd2-dev \
+            libfreetype6-dev libfontconfig1-dev libgl1-mesa-dev libx11-dev \
+            libxext-dev libxrandr-dev libxinerama-dev libxcursor-dev \
+            libcurl4-openssl-dev libwebkit2gtk-4.1-dev ninja-build
+
+      - name: Get JUCE
+        uses: actions/checkout@v4
+        with:
+          repository: juce-framework/JUCE
+          ref: ${{ env.JUCE_TAG }}
+          path: JUCE
+
+      - name: Configure
+        run: cmake -B build -DDAVULSEQ_RELEASE=ON -DJUCE_DIR="${{ github.workspace }}/JUCE" -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Stage package (macOS / Linux)
+        if: matrix.name != 'Windows'
+        shell: bash
+        run: |
+          OUT="BASAMAK-${{ matrix.name }}"
+          mkdir -p "$OUT"
+          find build -name "BASAMAK.vst3"      -maxdepth 8 -exec cp -R {} "$OUT/" \;
+          find build -name "BASAMAK.component" -maxdepth 8 -exec cp -R {} "$OUT/" \;   # AU (macOS)
+          find build -name "BASAMAK.app"       -maxdepth 8 -exec cp -R {} "$OUT/" \;   # Standalone (macOS)
+          find build -path "*Standalone/BASAMAK" -type f -maxdepth 8 -exec cp {} "$OUT/" \;   # Standalone (Linux)
+          cp -R Resources/Samples "$OUT/Samples"                                        # bundled CC0 sample library
+          grep -m1 'project(DrumSequencer VERSION' CMakeLists.txt | sed -E 's/.*VERSION ([0-9.]+).*/\1/' > "$OUT/VERSION"
+          cp Distribution/INSTALL.md "$OUT/" 2>/dev/null || true
+          if [ "${{ matrix.name }}" = "macOS" ]; then
+            cp Distribution/scripts/install-macos.command "$OUT/Install BASAMAK.command"; chmod +x "$OUT/Install BASAMAK.command"
+          else
+            cp Distribution/scripts/install-linux.sh "$OUT/"; chmod +x "$OUT/install-linux.sh"
+          fi
+
+      - name: Stage package (Windows)
+        if: matrix.name == 'Windows'
+        shell: pwsh
+        run: |
+          $out = "BASAMAK-Windows"
+          New-Item -ItemType Directory -Force $out | Out-Null
+          $vst3 = Get-ChildItem -Recurse -Directory build -Filter BASAMAK.vst3 | Select-Object -First 1
+          Copy-Item $vst3.FullName "$out\BASAMAK.vst3" -Recurse
+          $exe = Get-ChildItem -Recurse -File build -Filter BASAMAK.exe | Select-Object -First 1
+          if ($exe) { Copy-Item $exe.FullName "$out\BASAMAK.exe" }   # Standalone (Windows)
+          Copy-Item Resources/Samples "$out\Samples" -Recurse        # bundled CC0 sample library
+          Copy-Item Distribution/scripts/install-windows.bat "$out\"
+          Copy-Item Distribution/INSTALL.md "$out\" -ErrorAction SilentlyContinue
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BASAMAK-${{ matrix.name }}
+          path: BASAMAK-${{ matrix.name }}
