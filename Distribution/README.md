@@ -1,13 +1,13 @@
 # BASAMAK — Distribution
 
 How the installable packages are produced for each OS. End-user install steps
-are in **[INSTALL.md](INSTALL.md)**.
+are in **[INSTALL.txt](INSTALL.txt)**.
 
 ## What's here
 
 ```
 Distribution/
-  INSTALL.md              end-user install instructions (all 3 OSes)
+  INSTALL.txt              end-user install instructions (all 3 OSes)
   scripts/
     install-macos.command / install-windows.bat / install-linux.sh
     build-macos.sh        / build-windows.bat    / build-linux.sh
@@ -16,7 +16,7 @@ Distribution/
 ```
 
 Each install package contains: the plugin binary, the factory **Samples/**
-folder, the double-click installer for that OS, `INSTALL.md`, and a `VERSION`
+folder, the double-click installer for that OS, `INSTALL.txt`, and a `VERSION`
 file. Installing seeds the samples into `Documents/BASAMAK/Samples` and never
 touches the user's existing library.
 
@@ -38,8 +38,8 @@ sync with the latest code.
 | OS | Build | Then package |
 |----|-------|--------------|
 | macOS | `bash Distribution/scripts/package-macos.sh` | produces `BASAMAK-macOS.zip` |
-| Windows | `Distribution\scripts\build-windows.bat` | zip the `BASAMAK.vst3` together with `install-windows.bat` + `INSTALL.md` + a `Samples/` folder |
-| Linux | `bash Distribution/scripts/build-linux.sh` | zip the `BASAMAK.vst3` together with `install-linux.sh` + `INSTALL.md` + a `Samples/` folder |
+| Windows | `Distribution\scripts\build-windows.bat` | zip the `BASAMAK.vst3` together with `install-windows.bat` + `INSTALL.txt` + a `Samples/` folder |
+| Linux | `bash Distribution/scripts/build-linux.sh` | zip the `BASAMAK.vst3` together with `install-linux.sh` + `INSTALL.txt` + a `Samples/` folder |
 
 > The factory **Samples** library is not committed to the repo (≈37 MB).
 > `package-macos.sh` pulls it from `~/Documents/DrumSequencer Samples` by default

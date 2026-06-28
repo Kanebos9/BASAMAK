@@ -82,7 +82,7 @@ jobs:
           OUT="BASAMAK-${{ matrix.name }}"; mkdir -p "$OUT"
           find build -name "BASAMAK.vst3" -maxdepth 8 -exec cp -R {} "$OUT/" \;
           find build -name "BASAMAK.component" -maxdepth 8 -exec cp -R {} "$OUT/" \;
-          cp Distribution/INSTALL.md "$OUT/" 2>/dev/null || true
+          cp Distribution/INSTALL.txt "$OUT/" 2>/dev/null || true
           if [ "${{ matrix.name }}" = "macOS" ]; then
             cp "Distribution/scripts/install-macos.command" "$OUT/Install BASAMAK.command"
           else
@@ -96,7 +96,7 @@ jobs:
           $vst3 = Get-ChildItem -Recurse -Directory build -Filter BASAMAK.vst3 | Select-Object -First 1
           Copy-Item $vst3.FullName "$out\BASAMAK.vst3" -Recurse
           Copy-Item Distribution/scripts/install-windows.bat "$out\"
-          Copy-Item Distribution/INSTALL.md "$out\" -ErrorAction SilentlyContinue
+          Copy-Item Distribution/INSTALL.txt "$out\" -ErrorAction SilentlyContinue
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
@@ -125,7 +125,7 @@ jobs:
 3. Scroll to the bottom of that run page to the **Artifacts** section.
 4. Download **BASAMAK-Windows** and **BASAMAK-Linux** (they download as `.zip`).
    Inside each is the plugin plus its `install-…` script — exactly like the Mac
-   package. Hand those to your Windows/Linux users (see `INSTALL.md`).
+   package. Hand those to your Windows/Linux users (see `INSTALL.txt`).
 
 > **Samples note:** the cloud build does not include the factory sample library
 > (it's large and not stored on GitHub), so the Windows/Linux packages install

@@ -8,7 +8,7 @@
 #       Samples/                 <- factory sample library
 #       Install BASAMAK.command <- double-click installer
 #       VERSION
-#       INSTALL.md
+#       INSTALL.txt
 #   Distribution/BASAMAK-macOS.zip
 #
 # Factory samples are taken from $SAMPLES_SRC (default: the curated library in
@@ -37,7 +37,7 @@ cp -R "$VST3" "$DST/"
 cp "Distribution/scripts/install-macos.command" "$DST/Install BASAMAK.command"
 chmod +x "$DST/Install BASAMAK.command"
 echo "$VER" > "$DST/VERSION"
-[ -f "Distribution/INSTALL.md" ] && cp "Distribution/INSTALL.md" "$DST/"
+[ -f "Distribution/INSTALL.txt" ] && cp "Distribution/INSTALL.txt" "$DST/"
 
 if [ -d "$SAMPLES_SRC" ]; then
   echo "==> Bundling factory samples from: $SAMPLES_SRC"

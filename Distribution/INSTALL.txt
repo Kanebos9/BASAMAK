@@ -1,0 +1,90 @@
+============================================================
+  INSTALLING BASAMAK
+============================================================
+
+BASAMAK is a VST3 / Audio Unit drum & sample sequencer.
+Find your operating system below.
+
+Installing always replaces any older version and NEVER deletes
+your samples, sounds or presets - those live in a separate
+folder (Documents/BASAMAK) that the installer leaves alone.
+
+
+------------------------------------------------------------
+  WINDOWS
+------------------------------------------------------------
+  1. Unzip BASAMAK-Windows.zip.
+  2. Double-click   install-windows.bat
+     (it asks for administrator rights to install the plugin).
+  3. Restart your DAW and rescan plugins.
+
+  Just want to try it - no DAW needed?
+  Double-click   BASAMAK.exe   (the standalone app).
+  If Windows shows "Windows protected your PC", click
+  "More info" then "Run anyway" (normal for new apps).
+
+  Plugin installs to:
+     C:\Program Files\Common Files\VST3\BASAMAK.vst3
+
+
+------------------------------------------------------------
+  macOS
+------------------------------------------------------------
+  1. Unzip BASAMAK-macOS.zip.
+  2. Double-click   "Install BASAMAK.command"
+     If macOS says it is from an unidentified developer,
+     right-click the file -> Open -> Open.
+  3. Restart your DAW and rescan plugins.
+
+  Just want to try it - no DAW needed?
+  Right-click   BASAMAK.app   ->  Open.
+
+  Plugin installs to:
+     VST3:  ~/Library/Audio/Plug-Ins/VST3/BASAMAK.vst3
+     AU:    ~/Library/Audio/Plug-Ins/Components/BASAMAK.component
+
+
+------------------------------------------------------------
+  LINUX
+------------------------------------------------------------
+  1. Unzip BASAMAK-Linux.zip.
+  2. In a terminal:   bash install-linux.sh
+  3. Restart your DAW and rescan plugins.
+
+  Plugin installs to:   ~/.vst3/BASAMAK.vst3
+
+
+------------------------------------------------------------
+  YOUR LIBRARY  (all platforms)
+------------------------------------------------------------
+  Everything you make or add lives in:  Documents/BASAMAK/
+
+     Samples/      your audio samples (factory set added on install)
+     Sound Bank/   sounds you save from a channel  (.basamaksound)
+     Presets/      whole-kit presets you save      (.basamakpreset)
+
+  These are kept across updates. To move BASAMAK to another
+  computer, just copy this folder over.
+
+
+------------------------------------------------------------
+  UPDATING TO A NEW VERSION
+------------------------------------------------------------
+  Just run the installer again - you do NOT need to uninstall
+  first. It replaces the old plugin in place and leaves your
+  samples, sounds and presets completely untouched.
+
+
+------------------------------------------------------------
+  UNINSTALLING
+------------------------------------------------------------
+  Delete the installed plugin file shown above for your OS.
+  To also remove your library, delete the Documents/BASAMAK
+  folder (back it up first if you want to keep your saved
+  samples / sounds / presets).
+
+
+============================================================
+  BASAMAK - free & open source (GNU AGPL v3)
+  Created by Oguzhan Yazici
+============================================================
