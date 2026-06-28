@@ -1,6 +1,10 @@
 # BASAMAK
 
+<img width="1440" height="787" alt="Screenshot 2026-06-28 at 20 11 13" src="https://github.com/user-attachments/assets/7e98473c-c176-4a22-8f1d-b6945e213aca" />
+
 **BASAMAK** is a free, open-source drum & sample **step-sequencer plugin** — VST3, AU (macOS), and Standalone — for macOS, Windows, and Linux. Its built-in sounds are **synthesized** (analog/FM, physical-modelling, modal, noise) rather than sampled, and it ships with a CC0 sample library you can drop into any slot.
+
+<img width="1440" height="786" alt="Screenshot 2026-06-28 at 20 12 15" src="https://github.com/user-attachments/assets/e6a438b9-ca91-445c-99ef-6864f092997e" />
 
 Created by **Oğuzhan Yazıcı**.
 
