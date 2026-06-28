@@ -6,6 +6,13 @@ project(DrumSequencer VERSION 1.0.0)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Windows: statically link the MSVC runtime into the binary so users DON'T need the
+# Visual C++ Redistributable installed - the plugin/standalone just runs as-is.
+# (CMP0091 is NEW by default on CMake >= 3.15, so CMAKE_MSVC_RUNTIME_LIBRARY is honored.)
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 # Point to JUCE. Resolution order: -DJUCE_DIR=..., then a JUCE_DIR env var,
 # then ~/JUCE on macOS/Linux, then %USERPROFILE%\JUCE on Windows.
 if(NOT DEFINED JUCE_DIR)
