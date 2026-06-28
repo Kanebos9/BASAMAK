@@ -3422,7 +3422,9 @@ void DrumSequencerEditor::setupComponents()
     verLink.setURL(juce::URL("https://github.com/Kanebos9/BASAMAK/releases/latest"));
     verLink.setFont(juce::Font(11.5f, juce::Font::bold), false, juce::Justification::centredLeft);
     verLink.setColour(juce::HyperlinkButton::textColourId, juce::Colour(0xffe8bf4d));   // brand gold - inviting
-    verLink.setTooltip("BASAMAK v" DAVULSEQ_VERSION " - click to check GitHub for the latest version & updates");
+    verLink.setTooltip("BASAMAK v" DAVULSEQ_VERSION " - click to check GitHub for the latest version & updates.\n\n"
+                       "Installed a newer version but this still shows the old number? Rescan your plugins "
+                       "in your DAW/host and reopen the project - the DAW may have cached the old build.");
 
     content.addAndMakeVisible(btnClearMidi);
     btnClearMidi.setTooltip("Clear ALL MIDI assignments (every knob, button and step). Asks first. "
