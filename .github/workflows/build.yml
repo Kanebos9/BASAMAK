@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 env:
-  JUCE_TAG: 8.0.4
+  JUCE_TAG: 8.0.13
 
 jobs:
   build:
