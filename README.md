@@ -14,6 +14,7 @@ Built with [JUCE](https://juce.com). Licensed under the **GNU AGPL v3** (see [`L
 
 ## Features
 - 16 channels × up to 32 patterns, 8/16 steps, swing, per-step velocity/pitch/pan/roll/loop-conditions.
+- All steps in the sequencer can be midi assigned.
 - Synth engines: **Analog + FM**, **Physical** (Karplus–Strong), **Modal** (struck resonators), **Noise**, plus a per-slot **Sampler** (trim / slice / time-stretch / pitch-shift via SoundTouch).
 - Per-sound drawable EQ, drive, reverb/delay sends; a master FDN reverb, delay, **Glue** bus-compressor, and limiter.
 - Drawable amp/pitch envelopes, a Strike/Ring envelope for the struck engines, and a Unison/Detune/Vibrato visual.
