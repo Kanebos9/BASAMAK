@@ -326,13 +326,17 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         }
     }
 
-    // While the transport is NOT advancing steps (stopped / auditioning via TEST), the per-step arm
-    // in the Sequencer never fires. Re-arm here at ~20 Hz so a held / long-attack / still-ringing sound
-    // keeps refreshing and switching the analysed slot updates. Playback uses the step-aligned arm.
+    // While the transport is NOT advancing steps (stopped / auditioning via TEST), the per-step arm in
+    // the Sequencer never fires. Re-arm here on a FIXED ~5 Hz grid (every 0.2 s) so a held / long-attack /
+    // still-ringing sound keeps refreshing and switching the analysed slot updates. The grid is PHASE-ALIGNED
+    // to the TEST hit (the test handler below resets analysisArmCtr to 0), so every tap captures the sound at
+    // the SAME points in time -> a consistent spectrum. Before this alignment the grid was free-running, so a
+    // TEST hit landed at a random offset within it and each tap caught the decay at a different phase = the
+    // "different wave every time I press TEST" inconsistency. Playback still uses the step-aligned arm.
     if (! sequencer.isCurrentlyPlaying)
     {
         analysisArmCtr += audio.getNumSamples();
-        const int armEvery = juce::jmax(1, (int) (0.05 * currentSampleRate));
+        const int armEvery = juce::jmax(1, (int) (0.2 * currentSampleRate));
         if (analysisArmCtr >= armEvery) { analysisArmCtr = 0; spectrumTap.arm(); }
     }
     else analysisArmCtr = 0;
@@ -345,7 +349,11 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             // Cut this channel's previous voices first so every TEST is a clean, consistent single hit
             // (otherwise overlapping/ringing tails sum and the level seems to vary between taps).
             sequencer.channel(tc).silenceAllVoices();
-            sequencer.channel(tc).trigger();
+            sequencer.channel(tc).trigger();   // trigger() arms the spectrum capture aligned to this hit's attack
+            // Phase-align the stopped re-arm grid to THIS hit so every tap samples the sound at the same points
+            // (attack, +0.1 s, +0.2 s, ...) -> the EQ visual is identical tap-to-tap instead of catching a random
+            // point in the decay each time.
+            analysisArmCtr = 0;
         }
     }
 

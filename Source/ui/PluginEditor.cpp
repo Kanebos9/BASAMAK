@@ -1319,9 +1319,9 @@ void ADSRDisplay::handlePts(juce::Point<float> out[4]) const
 int ADSRDisplay::nearestHandle(juce::Point<float> p) const
 {
     juce::Point<float> h[4]; handlePts(h);
-    int best = 0; float bd = 1.0e9f;
+    int best = -1; float bd = 20.0f * 20.0f;   // only grab/hover within ~20px of a handle (else -1 = none), like the pitch env
     for (int i = 0; i < 3; ++i) { if (strikeRing && i == 1) continue;   // no Hold handle in Strike/Ring
-        float d = p.getDistanceFrom(h[i]); if (d < bd) { bd = d; best = i; } }
+        float d = p.getDistanceSquaredFrom(h[i]); if (d < bd) { bd = d; best = i; } }
     return best;
 }
 
@@ -1428,20 +1428,26 @@ void ADSRDisplay::mouseMove(const juce::MouseEvent& e)
 
 juce::String ADSRDisplay::getTooltip()
 {
+    // The "length ~X s" read-out is the AMP envelope's own length. A PITCH envelope can change the REAL audible
+    // length: on samples the pitch env is VARISPEED, so raising the pitch makes the sound END SOONER and lowering
+    // it makes it last LONGER than this envelope shows. Same caveat the pitch-env editor carries - mirror it here.
+    const juce::String warn = "  NOTE: a PITCH envelope can change the REAL length - on samples it's varispeed, so "
+                              "raising the pitch ends the sound sooner and lowering it lasts longer than the 'length' here.";
     const int i = drag >= 0 ? drag : hover;
     if (strikeRing) {   // Physical: Strike(attack) + Ring(decay), no Hold
         switch (i) {
             case 0: return "Strike (" + envTimeStr(atk) + ") - how soft the pluck/strike is: 0 = sharp pluck, higher = "
                            "a slow swelled strike (the string is held up so it still reaches full volume)";
             case 2: return "Ring (" + envTimeStr(dcy) + ") - how long the string rings out after the strike (drag left/right)";
-            default: return "Physical envelope: drag Strike (pluck softness) + Ring (how long it rings)";
+            default: return "Strike/Ring envelope: drag Strike (pluck softness) + Ring (how long it rings)." + warn;
         }
     }
     switch (i) {
         case 0: return "Attack (" + envTimeStr(atk) + ") - time to rise from silence to full level";
         case 1: return "Hold (" + envTimeStr(hld) + ") - time held at full before the decay";
-        case 2: return "Decay (" + envTimeStr(dcy) + ") - fall time from full to silence (drag left/right)";
-        default: return "Drag the coloured handles to shape Attack / Hold / Decay";
+        case 2: return "Decay (" + envTimeStr(dcy) + ") - fall time from full to silence (drag left/right)." + warn;
+        default: return "Amp envelope: drag the coloured handles to shape Attack / Hold / Decay. The 'length ~X s' "
+                        "is this envelope's length." + warn;
     }
 }
 
@@ -2335,9 +2341,8 @@ static constexpr int FACTORY_PST_BASE = 6000;   // factory presets:     6000 + i
 static constexpr int ID_INIT_PRESET   = 9003;
 static constexpr int ID_INIT_MIX      = 9996;
 static constexpr int ID_NONE          = 9997;
-static constexpr int ID_OPEN_FOLDER   = 9998;
 static constexpr int ID_LOAD_SAMPLE   = 9999;
-static constexpr int ID_OPEN_BANK     = 9995;   // reveal the Sound Bank folder (from the channel sound dropdown)
+static constexpr int ID_LOAD_BANK     = 9995;   // "Load Sound..." file chooser (from the channel sound dropdown); double-click loads
 static constexpr int ID_BROWSE        = 10001;   // open the sound-browser window (outside the sample-id range)
 
 // On-brand file extensions. We WRITE the new ones and READ both (so older .davulmix/.drumseq files still load).
@@ -2518,8 +2523,7 @@ void DrumSequencerEditor::rebuildSampleMenu()
     addFolderToMenu(*root, getSamplesFolder()); // only what's actually in the folder
 
     root->addSeparator();
-    root->addItem(ID_LOAD_SAMPLE, "Load Sample...");
-    root->addItem(ID_OPEN_FOLDER, "Open Samples Folder");
+    root->addItem(ID_LOAD_SAMPLE, "Load Sample...");   // double-click a file in the chooser loads it (no "Open Folder" needed)
 
     refreshSampleSel();
     rebuildSlotMenus();   // the slot dropdowns embed the same sample list as a submenu
@@ -2559,12 +2563,6 @@ void DrumSequencerEditor::handleSampleSelChange()
             dch.loadUserSample(envTargetSlot(), sampleFiles[idx]);
             cacheWaveform(selectedChannel);
         }
-    }
-    else if (id == ID_OPEN_FOLDER)
-    {
-        getSamplesFolder().revealToUser();
-        rescanSamples();
-        rebuildSampleMenu();
     }
     else if (id == ID_LOAD_SAMPLE)
     {
@@ -2693,7 +2691,7 @@ void DrumSequencerEditor::rebuildSoundMixMenu(int ch)
     else
         addSoundFolderToMenu(*root, getSoundMixFolder());
     root->addSeparator();
-    root->addItem(ID_OPEN_BANK, "Open Sound Bank Folder");
+    root->addItem(ID_LOAD_BANK, "Load Sound...");   // file chooser; double-click a .basamaksound loads it into this channel
     juce::ignoreUnused(keep);
     // clear() above reset the combo's displayed text, so invalidate the cache to
     // force updateStripMixLabel to re-apply this channel's mix name.
@@ -2706,10 +2704,26 @@ void DrumSequencerEditor::handleSoundMixChange(int ch)
 {
     int id = strips[ch].comboSound.getSelectedId();
     auto& c = proc.sequencer.channel(ch);
-    if (id == ID_OPEN_BANK)
+    if (id == ID_LOAD_BANK)
     {
-        getSoundMixFolder().revealToUser();
-        rescanSoundMixes(); for (int k = 0; k < Sequencer::NUM_CHANNELS; ++k) rebuildSoundMixMenu(k);
+        // Pick a saved sound file in a chooser - double-click loads it straight into this channel (no Finder,
+        // no "open with..." prompt). Mirrors the samples "Load Sample..." flow.
+        fileChooser = std::make_unique<juce::FileChooser>("Load Sound", getSoundMixFolder(), kSoundWild);
+        const int chN = ch;
+        fileChooser->launchAsync(
+            juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+            [this, chN](const juce::FileChooser& fc) {
+                auto f = fc.getResult();
+                if (f.existsAsFile())
+                {
+                    auto& cc = proc.sequencer.channel(chN);
+                    loadSoundMix(chN, f);
+                    cc.mixName = f.getFileNameWithoutExtension();
+                    cc.mixModified = false; cc.mixHash = channelSoundHash(cc);
+                    updateStripMixLabel(chN);
+                }
+            });
+        strips[ch].comboSound.setSelectedId(0, juce::dontSendNotification);
     }
     else if (id == ID_INIT_MIX)
     {
@@ -3153,7 +3167,7 @@ void DrumSequencerEditor::rebuildPresetMenu()
         comboPreset.addItem(presetFiles[i].getFileNameWithoutExtension(), i + 1);
     comboPreset.addSeparator();
     comboPreset.addItem("Save Preset...",       9001);
-    comboPreset.addItem("Open Presets Folder",  9002);
+    comboPreset.addItem("Load Preset...",       9002);   // file chooser; double-click a .basamakpreset loads it
     comboPreset.setItemEnabled(-1, false);
     comboPreset.setTextWhenNothingSelected("Presets");
     comboPreset.setSelectedId(0, juce::dontSendNotification);
@@ -3205,9 +3219,21 @@ void DrumSequencerEditor::handlePresetChange()
             });
         comboPreset.setSelectedId(0, juce::dontSendNotification);
     }
-    else if (id == 9002) // Open folder
+    else if (id == 9002) // Load Preset... (file chooser; double-click loads - no Finder / "open with" prompt)
     {
-        getPresetsFolder().revealToUser();
+        fileChooser = std::make_unique<juce::FileChooser>("Load Preset", getPresetsFolder(), kPresetWild);
+        fileChooser->launchAsync(
+            juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+            [this](const juce::FileChooser& fc) {
+                auto f = fc.getResult();
+                juce::MemoryBlock mb;
+                if (f.existsAsFile() && f.loadFileAsData(mb))
+                {
+                    proc.setStateInformation(mb.getData(), (int) mb.getSize());
+                    fullRefresh();
+                    rebaselinePreset(f.getFileNameWithoutExtension());
+                }
+            });
         comboPreset.setSelectedId(0, juce::dontSendNotification);
     }
 }
@@ -3247,7 +3273,13 @@ void DrumSequencerEditor::initPreset()
             resetChannelToDefault(ch, c);
             ch.chokeGroup = 0; ch.outputBus = 0; ch.midiOut = false; ch.midiOutChannel = 1;   // routing is preset-level -> reset on Init too
             ch.numSteps = 8;
-            for (int i = 0; i < DrumChannel::MAX_STEPS; ++i) ch.steps[i] = false;
+            // Wipe EVERY per-step value too (not just on/off) so a fresh init really starts clean - matches the
+            // Clear button. Without this, edited Vel/Len/Pan/Pitch/Roll/Loop values leaked into the new preset.
+            for (int i = 0; i < DrumChannel::MAX_STEPS; ++i) {
+                ch.steps[i] = false; ch.stepVel[i] = 1.0f; ch.stepPitch[i] = 0.0f; ch.stepProb[i] = 1.0f;
+                ch.stepRoll[i] = 1; ch.stepRollDecay[i] = 0.0f; ch.stepNoteLen[i] = 0.25f; ch.stepPan[i] = 0.0f;
+                ch.stepCondLen[i] = 1; ch.stepCondMask[i] = 0;
+            }
         }
     }
     syncAfterStateChange();
@@ -3418,11 +3450,11 @@ void DrumSequencerEditor::setupComponents()
 
     // Clickable version next to the logo -> opens the GitHub Releases page (check for updates).
     content.addAndMakeVisible(verLink);
-    verLink.setButtonText("v" DAVULSEQ_VERSION);
+    verLink.setButtonText("v" BASAMAK_VERSION);
     verLink.setURL(juce::URL("https://github.com/Kanebos9/BASAMAK/releases/latest"));
     verLink.setFont(juce::Font(11.5f, juce::Font::bold), false, juce::Justification::centredLeft);
     verLink.setColour(juce::HyperlinkButton::textColourId, juce::Colour(0xffe8bf4d));   // brand gold - inviting
-    verLink.setTooltip("BASAMAK v" DAVULSEQ_VERSION " - click to check GitHub for the latest version & updates.\n\n"
+    verLink.setTooltip("BASAMAK v" BASAMAK_VERSION " - click to check GitHub for the latest version & updates.\n\n"
                        "Installed a newer version but this still shows the old number? Rescan your plugins "
                        "in your DAW/host and reopen the project - the DAW may have cached the old build.");
 
@@ -4161,6 +4193,11 @@ void DrumSequencerEditor::setupComponents()
     knobDrive.onValueChange   = [this] { if (!ignoreKnobCallbacks)   proc.sequencer.channel(selectedChannel).slots[envTargetSlot()].fxDrive       = (float)knobDrive.getValue(); };
     knobReverb.onValueChange  = [this] { if (!ignoreKnobCallbacks)   proc.sequencer.channel(selectedChannel).slots[envTargetSlot()].fxReverbSend = (float)knobReverb.getValue(); };
     knobDelay.onValueChange   = [this] { if (!ignoreKnobCallbacks)   proc.sequencer.channel(selectedChannel).slots[envTargetSlot()].fxDelaySend  = (float)knobDelay.getValue(); };
+    // Auto Test: the per-sound FX knobs (Drive/Reverb/Delay) are editor-level LearnableKnobs, not SlotEditor
+    // knobs, so they need their own onDragEnd to play a test hit when "Auto Test" is on (they did nothing before).
+    knobDrive.onDragEnd  = [this] { if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel); };
+    knobReverb.onDragEnd = [this] { if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel); };
+    knobDelay.onDragEnd  = [this] { if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel); };
     // Reverb/Delay FLAVOUR is MASTER-level now (write ALL patterns), so it's one shared sound for the whole kit.
     auto allM = [this](std::function<void(Sequencer::MasterFX&)> fn) {
         if (ignoreKnobCallbacks) return; for (auto& p : proc.sequencer.patterns) fn(p.master); };
@@ -4728,8 +4765,7 @@ void DrumSequencerEditor::rebuildSlotMenus()
         juce::PopupMenu sampleSub;
         addFolderToMenu(sampleSub, getSamplesFolder());
         sampleSub.addSeparator();
-        sampleSub.addItem(ID_LOAD_SAMPLE, "Load Sample...");      // "Browse Library..." removed (redundant with Load + the inline list)
-        sampleSub.addItem(ID_OPEN_FOLDER, "Open Samples Folder");
+        sampleSub.addItem(ID_LOAD_SAMPLE, "Load Sample...");      // double-click loads; "Open Samples Folder" removed (Load does the real work)
         root->addSubMenu("Sample", sampleSub);
         root->addItem(3, "Noise"); root->addItem(4, "Analog + FM");   // Depth 0 = analog, raise it for FM (resonator removed)
         root->addItem(6, "Physical");   // "FM"/"Synth"/"Wavetable" retired from the menu (kept parseable for old
@@ -4912,12 +4948,6 @@ void DrumSequencerEditor::onSlotEngineChange(int box)
     if (id == ID_BROWSE)
     {
         openSoundBrowser(box);
-        syncBoxesFromSrcOn();   // restore this combo's display (the action isn't an engine)
-        return;
-    }
-    if (id == ID_OPEN_FOLDER)
-    {
-        getSamplesFolder().revealToUser(); rescanSamples(); rebuildSampleMenu();
         syncBoxesFromSrcOn();   // restore this combo's display (the action isn't an engine)
         return;
     }

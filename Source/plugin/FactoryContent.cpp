@@ -47,7 +47,8 @@ static void setSteps(DC& c, int n, std::initializer_list<int> on)
 {
     c.numSteps = n;
     for (int i = 0; i < DC::MAX_STEPS; ++i)
-    { c.steps[i] = false; c.stepVel[i] = 1.0f; c.stepPitch[i] = 0.0f; c.stepProb[i] = 1.0f; c.stepRoll[i] = 1; c.stepCondLen[i] = 1; c.stepCondMask[i] = 0; }
+    { c.steps[i] = false; c.stepVel[i] = 1.0f; c.stepPitch[i] = 0.0f; c.stepProb[i] = 1.0f; c.stepRoll[i] = 1;
+      c.stepRollDecay[i] = 0.0f; c.stepNoteLen[i] = 0.25f; c.stepPan[i] = 0.0f; c.stepCondLen[i] = 1; c.stepCondMask[i] = 0; }
     for (int s : on) if (s >= 0 && s < n) c.steps[s] = true;
 }
 
