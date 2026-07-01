@@ -3295,84 +3295,28 @@ void DrumSequencerEditor::handleMidiMenuChange()
     comboMidi.setSelectedId(0, juce::dontSendNotification);
 }
 
-// Save the CURRENT pattern's note grid (every channel's steps + per-step Vel/Pitch/Roll/RollRamp/NoteLen/Pan/
-// Loop-condition) to a *.basamakpattern file. Only the notes are stored - NOT the sounds - so a saved pattern
-// can be dropped onto any kit. (The "Drag MIDI" button still exports a standard .mid for other software.)
+// A "MIDI pattern" is the MIDI-LEARN MAP: which MIDI channel + CC number is assigned to each parameter and
+// step (exactly what MidiLearnManager stores). It does NOT save any parameter/step VALUES (velocity, pitch,
+// which steps are on, etc.) - just the CC assignments - so it's a portable controller map. (The "Drag MIDI"
+// button separately exports a standard .mid note clip.)
 void DrumSequencerEditor::saveMidiPattern(const juce::File& file)
 {
-    juce::ValueTree root("BasamakPattern");
-    root.setProperty("v", 1, nullptr);
-    auto& pat = proc.sequencer.patterns[currentPattern()];
-    for (int ch = 0; ch < Sequencer::NUM_CHANNELS; ++ch)
-    {
-        auto& c = pat.channels[ch];
-        juce::ValueTree t("Ch");
-        t.setProperty("numSteps", c.numSteps, nullptr);
-        juce::String steps, vel, pitch, roll, rollDec, noteLen, pan, condLen, condMask;
-        for (int s = 0; s < DrumChannel::MAX_STEPS; ++s)
-        {
-            steps    += (c.steps[s] ? "1" : "0");
-            vel      += juce::String(c.stepVel[s],       3) + ",";
-            pitch    += juce::String(c.stepPitch[s],     2) + ",";
-            roll     += juce::String(c.stepRoll[s])          + ",";
-            rollDec  += juce::String(c.stepRollDecay[s], 3) + ",";
-            noteLen  += juce::String(c.stepNoteLen[s],   3) + ",";
-            pan      += juce::String(c.stepPan[s],       3) + ",";
-            condLen  += juce::String(c.stepCondLen[s])       + ",";
-            condMask += juce::String(c.stepCondMask[s])      + ",";
-        }
-        t.setProperty("steps", steps, nullptr);        t.setProperty("stepVel",   vel,   nullptr);
-        t.setProperty("stepPitch", pitch, nullptr);    t.setProperty("stepRoll",  roll,  nullptr);
-        t.setProperty("stepRollDec", rollDec, nullptr);t.setProperty("stepNoteLen", noteLen, nullptr);
-        t.setProperty("stepPan", pan, nullptr);        t.setProperty("stepCondLen", condLen, nullptr);
-        t.setProperty("stepCondMask", condMask, nullptr);
-        root.addChild(t, -1, nullptr);
-    }
+    auto tree = proc.midiLearn.saveState();   // <MidiLearn><Assign param cc channel/>...</MidiLearn>
     file.deleteFile();
     juce::FileOutputStream os(file);
-    if (os.openedOk()) root.writeToStream(os);
+    if (os.openedOk()) tree.writeToStream(os);
 }
 
-// Load a saved note grid onto the CURRENT pattern (all channels). The sounds are left untouched.
+// Load a saved MIDI-learn map. Replaces the current CC assignments (MidiLearnManager::loadState clears first).
 void DrumSequencerEditor::loadMidiPattern(const juce::File& file)
 {
     juce::FileInputStream in(file);
     if (! in.openedOk()) return;
-    auto root = juce::ValueTree::readFromStream(in);
-    if (! root.isValid()) return;
-
-    auto& pat = proc.sequencer.patterns[currentPattern()];
-    const int n = juce::jmin(root.getNumChildren(), (int) Sequencer::NUM_CHANNELS);
-    for (int ch = 0; ch < n; ++ch)
-    {
-        auto t = root.getChild(ch);
-        auto& c = pat.channels[ch];
-        c.numSteps = juce::jlimit(1, DrumChannel::MAX_STEPS, (int) t.getProperty("numSteps", c.numSteps));
-        const juce::String steps = t.getProperty("steps", "").toString();
-        for (int s = 0; s < DrumChannel::MAX_STEPS; ++s)
-            c.steps[s] = (s < steps.length() && steps[s] == '1');
-        auto loadF = [&](const char* key, float* dst, float def) {
-            auto tk = juce::StringArray::fromTokens(t.getProperty(key, "").toString(), ",", "");
-            for (int s = 0; s < DrumChannel::MAX_STEPS; ++s)
-                dst[s] = (s < tk.size() && tk[s].isNotEmpty()) ? tk[s].getFloatValue() : def; };
-        loadF("stepVel",     c.stepVel,      1.0f);
-        loadF("stepPitch",   c.stepPitch,    0.0f);
-        loadF("stepRollDec", c.stepRollDecay,0.0f);
-        loadF("stepNoteLen", c.stepNoteLen,  0.25f);
-        loadF("stepPan",     c.stepPan,      0.0f);
-        auto rl = juce::StringArray::fromTokens(t.getProperty("stepRoll",     "").toString(), ",", "");
-        auto cl = juce::StringArray::fromTokens(t.getProperty("stepCondLen",  "").toString(), ",", "");
-        auto cm = juce::StringArray::fromTokens(t.getProperty("stepCondMask", "").toString(), ",", "");
-        for (int s = 0; s < DrumChannel::MAX_STEPS; ++s)
-        {
-            c.stepRoll[s]     = (s < rl.size() && rl[s].isNotEmpty()) ? juce::jlimit(1, 6, rl[s].getIntValue()) : 1;
-            c.stepCondLen[s]  = (s < cl.size() && cl[s].isNotEmpty()) ? juce::jlimit(1, 10, cl[s].getIntValue()) : 1;
-            c.stepCondMask[s] = (s < cm.size() && cm[s].isNotEmpty()) ? cm[s].getIntValue() : 0;
-        }
-    }
-    stepGrid.update(proc.sequencer, proc.anySolo);
-    refreshPatternButtons();
-    content.repaint();
+    auto tree = juce::ValueTree::readFromStream(in);
+    if (! tree.isValid()) return;
+    proc.midiLearn.loadState(tree);
+    stepGrid.repaint();   // steps redraw their assigned-CC labels
+    content.repaint();    // knobs/buttons repaint their assignment rings
 }
 
 // Push BPM / time signature from the sequencer into the toolbar and refresh
@@ -3597,8 +3541,9 @@ void DrumSequencerEditor::setupComponents()
 
     // MIDI menu (dropdown): Save / load the current pattern's note grid + clear MIDI-learn.
     content.addAndMakeVisible(comboMidi);
-    comboMidi.setTooltip("MIDI: save or load the current pattern's note grid (*.basamakpattern in your MIDI "
-                         "Patterns folder), refresh/open that folder, or clear all MIDI-learn assignments.");
+    comboMidi.setTooltip("MIDI: save or load a MIDI-learn map (the MIDI channel + CC number assigned to each "
+                         "parameter and step - NOT their values) as *.basamakpattern in your MIDI Patterns folder, "
+                         "refresh/open that folder, or clear all MIDI-learn assignments.");
     rebuildMidiMenu();
     comboMidi.onChange = [this] { handleMidiMenuChange(); };
 
