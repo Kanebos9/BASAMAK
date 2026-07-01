@@ -2341,9 +2341,15 @@ static constexpr int FACTORY_PST_BASE = 6000;   // factory presets:     6000 + i
 static constexpr int ID_INIT_PRESET   = 9003;
 static constexpr int ID_INIT_MIX      = 9996;
 static constexpr int ID_NONE          = 9997;
-static constexpr int ID_LOAD_SAMPLE   = 9999;
-static constexpr int ID_LOAD_BANK     = 9995;   // "Load Sound..." file chooser (from the channel sound dropdown); double-click loads
+static constexpr int ID_REFRESH_SAMPLES = 9990;  // rescan the Samples folder so newly-added files appear in the dropdown
+static constexpr int ID_SHOW_SAMPLES    = 9989;  // reveal the Samples folder in Finder/Explorer
+static constexpr int ID_REFRESH_BANK    = 9995;  // rescan the Sound Bank folder
+static constexpr int ID_SHOW_BANK       = 9993;  // reveal the Sound Bank folder
 static constexpr int ID_BROWSE        = 10001;   // open the sound-browser window (outside the sample-id range)
+
+// On-brand extension for a saved per-pattern note grid (the "MIDI pattern" menu).
+static const juce::String kPatternExt  = "basamakpattern";
+static const juce::String kPatternWild = "*.basamakpattern";
 
 // On-brand file extensions. We WRITE the new ones and READ both (so older .davulmix/.drumseq files still load).
 static const juce::String kSoundExt   = "basamaksound";                 // saved channel sound (Sound Bank)
@@ -2523,7 +2529,8 @@ void DrumSequencerEditor::rebuildSampleMenu()
     addFolderToMenu(*root, getSamplesFolder()); // only what's actually in the folder
 
     root->addSeparator();
-    root->addItem(ID_LOAD_SAMPLE, "Load Sample...");   // double-click a file in the chooser loads it (no "Open Folder" needed)
+    root->addItem(ID_REFRESH_SAMPLES, "Refresh samples folder");   // rescan so newly-added files show up
+    root->addItem(ID_SHOW_SAMPLES,    "Show Folder");              // open the Samples folder to drop files in
 
     refreshSampleSel();
     rebuildSlotMenus();   // the slot dropdowns embed the same sample list as a submenu
@@ -2564,27 +2571,14 @@ void DrumSequencerEditor::handleSampleSelChange()
             cacheWaveform(selectedChannel);
         }
     }
-    else if (id == ID_LOAD_SAMPLE)
+    else if (id == ID_REFRESH_SAMPLES)   // re-scan the folder so files added on disk appear in the list
     {
-        fileChooser = std::make_unique<juce::FileChooser>(
-            "Load Sample", getSamplesFolder(), "*.wav;*.aiff;*.aif;*.mp3;*.flac;*.ogg");
-        const int ch = selectedChannel;
-        fileChooser->launchAsync(
-            juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-            [this, ch](const juce::FileChooser& fc) {
-                auto f = fc.getResult();
-                if (f.existsAsFile())
-                {
-                    // Load the file IN PLACE (no copy). Only samples that actually live in the samples folder
-                    // appear in the dropdown; one loaded from elsewhere just plays (it isn't added to the library).
-                    auto& c2 = proc.sequencer.channel(ch);
-                    c2.slots[envTargetSlot()].engine = DrumChannel::SrcSample;
-                    c2.loadUserSample(envTargetSlot(), f);
-                    cacheWaveform(ch);
-                }
-                rescanSamples();
-                rebuildSampleMenu();
-            });
+        rescanSamples();
+        rebuildSampleMenu();
+    }
+    else if (id == ID_SHOW_SAMPLES)      // open the Samples folder so the user can drop files in
+    {
+        getSamplesFolder().revealToUser();
     }
 }
 
@@ -2691,7 +2685,8 @@ void DrumSequencerEditor::rebuildSoundMixMenu(int ch)
     else
         addSoundFolderToMenu(*root, getSoundMixFolder());
     root->addSeparator();
-    root->addItem(ID_LOAD_BANK, "Load Sound...");   // file chooser; double-click a .basamaksound loads it into this channel
+    root->addItem(ID_REFRESH_BANK, "Refresh sound bank folder");   // rescan so newly-saved sounds show up
+    root->addItem(ID_SHOW_BANK,    "Show Folder");                 // open the Sound Bank folder
     juce::ignoreUnused(keep);
     // clear() above reset the combo's displayed text, so invalidate the cache to
     // force updateStripMixLabel to re-apply this channel's mix name.
@@ -2704,25 +2699,14 @@ void DrumSequencerEditor::handleSoundMixChange(int ch)
 {
     int id = strips[ch].comboSound.getSelectedId();
     auto& c = proc.sequencer.channel(ch);
-    if (id == ID_LOAD_BANK)
+    if (id == ID_REFRESH_BANK)      // re-scan so sounds saved on disk appear in every channel's dropdown
     {
-        // Pick a saved sound file in a chooser - double-click loads it straight into this channel (no Finder,
-        // no "open with..." prompt). Mirrors the samples "Load Sample..." flow.
-        fileChooser = std::make_unique<juce::FileChooser>("Load Sound", getSoundMixFolder(), kSoundWild);
-        const int chN = ch;
-        fileChooser->launchAsync(
-            juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-            [this, chN](const juce::FileChooser& fc) {
-                auto f = fc.getResult();
-                if (f.existsAsFile())
-                {
-                    auto& cc = proc.sequencer.channel(chN);
-                    loadSoundMix(chN, f);
-                    cc.mixName = f.getFileNameWithoutExtension();
-                    cc.mixModified = false; cc.mixHash = channelSoundHash(cc);
-                    updateStripMixLabel(chN);
-                }
-            });
+        rescanSoundMixes();
+        for (int k = 0; k < Sequencer::NUM_CHANNELS; ++k) rebuildSoundMixMenu(k);
+    }
+    else if (id == ID_SHOW_BANK)    // open the Sound Bank folder
+    {
+        getSoundMixFolder().revealToUser();
         strips[ch].comboSound.setSelectedId(0, juce::dontSendNotification);
     }
     else if (id == ID_INIT_MIX)
@@ -3166,8 +3150,9 @@ void DrumSequencerEditor::rebuildPresetMenu()
     for (int i = 0; i < presetFiles.size(); ++i)
         comboPreset.addItem(presetFiles[i].getFileNameWithoutExtension(), i + 1);
     comboPreset.addSeparator();
-    comboPreset.addItem("Save Preset...",       9001);
-    comboPreset.addItem("Load Preset...",       9002);   // file chooser; double-click a .basamakpreset loads it
+    comboPreset.addItem("Save Preset...",         9001);
+    comboPreset.addItem("Refresh presets folder", 9002);   // rescan so newly-saved presets show up
+    comboPreset.addItem("Show Folder",            9004);   // open the Presets folder
     comboPreset.setItemEnabled(-1, false);
     comboPreset.setTextWhenNothingSelected("Presets");
     comboPreset.setSelectedId(0, juce::dontSendNotification);
@@ -3219,23 +3204,175 @@ void DrumSequencerEditor::handlePresetChange()
             });
         comboPreset.setSelectedId(0, juce::dontSendNotification);
     }
-    else if (id == 9002) // Load Preset... (file chooser; double-click loads - no Finder / "open with" prompt)
+    else if (id == 9002) // Refresh presets folder - rescan so presets saved on disk appear in the list
     {
-        fileChooser = std::make_unique<juce::FileChooser>("Load Preset", getPresetsFolder(), kPresetWild);
-        fileChooser->launchAsync(
-            juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-            [this](const juce::FileChooser& fc) {
-                auto f = fc.getResult();
-                juce::MemoryBlock mb;
-                if (f.existsAsFile() && f.loadFileAsData(mb))
-                {
-                    proc.setStateInformation(mb.getData(), (int) mb.getSize());
-                    fullRefresh();
-                    rebaselinePreset(f.getFileNameWithoutExtension());
-                }
-            });
+        rebuildPresetMenu();   // (also resets the combo selection to 0)
+    }
+    else if (id == 9004) // Show Folder - open the Presets folder
+    {
+        getPresetsFolder().revealToUser();
         comboPreset.setSelectedId(0, juce::dontSendNotification);
     }
+}
+
+//==============================================================================
+// MIDI menu (top-bar dropdown; replaces the old "Clear MIDI" button)
+//==============================================================================
+juce::File DrumSequencerEditor::getMidiPatternsFolder() { return UserPaths::midiPatterns(); }
+
+void DrumSequencerEditor::rebuildMidiMenu()
+{
+    midiPatternFiles.clear();
+    auto files = getMidiPatternsFolder().findChildFiles(juce::File::findFiles, false, kPatternWild);
+    files.sort();
+    for (auto& f : files) midiPatternFiles.add(f);
+
+    comboMidi.clear(juce::dontSendNotification);
+    comboMidi.addItem("Save MIDI pattern...", 9101);           // saves the CURRENT pattern's note grid
+    comboMidi.addSectionHeading("Factory MIDI patterns");
+    comboMidi.addItem("Ch1 8x8", 9105);                        // MIDI-learn map: ch1-8 steps 1-8 -> CC 1-64 (MIDI ch 1)
+    comboMidi.addSectionHeading("Saved MIDI patterns");
+    if (midiPatternFiles.isEmpty())
+        comboMidi.addItem("(none saved yet)", -1);
+    for (int i = 0; i < midiPatternFiles.size(); ++i)
+        comboMidi.addItem(midiPatternFiles[i].getFileNameWithoutExtension(), i + 1);   // ids 1..N = load
+    comboMidi.addSeparator();
+    comboMidi.addItem("Refresh MIDI pattern folder", 9102);
+    comboMidi.addItem("Show Folder",                 9103);
+    comboMidi.addSeparator();
+    comboMidi.addItem("Clear MIDI (learn)",          9104);    // clears MIDI-learn CC assignments (the old button)
+    comboMidi.setItemEnabled(-1, false);
+    comboMidi.setTextWhenNothingSelected("MIDI");
+    comboMidi.setSelectedId(0, juce::dontSendNotification);
+}
+
+void DrumSequencerEditor::handleMidiMenuChange()
+{
+    const int id = comboMidi.getSelectedId();
+    if (id == 9101)          // Save MIDI pattern...
+    {
+        fileChooser = std::make_unique<juce::FileChooser>(
+            "Save MIDI pattern", getMidiPatternsFolder().getChildFile("My Pattern." + kPatternExt), "*." + kPatternExt);
+        fileChooser->launchAsync(
+            juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
+                | juce::FileBrowserComponent::warnAboutOverwriting,
+            [this](const juce::FileChooser& fc) {
+                auto f = fc.getResult();
+                if (f != juce::File())
+                {
+                    if (f.getFileExtension() != "." + kPatternExt) f = f.withFileExtension(kPatternExt);
+                    saveMidiPattern(f);
+                }
+                rebuildMidiMenu();
+            });
+    }
+    else if (id == 9105)     // Factory example map: this pattern's first 8 steps of channels 1-8 -> CC 1-64 (MIDI ch 1)
+    {
+        const int p = currentPattern();
+        for (int ch = 0; ch < 8; ++ch)
+            for (int st = 0; st < 8; ++st)
+            {
+                // paramId MUST match StepGridComponent::stepParamId: "p{P}_step_{ch}_{step}".
+                const juce::String pid = "p" + juce::String(p) + "_step_" + juce::String(ch) + "_" + juce::String(st);
+                proc.midiLearn.assign(pid, ch * 8 + st + 1, 1);   // CC = ch*8+step+1 (1..64), all on MIDI channel 1
+            }
+        stepGrid.repaint(); content.repaint();   // the grid draws each step's assigned CC
+    }
+    else if (id == 9102)     // Refresh MIDI pattern folder
+        rebuildMidiMenu();
+    else if (id == 9103)     // Show Folder
+        getMidiPatternsFolder().revealToUser();
+    else if (id == 9104)     // Clear MIDI-learn assignments (the old "Clear MIDI")
+        juce::NativeMessageBox::showOkCancelBox(juce::AlertWindow::QuestionIcon,
+            "Clear all MIDI assignments?",
+            "This removes every MIDI CC assignment in the whole plugin. This cannot be undone "
+            "(but a saved preset keeps its own assignments - reloading it restores them).",
+            this, juce::ModalCallbackFunction::create([this](int ok) {
+                if (ok) { proc.midiLearn.clearAll(); content.repaint(); } }));
+    else if (id >= 1 && id <= midiPatternFiles.size())   // load a saved pattern onto the current pattern
+        loadMidiPattern(midiPatternFiles[id - 1]);
+
+    comboMidi.setSelectedId(0, juce::dontSendNotification);
+}
+
+// Save the CURRENT pattern's note grid (every channel's steps + per-step Vel/Pitch/Roll/RollRamp/NoteLen/Pan/
+// Loop-condition) to a *.basamakpattern file. Only the notes are stored - NOT the sounds - so a saved pattern
+// can be dropped onto any kit. (The "Drag MIDI" button still exports a standard .mid for other software.)
+void DrumSequencerEditor::saveMidiPattern(const juce::File& file)
+{
+    juce::ValueTree root("BasamakPattern");
+    root.setProperty("v", 1, nullptr);
+    auto& pat = proc.sequencer.patterns[currentPattern()];
+    for (int ch = 0; ch < Sequencer::NUM_CHANNELS; ++ch)
+    {
+        auto& c = pat.channels[ch];
+        juce::ValueTree t("Ch");
+        t.setProperty("numSteps", c.numSteps, nullptr);
+        juce::String steps, vel, pitch, roll, rollDec, noteLen, pan, condLen, condMask;
+        for (int s = 0; s < DrumChannel::MAX_STEPS; ++s)
+        {
+            steps    += (c.steps[s] ? "1" : "0");
+            vel      += juce::String(c.stepVel[s],       3) + ",";
+            pitch    += juce::String(c.stepPitch[s],     2) + ",";
+            roll     += juce::String(c.stepRoll[s])          + ",";
+            rollDec  += juce::String(c.stepRollDecay[s], 3) + ",";
+            noteLen  += juce::String(c.stepNoteLen[s],   3) + ",";
+            pan      += juce::String(c.stepPan[s],       3) + ",";
+            condLen  += juce::String(c.stepCondLen[s])       + ",";
+            condMask += juce::String(c.stepCondMask[s])      + ",";
+        }
+        t.setProperty("steps", steps, nullptr);        t.setProperty("stepVel",   vel,   nullptr);
+        t.setProperty("stepPitch", pitch, nullptr);    t.setProperty("stepRoll",  roll,  nullptr);
+        t.setProperty("stepRollDec", rollDec, nullptr);t.setProperty("stepNoteLen", noteLen, nullptr);
+        t.setProperty("stepPan", pan, nullptr);        t.setProperty("stepCondLen", condLen, nullptr);
+        t.setProperty("stepCondMask", condMask, nullptr);
+        root.addChild(t, -1, nullptr);
+    }
+    file.deleteFile();
+    juce::FileOutputStream os(file);
+    if (os.openedOk()) root.writeToStream(os);
+}
+
+// Load a saved note grid onto the CURRENT pattern (all channels). The sounds are left untouched.
+void DrumSequencerEditor::loadMidiPattern(const juce::File& file)
+{
+    juce::FileInputStream in(file);
+    if (! in.openedOk()) return;
+    auto root = juce::ValueTree::readFromStream(in);
+    if (! root.isValid()) return;
+
+    auto& pat = proc.sequencer.patterns[currentPattern()];
+    const int n = juce::jmin(root.getNumChildren(), (int) Sequencer::NUM_CHANNELS);
+    for (int ch = 0; ch < n; ++ch)
+    {
+        auto t = root.getChild(ch);
+        auto& c = pat.channels[ch];
+        c.numSteps = juce::jlimit(1, DrumChannel::MAX_STEPS, (int) t.getProperty("numSteps", c.numSteps));
+        const juce::String steps = t.getProperty("steps", "").toString();
+        for (int s = 0; s < DrumChannel::MAX_STEPS; ++s)
+            c.steps[s] = (s < steps.length() && steps[s] == '1');
+        auto loadF = [&](const char* key, float* dst, float def) {
+            auto tk = juce::StringArray::fromTokens(t.getProperty(key, "").toString(), ",", "");
+            for (int s = 0; s < DrumChannel::MAX_STEPS; ++s)
+                dst[s] = (s < tk.size() && tk[s].isNotEmpty()) ? tk[s].getFloatValue() : def; };
+        loadF("stepVel",     c.stepVel,      1.0f);
+        loadF("stepPitch",   c.stepPitch,    0.0f);
+        loadF("stepRollDec", c.stepRollDecay,0.0f);
+        loadF("stepNoteLen", c.stepNoteLen,  0.25f);
+        loadF("stepPan",     c.stepPan,      0.0f);
+        auto rl = juce::StringArray::fromTokens(t.getProperty("stepRoll",     "").toString(), ",", "");
+        auto cl = juce::StringArray::fromTokens(t.getProperty("stepCondLen",  "").toString(), ",", "");
+        auto cm = juce::StringArray::fromTokens(t.getProperty("stepCondMask", "").toString(), ",", "");
+        for (int s = 0; s < DrumChannel::MAX_STEPS; ++s)
+        {
+            c.stepRoll[s]     = (s < rl.size() && rl[s].isNotEmpty()) ? juce::jlimit(1, 6, rl[s].getIntValue()) : 1;
+            c.stepCondLen[s]  = (s < cl.size() && cl[s].isNotEmpty()) ? juce::jlimit(1, 10, cl[s].getIntValue()) : 1;
+            c.stepCondMask[s] = (s < cm.size() && cm[s].isNotEmpty()) ? cm[s].getIntValue() : 0;
+        }
+    }
+    stepGrid.update(proc.sequencer, proc.anySolo);
+    refreshPatternButtons();
+    content.repaint();
 }
 
 // Push BPM / time signature from the sequencer into the toolbar and refresh
@@ -3458,17 +3595,12 @@ void DrumSequencerEditor::setupComponents()
                        "Installed a newer version but this still shows the old number? Rescan your plugins "
                        "in your DAW/host and reopen the project - the DAW may have cached the old build.");
 
-    content.addAndMakeVisible(btnClearMidi);
-    btnClearMidi.setTooltip("Clear ALL MIDI assignments (every knob, button and step). Asks first. "
-                            "Use this to start your MIDI mapping over from scratch.");
-    btnClearMidi.onClick = [this] {
-        juce::NativeMessageBox::showOkCancelBox(juce::AlertWindow::QuestionIcon,
-            "Clear all MIDI assignments?",
-            "This removes every MIDI CC assignment in the whole plugin. This cannot be undone.",
-            this, juce::ModalCallbackFunction::create([this](int ok) {
-                if (ok) { proc.midiLearn.clearAll(); content.repaint(); }
-            }));
-    };
+    // MIDI menu (dropdown): Save / load the current pattern's note grid + clear MIDI-learn.
+    content.addAndMakeVisible(comboMidi);
+    comboMidi.setTooltip("MIDI: save or load the current pattern's note grid (*.basamakpattern in your MIDI "
+                         "Patterns folder), refresh/open that folder, or clear all MIDI-learn assignments.");
+    rebuildMidiMenu();
+    comboMidi.onChange = [this] { handleMidiMenuChange(); };
 
     content.addAndMakeVisible(btnUndo);
     btnUndo.setTooltip("Undo the last change (sounds, steps, FX, patterns - up to a couple dozen steps back).");
@@ -4765,7 +4897,8 @@ void DrumSequencerEditor::rebuildSlotMenus()
         juce::PopupMenu sampleSub;
         addFolderToMenu(sampleSub, getSamplesFolder());
         sampleSub.addSeparator();
-        sampleSub.addItem(ID_LOAD_SAMPLE, "Load Sample...");      // double-click loads; "Open Samples Folder" removed (Load does the real work)
+        sampleSub.addItem(ID_REFRESH_SAMPLES, "Refresh samples folder");   // rescan so newly-added files show up
+        sampleSub.addItem(ID_SHOW_SAMPLES,    "Show Folder");              // open the Samples folder to drop files in
         root->addSubMenu("Sample", sampleSub);
         root->addItem(3, "Noise"); root->addItem(4, "Analog + FM");   // Depth 0 = analog, raise it for FM (resonator removed)
         root->addItem(6, "Physical");   // "FM"/"Synth"/"Wavetable" retired from the menu (kept parseable for old
@@ -4951,24 +5084,16 @@ void DrumSequencerEditor::onSlotEngineChange(int box)
         syncBoxesFromSrcOn();   // restore this combo's display (the action isn't an engine)
         return;
     }
-    if (id == ID_LOAD_SAMPLE)
+    if (id == ID_REFRESH_SAMPLES)   // re-scan the folder so files added on disk appear in the list
     {
-        boxEngine[box] = DrumChannel::SrcSample; ch.slots[box].engine = DrumChannel::SrcSample;
-        fileChooser = std::make_unique<juce::FileChooser>("Load Sample", getSamplesFolder(), kAudioWildcard);
-        const int chN = selectedChannel;
-        fileChooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-            [this, chN, box](const juce::FileChooser& fc) {
-                auto f = fc.getResult();
-                if (f.existsAsFile()) {
-                    // Load IN PLACE (no copy). Only samples that live in the samples folder appear in the dropdown;
-                    // one loaded from elsewhere just plays in this slot (it isn't added to the library).
-                    proc.sequencer.channel(chN).loadUserSample(box, f);   // into THIS slot
-                    cacheWaveform(chN);
-                }
-                rescanSamples(); rebuildSampleMenu();
-                if (chN == selectedChannel) { syncPadFromSlots(true); layoutContent(); refreshDetailPanel(); }
-            });
-        syncPadFromSlots(true); ch.markDspDirty(); layoutContent(); refreshDetailPanel();
+        rescanSamples(); rebuildSampleMenu();
+        syncBoxesFromSrcOn();   // restore this combo's display (the action isn't an engine)
+        return;
+    }
+    if (id == ID_SHOW_SAMPLES)      // open the Samples folder so the user can drop files in
+    {
+        getSamplesFolder().revealToUser();
+        syncBoxesFromSrcOn();   // restore this combo's display (the action isn't an engine)
         return;
     }
     if (id >= SAMPLE_ID_BASE && id < ID_INIT_MIX)   // a specific sample file
@@ -5869,7 +5994,7 @@ void DrumSequencerEditor::layoutContent()
     btnUndo.setBounds     (858, 7, 28,  26);   // ↶ icon
     btnRedo.setBounds     (888, 7, 28,  26);   // ↷ icon
     lblMidiIn.setBounds   (922, 8, 92, 24);
-    btnClearMidi.setBounds(1018, 7, 76, 26);
+    comboMidi.setBounds(1018, 7, 72, 26);         // ends at 1090; "MIDI" is short, so this leaves an 8px gap
     btnAudition.setBounds (1098, 7, 70, 26);      // "Auto Test"
     comboVisChannels.setBounds(0, 0, 0, 0); comboNumPat.setBounds(0, 0, 0, 0);   // replaced by the toggle buttons
     // Where the Channels/Patterns count boxes used to be: Tooltips toggle + the (global) Follow toggle.

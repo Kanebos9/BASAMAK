@@ -238,17 +238,18 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         }
     }
 
-    // While the transport is NOT advancing steps (stopped / auditioning via TEST), the per-step arm in
-    // the Sequencer never fires. Re-arm here on a FIXED ~5 Hz grid (every 0.2 s) so a held / long-attack /
+    // While the transport is NOT advancing steps (stopped / auditioning via TEST or Auto Test), the per-step arm
+    // in the Sequencer never fires. Re-arm here on a FIXED ~10 Hz grid (every 0.1 s) so a held / long-attack /
     // still-ringing sound keeps refreshing and switching the analysed slot updates. The grid is PHASE-ALIGNED
-    // to the TEST hit (the test handler below resets analysisArmCtr to 0), so every tap captures the sound at
-    // the SAME points in time -> a consistent spectrum. Before this alignment the grid was free-running, so a
-    // TEST hit landed at a random offset within it and each tap caught the decay at a different phase = the
-    // "different wave every time I press TEST" inconsistency. Playback still uses the step-aligned arm.
+    // to the hit (the test handler below resets analysisArmCtr to 0 for BOTH the TEST button and Auto Test, which
+    // share the testTriggerRequest path), so every tap captures the sound at the SAME points in time -> a
+    // consistent spectrum. Before this alignment the grid was free-running, so a hit landed at a random offset
+    // within it and each tap caught the decay at a different phase = the "different wave every time" bug.
+    // Playback still uses the step-aligned arm.
     if (! sequencer.isCurrentlyPlaying)
     {
         analysisArmCtr += audio.getNumSamples();
-        const int armEvery = juce::jmax(1, (int) (0.2 * currentSampleRate));
+        const int armEvery = juce::jmax(1, (int) (0.1 * currentSampleRate));
         if (analysisArmCtr >= armEvery) { analysisArmCtr = 0; spectrumTap.arm(); }
     }
     else analysisArmCtr = 0;

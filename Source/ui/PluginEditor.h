@@ -948,7 +948,6 @@ private:
     juce::Label  lblMidiIn;
     uint32_t     lastMidiInSeen = 0;
     int          midiFlash = 0;
-    juce::TextButton btnClearMidi { "Clear MIDI" };
 
     // Undo / redo of whole-instrument state (snapshot stack, per-action). Each entry
     // carries the editor's preset-label state too, so undoing a preset switch also
@@ -977,6 +976,16 @@ private:
     juce::Label    lblPreset { {}, "Preset:" };
     juce::ComboBox comboPreset;
     juce::Array<juce::File> presetFiles;
+
+    //-- MIDI menu (top bar; replaces the old "Clear MIDI" button). Clear MIDI-learn + save/load
+    //   the current pattern's note grid as a *.basamakpattern file.
+    juce::ComboBox comboMidi;
+    juce::Array<juce::File> midiPatternFiles;
+    juce::File getMidiPatternsFolder();
+    void rebuildMidiMenu();
+    void handleMidiMenuChange();
+    void saveMidiPattern(const juce::File& file);
+    void loadMidiPattern(const juce::File& file);
 
     //-- Pattern row + per-pattern play options
     juce::Label    lblPatterns { {}, "Patterns" };

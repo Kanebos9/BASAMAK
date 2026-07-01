@@ -45,6 +45,10 @@ public:
     // changes so all its controls move together without losing their CCs.
     void setChannelForPrefix(const juce::String& prefix, int newChannel);
 
+    // Directly assign a CC (+ MIDI channel) to a param - e.g. to apply a factory/default mapping from code.
+    // Message thread only. Overwrites any existing assignment for that CC or that param.
+    void assign(const juce::String& paramId, int cc, int midiCh);   // takes mapCS + notifies listeners
+
     // Save / restore
     juce::ValueTree saveState() const;
     void            loadState(const juce::ValueTree& tree);
@@ -86,7 +90,6 @@ private:
 
     juce::ListenerList<Listener> listeners;
 
-    void assign(const juce::String& paramId, int cc, int midiCh);     // takes mapCS + notifies listeners
     void assignLocked(const juce::String& paramId, int cc, int midiCh); // map mutation only; caller holds mapCS, no notify
     static int key(int cc, int midiCh) { return cc * 16 + (midiCh - 1); }
 };

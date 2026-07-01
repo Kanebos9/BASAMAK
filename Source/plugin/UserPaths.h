@@ -10,6 +10,7 @@
 //        Samples/        - audio files (factory + anything the user adds)
 //        Sound Bank/     - *.basamaksound  (saved channel sounds)
 //        Presets/        - *.basamakpreset (saved whole-instrument presets)
+//        MIDI Patterns/  - *.basamakpattern (saved per-pattern note grids)
 //
 // On first run the folders are seeded (once) by COPYING from the older,
 // inconsistently-named locations used by earlier builds (the whole old
@@ -54,6 +55,7 @@ namespace UserPaths
 
     inline juce::File samples()    { return sub("Samples",    "Samples",     "DrumSequencer Samples"); }
     inline juce::File presets()    { return sub("Presets",    "Presets",     "DrumSequencer Presets"); }
+    inline juce::File midiPatterns() { return sub("MIDI Patterns", "", ""); }   // saved *.basamakpattern note grids
 
     inline juce::File soundMixes()
     {
