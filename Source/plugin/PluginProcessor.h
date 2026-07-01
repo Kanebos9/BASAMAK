@@ -46,17 +46,6 @@ public:
     LaunchpadController launchpad;
     MidiLearnManager    midiLearn;
 
-    //-- Host-automatable parameters (curated: per-channel essentials + master). They bridge
-    //   to the plain channel fields and apply per channel ACROSS ALL PATTERNS. applyAutomation()
-    //   (audio thread) writes param->field when the host moved a param; pushParamsFromFields()
-    //   (message thread) writes field->param so the DAW reflects/records manual + preset changes.
-    struct AutoP { juce::RangedAudioParameter* param = nullptr;
-                   std::function<float()> get; std::function<void(float)> set; float last = -1.0e9f; };
-    std::vector<AutoP> autoParams;
-    void buildAutomationParams();
-    void applyAutomation();
-    void pushParamsFromFields();
-
     // Duplicate a whole pattern (sounds + steps + per-pattern settings) into another slot.
     // Used by the pattern-bar drag-copy. Runs on the message thread.
     void copyPattern(int src, int dst);

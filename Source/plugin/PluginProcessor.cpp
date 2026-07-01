@@ -78,99 +78,11 @@ DrumSequencerProcessor::DrumSequencerProcessor()
             ch.padX = 0.0f; ch.padY = 0.5f;
             ch.restoredSlots = true;   // authored -> prepareToPlay won't rebuild from legacy
         }
-    buildAutomationParams();
 }
 
-// Create the curated host-automatable parameters + their field bridges. Per-channel params
-// apply to that channel in EVERY pattern (predictable automation); master likewise.
-void DrumSequencerProcessor::buildAutomationParams()
-{
-    auto addF = [this](const juce::String& id, const juce::String& nm, juce::NormalisableRange<float> r,
-                       float def, std::function<float()> get, std::function<void(float)> set)
-    {
-        auto* p = new juce::AudioParameterFloat(juce::ParameterID(id, 1), nm, r, def);
-        addParameter(p);
-        autoParams.push_back({ p, std::move(get), std::move(set), -1.0e9f });
-    };
-    auto addB = [this](const juce::String& id, const juce::String& nm, bool def,
-                       std::function<float()> get, std::function<void(float)> set)
-    {
-        auto* p = new juce::AudioParameterBool(juce::ParameterID(id, 1), nm, def);
-        addParameter(p);
-        autoParams.push_back({ p, std::move(get), std::move(set), -1.0e9f });
-    };
-    auto eachPat = [this](int ch, std::function<void(DrumChannel&)> fn) {
-        for (auto& pat : sequencer.patterns) fn(pat.channels[ch]);
-    };
-    auto rep = [this](int ch) -> DrumChannel& { return sequencer.patterns[0].channels[ch]; };  // representative (pattern 0)
-
-    const juce::NormalisableRange<float> rVol(0.0f, 1.25f), rPan(-1.0f, 1.0f), r01(0.0f, 1.0f);
-    juce::NormalisableRange<float> rCut(20.0f, 20000.0f, 0.0f, 0.3f);  // log-ish
-
-    for (int ch = 0; ch < Sequencer::NUM_CHANNELS; ++ch)
-    {
-        const juce::String c = "ch" + juce::String(ch + 1);
-        addF("p_" + c + "_vol", c + " Volume", rVol, 1.0f,
-             [this, ch, rep] { return rep(ch).volume; },
-             [this, ch, eachPat](float v){ eachPat(ch, [v](DrumChannel& d){ d.volume = v; }); });
-        addF("p_" + c + "_pan", c + " Pan", rPan, 0.0f,
-             [this, ch, rep] { return rep(ch).pan; },
-             [this, ch, eachPat](float v){ eachPat(ch, [v](DrumChannel& d){ d.pan = v; }); });
-        addB("p_" + c + "_mute", c + " Mute", false,
-             [this, ch, rep] { return rep(ch).mute ? 1.0f : 0.0f; },
-             [this, ch, eachPat](float v){ eachPat(ch, [v](DrumChannel& d){ d.mute = v > 0.5f; }); });
-        addF("p_" + c + "_cut", c + " LP Cutoff", rCut, 20000.0f,
-             [this, ch, rep] { return rep(ch).eqBand[DrumChannel::EQ_LP].freq; },
-             [this, ch, eachPat](float v){ eachPat(ch, [v](DrumChannel& d){
-                   d.eqBand[DrumChannel::EQ_LP].freq = v; d.eqBand[DrumChannel::EQ_LP].on = (v < 19500.0f); d.markDspDirty(); }); });
-        addF("p_" + c + "_rev", c + " Reverb Send", r01, 0.0f,
-             [this, ch, rep] { return rep(ch).reverbSend; },
-             [this, ch, eachPat](float v){ eachPat(ch, [v](DrumChannel& d){ d.reverbSend = v; }); });
-        addF("p_" + c + "_dly", c + " Delay Send", r01, 0.0f,
-             [this, ch, rep] { return rep(ch).delaySend; },
-             [this, ch, eachPat](float v){ eachPat(ch, [v](DrumChannel& d){ d.delaySend = v; }); });
-    }
-    // Master (applied to every pattern's master settings)
-    auto eachMaster = [this](std::function<void(Sequencer::MasterFX&)> fn) { for (auto& pat : sequencer.patterns) fn(pat.master); };
-    addF("p_m_vol", "Master Volume", r01, 0.9f,
-         [this] { return sequencer.patterns[0].master.volume; },
-         [this, eachMaster](float v){ eachMaster([v](Sequencer::MasterFX& m){ m.volume = v; }); });
-    addF("p_m_pan", "Master Pan", rPan, 0.0f,
-         [this] { return sequencer.patterns[0].master.pan; },
-         [this, eachMaster](float v){ eachMaster([v](Sequencer::MasterFX& m){ m.pan = v; }); });
-    addF("p_m_lim", "Master Limit", r01, 0.003f,
-         [this] { return sequencer.patterns[0].master.limit; },
-         [this, eachMaster](float v){ eachMaster([v](Sequencer::MasterFX& m){ m.limit = v; }); });
-    addF("p_m_glue", "Master Glue", r01, 0.0f,
-         [this] { return sequencer.patterns[0].master.glue; },
-         [this, eachMaster](float v){ eachMaster([v](Sequencer::MasterFX& m){ m.glue = v; }); });
-
-    for (auto& ap : autoParams) ap.last = ap.get();   // baseline so nothing fires until something moves
-}
-
-// Audio thread: when the HOST moved a param, write it to the field(s). Change-detected so
-// manual knob turns (field != param, param unchanged) are NOT overwritten.
-void DrumSequencerProcessor::applyAutomation()
-{
-    for (auto& ap : autoParams)
-    {
-        const float pv = ap.param->convertFrom0to1(ap.param->getValue());
-        if (std::abs(pv - ap.last) > 1.0e-6f) { ap.set(pv); ap.last = pv; }
-    }
-}
-
-// Message thread (editor timer / after load): push field -> param so the DAW shows + records
-// manual, preset and undo changes. Only when they differ (no needless host notifications).
-void DrumSequencerProcessor::pushParamsFromFields()
-{
-    for (auto& ap : autoParams)
-    {
-        const float fv = ap.get();
-        const float pv = ap.param->convertFrom0to1(ap.param->getValue());
-        if (std::abs(fv - pv) > 1.0e-6f)
-            ap.param->setValueNotifyingHost(ap.param->convertTo0to1(fv));
-    }
-}
+// NOTE: the curated host-automation parameters (per-channel Volume/Pan/Mute/LP Cutoff/Reverb/Delay +
+// Master) were REMOVED - they had drifted out of date (e.g. channel Pan no longer exists; panning is
+// per-step) and were low value, so the plugin now exposes NO host-automatable parameters.
 
 // Give fresh channels a default sample drawn from the samples folder (rotating),
 // instead of a built-in synth sound. A loaded project overrides this afterwards.
@@ -362,9 +274,6 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         for (auto& pat : sequencer.patterns)
             for (auto& ch : pat.channels)
                 ch.silenceAllVoices();
-
-    //-- Apply host automation (param -> field) before rendering.
-    applyAutomation();
 
     //-- Run sequencer at the OVERSAMPLED rate, then down-sample. The engine renders into the
     //   oversampler's up-block (kEngineOS x); channels route to Main or an aux bus inside it.
@@ -1389,7 +1298,6 @@ void DrumSequencerProcessor::setStateInformation(const void* data, int sizeInByt
             ch.restoredSlots = false;                           // consume the transient flag
         }
 
-    pushParamsFromFields();   // sync the automatable params to the loaded values
     launchpadRefreshPending.store(true);
 }
 

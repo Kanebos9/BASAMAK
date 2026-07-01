@@ -5579,7 +5579,6 @@ void DrumSequencerEditor::timerCallback()
     updateBarLength();       // keep the bar-length read-out in sync with tempo
 
     // Live envelope playheads: where each playing voice on the selected channel is.
-    proc.pushParamsFromFields();   // reflect manual/preset/undo changes onto the host params
     float heads[8]; int nh = proc.sequencer.channel(selectedChannel).activeVoiceTimes(heads, 8);
     envEditor.setPlayheads(heads, nh);
     pitchEditor.setPlayheads(heads, nh);
