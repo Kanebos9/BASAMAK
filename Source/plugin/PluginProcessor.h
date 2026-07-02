@@ -82,6 +82,10 @@ public:
     std::atomic<int>  analyzeChannel { 0 };
     std::atomic<int>  analysisSlot   { -1 };   // PER-SLOT EQ: spectrum slot (-1 = mix/All)
     int               analysisArmCtr = 0;      // re-arm the spectrum periodically while stopped (audio thread)
+    // ONE shared per-slot-analysis scratch (only one channel is ever analysed at a time);
+    // the analysed channel's analysisBuf points here per block. Replaced a 32 KB array on
+    // every channel of every pattern (~16 MB of idle RAM).
+    std::vector<float> analysisScratch;
 
     // Launchpad device name (partial match)
     juce::String launchpadDeviceName = "Launchpad Mini MK3";
@@ -102,13 +106,9 @@ public:
 
     // Reverb / Delay engines (the FX are shared; their KNOB VALUES are stored
     // per-pattern in Sequencer::Pattern::master, see Sequencer.h).
-    juce::Reverb reverb;                 // (legacy, unused - replaced by the FDN below)
-    juce::Reverb::Parameters reverbParams;
     FDNReverb fdn;                       // modulated FDN reverb (smoother than Freeverb)
-    float masterDelayMix = 0.3f;        // fixed delay return level (not user-facing)
     float limiterGain    = 1.0f;        // limiter gain-reduction envelope (audio thread state)
     float masterGlueEnv  = 0.0f;        // master "glue" compressor detector envelope (audio thread state)
-    float deglitchPrev[2] = { 0.0f, 0.0f };  // last clean output per channel (master de-glitcher)
     // Convenience accessor for the current pattern's master settings.
     Sequencer::MasterFX& masterFX() { return sequencer.current().master; }
 
@@ -148,9 +148,6 @@ public:
 
     // Export sequence as MIDI file for drag-to-DAW
     juce::File exportMidiFile();
-
-    // Load default channel samples from the samples folder (rotating).
-    void assignDefaultSamples();
 
 private:
     double currentSampleRate  = 44100.0;

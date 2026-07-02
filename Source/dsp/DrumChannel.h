@@ -81,54 +81,10 @@ struct Biquad
 };
 
 //==============================================================================
-// AHDSR envelope (Attack, Hold, Decay, Sustain, Release). Hold keeps the peak
-// for a time before decaying — useful for one-shot samples where attack is
-// instant. Times in seconds.
-struct Envelope
-{
-    enum Stage { Idle, Attack, Hold, Decay, Sustain, Release };
-
-    void setSampleRate(double s) { sr = s > 0 ? s : 44100.0; }
-    void setParams(float A, float H, float D, float S, float R) { a = A; h = H; d = D; s = S; r = R; }
-    void reset() { stage = Idle; level = 0; holdCtr = 0; }
-    void noteOn() { stage = Attack; }
-    void noteOff()
-    {
-        if (stage != Idle && stage != Release)
-        {
-            relStep = (r > 0.0f) ? level / (float)(r * sr) : level;
-            if (relStep <= 0.0f) relStep = 1.0e-5f;
-            stage = Release;
-        }
-    }
-    bool isActive() const { return stage != Idle; }
-
-    float getNext() noexcept
-    {
-        switch (stage)
-        {
-            case Attack:  { float st = a > 0 ? 1.0f / (float)(a * sr) : 1.0f;
-                            level += st; if (level >= 1.0f) { level = 1.0f; holdCtr = 0; stage = h > 0 ? Hold : Decay; } } break;
-            case Hold:    { level = 1.0f; if (++holdCtr >= (long)(h * sr)) stage = Decay; } break;
-            case Decay:   { float st = d > 0 ? (1.0f - s) / (float)(d * sr) : 1.0f;
-                            level -= st; if (level <= s) { level = s; stage = Sustain; } } break;
-            case Sustain: level = s; break;
-            case Release: { level -= relStep; if (level <= 0.0f) { level = 0.0f; stage = Idle; } } break;
-            default:      level = 0.0f; break;
-        }
-        return level;
-    }
-
-    Stage stage = Idle;
-    double sr = 44100.0;
-    float a = 0.001f, h = 0.0f, d = 0.1f, s = 0.7f, r = 0.1f;
-    float level = 0.0f, relStep = 0.0f;
-    long  holdCtr = 0;
-};
-
-//==============================================================================
-// Generates built-in drum sounds synthetically — no external samples needed.
-// Each sound has a category (Kick, Snare, ...) and a variant (808, 909, ...).
+// LEGACY sound-type metadata. The old built-in synthesized drum bank is GONE
+// (its generate()/gen* synthesis was dead code and was removed); only the Type
+// enum + names remain because the "sound" property is persisted in old projects
+// and the editor still shows the category names.
 class DrumSoundGenerator
 {
 public:
@@ -145,27 +101,12 @@ public:
 
     struct SoundInfo { Type type; juce::String category; juce::String variant; };
 
-    static juce::AudioBuffer<float> generate(Type type, double sampleRate);
-
     // Metadata for building the UI
     static const std::vector<SoundInfo>& all();
     static juce::StringArray            categories();                 // unique, alphabetical
     static juce::Array<Type>            variantsIn(const juce::String& category);
     static juce::String                 categoryOf(Type);
     static juce::String                 variantOf(Type);
-
-private:
-    static juce::AudioBuffer<float> genKick (double sr, float f0, float f1, float pitchDecay,
-                                             float ampDecay, float click, float len);
-    static juce::AudioBuffer<float> genSnare(double sr, float tone, float toneAmt,
-                                             float noiseDecay, float len);
-    static juce::AudioBuffer<float> genHat  (double sr, float decay, float len, float bright);
-    static juce::AudioBuffer<float> genClap (double sr, float len, float decay);
-    static juce::AudioBuffer<float> genTom  (double sr, float f0, float decay, float len);
-    static juce::AudioBuffer<float> genCymbal(double sr, float len, float decay, float bright);
-    static juce::AudioBuffer<float> genCowbell(double sr);
-    static juce::AudioBuffer<float> genClave(double sr);
-    static juce::AudioBuffer<float> genRim(double sr);
 };
 
 //==============================================================================
@@ -233,9 +174,9 @@ public:
     int  getSampleNumFrames(int slot = 0) const
          { return slotSample[juce::jlimit(0, NUM_SLOTS - 1, slot)].buf.getNumSamples(); }
     double getSampleRateHz()  const { return sr; }
-    // The loaded file's own sample rate (frames are stored at this rate, not the
-    // playback rate), so the real length in seconds = frames / sampleFileRate.
-    double getSampleFileRate() const { return sampleFileRate > 0.0 ? sampleFileRate : sr; }
+    // Sample buffers are RESAMPLED to the host base rate at load (loadUserSample), so
+    // their frames are always at hostRate = sr / engineOS. Length in seconds = frames / this.
+    double getSampleFileRate() const { return engineOS > 0 ? sr / (double) engineOS : sr; }
 
     float sampleCrush = 0.0f;         // 0 = clean .. 1 = heavy bit-crush (lo-fi grit) on the Sample
     //-- Sample source pitch (+/- semitones, applied via resampling) + its own
@@ -449,8 +390,8 @@ public:
     };
     Slot slots[NUM_SLOTS];
 
-    // PER-SLOT sample storage: each Sample slot has its OWN buffer + region + speed + reverse, so three
-    // slots can hold three different samples (each with its own waveform/trim/reverse). Public so the
+    // PER-SLOT sample storage: each Sample slot has its OWN buffer + region + speed + reverse, so both
+    // slots can hold different samples (each with its own waveform/trim/reverse). Public so the
     // editor can read a slot's loaded file/name (like it reads slots[] directly).
     struct SlotSample
     {
@@ -458,6 +399,8 @@ public:
         juce::AudioBuffer<float> original;   // the loaded source (kept so Stretch can be re-derived)
         juce::File file;                     // source path (for persistence + display)
         bool usingUser = false;              // a user file is loaded in this slot
+        double loadedAtRate = 0.0;           // host rate the file was resampled to at load (0 = none);
+                                             // prepareToPlay reloads the slot if the host rate changed
         int  sliceCounter = 0;               // round-robin-of-regions runtime state
         float curRegLo = 0.0f, curRegHi = 1.0f;  // region (0..1) the current voice is playing (set at trigger)
     };
@@ -478,8 +421,8 @@ public:
         return 0.0f;
     }
 
-    // UI (saved per channel): which slot the envelope editor currently edits (1/2/3 = slot
-    // 1/2/3). Each slot keeps its own envelope - pick a slot, shape it, pick the next.
+    // UI (saved per channel): which slot the envelope editor currently edits (1/2 = slot
+    // 1/2). Each slot keeps its own envelope - pick a slot, shape it, pick the next.
     int envEditMode = 1;
 
     // Rebuild slots[] from the legacy per-engine fields (srcOn/srcWeight + the
@@ -542,9 +485,13 @@ public:
     //-- Optional spectrum tap (set by processor for the analysed channel only)
     SpectrumTap* analysisTap = nullptr;
     // === PER-SLOT EQ (begin) - which slot the spectrum analyses: -1 = the final mix (All),
-    //     0/1/2 = that slot's signal (pre-mix). Set per block by the processor. ===
+    //     0/1 = that slot's signal (pre-mix). Set per block by the processor. ===
     int   analysisSlot = -1;
-    float analysisBuf[8192] = {};   // audio-thread scratch: the selected slot's per-sample output
+    // Audio-thread scratch for the selected slot's per-sample output. Points into ONE
+    // processor-owned buffer (only one channel is ever analysed at a time) instead of a
+    // 32 KB array per channel x pattern. Set per block by the processor with analysisTap.
+    float* analysisBuf   = nullptr;
+    int    analysisBufLen = 0;
     // === PER-SLOT EQ (end) ===
 
     //==================================================================
@@ -552,6 +499,12 @@ public:
     void loadDefaultSound();
     void loadUserSample(int slot, const juce::File& file);   // load a file into one slot's buffer
     void updateStretch(int slot);   // rebuild slotSample[slot].buf from .original at slots[slot].smpStretch
+    // Allocate the Karplus-Strong delay lines (16 KB per voice-slot) if any slot uses a KS
+    // engine (Physical / legacy Synth). MESSAGE THREAD ONLY (it allocates); the audio thread
+    // gates every KS read/write on ksReady. Called from prepareToPlay / readSlots /
+    // buildSlotsFromLegacy / the editor's engine-change path. Lazily allocating these cut the
+    // idle memory of 32 patterns x 16 channels x 8 voices x 2 slots from ~130 MB to ~0.
+    void ensureKsBuffers();
     void trigger(float velocityGain = 1.0f, float pitchSemis = 0.0f, float pan = 0.0f);
     void renderInto(juce::AudioBuffer<float>& dest, int startSample, int numSamples, bool anySolo,
                     juce::AudioBuffer<float>* reverbSendBus = nullptr,
@@ -578,28 +531,29 @@ public:
 
     // Immediately silence every voice - used by Stop so ringing tails are cut.
     void silenceAllVoices() { for (auto& v : voices) v.playHead = -1.0; for (auto& ss : slotSample) ss.sliceCounter = 0; }
+    // CHOKE-group cut: fade every ringing voice out over ~3 ms instead of a hard cut
+    // (a mid-sample discontinuity clicks when the choking hit is quieter than the tail).
+    void fadeOutVoices() { for (auto& v : voices) if (v.active()) v.killing = true; }
     bool anyVoiceActive() const { for (auto& v : voices) if (v.active()) return true; return false; }
 
 private:
     double sr = 44100.0;
-    double sampleFileRate = 0.0;   // the loaded file's own sample rate (0 = none loaded)
     // Per-channel state for the blend-character processors (Drift/Punch/Glue).
     float driftPhase = 0.0f;
     float vibPhase   = 0.0f;   // shared ~5.5 Hz vibrato LFO (Analog + Physical)
     float punchFast = 0.0f, punchSlow = 0.0f;
     float glueEnv = 0.0f;
 
-    double pitchRatio = 1.0;
-
     // One playing note. The channel holds a small pool so overlapping triggers
     // can ring out together (polyphony); in mono mode only voice 0 is used.
     static constexpr int POLY      = 8;
     static constexpr int UNI_MAX   = 7;      // max unison voices for the oscillator
     static constexpr int KS_MAX    = 4096;   // Karplus-Strong delay buffer (min ~11 Hz @ 44.1k)
-    // Per-slot synthesis state: each of the 3 slots runs its own engine, so it
+    // Per-slot synthesis state: each of the 2 slots runs its own engine, so it
     // needs its own oscillator phases / noise colour state / Karplus-Strong line /
-    // sample playhead. (3x the KS buffer is the only notable memory cost; that's
-    // why stacking several Physical slots is the heaviest case - see the tooltip.)
+    // sample playhead. The KS line (16 KB) is HEAP-allocated lazily by ensureKsBuffers()
+    // only when a KS engine (Physical / legacy Synth) is actually assigned - every
+    // pattern x channel x voice carrying it inline cost ~130 MB of always-on RAM.
     struct SlotVoice
     {
         double   sinePhase = 0.0;
@@ -618,7 +572,7 @@ private:
         float    brownState = 0.0f, prevWhite = 0.0f;
         float    greyZ1 = 0.0f, greyZ2 = 0.0f;   // grey-noise mid-scoop biquad state (inverse equal-loudness)
         uint32_t noiseState = 0x1234567u;
-        float    ksBuf[KS_MAX] = { 0 };
+        std::vector<float> ksBuf;        // KS delay line: empty until ensureKsBuffers(), then KS_MAX floats
         double   ksWrite = 0.0;
         float    ksLp = 0.0f;
         float    ksApSt[6] = { 0,0,0,0,0,0 };   // dispersion allpass state (up to 6 stages for user Stiffness)
@@ -635,11 +589,16 @@ private:
         float    velGain = 1.0f;    // per-step velocity (volume) for this hit
         float    voicePitch = 0.0f; // per-step pitch offset (semitones) for this hit
         float    voicePan = 0.0f;   // per-step stereo pan (-1..+1) for this hit (0 = centre)
+        bool     killing  = false;  // choke: fade this voice out (~3 ms) then stop - no hard-cut click
+        float    killGain = 1.0f;   // current fade gain while killing
         const juce::AudioBuffer<float>* smpBuf = nullptr;  // velocity-layer buffer chosen at trigger
         SlotVoice sv[NUM_SLOTS];
         bool active() const { return playHead >= 0.0; }
     };
     Voice voices[POLY];
+    // True once every voice's KS lines are allocated (ensureKsBuffers). The audio thread
+    // gates all ksBuf access on this (acquire) so allocation on the message thread is safe.
+    std::atomic<bool> ksReady { false };
 
     // Decay coefficient 1 -> ~0.05 over 'timeSeconds' (exp). t in samples.
     inline float decayCurve(long t, float timeSeconds) const noexcept
@@ -713,5 +672,4 @@ private:
     juce::AudioBuffer<float> fxSendBuf;   // per-slot reverb/delay send sums (ch 0/1 = reverb L/R, 2/3 = delay L/R)
 
     void applyEQ(juce::AudioBuffer<float>& buf, int numSamples);
-    void rebuildSampleWithPitch();
 };

@@ -31,6 +31,6 @@ SA_APP=$(ls -dt build/DrumSequencer_artefacts/Release/Standalone/*.app 2>/dev/nu
 [ -n "$SA_APP" ] && cp -R "$SA_APP" "$APP_DIR/"
 
 echo "==> Done. Installed:"
-ls -1 "$VST3_DIR" | grep -i davulseq || true
-ls -1 "$AU_DIR"   | grep -i davulseq || true
-ls -1d "$APP_DIR/DavulSEQ"*.app 2>/dev/null || true
+ls -1 "$VST3_DIR" | grep -i basamak || true
+ls -1 "$AU_DIR"   | grep -i basamak || true
+ls -1d "$APP_DIR/BASAMAK"*.app 2>/dev/null || true

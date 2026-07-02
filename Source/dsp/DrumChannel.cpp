@@ -165,8 +165,6 @@ static inline float hermite4(float fr, float y0, float y1, float y2, float y3) n
 // Sound generation helpers
 //==============================================================================
 
-static float whiteNoise(juce::Random& rng) { return rng.nextFloat() * 2.0f - 1.0f; }
-
 // === PER-SLOT EQ === process x through a biquad whose COEFFS are in 'c' but whose STATE is
 // external (kept per-voice-per-slot in SlotVoice). Lets one set of coeffs serve all voices.
 static inline float eqProcess(const Biquad& c, float* z1, float* z2, float x, int ch) noexcept
@@ -244,16 +242,6 @@ const char* DrumChannel::oscShapeName(int s) {
 }
 float       DrumChannel::oscShapeSample(int shape, float ph01) {
     return waveShape((double)(ph01 - std::floor(ph01)) * 2.0 * (double) kPi, shape);
-}
-// Skew/warp the phase (PWM on square, skew toward saw on tri, bend on sine). warp 0.5 = neutral.
-static inline double skewPhase(double phase, float warp) noexcept
-{
-    if (warp > 0.49f && warp < 0.51f) return phase;   // neutral -> untouched (and keeps BLEP exact)
-    const double tp = 2.0 * (double) kPi;
-    double ph = phase / tp - std::floor(phase / tp);  // 0..1
-    const double k = (double) juce::jlimit(0.03f, 0.97f, warp);
-    ph = (ph < k) ? (ph * 0.5 / k) : (0.5 + (ph - k) * 0.5 / (1.0 - k));
-    return ph * tp;
 }
 // Continuous morph between the shapes (pos 0..NUM_OSC_SHAPES-1). At an integer pos it is
 // identical to waveShape(), so Wave A == Wave B reproduces a plain single shape.
@@ -377,197 +365,6 @@ juce::String DrumSoundGenerator::variantOf(Type t)
     return {};
 }
 
-//-- Parameterized synthesis helpers -----------------------------------------
-juce::AudioBuffer<float> DrumSoundGenerator::genKick(double sr, float f0, float f1,
-                                                     float pitchDecay, float ampDecay,
-                                                     float click, float len)
-{
-    const int n = (int)(sr * len);
-    juce::AudioBuffer<float> buf(1, n);
-    auto* d = buf.getWritePointer(0);
-    for (int i = 0; i < n; ++i)
-    {
-        float t = (float)i / (float)sr;
-        float freq = f1 + (f0 - f1) * std::exp(-pitchDecay * t);
-        float env = std::exp(-ampDecay * t);
-        float cl = (t < 0.003f) ? (1.0f - t / 0.003f) * click : 0.0f;
-        d[i] = (std::sin(2.0f * kPi * freq * t) * env + cl) * 0.9f;
-    }
-    return buf;
-}
-
-juce::AudioBuffer<float> DrumSoundGenerator::genSnare(double sr, float tone, float toneAmt,
-                                                      float noiseDecay, float len)
-{
-    const int n = (int)(sr * len);
-    juce::AudioBuffer<float> buf(1, n);
-    auto* d = buf.getWritePointer(0);
-    juce::Random rng;
-    for (int i = 0; i < n; ++i)
-    {
-        float t = (float)i / (float)sr;
-        float toneEnv = std::exp(-22.0f * t);
-        float noiseEnv = std::exp(-noiseDecay * t);
-        float toneSig = std::sin(2.0f * kPi * tone * t) * toneEnv * toneAmt;
-        float noise = whiteNoise(rng) * noiseEnv * (1.0f - toneAmt);
-        d[i] = (toneSig + noise) * 0.85f;
-    }
-    return buf;
-}
-
-juce::AudioBuffer<float> DrumSoundGenerator::genHat(double sr, float decay, float len, float bright)
-{
-    const int n = (int)(sr * len);
-    juce::AudioBuffer<float> buf(1, n);
-    auto* d = buf.getWritePointer(0);
-    const float base[] = { 287.0f, 314.0f, 365.0f, 404.0f, 451.0f, 501.0f };
-    for (int i = 0; i < n; ++i)
-    {
-        float t = (float)i / (float)sr;
-        float env = std::exp(-decay * t);
-        float sig = 0.0f;
-        for (float f : base)
-            sig += (std::fmod(f * bright * t, 1.0f) < 0.5f ? 1.0f : -1.0f) / 6.0f;
-        d[i] = sig * env * 0.6f;
-    }
-    return buf;
-}
-
-juce::AudioBuffer<float> DrumSoundGenerator::genClap(double sr, float len, float decay)
-{
-    const int n = (int)(sr * len);
-    juce::AudioBuffer<float> buf(1, n);
-    auto* d = buf.getWritePointer(0);
-    juce::Random rng;
-    for (int i = 0; i < n; ++i)
-    {
-        float t = (float)i / (float)sr;
-        float b1 = (t < 0.006f) ? std::exp(-200.0f * t) : 0.0f;
-        float b2 = (t >= 0.006f && t < 0.012f) ? std::exp(-200.0f * (t - 0.006f)) : 0.0f;
-        float b3 = (t >= 0.012f && t < 0.018f) ? std::exp(-200.0f * (t - 0.012f)) : 0.0f;
-        float tail = (t >= 0.018f) ? std::exp(-decay * (t - 0.018f)) : 0.0f;
-        float env = b1 + b2 * 0.8f + b3 * 0.6f + tail * 0.5f;
-        d[i] = whiteNoise(rng) * env * 0.8f;
-    }
-    return buf;
-}
-
-juce::AudioBuffer<float> DrumSoundGenerator::genTom(double sr, float f0, float decay, float len)
-{
-    const int n = (int)(sr * len);
-    juce::AudioBuffer<float> buf(1, n);
-    auto* d = buf.getWritePointer(0);
-    for (int i = 0; i < n; ++i)
-    {
-        float t = (float)i / (float)sr;
-        float freq = f0 * 1.5f * std::exp(-12.0f * t) + f0;
-        float env = std::exp(-decay * t);
-        d[i] = std::sin(2.0f * kPi * freq * t) * env * 0.85f;
-    }
-    return buf;
-}
-
-juce::AudioBuffer<float> DrumSoundGenerator::genCymbal(double sr, float len, float decay, float bright)
-{
-    const int n = (int)(sr * len);
-    juce::AudioBuffer<float> buf(1, n);
-    auto* d = buf.getWritePointer(0);
-    const float base[] = { 287.0f, 314.0f, 365.0f, 404.0f, 451.0f, 501.0f, 550.0f, 630.0f };
-    juce::Random rng;
-    for (int i = 0; i < n; ++i)
-    {
-        float t = (float)i / (float)sr;
-        float env = std::exp(-decay * t);
-        float sig = 0.0f;
-        for (float f : base)
-            sig += (std::fmod(f * bright * t, 1.0f) < 0.5f ? 1.0f : -1.0f) / 8.0f;
-        sig += whiteNoise(rng) * 0.25f;
-        d[i] = sig * env * 0.55f;
-    }
-    return buf;
-}
-
-juce::AudioBuffer<float> DrumSoundGenerator::genCowbell(double sr)
-{
-    const int n = (int)(sr * 0.4);
-    juce::AudioBuffer<float> buf(1, n);
-    auto* d = buf.getWritePointer(0);
-    for (int i = 0; i < n; ++i)
-    {
-        float t = (float)i / (float)sr;
-        float env = std::exp(-8.0f * t);
-        float a = (std::fmod(540.0f * t, 1.0f) < 0.5f ? 1.0f : -1.0f);
-        float b = (std::fmod(800.0f * t, 1.0f) < 0.5f ? 1.0f : -1.0f);
-        d[i] = (a + b) * 0.5f * env * 0.7f;
-    }
-    return buf;
-}
-
-juce::AudioBuffer<float> DrumSoundGenerator::genClave(double sr)
-{
-    const int n = (int)(sr * 0.08);
-    juce::AudioBuffer<float> buf(1, n);
-    auto* d = buf.getWritePointer(0);
-    for (int i = 0; i < n; ++i)
-    {
-        float t = (float)i / (float)sr;
-        float env = std::exp(-90.0f * t);
-        d[i] = std::sin(2.0f * kPi * 1200.0f * t) * env * 0.85f;
-    }
-    return buf;
-}
-
-juce::AudioBuffer<float> DrumSoundGenerator::genRim(double sr)
-{
-    const int n = (int)(sr * 0.06);
-    juce::AudioBuffer<float> buf(1, n);
-    auto* d = buf.getWritePointer(0);
-    for (int i = 0; i < n; ++i)
-    {
-        float t = (float)i / (float)sr;
-        float toneEnv = std::exp(-80.0f * t);
-        float tone = std::sin(2.0f * kPi * 1700.0f * t) * toneEnv;
-        float click = (i < 5) ? 1.0f : 0.0f;
-        d[i] = (tone * 0.6f + click * 0.4f) * 0.8f;
-    }
-    return buf;
-}
-
-juce::AudioBuffer<float> DrumSoundGenerator::generate(Type type, double sr)
-{
-    switch (type)
-    {
-        case Type::Kick808:      return genKick(sr, 150.0f, 45.0f, 20.0f, 6.0f, 0.4f, 0.6f);
-        case Type::Kick909:      return genKick(sr, 180.0f, 50.0f, 35.0f, 9.0f, 0.6f, 0.45f);
-        case Type::KickAcoustic: return genKick(sr, 120.0f, 60.0f, 14.0f, 7.0f, 0.5f, 0.5f);
-        case Type::KickSub:      return genKick(sr, 90.0f,  35.0f, 8.0f,  3.5f, 0.1f, 0.9f);
-
-        case Type::Snare808:     return genSnare(sr, 200.0f, 0.45f, 14.0f, 0.28f);
-        case Type::Snare909:     return genSnare(sr, 180.0f, 0.30f, 18.0f, 0.22f);
-        case Type::SnareAcoustic:return genSnare(sr, 220.0f, 0.35f, 10.0f, 0.35f);
-
-        case Type::HatClosed808: return genHat(sr, 60.0f, 0.08f, 1.0f);
-        case Type::HatClosed909: return genHat(sr, 75.0f, 0.06f, 1.25f);
-        case Type::HatOpen808:   return genHat(sr, 8.0f,  0.4f,  1.0f);
-        case Type::HatOpen909:   return genHat(sr, 7.0f,  0.5f,  1.25f);
-
-        case Type::ClapClassic:  return genClap(sr, 0.25f, 25.0f);
-        case Type::Clap909:      return genClap(sr, 0.3f,  18.0f);
-
-        case Type::TomLow:       return genTom(sr, 80.0f,  9.0f,  0.4f);
-        case Type::TomMid:       return genTom(sr, 120.0f, 10.0f, 0.35f);
-        case Type::TomHigh:      return genTom(sr, 180.0f, 12.0f, 0.3f);
-
-        case Type::Crash:        return genCymbal(sr, 1.4f, 3.5f, 1.0f);
-        case Type::Ride:         return genCymbal(sr, 1.0f, 5.0f, 1.6f);
-
-        case Type::Cowbell:      return genCowbell(sr);
-        case Type::Clave:        return genClave(sr);
-        case Type::Rim:          return genRim(sr);
-        default:                 return genKick(sr, 150.0f, 45.0f, 20.0f, 6.0f, 0.4f, 0.6f);
-    }
-}
-
 //==============================================================================
 // DrumChannel implementation
 //==============================================================================
@@ -665,6 +462,7 @@ void DrumChannel::buildSlotsFromLegacy()
             }
         }
     }
+    ensureKsBuffers();   // a legacy Physical source needs the KS lines (message thread)
 }
 
 void DrumChannel::writeSlots(juce::ValueTree& parent) const
@@ -795,6 +593,7 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         ++n;
     }
     for (int b = n; b < NUM_SLOTS; ++b) { slots[b] = Slot(); slotSample[b] = SlotSample(); }   // clear unused slots
+    if (n > 0) ensureKsBuffers();   // restored slots may use a KS engine (message thread)
     return n > 0;
 }
 
@@ -810,6 +609,7 @@ void DrumChannel::prepareToPlay(double sampleRate, int maxBlockSize)
     for (auto& v : voices)
     {
         v.playHead = -1.0;
+        v.killing = false; v.killGain = 1.0f;
         for (auto& sv : v.sv) sv.noiseBP.reset();
     }
 
@@ -820,54 +620,130 @@ void DrumChannel::prepareToPlay(double sampleRate, int maxBlockSize)
     for (auto& ss : slotSample) if (ss.buf.getNumSamples() > 0) anySamp = true;
     if (! anySamp) loadDefaultSound();
 
+    // Samples are resampled to the HOST rate at load; if the host rate changed since
+    // (or the load happened before the rate was known), reload from the file cache.
+    {
+        const double hostRate = engineOS > 0 ? sr / (double) engineOS : sr;
+        for (int s = 0; s < NUM_SLOTS; ++s)
+            if (slotSample[s].usingUser && slotSample[s].file.existsAsFile()
+                && std::abs(slotSample[s].loadedAtRate - hostRate) > 0.5)
+                loadUserSample(s, slotSample[s].file);
+    }
+
     // Only derive slots from the legacy fields if NONE is set up yet (a brand-new channel had its default slots
     // authored in the processor ctor; a loaded project sets them via readSlots / the post-load buildSlotsFromLegacy).
     // Rebuilding unconditionally here used to wipe the authored default (the first 2 legacy srcOn -> Sample+Noise).
     bool anySlot = false;
     for (auto& s : slots) if (s.engine >= 0) { anySlot = true; break; }
     if (! anySlot) buildSlotsFromLegacy();
+    ensureKsBuffers();   // allocate the KS lines if any slot runs a KS engine (message thread)
     updateDSP();
+}
+
+// Allocate every voice-slot's Karplus-Strong delay line if any slot uses a KS engine.
+// MESSAGE THREAD ONLY. Vectors are allocated once and never resized again; the audio
+// thread gates all access on ksReady (acquire), so this is race-free.
+void DrumChannel::ensureKsBuffers()
+{
+    if (ksReady.load(std::memory_order_acquire)) return;
+    bool needs = false;
+    for (auto& s : slots)
+        if (s.engine == SrcPhys || s.engine == SrcSynth) { needs = true; break; }
+    if (! needs) return;
+    for (auto& v : voices)
+        for (auto& sv : v.sv)
+            sv.ksBuf.assign((size_t) KS_MAX, 0.0f);
+    ksReady.store(true, std::memory_order_release);
 }
 
 void DrumChannel::loadDefaultSound()
 {
     // No built-in synth samples — a Sample slot is silent until a file is loaded into it
     // (the Osc/Noise/FM/Physical engines still make sound).
-    {
-        const juce::ScopedLock sl(sampleLock);
-        for (auto& ss : slotSample) { ss.buf.setSize(1, 0); ss.original.setSize(1, 0); ss.file = juce::File(); ss.usingUser = false; }
-        sampleFileRate = 0.0;
-        for (auto& v : voices) v.playHead = -1.0;
-    }
-    rebuildSampleWithPitch();
+    const juce::ScopedLock sl(sampleLock);
+    for (auto& ss : slotSample) { ss.buf.setSize(1, 0); ss.original.setSize(1, 0); ss.file = juce::File(); ss.usingUser = false; }
+    for (auto& v : voices) v.playHead = -1.0;
 }
+
+//==============================================================================
+// SAMPLE FILE CACHE. A project stores its sounds per pattern, so loading one project can ask
+// for the SAME file up to 32 times (once per pattern's copy of the channel). Decode + resample
+// once, then hand out copies. Keyed by path + mtime + size + target rate; message thread only.
+namespace {
+struct SampleFileCache
+{
+    struct Entry { juce::String key; juce::AudioBuffer<float> buf; };
+    std::vector<Entry> entries;
+    juce::CriticalSection cs;
+    static constexpr int MAX_ENTRIES = 24;   // bound the cache (LRU-ish: oldest dropped first)
+
+    // Load `file` decoded AND resampled to targetRate into `out`. Returns false if unreadable.
+    bool get(const juce::File& file, double targetRate, juce::AudioBuffer<float>& out)
+    {
+        const juce::String key = file.getFullPathName() + "|" + juce::String(file.getLastModificationTime().toMilliseconds())
+                               + "|" + juce::String(file.getSize()) + "|" + juce::String(targetRate, 1);
+        {
+            const juce::ScopedLock sl(cs);
+            for (auto& e : entries) if (e.key == key) { out = e.buf; return true; }
+        }
+
+        juce::AudioFormatManager fm;
+        fm.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> reader(fm.createReaderFor(file));
+        if (!reader) return false;
+        const int len = (int) reader->lengthInSamples;
+        if (len <= 0) return false;
+        const int nCh = (int) juce::jmax((unsigned int) 1, reader->numChannels);
+
+        juce::AudioBuffer<float> raw(nCh, len);
+        reader->read(&raw, 0, len, 0, true, true);
+
+        // RESAMPLE to the host rate at load. Without this a 48 kHz file in a 44.1 kHz session
+        // played ~9% slow/flat (the playback head consumes file frames 1:1 at the host rate).
+        const double fileRate = reader->sampleRate > 0.0 ? reader->sampleRate : targetRate;
+        if (std::abs(fileRate - targetRate) < 0.5)
+            out = std::move(raw);
+        else
+        {
+            const double ratio  = fileRate / targetRate;              // input frames per output frame
+            const int    outLen = juce::jmax(1, (int) std::floor((double) len / ratio));
+            out.setSize(nCh, outLen);
+            for (int c = 0; c < nCh; ++c)
+            {
+                juce::LagrangeInterpolator interp;
+                interp.process(ratio, raw.getReadPointer(c), out.getWritePointer(c), outLen, len, 0);
+            }
+        }
+
+        const juce::ScopedLock sl(cs);
+        if ((int) entries.size() >= MAX_ENTRIES) entries.erase(entries.begin());
+        entries.push_back({ key, out });
+        return true;
+    }
+};
+static SampleFileCache& sampleFileCache() { static SampleFileCache c; return c; }
+} // namespace
 
 void DrumChannel::loadUserSample(int slot, const juce::File& file)
 {
     if (slot < 0 || slot >= NUM_SLOTS) return;
-    juce::AudioFormatManager fm;
-    fm.registerBasicFormats();
-    std::unique_ptr<juce::AudioFormatReader> reader(fm.createReaderFor(file));
-    if (!reader) return;
 
-    const int len = (int)reader->lengthInSamples;
-    if (len <= 0) return;
+    // Samples play back at the HOST base rate (the engine's 2x oversampling is compensated
+    // by the /engineOS head advance), so that's the rate we resample to.
+    const double hostRate = engineOS > 0 ? sr / (double) engineOS : sr;
 
-    const double fileRate = reader->sampleRate;
-
-    juce::AudioBuffer<float> newSample((int)juce::jmax((unsigned int)1, reader->numChannels), len);
-    reader->read(&newSample, 0, len, 0, true, true);
+    juce::AudioBuffer<float> newSample;
+    if (! sampleFileCache().get(file, hostRate, newSample)) return;
 
     {
         const juce::ScopedLock sl(sampleLock);
         slotSample[slot].original = std::move(newSample);   // keep the unstretched source
-        sampleFileRate = fileRate > 0.0 ? fileRate : sr;
         for (auto& v : voices) v.playHead = -1.0;
     }
 
     slotSample[slot].usingUser = true;
     slotSample[slot].file = file;
-    rebuildSampleWithPitch();
+    slotSample[slot].loadedAtRate = hostRate;
     updateStretch(slot);   // builds slotSample[slot].buf from .original (= a copy when stretch == 1)
 }
 
@@ -925,11 +801,6 @@ void DrumChannel::updateStretch(int slot)
 #endif
 }
 
-
-void DrumChannel::rebuildSampleWithPitch()
-{
-    pitchRatio = std::pow(2.0, pitch / 12.0);
-}
 
 void DrumChannel::getWaveformPeaks(int slot, int numBuckets, std::vector<float>& mins, std::vector<float>& maxs)
 {
@@ -991,6 +862,7 @@ void DrumChannel::trigger(float velocityGain, float pitchSemis, float pan)
     v.voicePan   = juce::jlimit(-1.0f, 1.0f, pan);
     v.playHead = 0.0;          // alive (per-slot sample heads do the reading)
     v.voiceSamples = 0;
+    v.killing = false; v.killGain = 1.0f;   // fresh hit cancels any choke fade on this voice
 
     for (int s = 0; s < NUM_SLOTS; ++s)
     {
@@ -1036,13 +908,16 @@ void DrumChannel::trigger(float velocityGain, float pitchSemis, float pan)
         sv.smpHead = head;
 
         // Karplus-Strong: pluck = fill the tuned delay with a noise burst, tone-shaped
-        // by the Material model, then comb it by the strike Position.
+        // by the Material model, then comb it by the strike Position. The KS line is
+        // lazily heap-allocated (ensureKsBuffers); gate on ksReady + only clear/fill it
+        // for engines that actually pluck (a 16 KB memset per slot per hit otherwise).
+        // (SrcOsc's retired resonator section no longer plucks - its render never reads KS.)
         sv.ksWrite = 0.0; sv.ksLp = 0.0f;
         for (auto& a : sv.ksApSt) a = 0.0f;
-        std::fill(std::begin(sv.ksBuf), std::end(sv.ksBuf), 0.0f);
-        const bool ksPluck = (sl.engine == SrcPhys)
-                           || (sl.engine == SrcSynth && sl.resonAmt > 0.001f)
-                           || (sl.engine == SrcOsc   && sl.resonAmt > 0.001f);   // Osc engine's resonator section
+        const bool ksPluck = (ksReady.load(std::memory_order_acquire)
+                              && ((sl.engine == SrcPhys)
+                                  || (sl.engine == SrcSynth && sl.resonAmt > 0.001f)));
+        if (ksPluck) std::fill(sv.ksBuf.begin(), sv.ksBuf.end(), 0.0f);
         if (ksPluck)
         {
             const float ksFreq = (sl.engine == SrcPhys) ? sl.physFreq : sl.oscFreq;
@@ -1075,8 +950,11 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
     // FFT windows stay aligned to the real timeline. Without this, the silent
     // gaps get skipped and the window's phase against each hit drifts randomly,
     // making the spectrum of one repeated sound look different every time.
+    // NOTE: do NOT zero meterPeak here - the peak-hold contract is "audio thread only
+    // ever raises it, the UI resets it on read". Storing 0 on the first silent block
+    // wiped a short one-shot's peak ~6 ms after it ended, long before the ~42 ms UI
+    // tick could read it, so rims/claves randomly never registered on the meter.
     auto feedSilence = [this, numSamples]() {
-        meterPeak.store(0.0f, std::memory_order_relaxed);   // nothing rendered -> meter falls
         if (analysisTap != nullptr)
             for (int i = 0; i < numSamples; ++i) analysisTap->push(0.0f);
     };
@@ -1149,7 +1027,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         c.engine = sl.engine; c.weight = sl.weight;
         c.fxDriveType = sl.fxDriveType; c.fxDrive = sl.fxDrive; c.fxRevSend = sl.fxReverbSend; c.fxDelSend = sl.fxDelaySend;  // per-slot FX
         c.atk = sl.atk; c.hold = sl.hold; c.dec = sl.dec; c.sustain = sl.sustain; c.release = sl.release;
-        // 3-point pitch envelope + the sound length its time-axis is measured against
+        // 4-point pitch envelope + the sound length its time-axis is measured against
         // (mirror the amp-envelope length the UI shows as "ENVELOPE ~X s").
         c.pEnvOn = sl.pEnvOn();
         for (int k = 0; k < Slot::NPE; ++k) { c.pEnvP[k] = sl.pEnvP[k]; c.pEnvT[k] = sl.pEnvT[k]; }
@@ -1398,9 +1276,15 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
     float* fxDelL = fxSendBuf.getWritePointer(2); float* fxDelR = fxSendBuf.getWritePointer(3);
 
     // === PER-SLOT EQ (begin) - spectrum tap for one slot: clear the accumulator ===
-    const int tapSlot = (analysisTap != nullptr && analysisSlot >= 0 && analysisSlot < NUM_SLOTS) ? analysisSlot : -1;
-    if (tapSlot >= 0) { const int nn = juce::jmin(numSamples, (int) std::size(analysisBuf)); for (int i = 0; i < nn; ++i) analysisBuf[i] = 0.0f; }
+    // analysisBuf points into ONE processor-owned scratch (set per block, only for the
+    // analysed channel) - not a per-channel array anymore.
+    const int tapSlot = (analysisTap != nullptr && analysisBuf != nullptr
+                         && analysisSlot >= 0 && analysisSlot < NUM_SLOTS) ? analysisSlot : -1;
+    if (tapSlot >= 0) { const int nn = juce::jmin(numSamples, analysisBufLen); for (int i = 0; i < nn; ++i) analysisBuf[i] = 0.0f; }
     // === PER-SLOT EQ (end) ===
+
+    // KS delay lines are lazily allocated; never touch them until ensureKsBuffers() ran.
+    const bool ksOk = ksReady.load(std::memory_order_acquire);
 
     // ---- Voice loop -----------------------------------------------------------
     for (int vi = 0; vi < POLY; ++vi)
@@ -1422,11 +1306,15 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         // channel pan applied later). 0 = centre, -1 = hard left, +1 = hard right.
         const float vPanL = v.voicePan <= 0.0f ? 1.0f : 1.0f - v.voicePan;
         const float vPanR = v.voicePan >= 0.0f ? 1.0f : 1.0f + v.voicePan;
+        // Choke fade: ~3 ms ramp to zero instead of a hard cut (a mid-sample discontinuity
+        // clicks when the choking hit is quieter than the tail being cut).
+        const float killStep = 1.0f / juce::jmax(1.0f, 0.003f * (float) sr);
         bool finished = false;
 
         for (int i = 0; i < numSamples; ++i)
         {
             const long t = v.voiceSamples;
+            const float kg = v.killing ? v.killGain : 1.0f;
             float vEnv = 0.0f, mixL = 0.0f, mixR = 0.0f;
             const float be = bloomAmt > 0.0001f ? (1.0f - std::exp(-(float) t * bloomRise)) : 1.0f;
             const float bGate = (1.0f - bloomAmt) + bloomAmt * be;
@@ -1439,7 +1327,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 float sig = 0.0f, sL = 0.0f, sR = 0.0f, env = 0.0f;
                 bool  stereo = false;
 
-                // 3-point pitch envelope -> frequency multiplier (1.0 when unused). Applies to every engine.
+                // 4-point pitch envelope -> frequency multiplier (1.0 when unused). Applies to every engine.
                 double pe3Mul = 1.0;
                 if (c.pEnvOn) {
                     const float frac = juce::jlimit(0.0f, 1.0f, (float)((double) t / c.voiceLenSamp));
@@ -1550,6 +1438,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         sig = fm * env;
                         break; }
                     case SrcPhys: {
+                        if (! ksOk) break;   // KS line not allocated (engine assigned without ensureKsBuffers - silent, no crash)
                         env = ahdsEnv(t, c.atk, c.hold, c.dec, c.sustain, c.release);
                         double pSemis = (c.physPEnvAmt != 0.0f) ? (double) c.physPEnvAmt * pitchEnvShape(t, c.physPEnvTime, c.physPOffset) : 0.0;
                         if (c.pm->pitchDrop != 0.0f) pSemis += (double) c.pm->pitchDrop * std::exp(-(float) t * 3.0f / (0.06f * (float) sr));
@@ -1571,7 +1460,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         const long aS = (long) (c.atk * (float) sr), hS = (long) (c.hold * (float) sr);
                         // Sustain the string through the STRIKE (a slow attack) + any hold, so the amp env swells the
                         // pluck to FULL instead of fading in an already-decaying string (the weak-peak with slow attacks).
-                        // Instant plucks (atk<=20ms, hold=0) are untouched -> factory Physical sounds stay bit-identical.
+                        // Instant plucks (atk <= 5 ms, hold=0) are untouched -> factory Physical sounds stay bit-identical.
                         if (t < aS + hS && (c.atk > 0.005f || c.hold > 0.0001f)) ksFb = 0.9997f;   // (the loop LP still dulls it)
                         sv.ksBuf[wi] = juce::jlimit(-2.5f, 2.5f, ss * ksFb); sv.ksWrite = wi + 1;   // safety bound (pure pluck never reaches it)
                         sig = (ss * 1.4f) * env;
@@ -1689,7 +1578,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         }
 
                         // -- optional Karplus-Strong resonator (ex injected; pure pluck when ex==0) --
-                        if (c.reson)
+                        if (c.reson && ksOk)
                         {
                             const double f = c.physBaseF * pMul * vPitchMul * c.oscVibFac * pe3Mul;
                             const double L = juce::jlimit(2.0, (double)(KS_MAX - 2), sr / juce::jmax(20.0, f));
@@ -1749,7 +1638,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         }
                         sv.modalInit = true;
                         // STRIKE (attack ramp) = a soft/swelled onset (the modes self-decay = the RING). Gated so
-                        // atk<=20ms (every factory Modal sound, default 0.003) keeps env=1 = instant = bit-identical.
+                        // atk <= 5 ms (every factory Modal sound, default 0.003) keeps env=1 = instant = bit-identical.
                         env = (c.atk > 0.005f) ? juce::jmin(1.0f, (float) t / juce::jmax(1.0f, c.atk * (float) sr)) : 1.0f;
                         if (! std::isfinite(out)) { for (int m = 0; m < sv.modalNV; ++m) { sv.modalY1[m] = sv.modalY2[m] = 0.0f; } out = 0.0f; }  // self-heal a runaway
                         sig = juce::jlimit(-4.0f, 4.0f, out) * 0.4f * env;   // bound the bank sum to a musical level, then the Strike ramp
@@ -1782,10 +1671,10 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 const float cR = (stereo ? sR : sig) * wEff * c.gR;
                 mixL += cL; mixR += cR;
                 // Per-slot reverb/delay SEND: this slot's signal x its own send amount (pre channel-gain; gain added later).
-                if (c.fxRevSend > 0.0001f) { fxRevL[i] += cL * v.velGain * vPanL * c.fxRevSend; fxRevR[i] += cR * v.velGain * vPanR * c.fxRevSend; }
-                if (c.fxDelSend > 0.0001f) { fxDelL[i] += cL * v.velGain * vPanL * c.fxDelSend; fxDelR[i] += cR * v.velGain * vPanR * c.fxDelSend; }
+                if (c.fxRevSend > 0.0001f) { fxRevL[i] += cL * v.velGain * vPanL * c.fxRevSend * kg; fxRevR[i] += cR * v.velGain * vPanR * c.fxRevSend * kg; }
+                if (c.fxDelSend > 0.0001f) { fxDelL[i] += cL * v.velGain * vPanL * c.fxDelSend * kg; fxDelR[i] += cR * v.velGain * vPanR * c.fxDelSend * kg; }
                 // === PER-SLOT EQ (begin) - capture THIS slot's mono output for its spectrum ===
-                if (s == tapSlot && i < (int) std::size(analysisBuf)) {
+                if (s == tapSlot && i < analysisBufLen) {
                     const float mono = stereo ? 0.5f * (wEff * sL * c.gL + wEff * sR * c.gR)
                                               : 0.5f * wEff * sig * (c.gL + c.gR);
                     analysisBuf[i] += mono * v.velGain;
@@ -1793,10 +1682,15 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 // === PER-SLOT EQ (end) ===
             }
 
-            outL[i] += mixL * v.velGain * vPanL;
-            outR[i] += mixR * v.velGain * vPanR;
+            outL[i] += mixL * v.velGain * vPanL * kg;
+            outR[i] += mixR * v.velGain * vPanR * kg;
             maxEnvLevel = juce::jmax(maxEnvLevel, vEnv * v.velGain);
 
+            if (v.killing)
+            {
+                v.killGain -= killStep;                                   // choke fade advances per sample
+                if (v.killGain <= 0.0f) { finished = true; break; }       // fade complete -> voice ends
+            }
             if (++v.voiceSamples >= voiceEnd) { finished = true; break; }
         }
 
@@ -1853,7 +1747,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
     {
         if (tapSlot >= 0)
         {
-            const int nn = juce::jmin(numSamples, (int) std::size(analysisBuf));
+            const int nn = juce::jmin(numSamples, analysisBufLen);
             for (int i = 0; i < nn; ++i) analysisTap->push(analysisBuf[i]);
         }
         else

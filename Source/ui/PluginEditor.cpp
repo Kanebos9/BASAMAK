@@ -2799,7 +2799,7 @@ juce::int64 DrumSequencerEditor::stateHash() const
         const auto& m = P.master;        // per-pattern master FX + output
         h = mix(h, f(m.reverbRoom)); h = mix(h, f(m.reverbDamp)); h = mix(h, f(m.reverbWet));
         h = mix(h, f(m.reverbPreDelay)); h = mix(h, f(m.reverbWidth));
-        h = mix(h, f(m.delayTime)); h = mix(h, f(m.delayFeedback)); h = mix(h, m.delaySync ? 1 : 0); h = mix(h, m.delayDivision); h = mix(h, m.delayPingPong ? 1 : 0);
+        h = mix(h, f(m.delayTime)); h = mix(h, f(m.delayFeedback)); h = mix(h, f(m.delayWet)); h = mix(h, m.delaySync ? 1 : 0); h = mix(h, m.delayDivision); h = mix(h, m.delayPingPong ? 1 : 0);
         h = mix(h, f(m.volume)); h = mix(h, f(m.pan)); h = mix(h, m.mono ? 1 : 0); h = mix(h, f(m.limit)); h = mix(h, f(m.glue));
         for (int c = 0; c < Sequencer::NUM_CHANNELS; ++c)
         {
@@ -4242,6 +4242,7 @@ void DrumSequencerEditor::setupComponents()
     setupKnob(knobReverbWidth, lblRevWidth, "Width", 0.0, 1.0,  1.0,   1.0, fmtPct);
     setupKnob(knobDelayTime,  lblDelTime, "Time", 0.05, 2.0, 0.375, 1.0, fmtMs);
     setupKnob(knobDelayFB,    lblDelFB,   "Feedback", 0.0, 0.95, 0.3, 1.0, fmtPct);
+    setupKnob(knobDelayWet,   lblDelWet,  "Wet",  0.0, 1.0, 0.3, 1.0, fmtPct);   // return level (mirrors reverb Wet)
     knobDelayTime.setSkewFactorFromMidPoint(0.3);
     setupKnob(knobMasterVol,   lblMasterVol,   "Volume", 0.0, 1.0,  0.9, 1.0, fmtPct);
     // Master VOLUME is a horizontal FADER now (lives in the SOUND BLEND box; Pattern Output group removed).
@@ -4284,6 +4285,7 @@ void DrumSequencerEditor::setupComponents()
     knobReverbPre.onValueChange   = [this, allM] { allM([this](Sequencer::MasterFX& m){ m.reverbPreDelay = (float)knobReverbPre.getValue(); }); };
     knobReverbWidth.onValueChange = [this, allM] { allM([this](Sequencer::MasterFX& m){ m.reverbWidth = (float)knobReverbWidth.getValue(); }); };
     knobDelayFB.onValueChange     = [this, allM] { allM([this](Sequencer::MasterFX& m){ m.delayFeedback = (float)knobDelayFB.getValue(); }); };
+    knobDelayWet.onValueChange    = [this, allM] { allM([this](Sequencer::MasterFX& m){ m.delayWet = (float)knobDelayWet.getValue(); }); };
     knobMasterVol.onValueChange   = [this] { if (!ignoreKnobCallbacks) proc.masterFX().volume = (float)knobMasterVol.getValue(); };
     knobMasterPan.onValueChange   = [this] { if (!ignoreKnobCallbacks) proc.masterFX().pan    = (float)knobMasterPan.getValue(); };
     knobMasterLimit.onValueChange = [this] { if (!ignoreKnobCallbacks) proc.masterFX().limit  = (float)knobMasterLimit.getValue(); };
@@ -4738,6 +4740,7 @@ void DrumSequencerEditor::setupComponents()
     knobReverbWidth.setTooltip("Stereo width of the reverb tail. 1 = full wide, lower = narrower (toward mono).");
     knobDelayTime.setTooltip("Time between echoes. With Sync on it snaps to note values; otherwise it's free milliseconds.");
     knobDelayFB.setTooltip("Delay feedback - how many times the echo repeats. Higher = more repeats.");
+    knobDelayWet.setTooltip("Overall delay amount (how loud the echoes are in the mix) - like the reverb Wet.");
     knobMasterVol.setTooltip("MASTER output volume (the final fader, per pattern).");
     knobMasterPan.setTooltip("(unused - master pan was removed)");
     knobMasterLimit.setTooltip("MASTER output limiter. The read-out is the output CEILING in dB - peaks are held just "
@@ -5052,6 +5055,7 @@ void DrumSequencerEditor::onSlotEngineChange(int box)
         boxEngine[box] = (id <= 1) ? -1 : id - 2;   // None / Noise / Analog+FM / FM / Physical / Synth / Wave / Modal
         ch.slots[box].engine = boxEngine[box];
         ch.silenceAllVoices();   // don't let a voice ringing on the OLD engine get re-read as the new one (= noise)
+        ch.ensureKsBuffers();    // KS lines are lazily allocated; a KS engine just got assigned (message thread)
     }
     syncPadFromSlots (true);   // adding/removing a slot rebalances the blend
     ch.markDspDirty();
@@ -5280,6 +5284,7 @@ void DrumSequencerEditor::refreshDetailPanel()
     knobReverbWidth.setValue(proc.masterFX().reverbWidth,       juce::dontSendNotification);
     knobDelayTime.setValue  (proc.masterFX().delayTime,         juce::dontSendNotification);
     knobDelayFB.setValue    (proc.masterFX().delayFeedback,     juce::dontSendNotification);
+    knobDelayWet.setValue   (proc.masterFX().delayWet,          juce::dontSendNotification);
     swDelaySync.setToggleState(proc.masterFX().delaySync,       juce::dontSendNotification);
     swDelayPingPong.setToggleState(proc.masterFX().delayPingPong, juce::dontSendNotification);
     knobDelayTime.updateText();
@@ -5477,6 +5482,30 @@ void DrumSequencerEditor::refreshEqTarget()
 
 void DrumSequencerEditor::timerCallback()
 {
+    // Close any open dropdown / popup menu when the user clicks OUTSIDE the plugin - into the
+    // host's own UI or another application. JUCE auto-dismisses only for clicks inside OUR
+    // windows, so a combo menu left open while the user switched to the DAW hung around.
+    // Signals: the app deactivated (clicked another app), or a popup is open but no window of
+    // ours has OS focus (clicked the host window in the same process). Debounced 2 ticks
+    // (~80 ms) so focus flicker while a menu is opening can never dismiss it.
+    if (juce::ModalComponentManager::getInstance()->getNumModalComponents() > 0)
+    {
+        bool anyFocused = juce::Process::isForegroundProcess();
+        if (anyFocused)
+        {
+            anyFocused = false;
+            if (auto* ownPeer = getPeer(); ownPeer != nullptr && ownPeer->isFocused()) anyFocused = true;
+            auto& desktop = juce::Desktop::getInstance();
+            for (int i = desktop.getNumComponents(); ! anyFocused && --i >= 0;)
+                if (auto* dc = desktop.getComponent(i))
+                    if (auto* peer = dc->getPeer())
+                        if (peer->isFocused()) anyFocused = true;
+        }
+        if (! anyFocused && ++outsideFocusTicks >= 2) { outsideFocusTicks = 0; juce::PopupMenu::dismissAllActiveMenus(); }
+        else if (anyFocused) outsideFocusTicks = 0;
+    }
+    else outsideFocusTicks = 0;
+
     // The playing pattern auto-advanced (or a MIDI CC switched it). Follow it only if
     // "Follow" is on; otherwise just keep the green playing-marker in sync.
     if (proc.patternChangedByMidi.exchange(false)
@@ -6158,8 +6187,9 @@ void DrumSequencerEditor::layoutContent()
           hdrDelayG.setBounds(sx + 8, colTop + 228, masterW - 16, hdrH);
           kB(knobDelayTime,   lblDelTime,  rx,             colTop + 248);
           kB(knobDelayFB,     lblDelFB,    rx + rstep,     colTop + 248);
-          lblDelaySync.setBounds(rx + 2 * rstep, colTop + 256, 48, 11);   swDelaySync.setBounds(rx + 2 * rstep + 8, colTop + 270, 34, 16);
-          lblDelayPingPong.setBounds(rx + 3 * rstep, colTop + 256, 48, 11); swDelayPingPong.setBounds(rx + 3 * rstep + 8, colTop + 270, 34, 16); }
+          kB(knobDelayWet,    lblDelWet,   rx + 2 * rstep, colTop + 248);
+          lblDelaySync.setBounds(rx + 3 * rstep, colTop + 256, 48, 11);   swDelaySync.setBounds(rx + 3 * rstep + 8, colTop + 270, 34, 16);
+          lblDelayPingPong.setBounds(rx + 4 * rstep, colTop + 256, 48, 11); swDelayPingPong.setBounds(rx + 4 * rstep + 8, colTop + 270, 34, 16); }
 
         // -- AMP ENVELOPE + EQ column. The amp-env graph top is GRAPH_Y so it aligns with the pitch-env graph. --
         const int GRAPH_Y = colTop + 38, GRAPH_H = 118;

@@ -1,6 +1,5 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
-#include "UserPaths.h"
 
 juce::AudioProcessor::BusesProperties DrumSequencerProcessor::makeBuses()
 {
@@ -63,13 +62,6 @@ DrumSequencerProcessor::DrumSequencerProcessor()
         }
     }
 
-    reverbParams.roomSize   = masterFX().reverbRoom;
-    reverbParams.damping    = masterFX().reverbDamp;
-    reverbParams.wetLevel   = 0.33f;
-    reverbParams.dryLevel   = 0.4f;
-    reverbParams.width      = 1.0f;
-    reverb.setParameters(reverbParams);
-
     // Default sound on every channel: Slot 1 = Analog + FM (SrcOsc), Slot 2 empty (no sample default).
     for (auto& pat : sequencer.patterns)
         for (auto& ch : pat.channels) {
@@ -83,20 +75,6 @@ DrumSequencerProcessor::DrumSequencerProcessor()
 // NOTE: the curated host-automation parameters (per-channel Volume/Pan/Mute/LP Cutoff/Reverb/Delay +
 // Master) were REMOVED - they had drifted out of date (e.g. channel Pan no longer exists; panning is
 // per-step) and were low value, so the plugin now exposes NO host-automatable parameters.
-
-// Give fresh channels a default sample drawn from the samples folder (rotating),
-// instead of a built-in synth sound. A loaded project overrides this afterwards.
-void DrumSequencerProcessor::assignDefaultSamples()
-{
-    auto folder = UserPaths::samples();
-    auto files = folder.findChildFiles(juce::File::findFiles, true,
-                                       "*.wav;*.aiff;*.aif;*.mp3;*.flac;*.ogg");
-    files.sort();
-    if (files.isEmpty()) return;
-    for (int p = 0; p < Sequencer::NUM_PATTERNS; ++p)
-        for (int i = 0; i < Sequencer::NUM_CHANNELS; ++i)
-            sequencer.patterns[p].channels[i].loadUserSample(0, files[i % files.size()]);  // slot 0 = default Sample slot
-}
 
 DrumSequencerProcessor::~DrumSequencerProcessor() {}
 
@@ -112,8 +90,8 @@ void DrumSequencerProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
         {
             ch.engineOS = kEngineOS;
             ch.prepareToPlay(sampleRate * kEngineOS, samplesPerBlock * kEngineOS);
-            // (ch.prepareToPlay already loads the default sound only if no slot has a sample, so the
-            //  default samples loaded by assignDefaultSamples are preserved across re-prepare.)
+            // (ch.prepareToPlay loads the default sound only if no slot has a sample, so
+            //  already-loaded samples are preserved across re-prepare.)
         }
 
     // Whole-engine oversampler (all output channels). Polyphase IIR = low latency, no transient
@@ -133,9 +111,11 @@ void DrumSequencerProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     limiterLAhead = 0;
     setLatencySamples((int) engineOS->getLatencyInSamples() + limiterLAlen);
 
-    reverb.reset();
     fdn.prepare(sampleRate);
     fdn.reset();
+
+    // Shared per-slot spectrum scratch: sized for the biggest engine-rate block (min 8192 for safety).
+    analysisScratch.assign((size_t) juce::jmax(8192, samplesPerBlock * kEngineOS), 0.0f);
 
     // Delay buffer: 2 seconds max
     delayBuffer.setSize(2, (int)(sampleRate * 2.0));
@@ -153,7 +133,6 @@ void DrumSequencerProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     delayWriteHead = 0;
     limiterGain = 1.0f;
     masterGlueEnv = 0.0f;
-    deglitchPrev[0] = deglitchPrev[1] = 0.0f;
 
     launchpadInitPending.store(true);
 }
@@ -228,13 +207,17 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
     }
     midi.clear();
 
-    //-- Point the spectrum tap at the channel the editor is inspecting
+    //-- Point the spectrum tap at the channel the editor is inspecting. The analysed channel
+    //   also gets the SHARED per-slot analysis scratch (one buffer for the whole plugin).
     {
         const int ac = analyzeChannel.load();
         const int as = analysisSlot.load();   // PER-SLOT EQ: which slot to analyse (-1 = mix)
         for (int c = 0; c < Sequencer::NUM_CHANNELS; ++c) {
-            sequencer.channel(c).analysisTap  = (c == ac) ? &spectrumTap : nullptr;
-            sequencer.channel(c).analysisSlot = (c == ac) ? as : -1;
+            auto& ch = sequencer.channel(c);
+            ch.analysisTap    = (c == ac) ? &spectrumTap : nullptr;
+            ch.analysisSlot   = (c == ac) ? as : -1;
+            ch.analysisBuf    = (c == ac && ! analysisScratch.empty()) ? analysisScratch.data() : nullptr;
+            ch.analysisBufLen = (c == ac) ? (int) analysisScratch.size() : 0;
         }
     }
 
@@ -304,8 +287,10 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         }
     }
     reverbSendOS.clear(); delaySendOS.clear();   // per-channel send sums accumulate here (OS rate)
+    // (The sequencer computes each rendered pattern's OWN anySolo internally - passing the
+    //  VIEWED pattern's used to silence the whole playing pattern when view != playback.)
     auto events = sequencer.processBlock(osMain, currentSampleRate * kEngineOS, nOS,
-                                          getPlayHead(), anySolo, auxPtrs, NUM_AUX_OUTS,
+                                          getPlayHead(), auxPtrs, NUM_AUX_OUTS,
                                           &reverbSendOS, &delaySendOS);
     engineOS->processSamplesDown(hostBlock);   // -> `audio` at the host rate
 
@@ -352,17 +337,19 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             const int note  = juce::jlimit(0, 127, ch.midiNote + juce::roundToInt(ch.stepPitch[e.step]));
             const float v   = juce::jlimit(0.0f, 1.0f, ch.stepVel[e.step] * e.velScale);
             const auto  vel = (juce::uint8) juce::jlimit(1, 127, juce::roundToInt(v * 127.0f));
+            // SAMPLE-ACCURATE placement: the event offset is at the engine (OS) rate -> host rate.
+            const int hostOff = juce::jlimit(0, juce::jmax(0, numSamples - 1), e.offset / kEngineOS);
 
             if (activeMidiNote[e.channel] >= 0)                          // retrigger -> cut held note (on its own channel)
-                midi.addEvent(juce::MidiMessage::noteOff(activeMidiChan[e.channel], activeMidiNote[e.channel]), 0);
+                midi.addEvent(juce::MidiMessage::noteOff(activeMidiChan[e.channel], activeMidiNote[e.channel]), hostOff);
 
-            midi.addEvent(juce::MidiMessage::noteOn(midiCh, note, vel), 0);
+            midi.addEvent(juce::MidiMessage::noteOn(midiCh, note, vel), hostOff);
             activeMidiChan[e.channel] = midiCh;
             const double samplesPerStep = barSamples / juce::jmax(1, ch.numSteps);
             const double lenSteps = 0.1 + juce::jlimit(0.0f, 1.0f, ch.stepNoteLen[e.step]) * 3.9;  // 0.1..4 steps
             const int len = juce::jmax(1, (int)(lenSteps * samplesPerStep));
-            if (len <= numSamples) { midi.addEvent(juce::MidiMessage::noteOff(midiCh, note), len); activeMidiNote[e.channel] = -1; }
-            else                   { activeMidiNote[e.channel] = note; midiNoteCountdown[e.channel] = len - numSamples; }
+            if (hostOff + len < numSamples) { midi.addEvent(juce::MidiMessage::noteOff(midiCh, note), hostOff + len); activeMidiNote[e.channel] = -1; }
+            else                            { activeMidiNote[e.channel] = note; midiNoteCountdown[e.channel] = len - (numSamples - hostOff); }
             triggered[e.channel] = true;
         }
 
@@ -387,12 +374,14 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
     {
         if (auto* ph = getPlayHead())
         {
-            juce::AudioPlayHead::CurrentPositionInfo pos;
-            if (ph->getCurrentPosition(pos))
+            if (const auto pos = ph->getPosition())
             {
-                if (pos.bpm > 1.0) currentBpm = pos.bpm;
-                if (pos.timeSigNumerator   > 0) currentTimeSigNum = pos.timeSigNumerator;
-                if (pos.timeSigDenominator > 0) currentTimeSigDen = pos.timeSigDenominator;
+                if (const auto bpm = pos->getBpm(); bpm.hasValue() && *bpm > 1.0) currentBpm = *bpm;
+                if (const auto ts = pos->getTimeSignature(); ts.hasValue())
+                {
+                    if (ts->numerator   > 0) currentTimeSigNum = ts->numerator;
+                    if (ts->denominator > 0) currentTimeSigDen = ts->denominator;
+                }
             }
         }
     }
@@ -625,6 +614,7 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
     if (pid == "global_reverbWidth"){ masterFX().reverbWidth    = norm;               return; }
     if (pid == "global_delayTime")  { masterFX().delayTime   = 0.05f + norm * 1.95f;  return; }
     if (pid == "global_delayFB")    { masterFX().delayFeedback = norm * 0.95f;        return; }
+    if (pid == "global_delayWet")   { for (auto& pat : sequencer.patterns) pat.master.delayWet = norm; return; }
     if (pid == "global_masterGlue") { for (auto& pat : sequencer.patterns) pat.master.glue = norm; return; }
 
     // UI-only controls (edit-mode buttons + influence) -> relayed to the editor.
@@ -791,7 +781,7 @@ void DrumSequencerProcessor::processDelay(juce::AudioBuffer<float>& audio, juce:
     const float* inR = send.getReadPointer(stereo ? 1 : 0);
     float* dL   = delayBuffer.getWritePointer(0);
     float* dR   = delayBuffer.getWritePointer(juce::jmin(1, nDly - 1));
-    const float wet = masterDelayMix;                         // send already applied per channel
+    const float wet = juce::jlimit(0.0f, 1.0f, masterFX().delayWet);   // delay return level (MASTER "Wet" knob)
 
     for (int i = 0; i < numSamples; ++i)
     {
@@ -821,31 +811,74 @@ void DrumSequencerProcessor::processDelay(juce::AudioBuffer<float>& audio, juce:
 
 juce::File DrumSequencerProcessor::exportMidiFile()
 {
+    // Export WHAT THE SEQUENCER PLAYS: per-step velocity, pitch transposition, ratchet
+    // sub-hits with their velocity ramp, per-step note length, and the pattern's swing
+    // (via the same Sequencer::stepSpan the engine uses). Plus tempo + time-sig meta
+    // events so the clip drops into the DAW at the right speed.
     juce::MidiFile midiFile;
-    midiFile.setTicksPerQuarterNote(96);
+    constexpr int tpq = 96;   // ticks per quarter note
+    midiFile.setTicksPerQuarterNote(tpq);
 
     juce::MidiMessageSequence seq;
 
-    // Write the current pattern's steps as MIDI notes
+    const double qpb      = juce::jmax(1, currentTimeSigNum) * 4.0 / juce::jmax(1, currentTimeSigDen);
+    const double barTicks = qpb * (double) tpq;
+
+    seq.addEvent(juce::MidiMessage::tempoMetaEvent((int) (60000000.0 / juce::jmax(1.0, currentBpm))), 0.0);
+    seq.addEvent(juce::MidiMessage::timeSignatureMetaEvent(juce::jmax(1, currentTimeSigNum),
+                                                           juce::jmax(1, currentTimeSigDen)), 0.0);
+
+    const auto& pat = sequencer.current();
     for (int ch = 0; ch < Sequencer::NUM_CHANNELS; ++ch)
     {
-        auto& channel = sequencer.channel(ch);
-        for (int step = 0; step < channel.numSteps; ++step)
+        const auto& channel = pat.channels[ch];
+        const int n = channel.numSteps;
+        if (n <= 0) continue;
+        // MIDI-out channels export on their own MIDI channel; sound channels on ch 10 (GM drums).
+        const int midiCh = channel.midiOut ? juce::jlimit(1, 16, channel.midiOutChannel) : 10;
+        const double stepTicks = barTicks / (double) n;
+
+        for (int step = 0; step < n; ++step)
         {
-            if (!channel.steps[step]) continue;
-            // Each step = 1 16th note = 24 ticks
-            double startTick = step * 24.0;
-            double endTick   = startTick + 20.0;
-            seq.addEvent(juce::MidiMessage::noteOn (10, channel.midiNote, (uint8_t)100), startTick);
-            seq.addEvent(juce::MidiMessage::noteOff(10, channel.midiNote),               endTick);
+            if (! channel.steps[step]) continue;
+            double st, en;
+            Sequencer::stepSpan(step, n, pat.swing, st, en);   // swung span -> the exported groove == the played one
+            const int roll = juce::jlimit(1, 6, channel.stepRoll[step]);
+            const int note = juce::jlimit(0, 127, channel.midiNote + juce::roundToInt(channel.stepPitch[step]));
+            // Note length: MIDI-out channels use their per-step length (0.1..4 steps); sound
+            // channels get a solid default slightly shorter than the (sub-)step.
+            const double lenSteps = channel.midiOut
+                                  ? 0.1 + juce::jlimit(0.0f, 1.0f, channel.stepNoteLen[step]) * 3.9
+                                  : 0.8 / (double) roll;
+
+            for (int j = 0; j < roll; ++j)
+            {
+                const double pos = st + (en - st) * (double) j / (double) roll;   // bar fraction
+                float velScale = 1.0f;
+                if (roll > 1)
+                {
+                    const float rr   = juce::jlimit(-1.0f, 1.0f, channel.stepRollDecay[step]);
+                    const float frac = (float) j / (float) (roll - 1);
+                    velScale = (rr >= 0.0f) ? (1.0f - rr) + rr * frac : 1.0f + rr * frac;
+                    velScale = juce::jmax(0.0f, velScale);
+                }
+                const float v   = juce::jlimit(0.0f, 1.0f, channel.stepVel[step] * velScale);
+                const auto  vel = (juce::uint8) juce::jlimit(1, 127, juce::roundToInt(v * 127.0f));
+                const double startTick = pos * barTicks;
+                const double endTick   = startTick + juce::jmax(4.0, lenSteps * stepTicks);
+                seq.addEvent(juce::MidiMessage::noteOn (midiCh, note, vel), startTick);
+                seq.addEvent(juce::MidiMessage::noteOff(midiCh, note),      endTick);
+            }
         }
     }
 
+    seq.updateMatchedPairs();
     seq.sort();
     midiFile.addTrack(seq);
 
     juce::File tmpFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
                          .getChildFile("drum_seq_export.mid");
+    tmpFile.deleteFile();
     juce::FileOutputStream fos(tmpFile);
     if (fos.openedOk())
         midiFile.writeTo(fos);
@@ -971,21 +1004,22 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
     chState.setProperty("stepCondLen",  condLenStr,  nullptr);
     chState.setProperty("stepCondMask", condMaskStr, nullptr);
 
-    ch.writeSlots(chState);   // 3-slot model (duplicate engines survive save/load + undo)
+    ch.writeSlots(chState);   // 2-slot model (duplicate engines survive save/load + undo)
 
 }
 
 static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
 {
     ch.channelName = child.getProperty("name", ch.channelName).toString();
-    ch.volume      = (float)child.getProperty("volume",   0.8f);
+    ch.volume      = (float)child.getProperty("volume",   1.0f);   // matches the field default
     ch.pan         = (float)child.getProperty("pan",      0.0f);
     ch.mute        = (bool)child.getProperty("mute",      false);
     ch.solo        = (bool)child.getProperty("solo",      false);
     ch.phaseInvert = (bool)child.getProperty("phase",     false);
     ch.pitch       = (float)child.getProperty("pitch",    0.0f);
     {
-        const float decDef[4] = { 2.0f, 0.08f, 0.20f, 0.30f };
+        // One default per source (Sample/Noise/Osc/FM/Physical) - was 4 entries for 5 sources = OOB read.
+        const float decDef[DrumChannel::NUM_SOURCES] = { 2.0f, 0.08f, 0.20f, 0.30f, 0.80f };
         for (int s = 0; s < DrumChannel::NUM_SOURCES; ++s) {
             ch.srcAtk[s]  = (float)child.getProperty("atk" + juce::String(s), 0.003f);
             ch.srcHold[s] = (float)child.getProperty("hld" + juce::String(s), 0.0f);
@@ -1041,7 +1075,7 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
     ch.physPosition     = (float)child.getProperty("phPos",    0.0f);
     ch.noiseType        = (int)  child.getProperty("nType",    0);
     ch.layerNoiseCenter = (float)child.getProperty("layNCtr",  3000.0f);
-    ch.layerNoiseWidth  = (float)child.getProperty("layNWid",  0.4f);
+    ch.layerNoiseWidth  = (float)child.getProperty("layNWid",  0.0f);   // matches the field default
     ch.fmPitch          = (float)child.getProperty("fmPit",    0.0f);
     ch.fmSpread         = (float)child.getProperty("fmSpr",    0.0f);
     ch.fmDepth          = (float)child.getProperty("fmDep",    0.4f);
@@ -1106,7 +1140,7 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
 
     ch.loadDefaultSound();   // clear slot sample buffers; readSlots/migration below load per-slot
 
-    // Prefer the saved 3-slot data; only old projects without it fall back to
+    // Prefer the saved 2-slot data; only old projects without it fall back to
     // buildSlotsFromLegacy() (done in the post-load loop when restoredSlots stays false).
     ch.restoredSlots = ch.readSlots(child);
     // MIGRATION: old projects stored ONE per-channel sample ("userSample"); if no slot loaded its own
@@ -1200,6 +1234,7 @@ void DrumSequencerProcessor::getStateInformation(juce::MemoryBlock& dest)
         patState.setProperty("revWidth", m.reverbWidth,  nullptr);
         patState.setProperty("delTime", m.delayTime,     nullptr);
         patState.setProperty("delFB",   m.delayFeedback, nullptr);
+        patState.setProperty("delWet",  m.delayWet,      nullptr);
         patState.setProperty("delSync", m.delaySync,     nullptr);
         patState.setProperty("delDiv",  m.delayDivision, nullptr);
         patState.setProperty("delPP",   m.delayPingPong, nullptr);
@@ -1269,6 +1304,7 @@ void DrumSequencerProcessor::setStateInformation(const void* data, int sizeInByt
             m.reverbWidth    = (float)child.getProperty("revWidth", 1.0f);
             m.delayTime     = (float)child.getProperty("delTime", 0.375f);
             m.delayFeedback = (float)child.getProperty("delFB",   0.3f);
+            m.delayWet      = (float)child.getProperty("delWet",  0.3f);   // 0.3 = the old fixed return level
             m.delaySync     = (bool) child.getProperty("delSync", false);
             m.delayDivision = (int)  child.getProperty("delDiv",  4);
             m.delayPingPong = (bool) child.getProperty("delPP",   false);

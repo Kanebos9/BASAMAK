@@ -24,6 +24,7 @@ public:
     {
         float reverbRoom = 0.5f, reverbDamp = 0.5f, reverbWet = 0.4f;
         float delayTime  = 0.375f, delayFeedback = 0.3f;
+        float delayWet   = 0.3f;        // delay return level (was a fixed hidden 0.3; now a MASTER knob like reverb Wet)
         bool  delaySync  = false;
         int   delayDivision = 4;        // index into the note-division table
         bool  delayPingPong = false;    // cross-feed L<->R so echoes bounce across the stereo field
@@ -67,7 +68,24 @@ public:
     // so the editor can re-sync its UI.
     std::atomic<bool> patternChanged { false };
 
-    struct TriggerEvent { int channel; int step; float velScale = 1.0f; int sub = 0; int roll = 1; };
+    // offset = SAMPLE-ACCURATE position of the hit within this block (at the engine's rate).
+    // The render is split at these offsets so triggers land exactly on the grid instead of
+    // being quantised to block starts (which jittered up to a whole buffer, ~12 ms at 512).
+    struct TriggerEvent { int channel; int step; float velScale = 1.0f; int sub = 0; int roll = 1; int offset = 0; };
+
+    // [start, end) of step `s` (bar fraction 0..1) with this pattern's swing applied. The
+    // MIDI exporter reuses it so exported clips carry the same groove the engine plays.
+    static void stepSpan(int s, int n, float swing, double& start, double& end)
+    {
+        const double stepW = 1.0 / juce::jmax(1, n);
+        if (swing <= 0.0001f || (n % 2 != 0 && s >= n - 1))   // straight, or the lone last step of an odd count
+        { start = s * stepW; end = start + stepW; return; }
+        const int    pair      = s / 2;
+        const double pairStart = pair * 2.0 * stepW;
+        const double boundary  = pairStart + (0.5 + (double) swing * 0.25) * 2.0 * stepW;  // swung split point
+        if ((s & 1) == 0) { start = pairStart; end = boundary; }
+        else              { start = boundary;  end = pairStart + 2.0 * stepW; }
+    }
 
     //-- Accessors for the VIEWED pattern (what the editor edits/auditions).
     Pattern&       current()        { return patterns[currentPattern]; }
@@ -89,16 +107,20 @@ public:
             playPattern = p;
             patternRepeatCount = 0;
             finished = false;
-            resetStepTracking();
         }
     }
+
+    // Solo state is PER PATTERN, so each rendered pattern must be muted against ITS OWN
+    // solo flags (using the viewed pattern's solo for the playing pattern silenced
+    // everything when view != playback - the old anySolo-parameter bug).
+    static bool anySoloIn(const Pattern& p)
+    { for (auto& c : p.channels) if (c.solo) return true; return false; }
 
     juce::Array<TriggerEvent> processBlock(
         juce::AudioBuffer<float>& audio,        // the Main output bus
         double sampleRate,
         int numSamples,
         juce::AudioPlayHead* playHead,
-        bool anySolo,
         juce::AudioBuffer<float>* const* auxBuses = nullptr,  // per-aux-out views (nullptr = disabled)
         int numAux = 0,
         juce::AudioBuffer<float>* reverbSendBus = nullptr,    // per-channel reverb-send sum (Main-routed only)
@@ -107,9 +129,9 @@ public:
     void reset();
     void resetChains()           { for (auto& p : patterns) p.chainStep = 0; }   // chain positions back to the start
     void startStandalone()       { playing = true; finished = false; patternRepeatCount = 0; loopCount = 0;
-                                   resetChains(); playPattern = currentPattern; resetStepTracking(); }   // play from the viewed pattern
+                                   resetChains(); playPattern = currentPattern; resetTickDedupe(); }   // play from the viewed pattern
     void stopStandalone()        { playing = false; barPosition = 0.0; finished = false;
-                                   patternRepeatCount = 0; loopCount = 0; resetChains(); isCurrentlyPlaying = false; resetStepTracking(); }
+                                   patternRepeatCount = 0; loopCount = 0; resetChains(); isCurrentlyPlaying = false; resetTickDedupe(); }
     void setStandaloneBpm(float bpm) { standaloneBpm = bpm; }
 
     int getChannelStep(int ch) const
@@ -124,8 +146,13 @@ public:
 
 private:
     double barPosition = 0.0;      // 0..1 fraction within current bar
-    int    lastStep[NUM_CHANNELS] = { -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1 };
     juce::Random stepRng;          // per-step probability rolls
+    // Seam dedupe: the DAW path recomputes oldPos from the host ppq each block; a floating-point
+    // mismatch at the block seam could re-cross (double-fire) a tick. Remember the last tick id
+    // + the loop it fired on per channel and skip exact repeats.
+    int lastTick[NUM_CHANNELS]     = {};
+    int lastTickLoop[NUM_CHANNELS] = {};
+    void resetTickDedupe() { for (int i = 0; i < NUM_CHANNELS; ++i) { lastTick[i] = -1; lastTickLoop[i] = -1; } }
 
     int    patternRepeatCount = 0; // bars completed in current pattern
 public:
@@ -134,10 +161,14 @@ private:
     bool   finished = false;       // StopAfterN reached → suppress triggers
     bool   wasPlaying = false;     // DAW transport edge detection
 
-    void resetStepTracking();
     void onBarComplete();          // applies the current pattern's play mode
     void advanceStandalone(double sampleRate, int numSamples, juce::Array<TriggerEvent>& events);
     void advanceDaw(juce::AudioPlayHead* playHead, double sampleRate, int numSamples,
                     juce::Array<TriggerEvent>& events);
-    void checkChannelTriggers(double oldPos, double newPos, juce::Array<TriggerEvent>& events);
+    // Scan every step/sub-hit boundary in (oldPos, newPos] (bar fractions) and fire the ones
+    // that are on, with a sample-accurate block offset = baseOffset + position within the span.
+    // Scanning the RANGE (not "which step are we in now") also fires steps a huge host buffer
+    // would previously have skipped, and puts ratchet sub-hits inside the SWUNG step span.
+    void checkChannelTriggers(double oldPos, double newPos, int spanSamples, int baseOffset,
+                              juce::Array<TriggerEvent>& events);
 };

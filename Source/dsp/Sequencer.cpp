@@ -1,4 +1,5 @@
 #include "Sequencer.h"
+#include <algorithm>
 
 void Sequencer::reset()
 {
@@ -9,13 +10,7 @@ void Sequencer::reset()
     patternRepeatCount = 0;
     loopCount = 0;
     wasPlaying = false;
-    resetStepTracking();
-}
-
-void Sequencer::resetStepTracking()
-{
-    for (int i = 0; i < NUM_CHANNELS; ++i)
-        lastStep[i] = -1;
+    resetTickDedupe();
 }
 
 //==============================================================================
@@ -24,53 +19,76 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
     double sampleRate,
     int numSamples,
     juce::AudioPlayHead* playHead,
-    bool anySolo,
     juce::AudioBuffer<float>* const* auxBuses,
     int numAux,
     juce::AudioBuffer<float>* reverbSendBus,
     juce::AudioBuffer<float>* delaySendBus)
 {
     juce::Array<TriggerEvent> events;
+    if (numSamples <= 0) return events;
 
     if (dawSync)
         advanceDaw(playHead, sampleRate, numSamples, events);
     else if (playing)
         advanceStandalone(sampleRate, numSamples, events);
 
-    for (auto& e : events)
+    // Events now carry a sample-accurate block offset. Sort by offset, then render the
+    // PLAYING pattern in segments split at those offsets so each hit starts exactly on
+    // the grid (previously everything was quantised to the block start = up to a whole
+    // buffer of jitter).
+    std::sort(events.begin(), events.end(),
+              [](const TriggerEvent& a, const TriggerEvent& b) { return a.offset < b.offset; });
+
+    auto fireEvent = [this](const TriggerEvent& e)
     {
         auto& c = patterns[playPattern].channels[e.channel];   // steps fire from the PLAYING pattern
-        if (c.midiOut) continue;   // MIDI-out channels make no internal sound (they emit notes in the processor)
-        // Choke groups: a hit cuts the ringing tails of other channels in the same group (e.g. a
-        // closed hi-hat silencing an open one). The new hit masks the cut, so no audible click.
+        if (c.midiOut) return;   // MIDI-out channels make no internal sound (they emit notes in the processor)
+        // Choke groups: a hit FADES OUT (~3 ms) the ringing tails of other channels in the same
+        // group (e.g. a closed hi-hat silencing an open one). A hard cut clicked whenever the
+        // choking hit was quieter than the tail it cut.
         if (c.chokeGroup > 0)
             for (int o = 0; o < NUM_CHANNELS; ++o)
                 if (o != e.channel && patterns[playPattern].channels[o].chokeGroup == c.chokeGroup)
-                    patterns[playPattern].channels[o].silenceAllVoices();
-        c.trigger(c.stepVel[e.step] * e.velScale, c.stepPitch[e.step], c.stepPan[e.step]);   // velScale = roll-decay ramp
-    }
+                    patterns[playPattern].channels[o].fadeOutVoices();
+        c.trigger(c.stepVel[e.step] * e.velScale, c.stepPitch[e.step], c.stepPan[e.step]);   // velScale = roll ramp
+    };
 
-    for (int ch = 0; ch < NUM_CHANNELS; ++ch)
+    // Each rendered pattern is muted against ITS OWN solo flags (solo is per pattern).
+    const bool soloPlay = anySoloIn(patterns[playPattern]);
+
+    int idx = 0, segStart = 0;
+    while (segStart < numSamples)
     {
-        auto& chan = patterns[playPattern].channels[ch];
-        const int ob = chan.outputBus;   // 0 = Main; 1..numAux = a discrete aux out
-        const bool toMain = ! (ob >= 1 && ob <= numAux && auxBuses != nullptr && auxBuses[ob - 1] != nullptr);
-        juce::AudioBuffer<float>* dest = toMain ? &audio : auxBuses[ob - 1];
-        // Sends only apply to Main-routed channels (aux outs are dry, on their own DAW track).
-        chan.renderInto(*dest, 0, numSamples, anySolo,
-                        toMain ? reverbSendBus : nullptr,
-                        toMain ? delaySendBus  : nullptr);
+        while (idx < events.size() && events[idx].offset <= segStart) fireEvent(events[idx++]);
+        int segEnd = numSamples;
+        if (idx < events.size()) segEnd = juce::jlimit(segStart + 1, numSamples, events[idx].offset);
+
+        for (int ch = 0; ch < NUM_CHANNELS; ++ch)
+        {
+            auto& chan = patterns[playPattern].channels[ch];
+            const int ob = chan.outputBus;   // 0 = Main; 1..numAux = a discrete aux out
+            const bool toMain = ! (ob >= 1 && ob <= numAux && auxBuses != nullptr && auxBuses[ob - 1] != nullptr);
+            juce::AudioBuffer<float>* dest = toMain ? &audio : auxBuses[ob - 1];
+            // Sends only apply to Main-routed channels (aux outs are dry, on their own DAW track).
+            chan.renderInto(*dest, segStart, segEnd - segStart, soloPlay,
+                            toMain ? reverbSendBus : nullptr,
+                            toMain ? delaySendBus  : nullptr);
+        }
+        segStart = segEnd;
     }
+    while (idx < events.size()) fireEvent(events[idx++]);   // safety: offsets are clamped < numSamples
+
     // A pattern we just switched AWAY from (NextAfterN) keeps rendering its still-ringing voices
     // (tails) into Main until they finish, so the switch doesn't hard-cut them = no click. No new
     // triggers fire on it (it's not playPattern), so the voices just decay out.
     if (fadeOutPattern >= 0 && fadeOutPattern != playPattern && fadeOutPattern != currentPattern)
     {
+        const bool soloFade = anySoloIn(patterns[fadeOutPattern]);
         bool anyRinging = false;
         for (int ch = 0; ch < NUM_CHANNELS; ++ch)
         {
             auto& fc = patterns[fadeOutPattern].channels[ch];
-            if (! fc.midiOut) fc.renderInto(audio, 0, numSamples, anySolo);   // dry tail into Main
+            if (! fc.midiOut) fc.renderInto(audio, 0, numSamples, soloFade);   // dry tail into Main
             if (fc.anyVoiceActive()) anyRinging = true;
         }
         if (! anyRinging) fadeOutPattern = -1;   // all tails finished
@@ -79,14 +97,17 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
     // Also render the VIEWED pattern when it differs, so auditioning a channel there
     // is still heard (always to Main, so it's audible regardless of routing).
     if (currentPattern != playPattern)
+    {
+        const bool soloView = anySoloIn(patterns[currentPattern]);
         for (int ch = 0; ch < NUM_CHANNELS; ++ch)
-            patterns[currentPattern].channels[ch].renderInto(audio, 0, numSamples, anySolo);
+            patterns[currentPattern].channels[ch].renderInto(audio, 0, numSamples, soloView);
+    }
 
     return events;
 }
 
 //==============================================================================
-// Standalone timing: advance barPosition at BPM rate (4/4 assumed)
+// Standalone timing: advance barPosition at BPM rate, honouring the time signature.
 void Sequencer::advanceStandalone(double sampleRate, int numSamples,
                                    juce::Array<TriggerEvent>& events)
 {
@@ -101,18 +122,25 @@ void Sequencer::advanceStandalone(double sampleRate, int numSamples,
 
     if (newPos < 1.0)
     {
-        checkChannelTriggers(oldPos, newPos, events);
+        checkChannelTriggers(oldPos, newPos, numSamples, 0, events);
         barPosition = newPos;
         return;
     }
 
-    // Bar finished — decide stop/next BEFORE firing the next bar's first step
+    // Ticks in the tail of this bar (oldPos -> 1.0), then decide stop/next BEFORE the new bar.
+    const int tailSamples = juce::jlimit(0, numSamples,
+                                         (int) std::floor((1.0 - oldPos) / juce::jmax(1.0e-12, barsPerSample)));
+    checkChannelTriggers(oldPos, 1.0, juce::jmax(1, tailSamples), 0, events);
+
     onBarComplete();
     if (finished) { playing = false; barPosition = 0.0; isCurrentlyPlaying = false; return; }
 
     double rem = newPos - 1.0;
-    resetStepTracking();
-    checkChannelTriggers(0.0, rem, events);  // first step of the new (looped/next) bar
+    while (rem >= 1.0) rem -= 1.0;   // pathological giant-buffer safety
+    // rem == 0 -> the bar boundary is exactly the block end; the next block (oldPos == 0)
+    // fires step 0 itself - calling here too would double-fire it.
+    if (rem > 0.0)
+        checkChannelTriggers(0.0, rem, juce::jmax(1, numSamples - tailSamples), tailSamples, events);
     barPosition = rem;
 }
 
@@ -123,57 +151,70 @@ void Sequencer::advanceDaw(juce::AudioPlayHead* dawHead, double sampleRate, int 
 {
     if (!dawHead) { isCurrentlyPlaying = false; return; }
 
-    juce::AudioPlayHead::CurrentPositionInfo pos;
-    if (!dawHead->getCurrentPosition(pos))
+    const auto posInfo = dawHead->getPosition();
+    if (! posInfo.hasValue())
     {
         isCurrentlyPlaying = false;
         return;
     }
 
-    if (!pos.isPlaying && !pos.isRecording)
+    if (! posInfo->getIsPlaying() && ! posInfo->getIsRecording())
     {
         isCurrentlyPlaying = false;
-        resetStepTracking();
         barPosition = 0.0;
         finished = false;            // transport stopped → re-arm
         patternRepeatCount = 0;
         loopCount = 0;
         wasPlaying = false;
+        resetTickDedupe();
         return;
     }
 
     // Transport just (re)started → re-arm the play-mode counters + start from the viewed pattern
     if (!wasPlaying) { finished = false; patternRepeatCount = 0; loopCount = 0; resetChains(); wasPlaying = true;
-                       playPattern = currentPattern; resetStepTracking(); }
+                       playPattern = currentPattern; resetTickDedupe(); }
 
     if (finished) { isCurrentlyPlaying = false; return; } // StopAfterN reached
 
     isCurrentlyPlaying = true;
 
     // bar position = frac(ppq / quartersPerBar), using the DAW's time signature.
-    const int    num = pos.timeSigNumerator   > 0 ? pos.timeSigNumerator   : 4;
-    const int    den = pos.timeSigDenominator > 0 ? pos.timeSigDenominator : 4;
+    const auto ts  = posInfo->getTimeSignature();
+    const int  num = (ts.hasValue() && ts->numerator   > 0) ? ts->numerator   : 4;
+    const int  den = (ts.hasValue() && ts->denominator > 0) ? ts->denominator : 4;
     const double quartersPerBar = num * 4.0 / den;
 
-    double oldPos = std::fmod(pos.ppqPosition / quartersPerBar, 1.0);
+    const auto ppq = posInfo->getPpqPosition();
+    const auto bpm = posInfo->getBpm();
+    const double ppqPos  = ppq.hasValue() ? *ppq : 0.0;
+    const double hostBpm = (bpm.hasValue() && *bpm > 1.0) ? *bpm : 120.0;
+
+    double oldPos = std::fmod(ppqPos / quartersPerBar, 1.0);
+    if (oldPos < 0.0) oldPos += 1.0;
 
     // Advance by one block (ppq is in quarter notes)
-    double beatsPerSample = pos.bpm / (60.0 * sampleRate);
-    double newPos = oldPos + numSamples * beatsPerSample / quartersPerBar;
+    double beatsPerSample = hostBpm / (60.0 * sampleRate);
+    double barsPerSample  = beatsPerSample / quartersPerBar;
+    double newPos = oldPos + numSamples * barsPerSample;
 
     if (newPos < 1.0)
     {
-        checkChannelTriggers(oldPos, newPos, events);
+        checkChannelTriggers(oldPos, newPos, numSamples, 0, events);
         barPosition = newPos;
         return;
     }
+
+    const int tailSamples = juce::jlimit(0, numSamples,
+                                         (int) std::floor((1.0 - oldPos) / juce::jmax(1.0e-12, barsPerSample)));
+    checkChannelTriggers(oldPos, 1.0, juce::jmax(1, tailSamples), 0, events);
 
     onBarComplete();
     if (finished) { isCurrentlyPlaying = false; return; }
 
     double rem = newPos - 1.0;
-    resetStepTracking();
-    checkChannelTriggers(0.0, rem, events);
+    while (rem >= 1.0) rem -= 1.0;
+    if (rem > 0.0)   // rem == 0 -> next block's oldPos == 0 fires step 0 (no double-fire)
+        checkChannelTriggers(0.0, rem, juce::jmax(1, numSamples - tailSamples), tailSamples, events);
     barPosition = rem;
 }
 
@@ -196,7 +237,6 @@ void Sequencer::onBarComplete()
         playPattern = juce::jlimit(0, NUM_PATTERNS - 1, p.gotoPattern);
         patternRepeatCount = 0;
         finished = false;
-        resetStepTracking();
         patternChanged.store(true);   // editor follows playPattern if "Follow" is on
     }
     else if (p.playMode == Chain && p.chainLen > 0
@@ -210,82 +250,79 @@ void Sequencer::onBarComplete()
         playPattern = tgt;
         patternRepeatCount = 0;
         finished = false;
-        resetStepTracking();
         patternChanged.store(true);
     }
 }
 
 //==============================================================================
-// Fire the step we're now entering, for each channel. The caller guarantees
-// newPos <= 1.0 and handles bar boundaries (so the next bar's first step is
-// only fired when playback actually continues).
-// Maps a bar position to the step we're inside, applying swing: each pair of
-// steps splits not at the midpoint but later for the off-step, so odd steps are
-// delayed for a groove feel. 'swing' 0 = straight, ~0.7 = heavy.
-static int swungStep(double pos, int n, float swing)
-{
-    if (swing <= 0.0001f) return (int)(pos * n) % n;
-    const double stepsPos = pos * (double) n;          // 0..n
-    const int    pair     = (int) (stepsPos) / 2;      // which pair of steps
-    const double within   = (stepsPos - pair * 2.0) * 0.5; // 0..1 across the pair
-    const double boundary = 0.5 + (double) swing * 0.25;   // split point (0.5..0.75)
-    int step = pair * 2 + (within < boundary ? 0 : 1);
-    if (step >= n) step = n - 1;                        // lone last step (odd n) stays straight
-    return step;
-}
-
-void Sequencer::checkChannelTriggers(double oldPos, double newPos,
+// Scan every step / ratchet-sub-hit boundary in (oldPos, newPos] and fire the ones that
+// are on. Each fired event gets a sample-accurate offset within the block:
+// baseOffset + (its position within the scanned span) * spanSamples.
+//   - Scanning the RANGE means a huge host buffer that crosses several boundaries fires
+//     them ALL (the old "which step are we in now" check silently skipped steps).
+//   - Sub-hits subdivide the SWUNG step span, so ratchets inside a swung step groove too.
+//   - The exact bar start (position 0) fires only when the scan starts at 0.
+void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSamples, int baseOffset,
                                       juce::Array<TriggerEvent>& events)
 {
+    if (newPos < oldPos) return;
+    const double span = juce::jmax(1.0e-12, newPos - oldPos);
     Pattern& pp = patterns[playPattern];   // triggers come from the PLAYING pattern
+
     for (int ch = 0; ch < NUM_CHANNELS; ++ch)
     {
-        int n = pp.channels[ch].numSteps;
+        auto& c = pp.channels[ch];
+        const int n = c.numSteps;
         if (n <= 0) continue;
 
-        // Which step do we land on now? (with this pattern's swing applied)
-        int curStep = swungStep(newPos, n, pp.swing);
-        auto& c = pp.channels[ch];
-
-        // Ratchet/roll: subdivide the step into 'roll' evenly-spaced sub-hits. A
-        // unique tick per (step, sub-hit) makes the step fire that many times.
-        const int roll = juce::jlimit(1, 6, c.stepRoll[curStep]);
-        const double posS = newPos * (double) n;
-        const double within = posS - std::floor(posS);               // 0..1 within the step slot
-        const int sub = juce::jlimit(0, roll - 1, (int)(within * roll));
-        const long tick = (long) curStep * 8 + sub;
-
-        // At the exact start of a bar (oldPos == 0.0), always fire step 0
-        bool atBarStart = (oldPos == 0.0);
-
-        if (tick != lastStep[ch] || atBarStart)
+        for (int s = 0; s < n; ++s)
         {
-            lastStep[ch] = tick;
-            // Refresh the analysed channel's spectrum at every step/sub boundary so
-            // the EQ graph updates. Only the inspected channel has a tap.
-            if (auto* tap = c.analysisTap) tap->arm();
-            // Per-step LOOP condition: fire only on the chosen loops of an N-loop cycle (N=1 OR no bars chosen = always).
-            bool condOk = true;
-            const int condN = juce::jlimit(1, 10, c.stepCondLen[curStep]);
-            if (condN > 1 && c.stepCondMask[curStep] != 0) {
-                const int bar = ((loopCount % condN) + condN) % condN;
-                condOk = ((c.stepCondMask[curStep] >> bar) & 1) != 0;
-            }
-            if (c.steps[curStep] && condOk)
+            double st, en;
+            stepSpan(s, n, pp.swing, st, en);
+            const int roll = juce::jlimit(1, 6, c.stepRoll[s]);
+
+            for (int j = 0; j < roll; ++j)
             {
+                const double pos = st + (en - st) * (double) j / (double) roll;
+                const bool atZero = (oldPos == 0.0 && pos == 0.0);           // bar start fires inclusively
+                if (! atZero && ! (pos > oldPos && pos <= newPos)) continue;
+
+                // Seam dedupe: never fire the same tick twice within one loop iteration
+                // (protects against block-seam floating-point re-crossings in DAW sync).
+                const int tickId = s * 8 + j;
+                if (lastTick[ch] == tickId && lastTickLoop[ch] == loopCount) continue;
+                lastTick[ch] = tickId; lastTickLoop[ch] = loopCount;
+
+                // Refresh the analysed channel's spectrum at every step/sub boundary so
+                // the EQ graph updates. Only the inspected channel has a tap.
+                if (auto* tap = c.analysisTap) tap->arm();
+
+                // Per-step LOOP condition: fire only on the chosen loops of an N-loop cycle
+                // (N=1 OR no bars chosen = always).
+                bool condOk = true;
+                const int condN = juce::jlimit(1, 10, c.stepCondLen[s]);
+                if (condN > 1 && c.stepCondMask[s] != 0) {
+                    const int bar = ((loopCount % condN) + condN) % condN;
+                    condOk = ((c.stepCondMask[s] >> bar) & 1) != 0;
+                }
+                if (! c.steps[s] || ! condOk) continue;
+
                 // Roll ramp: each successive sub-hit ramps in velocity across the ratchet. The amount
                 // (stepRollDecay, -1..+1) is set by the Roll cell's X-drag: negative = fade out (each
                 // hit quieter), 0 = flat, positive = build up (each hit louder).
                 float velScale = 1.0f;
                 if (roll > 1)
                 {
-                    const float rr   = juce::jlimit(-1.0f, 1.0f, c.stepRollDecay[curStep]);
-                    const float frac = (float) sub / (float)(roll - 1);   // 0 = first hit, 1 = last
-                    velScale = (rr >= 0.0f) ? (1.0f - rr) + rr * frac      // build up
-                                            : 1.0f + rr * frac;           // fade out (rr < 0)
+                    const float rr   = juce::jlimit(-1.0f, 1.0f, c.stepRollDecay[s]);
+                    const float frac = (float) j / (float)(roll - 1);   // 0 = first hit, 1 = last
+                    velScale = (rr >= 0.0f) ? (1.0f - rr) + rr * frac    // build up
+                                            : 1.0f + rr * frac;         // fade out (rr < 0)
                     velScale = juce::jmax(0.0f, velScale);
                 }
-                events.add({ ch, curStep, velScale, sub, roll });
+
+                const int off = baseOffset + (int) juce::jlimit(0.0, (double) spanSamples - 1.0,
+                                                (pos - oldPos) / span * (double) spanSamples);
+                events.add({ ch, s, velScale, j, roll, off });
             }
         }
     }

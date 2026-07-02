@@ -1128,6 +1128,7 @@ private:
     LearnableKnob knobReverbRoom { "global_reverbRoom", proc.midiLearn };
     LearnableKnob knobDelayTime  { "global_delayTime",  proc.midiLearn };
     LearnableKnob knobDelayFB    { "global_delayFB",    proc.midiLearn };
+    LearnableKnob knobDelayWet   { "global_delayWet",   proc.midiLearn };   // delay return level (was a hidden fixed 0.3)
 
     //-- Sample pitch envelope
     LearnableKnob knobPEnvAmt  { "p0_ch0_pitchEnvAmt",  proc.midiLearn };
@@ -1267,7 +1268,7 @@ private:
     juce::Label lblPit,lblVol,lblPan;
     juce::Label lblCutoff,lblReso,lblEnvAmt,lblDrive,lblRev,lblDel;
     juce::Label lblFiltType,lblDrvType;
-    juce::Label lblRevRoom,lblDelTime,lblDelFB;
+    juce::Label lblRevRoom,lblDelTime,lblDelFB,lblDelWet;
     juce::Label hdrEq, hdrFilter, hdrDrive, hdrChan, hdrSend, hdrMaster;
 
     KnobLNF knobLNF;                       // value read-out under each knob
@@ -1356,6 +1357,9 @@ private:
     // when learning starts / moves / finishes.
     bool         lastLearnActive = false;
     juce::String lastLearnParam;
+    // Ticks in a row that a popup menu has been open while NO window of ours has OS focus
+    // (= the user clicked outside the plugin). Debounces the auto-dismiss of open dropdowns.
+    int          outsideFocusTicks = 0;
     juce::String stripMixShown[Sequencer::NUM_CHANNELS]; // last text drawn (avoid per-tick repaint)
     juce::String presetShown;
 
