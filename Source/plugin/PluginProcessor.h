@@ -65,9 +65,9 @@ public:
     // instead of being read as Launchpad pads. Off by default so the Launchpad keeps working.
     std::atomic<bool> keysMode { false };
 
-    // Auto-audition: when ON, releasing a slot knob/fader fires a TEST hit so you hear the edit. OFF by
-    // default (firing on every release surprised the user as "random sounds"); toggled from the top bar.
-    std::atomic<bool> auditionOnEdit { false };
+    // Auto-audition: when ON, releasing a slot knob/fader fires a TEST hit so you hear the edit. ON by
+    // default (user request); toggled from the top bar. A fresh instance starts ON; saved state restores.
+    std::atomic<bool> auditionOnEdit { true };
 
     static constexpr int kEngineOS = 2;
     std::unique_ptr<juce::dsp::Oversampling<float>> engineOS;
@@ -104,11 +104,22 @@ public:
     // Page B state per channel (which 8 steps are visible on Launchpad)
     bool channelPageB[8] = {};
 
+    // A fresh STANDALONE must open at FACTORY DEFAULTS, not restore its last session (the JUCE
+    // standalone auto-persists + reloads state on launch). We skip that ONE startup restore - it
+    // happens before the editor is ever created - while still allowing preset-file loads + undo
+    // (which call setStateInformation later, after the editor exists). A VST is untouched: a fresh
+    // instance gets no state, a SAVED project restores normally. Set true in createEditor().
+    bool uiCreatedOnce = false;
+
     // Reverb / Delay engines (the FX are shared; their KNOB VALUES are stored
     // per-pattern in Sequencer::Pattern::master, see Sequencer.h).
     FDNReverb fdn;                       // modulated FDN reverb (smoother than Freeverb)
     float limiterGain    = 1.0f;        // limiter gain-reduction envelope (audio thread state)
     float masterGlueEnv  = 0.0f;        // master "glue" compressor detector envelope (audio thread state)
+    float masterTiltL    = 0.0f;        // master tilt-EQ one-pole low-band state (L/R)
+    float masterTiltR    = 0.0f;
+    float satDcX[2]      = { 0.0f, 0.0f };  // master saturation DC-blocker state (last in, per channel)
+    float satDcY[2]      = { 0.0f, 0.0f };  // (last out) - removes the asymmetric-shaper bias
     // Convenience accessor for the current pattern's master settings.
     Sequencer::MasterFX& masterFX() { return sequencer.current().master; }
 

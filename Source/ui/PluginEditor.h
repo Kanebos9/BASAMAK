@@ -9,8 +9,8 @@
 class StepGridComponent : public juce::Component
 {
 public:
-    // Step edit mode: 0 = on/off, 1 = Velocity, 2 = Pitch, 3 = Probability, 4 = Roll, 5 = Pan.
-    enum EditMode { ModeSteps = 0, ModeVel, ModePitch, ModeProb, ModeRoll, ModePan };
+    // Step edit mode: 0 = on/off, 1 = Velocity, 2 = Pitch, 3 = Probability(Loop), 4 = Roll, 5 = Pan, 6 = Length.
+    enum EditMode { ModeSteps = 0, ModeVel, ModePitch, ModeProb, ModeRoll, ModePan, ModeLen };
     int editMode = ModeSteps;
     bool influenceArmed[Sequencer::NUM_CHANNELS] = {};   // per channel: next touched step propagates to all
 
@@ -21,6 +21,8 @@ public:
     std::function<void(int ch, int step, int mode, float value)> onStepValueChanged;
     // Called when the per-step LOOP condition (Prob mode) is edited: cycle length + enabled-loop bitmask.
     std::function<void(int ch, int step, int len, int mask)> onStepCondChanged;
+    // Called when a step's 303-SLIDE flag is toggled (bottom strip of a cell in Pitch mode).
+    std::function<void(int ch, int step, bool on)> onStepSlideChanged;
     // Influence: copy one source step's vel/pitch/prob/roll onto every step in the channel.
     std::function<void(int ch, int srcStep)> onInfluenceApply;
     std::function<void(int ch)>              onInfluenceDisarm; // un-highlight the strip button
@@ -40,7 +42,7 @@ public:
     void update(const Sequencer& seq, bool anySolo);
     float getRollDec(int ch, int step) const { return rollDec[ch][step]; }
     float getVel(int ch, int step) const { return vel[ch][step]; }   // velocity set by X-drag in Roll mode
-    float getNoteLen(int ch, int step) const { return noteLen[ch][step]; }  // length set by X in Vel/Len mode (MIDI)
+    float getNoteLen(int ch, int step) const { return noteLen[ch][step]; }  // per-step gate length (Len mode)
 
 private:
     static constexpr int NCH = Sequencer::NUM_CHANNELS;
@@ -50,8 +52,9 @@ private:
     float prob[NCH][DrumChannel::MAX_STEPS]  = {};
     int   roll[NCH][DrumChannel::MAX_STEPS]  = {};
     float rollDec[NCH][DrumChannel::MAX_STEPS] = {};   // roll decay 0..1 (fade across ratchet hits)
-    float noteLen[NCH][DrumChannel::MAX_STEPS] = {};   // per-step MIDI note length 0..1 (Vel/Len mode)
+    float noteLen[NCH][DrumChannel::MAX_STEPS] = {};   // per-step GATE length 0..1 of one step (0 = off/natural)
     float pan[NCH][DrumChannel::MAX_STEPS]   = {};      // per-step stereo pan -1..+1 (Pan mode; 0 = centre)
+    bool  slide[NCH][DrumChannel::MAX_STEPS] = {};      // 303 slide flag (toggled in Pitch mode's bottom strip)
     int   condLen[NCH][DrumChannel::MAX_STEPS]  = {};   // per-step loop-condition cycle length (Prob mode)
     int   condMask[NCH][DrumChannel::MAX_STEPS] = {};   // per-step loop-condition bitmask (0 = every loop)
     int   condDragCh = -1, condDragStep = -1, condDownBar = -1, condDownX = 0;   // Prob-mode gesture state
@@ -68,11 +71,67 @@ private:
     void  handleValueDrag(juce::Point<int> pos);
     void  applyInfluence(int ch, int srcStep); // copy srcStep onto every step in the channel
 
+public:
+    // STEP MAGNIFIER (value modes): while the mouse is down on a step, that cell is drawn (and its
+    // value mapped) at 2x, ANCHORED so the cursor keeps its exact fractional position inside the
+    // cell - the click therefore lands on the same value as unmagnified, and the drag gets 2x
+    // finer travel (needed with 32 steps, where a raw cell is tiny). Cleared on mouseUp.
+    int   magCh = -1, magStep = -1;
+    juce::Rectangle<int> magRect;
+    juce::Component* magOverlay = nullptr;   // top-most sibling that paints the magnified cell above the top bar
+    void notifyMag() { repaint(); if (magOverlay) magOverlay->repaint(); }
+    void beginMagnify(int ch, int step, juce::Point<int> pos)
+    {
+        const auto r = stepRect(ch, step);
+        const float fx = (float)(pos.x - r.getX()) / (float) juce::jmax(1, r.getWidth());
+        const float fy = (float)(pos.y - r.getY()) / (float) juce::jmax(1, r.getHeight());
+        const int mw = r.getWidth() * 2, mh = r.getHeight() * 2;
+        magCh = ch; magStep = step;
+        magRect = { pos.x - juce::roundToInt(fx * (float) mw), pos.y - juce::roundToInt(fy * (float) mh), mw, mh };
+        notifyMag();
+    }
+    void endMagnify() { if (magCh >= 0) { magCh = magStep = -1; notifyMag(); } }
+    // The rect a gesture maps positions against: the magnified rect while this step is magnified.
+    juce::Rectangle<int> activeStepRect(int ch, int step) const
+    { return (ch == magCh && step == magStep) ? magRect : stepRect(ch, step); }
+    // The magnified cell (in THIS grid's local coords); false if none. Used by the overlay to
+    // re-draw it above everything (the top bar / channel strips clip a first-row magnified cell).
+    bool magnifiedCell(int& ch, int& step, juce::Rectangle<int>& rr) const
+    {
+        const int lastR = juce::jmin(firstRow + visibleRows, Sequencer::NUM_CHANNELS);
+        if (editMode == ModeSteps || magCh < juce::jmax(0, firstRow) || magCh >= lastR
+            || magStep < 0 || magStep >= numSteps[magCh]) return false;
+        ch = magCh; step = magStep; rr = magRect; return true;
+    }
+    void paintValueCell(juce::Graphics& g, int ch, int step, juce::Rectangle<int> rr, bool magnified);
+
+private:
     juce::String stepParamId(int ch, int step) const;
     juce::Rectangle<int> stepRect(int ch, int step) const;
     bool findStepAt(juce::Point<int> pos, int& outCh, int& outStep) const;
     void handleClick(juce::Point<int> pos, bool setDragState);
+    void paintCellExtras(juce::Graphics& g, int ch, int step, juce::Rectangle<int> rr,
+                         juce::Rectangle<float> r, bool isActive, bool isCurrent);
     bool lastDragState = false;
+};
+
+//==============================================================================
+// Top-most transparent overlay that redraws the step grid's MAGNIFIED cell in front of
+// everything (the top bar and channel strips otherwise clip a first-row / first-column
+// magnified cell). Mouse-transparent; shares the grid's parent coordinate space.
+class StepMagnifierOverlay : public juce::Component
+{
+public:
+    StepGridComponent* grid = nullptr;
+    StepMagnifierOverlay() { setInterceptsMouseClicks(false, false); }
+    void paint(juce::Graphics& g) override
+    {
+        if (grid == nullptr) return;
+        int ch, step; juce::Rectangle<int> rr;
+        if (! grid->magnifiedCell(ch, step, rr)) return;
+        // grid + overlay are siblings -> grid-local + grid.getPosition() == overlay-local.
+        grid->paintValueCell(g, ch, step, rr.translated(grid->getX() - getX(), grid->getY() - getY()), true);
+    }
 };
 
 //==============================================================================
@@ -155,6 +214,7 @@ struct SlotParam
     juce::String tooltip;        // optional hover help for the knob
     bool resonGated = false;     // SrcOsc: only shown once the slot's resonator (resonAmt) is on
     bool reBake = false;         // Sample: changing this needs a SoundTouch re-bake on drag-end (Stretch)
+    bool snapRatio = false;      // FM Ratio: snap the mapped 1..6x ratio to integers (hold Shift = free)
 };
 // env (Atk/Hold/Dec[/Sustain][/Vibrato]) + the engine's own params. -1 => empty.
 juce::Array<SlotParam> slotParamsFor(int engine);
@@ -179,6 +239,71 @@ public:
 };
 
 //==============================================================================
+// A sliding on/off switch: green with the knob to the right when on, grey with
+// the knob to the left when off. (Declared early so SlotEditor can hold one.)
+class ToggleSwitch : public juce::Button
+{
+public:
+    ToggleSwitch() : juce::Button({}) { setClickingTogglesState(true); }
+    juce::Colour onColour { 0xff35b56a };   // "on" fill (override for special toggles)
+    void paintButton(juce::Graphics& g, bool, bool) override
+    {
+        auto b = getLocalBounds().toFloat().reduced(1.0f);
+        const bool on = getToggleState();
+        const float r = b.getHeight() * 0.5f;
+        g.setColour(on ? onColour : juce::Colour(0xff4a4a5e));
+        g.fillRoundedRectangle(b, r);
+        const float d  = b.getHeight() - 4.0f;
+        const float kx = on ? b.getRight() - d - 2.0f : b.getX() + 2.0f;
+        g.setColour(juce::Colours::white);
+        g.fillEllipse(kx, b.getY() + 2.0f, d, d);
+    }
+};
+
+//==============================================================================
+// INTERACTIVE string controller for the Physical engine (a visual CONTROLLER like the
+// env/EQ editors, not a decoration): the drawn pluck shape IS the parameters. Drag the
+// dot: X = strike Position (the comb), Y = Tone (brightness = how high the pluck sits).
+// The string's jaggedness derives from Stiffness, its colour character from Material.
+// Static unless a control changes - nothing animates on its own.
+class StringDisplay : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    std::function<DrumChannel::Slot*()> getSlot;
+    std::function<void()> onEdit;      // wrote Position/Tone (mark DSP dirty)
+    std::function<void()> onDragEnd;   // released (auto-audition)
+    void paint(juce::Graphics& g) override;
+    void mouseDown(const juce::MouseEvent& e) override;
+    void mouseDrag(const juce::MouseEvent& e) override;
+    void mouseUp(const juce::MouseEvent&) override;
+    juce::String getTooltip() override;
+private:
+    bool dragging = false;
+};
+
+//==============================================================================
+// INTERACTIVE mallet controller for the Modal engine: a silhouette of the struck body
+// (bar / tube / circle / plate / block per Material) with a draggable MALLET that travels
+// the FULL width (a struck body is symmetric: both edges = edge strike, the middle =
+// centre strike, so hit = 1 - |2x - 1|). Vibration arcs around the strike point show how
+// freely it rings; dragging DOWN shortens them = Damp. Same family as the env editors.
+class ModalDisplay : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    std::function<DrumChannel::Slot*()> getSlot;
+    std::function<void()> onEdit;
+    std::function<void()> onDragEnd;
+    void paint(juce::Graphics& g) override;
+    void mouseDown(const juce::MouseEvent& e) override;
+    void mouseDrag(const juce::MouseEvent& e) override;
+    void mouseUp(const juce::MouseEvent&) override;
+    juce::String getTooltip() override;
+private:
+    bool  dragging = false;
+    float dotX = -1.0f;   // mallet x (0..1, FULL width); reconciled with the slot's hit on paint
+};
+
+//==============================================================================
 // WavetableDisplay - shows the SrcWave engine's current single-cycle waveform (read from the
 // real wavetable bank at the slot's Table + Position). Faint neighbour frames behind give the
 // "table" feel; the bright wave morphs as you turn Position. Read-only (no click editing).
@@ -199,7 +324,52 @@ public:
 // One slot's editor: an engine dropdown + a pool of knobs that reconfigure to the
 // chosen engine's parameters, all editing a single DrumChannel::Slot. Three of
 // these make up the new SOUND BLEND row (each fully editable, duplicates allowed).
-class SlotEditor : public juce::Component
+//==============================================================================
+// LfoDisplay: the per-slot LFOs as an INTERACTIVE visual (same family as the env/EQ editors -
+// the drawn wave IS the parameters). THREE fully independent LFOs, one per target (FILT / PITCH /
+// VOL) - the top tabs pick WHICH one you're editing (dragging never touches the other two), and
+// any mix can run at once (active-but-unselected LFOs show as dim ghost waves). Drag LEFT/RIGHT =
+// Rate (log 0.1..20 Hz, more cycles appear), UP/DOWN = Amount (wave height; 0 = off).
+// Double-click = off / restore. A live dot rides the wave at the real playing voice's phase.
+class LfoDisplay : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    std::function<void(int dest, float rate, float amt)> onChange;
+    std::function<void()> onDragEnd;
+    void setValues(const float* rates, const float* amts, bool filterOn, juce::Colour accent)
+    {
+        bool ch = (filterOn != filtOn_) || (accent != accent_);
+        for (int d = 0; d < 3; ++d) { ch = ch || rates[d] != rate_[d] || amts[d] != amt_[d];
+                                      rate_[d] = rates[d]; amt_[d] = amts[d]; }
+        filtOn_ = filterOn; accent_ = accent; if (ch) repaint();
+    }
+    int  selDest() const { return dest_; }   // the tab being edited (the timer feeds ITS phase)
+    void setPhase(double ph) { if (std::abs(ph - phase_) > 1.0e-3) { phase_ = ph; repaint(); } }
+    void paint(juce::Graphics&) override;
+    void mouseDown(const juce::MouseEvent&) override;
+    void mouseDrag(const juce::MouseEvent&) override;
+    void mouseUp(const juce::MouseEvent&) override { if (dragging_ && onDragEnd) onDragEnd(); dragging_ = false; }
+    void mouseDoubleClick(const juce::MouseEvent&) override;
+    juce::String getTooltip() override;
+private:
+    float rate_[3] = { 4.0f, 4.0f, 4.0f }, amt_[3] = { 0.0f, 0.0f, 0.0f };
+    int dest_ = 0; bool filtOn_ = false;
+    double phase_ = -1.0;
+    juce::Colour accent_ { 0xffe8bf4d };
+    float dnRate_ = 4.0f, dnAmt_ = 0.0f; bool dragging_ = false;
+    float lastAmt_[3] = { 0.5f, 0.5f, 0.5f };  // restore values for the double-click off/on toggle
+    juce::Point<float> dnPos_;
+    juce::Rectangle<float> waveArea() const { return getLocalBounds().toFloat().reduced(2.0f).withTrimmedTop(17.0f); }
+    int destAt(juce::Point<float> p) const  // which of the 3 dest tabs (top strip); -1 = none
+    {
+        const float w = (float) getWidth();
+        if (p.y > 16.0f || p.x < w * 0.22f) return -1;   // below the strip / over the "LFO" title
+        return juce::jlimit(0, 2, (int) ((p.x - w * 0.22f) / (w * 0.26f)));
+    }
+};
+
+class SlotEditor : public juce::Component,
+                   public juce::FileDragAndDropTarget   // drop an audio file anywhere on the box -> load it as a Sample
 {
 public:
     static constexpr int MAXK = 24;            // Synth engine needs the most knobs
@@ -216,9 +386,39 @@ public:
     std::function<void()> onEdit;                  // after a knob change (mark DSP dirty)
     std::function<void()> onAudition;              // on knob release: play a TEST hit (gated by the "Auto" toggle)
     std::function<void(int)> onSampleEdit;         // Sample: re-bake (SoundTouch) on drag-end after a reBake param (Stretch)
+    std::function<void()> onFreqModeToggled;       // Hz <-> note read-out toggled (editor refreshes the sibling slot)
     bool pendingRebake = false;                    // a reBake param was touched this drag
+    // CLICKING a pitched-Freq value read-out toggles the session-wide Hz <-> NOTE mode. The
+    // listener attaches to the slider's internal text Label (recreated by setTextBoxStyle, so
+    // hookFreqReadouts() re-attaches after every place()).
+    struct ReadoutClick : juce::MouseListener
+    {
+        std::function<void()> onClick;
+        // Fire on mouse-DOWN: waiting for mouse-up and rejecting "dragged" clicks made the toggle
+        // feel flaky (a few pixels of jitter during a click counted as a drag and ate it).
+        void mouseDown(const juce::MouseEvent&) override { if (onClick) onClick(); }
+    };
+    ReadoutClick freqReadoutClick;
+    void hookFreqReadouts();
     WaveMorphDisplay morphView;                     // Analog/FM only: Wave A->B morph (replaces 2 knobs)
     WavetableDisplay waveView;                       // SrcWave only: the current wavetable waveform
+    StringDisplay    physView;                       // Physical only: interactive string (Position/Tone on the visual)
+    ModalDisplay     modalView;                      // Modal only: interactive struck-body (Hit Pos/Damp on the visual)
+    ToggleSwitch     fmEnvSw;                        // SrcOsc only: FM Amount follows the amp envelope
+    // Drop an audio file on the box -> the editor switches this slot to Sample + loads it.
+    std::function<void(const juce::File&)> onFileDropped;
+    bool fileDragOver = false;                       // paint a drop highlight
+    static bool isAudioFile(const juce::String& path)
+    {
+        const juce::String e = juce::File(path).getFileExtension().toLowerCase();
+        return e == ".wav" || e == ".aiff" || e == ".aif" || e == ".mp3" || e == ".flac" || e == ".ogg";
+    }
+    bool isInterestedInFileDrag(const juce::StringArray& files) override
+    { return onFileDropped != nullptr && files.size() > 0 && isAudioFile(files[0]); }
+    void fileDragEnter(const juce::StringArray&, int, int) override { fileDragOver = true;  repaint(); }
+    void fileDragExit (const juce::StringArray&) override           { fileDragOver = false; repaint(); }
+    void filesDropped(const juce::StringArray& files, int, int) override
+    { fileDragOver = false; repaint(); if (onFileDropped && files.size() > 0) onFileDropped(juce::File(files[0])); }
     // SrcOsc only: the box is split into ANALOG (wave + Freq fader) / FM (Depth fader + Ratio/Feedback
     // knobs) / PHYSICAL (Reson fader + revealed knob row). Freq, Depth (FM amount) and Reson (resonator
     // amount) are each a horizontal fader leading its section, so each knob group is one clean row.
@@ -306,12 +506,17 @@ public:
     void setEnabledLook(bool en) { if (en == enabledLook) return; enabledLook = en; repaint(); }  // grey out (samples have no AHDSR)
     void setStrikeRing(bool sr) { if (sr == strikeRing) return; strikeRing = sr; repaint(); }      // Physical: 2-handle Strike/Ring (no Hold)
     void setNa(const juce::String& main, const juce::String& sub) { if (main == naMain && sub == naSub) return; naMain = main; naSub = sub; repaint(); }  // greyed-state message
+    // Sample slots: the amp env is OPT-IN. When toggleable, double-clicking the (greyed or active)
+    // graph fires onToggleRequest so the editor can flip Slot::smpEnvOn.
+    void setToggleable(bool t) { if (t == toggleable) return; toggleable = t; repaint(); }
+    std::function<void()> onToggleRequest;
     std::function<void(float,float,float,float,float)> onChange;  // a,h,d,s,r on drag
     std::function<void()> onDragEnd;                              // released after editing (for auto-audition)
 
     void paint(juce::Graphics& g) override;
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
+    void mouseDoubleClick(const juce::MouseEvent& e) override;    // sample slots: toggle the opt-in envelope
     void mouseMove(const juce::MouseEvent& e) override;
     void mouseExit(const juce::MouseEvent&) override { hover = -1; repaint(); }
     void mouseUp(const juce::MouseEvent&) override { const bool ed = drag >= 0; drag = -1; repaint(); if (ed && onDragEnd) onDragEnd(); }
@@ -324,6 +529,7 @@ public:
 private:
     float atk = 0.01f, hld = 0.0f, dcy = 0.1f, sus = 0.0f, rel = 0.06f;
     bool  enabledLook = true;      // false for sample slots (no amp envelope)
+    bool  toggleable  = false;     // sample slots: double-click toggles the opt-in envelope
     bool  strikeRing  = false;     // Physical engine: show a 2-handle Strike(attack)/Ring(decay) envelope, no Hold
     juce::String naMain = "AMP ENVELOPE (n/a - sample)", naSub = "sample plays full length";  // greyed-state text
     int   drag = -1, hover = -1;   // handle index: 0=A 1=H 2=Decay (to zero), -1=none. Release removed; sustain not edited here.
@@ -470,10 +676,14 @@ public:
     }
 
     static constexpr float kMaxDb = 18.0f;       // vertical range +/- dB
-    // Point the display at a channel's EQ bands (drawn + dragged in place) + formant info.
-    void setBands(DrumChannel::EqBand* b, int formantType, float cutoff, float reso, double sr);
+    // Point the display at a channel's EQ bands (drawn + dragged in place) + the channel's
+    // resonant FILTER (drawn/edited here too when showFilt - i.e. on the "All"/channel target).
+    void setBands(DrumChannel::EqBand* b, int filterType, float cutoff, float reso, float envAmt,
+                  double sr, bool showFilt);
     std::function<void()> onEdit;                // after a drag/wheel/toggle -> updateDSP + hash
     std::function<void()> onDragEnd;             // released after editing (for auto-audition)
+    // The FILTER handle writes back through this (type = DrumChannel::FilterType).
+    std::function<void(int type, float cutoff, float reso, float envAmt)> onFilterEdit;
     void pushSpectrum(const float* mags, int n);
     void decayTick();                            // call on a timer to fade slowly
     void paint(juce::Graphics& g) override;
@@ -489,7 +699,24 @@ public:
 private:
     DrumChannel::EqBand* bands = nullptr;         // -> selected channel's eqBand[5]
     int   fType = 0;
-    float fCutoff = 1000.0f, fReso = 0.707f;
+    float fCutoff = 1000.0f, fReso = 0.707f, fEnvAmt = 0.0f;
+    bool  showFilter = false;                     // filter handle only on the channel ("All") target
+    static constexpr int kFilt = 100, kFiltEnv = 101;   // pseudo-band ids for the filter handles
+    float resoToNorm(float q) const { return juce::jlimit(0.0f, 1.0f, std::log(juce::jmax(0.31f, q) / 0.3f) / std::log(12.0f / 0.3f)); }
+    float normToReso(float n) const { return 0.3f * std::pow(12.0f / 0.3f, juce::jlimit(0.0f, 1.0f, n)); }
+    float filtEnvEndHz() const { return juce::jlimit(20.0f, 20000.0f, fCutoff * std::pow(2.0f, fEnvAmt * 5.0f)); }
+    juce::Point<float> filtPos(juce::Rectangle<float> a) const
+    { return { xForFreq(a, fCutoff), a.getBottom() - resoToNorm(fReso) * a.getHeight() * 0.85f - a.getHeight() * 0.06f }; }
+    juce::Point<float> filtEnvPos(juce::Rectangle<float> a) const
+    {
+        auto m = filtPos(a);
+        // env == 0: PARK the handle beside the diamond (visible + grabbable). With the old
+        // "handle sits at the sweep end" mapping it landed exactly UNDER the diamond, so once
+        // the envelope was zeroed there was no visible way to ever drag one up again.
+        if (std::abs(fEnvAmt) <= 0.02f)
+            return { m.x + 20.0f <= a.getRight() - 6.0f ? m.x + 20.0f : m.x - 20.0f, m.y };
+        return { xForFreq(a, filtEnvEndHz()), m.y };
+    }
     double sampleRate = 44100.0;
     float scope[scopeSize]  = {}; // spectrum outline (peak-hold for consistency)
     bool  hasSpectrum = false;
@@ -545,7 +772,8 @@ private:
 //==============================================================================
 // Cached waveform view of a sample. Peaks are bucketed to the box width so any
 // length fits. When selection is enabled you can drag a start/end region.
-class WaveformDisplay : public juce::Component, public juce::SettableTooltipClient
+class WaveformDisplay : public juce::Component, public juce::SettableTooltipClient,
+                        public juce::FileDragAndDropTarget   // drop an audio file straight onto the waveform
 {
 public:
     static constexpr int MAXREG = 4;            // up to 4 hand-drawn regions (green / yellow / pink / cyan)
@@ -561,14 +789,24 @@ public:
     }
     void setLength(float secs) { if (secs != lengthSec) { lengthSec = secs; repaint(); } }          // length watermark
     void setReversed(bool r) { if (r != reversed) { reversed = r; repaint(); } }                    // REV badge
+    // LIVE playhead cursor: the actual read position of the newest playing voice (fraction of the
+    // buffer, -1 = none). Fed each editor timer tick - it's the real position, not an animation.
+    void setPlayhead(float frac)
+    { if (std::abs(frac - playhead) > 0.002f || (frac < 0.0f) != (playhead < 0.0f)) { playhead = frac; repaint(); } }
     // Called whenever the regions change (drag/clear). The editor writes them to the slot.
     std::function<void(int n, const float* lo, const float* hi)> onRegionsChange;
+    // Drop an audio file on the waveform -> the editor loads it into this slot.
+    std::function<void(const juce::File&)> onFileDropped;
 
     void paint(juce::Graphics&) override;
     void mouseDown(const juce::MouseEvent&) override;
     void mouseDrag(const juce::MouseEvent&) override;
     void mouseUp(const juce::MouseEvent&) override;
     void mouseDoubleClick(const juce::MouseEvent&) override;
+    bool isInterestedInFileDrag(const juce::StringArray& files) override;
+    void fileDragEnter(const juce::StringArray&, int, int) override { fileDragOver = true;  repaint(); }
+    void fileDragExit (const juce::StringArray&) override           { fileDragOver = false; repaint(); }
+    void filesDropped(const juce::StringArray& files, int, int) override;
 
 private:
     void emitRegions() { if (onRegionsChange) onRegionsChange(regN, regLo, regHi); }
@@ -579,28 +817,8 @@ private:
     bool  selEnabled = false;
     float lengthSec = 0.0f;    // sample length (watermark)
     bool  reversed = false;    // draw a REV badge when the sample plays backwards
-};
-
-//==============================================================================
-// A sliding on/off switch: green with the knob to the right when on, grey with
-// the knob to the left when off.
-class ToggleSwitch : public juce::Button
-{
-public:
-    ToggleSwitch() : juce::Button({}) { setClickingTogglesState(true); }
-    juce::Colour onColour { 0xff35b56a };   // "on" fill (override for special toggles)
-    void paintButton(juce::Graphics& g, bool, bool) override
-    {
-        auto b = getLocalBounds().toFloat().reduced(1.0f);
-        const bool on = getToggleState();
-        const float r = b.getHeight() * 0.5f;
-        g.setColour(on ? onColour : juce::Colour(0xff4a4a5e));
-        g.fillRoundedRectangle(b, r);
-        const float d  = b.getHeight() - 4.0f;
-        const float kx = on ? b.getRight() - d - 2.0f : b.getX() + 2.0f;
-        g.setColour(juce::Colours::white);
-        g.fillEllipse(kx, b.getY() + 2.0f, d, d);
-    }
+    float playhead = -1.0f;    // live play position (fraction; -1 = not playing)
+    bool  fileDragOver = false;
 };
 
 //==============================================================================
@@ -912,6 +1130,7 @@ private:
 
     //-- Step grid
     StepGridComponent stepGrid;
+    StepMagnifierOverlay stepMagOverlay;   // top-most: redraws the magnified step above the top bar/strips
 
     //-- Top toolbar
     LearnableButton btnDawSync { "DAW Sync", "global_dawsync", proc.midiLearn };
@@ -1016,7 +1235,7 @@ private:
     bool detailShown = true;                   // when false, only the sequencer is shown (window shrinks)
     void  refreshAuditionButton();
     // Step-grid edit-mode radio buttons (none selected = normal on/off steps).
-    LearnableButton btnModeVel { "Vel/Len" }, btnModePitch { "Pitch" }, btnModeProb { "Loop" }, btnModeRoll { "Roll" }, btnModePan { "Pan" };
+    LearnableButton btnModeVel { "Vel" }, btnModeLen { "Len" }, btnModePitch { "Pitch" }, btnModeProb { "Loop" }, btnModeRoll { "Roll" }, btnModePan { "Pan" };
     juce::Label      lblEditMode;
     void setStepEditMode(int mode);   // 0 normal, 1 vel, 2 pitch, 3 prob
     juce::Slider     sliderPatN;   // repeat count N
@@ -1261,8 +1480,10 @@ private:
     LearnableKnob    knobMasterPan   { "global_masterPan",   proc.midiLearn };
     LearnableKnob    knobMasterLimit { "global_masterLimit", proc.midiLearn };
     LearnableKnob    knobMasterGlue  { "global_masterGlue",  proc.midiLearn };
+    LearnableKnob    knobMasterTilt  { "global_masterTilt",  proc.midiLearn };
+    LearnableKnob    knobMasterSat   { "global_masterSat",   proc.midiLearn };
     ToggleSwitch     swMasterMono;
-    juce::Label      lblRevDecay, lblMasterVol, lblMasterPan, lblMasterLimit, lblMasterMono, lblMasterGlue;
+    juce::Label      lblRevDecay, lblMasterVol, lblMasterPan, lblMasterLimit, lblMasterMono, lblMasterGlue, lblMasterTilt, lblMasterSat;
 
     // (EQ knobs removed - the EQ is drawn/dragged on freqDisplay now.)
     juce::Label lblPit,lblVol,lblPan;
@@ -1285,6 +1506,7 @@ private:
 
     //-- Visuals
     FrequencyDisplay freqDisplay;
+    LfoDisplay       lfoDisplay;     // per-slot LFO visual (FX box bottom; follows the FX slot selector)
     juce::dsp::FFT   fft { SpectrumTap::fftOrder };
     juce::dsp::WindowingFunction<float> fftWindow
         { (size_t) SpectrumTap::fftSize, juce::dsp::WindowingFunction<float>::hann };

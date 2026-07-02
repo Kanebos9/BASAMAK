@@ -2,7 +2,9 @@
 
 <img width="1440" height="787" alt="Screenshot 2026-06-28 at 20 11 13" src="https://github.com/user-attachments/assets/7e98473c-c176-4a22-8f1d-b6945e213aca" />
 
-**BASAMAK** is a free, open-source drum & sample **step-sequencer plugin** — VST3, AU (macOS), and Standalone — for macOS, Windows, and Linux. Its built-in sounds are **synthesized** (analog/FM, physical-modelling, modal, noise) rather than sampled, and it ships with a CC0 sample library you can drop into any slot.
+**BASAMAK** is a free, open-source **drum & bass synth / step-sequencer / sampler** — VST3, AU (macOS), and Standalone — for macOS, Windows, and Linux. Its built-in sounds are **synthesized** (analog/FM, physical-modelling, modal, noise) rather than sampled, so a channel can be a kick, a hi-hat, a plucked bell, *or* a full-blown bassline — every channel is playable as a pitched instrument with per-step pitch, glide and note-length. It also has a per-slot **sampler**, and ships with a CC0 sample library you can drop into any slot.
+
+Think of it as one box that covers the rhythm section: program a beat on some channels, write a **bass line** (or a lead) on others with per-step notes + 303-style slide, and finish it on the master bus. Two synth slots per channel let you stack, say, a saw + a sub-oscillator for a fat bass.
 
 <img width="1440" height="786" alt="Screenshot 2026-06-28 at 20 12 15" src="https://github.com/user-attachments/assets/e6a438b9-ca91-445c-99ef-6864f092997e" />
 
@@ -13,12 +15,15 @@ Built with [JUCE](https://juce.com). Licensed under the **GNU AGPL v3** (see [`L
 ---
 
 ## Features
-- 16 channels × up to 32 patterns, 8/16 steps, swing, per-step velocity/pitch/pan/roll/loop-conditions.
-- All steps in the sequencer can be midi assigned.
-- Synth engines: **Analog + FM**, **Physical** (Karplus–Strong), **Modal** (struck resonators), **Noise**, plus a per-slot **Sampler** (trim / slice / time-stretch / pitch-shift via SoundTouch).
-- Per-sound drawable EQ, drive, reverb/delay sends; a master FDN reverb, delay, **Glue** bus-compressor, and limiter.
+- **16 channels × up to 32 patterns**, 16/32 steps, swing (MPC 50–75%), and **pattern chaining** to arrange a whole song (each pattern plays N loops, then jumps).
+- **Two synth slots per channel**, each any engine with its own params, envelopes, EQ, filter, FX and LFO — blend them (e.g. saw + sub for bass).
+- Synth engines: **Analog + FM** (14 band-limited waveshapes + wavefold + unison), **Physical** (Karplus–Strong), **Modal** (struck resonators), **Noise**, plus a per-slot **Sampler** (trim / slice / time-stretch / pitch-shift via SoundTouch).
+- **Bass/melodic ready:** per-step **pitch**, **303-style slide/portamento** (glide into the next note), per-step **note length** (decay-rescale, from tight gates to long ring-outs), and a **Hz ↔ note** read-out (click a frequency to dial in real notes). Any channel can be played as a bass or lead. Includes a dedicated **bass sound bank** (Station/Ladder/Rubber/Neuro/Hoover/Reese and more).
+- **Per-slot resonant filter with envelope + velocity accent** (drawn right on the EQ display) and a **per-slot LFO** with three independent destinations (filter / pitch / volume) for wobbles, sirens and tremolo.
 - Drawable amp/pitch envelopes, a Strike/Ring envelope for the struck engines, and a Unison/Detune/Vibrato visual.
-- Per-channel multi-output routing, MIDI-out mode, MIDI-learn on every control, and Novation **Launchpad Mini MK3** grid support.
+- Per-sound drawable EQ, drive, reverb/delay sends; a master **FDN reverb**, **delay**, one-knob **Tilt** tone, tube **Saturation**, **Glue** bus-compressor, and a look-ahead **limiter**.
+- Every control (and every step) is **MIDI-learnable**; **MIDI-out** mode turns any channel into a note generator; per-channel multi-output routing and Novation **Launchpad Mini MK3** grid support.
+- Faithful **drag-out MIDI export** of the current pattern (velocity, pitch, rolls, note length, swing, tempo).
 - A bundled **CC0 sample library** (see [`ATTRIBUTIONS.md`](ATTRIBUTIONS.md)).
 
 ## Formats & DAW support

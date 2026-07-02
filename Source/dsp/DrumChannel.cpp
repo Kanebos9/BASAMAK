@@ -151,6 +151,36 @@ static const int kNumModalMaterials = (int) (sizeof(kModalMaterials) / sizeof(kM
 
 int         DrumChannel::modalMaterialCount()      { return kNumModalMaterials; }
 const char* DrumChannel::modalMaterialName(int m)  { return kModalMaterials[juce::jlimit(0, kNumModalMaterials - 1, m)].name; }
+int         DrumChannel::modalModeCount(int m)     { return kModalMaterials[juce::jlimit(0, kNumModalMaterials - 1, m)].n; }
+float       DrumChannel::modalModeGain(int m, int i)
+{
+    const auto& M = kModalMaterials[juce::jlimit(0, kNumModalMaterials - 1, m)];
+    return (i >= 0 && i < M.n) ? M.gain[i] : 0.0f;
+}
+
+// USER-STIFFNESS dispersion design (SrcPhys). At the 2x engine rate, POSITIVE-coefficient
+// allpasses only bend phase near the (ultrasonic) Nyquist - the audible band sits in their
+// flat region, which is why the old Stiffness knob was inaudible no matter the stage count.
+// NEGATIVE coefficients near -1 concentrate their group delay at LOW frequencies instead:
+// the fundamental is delayed most and upper partials progressively less, so after the loop
+// length is COMPENSATED for the fundamental (comp), the upper partials come out SHARP =
+// real stiff-string -> bar -> bell inharmonicity (up to ~+3 semitones of partial stretch).
+// Shared by the SC setup and trigger so the burst fill + ring agree on the loop length.
+static inline void designStiffChain(float st, double baseF, double sr,
+                                    float& apC, int& apN, float& comp) noexcept
+{
+    st   = juce::jlimit(0.0f, 1.0f, st);
+    apC  = -(0.80f + 0.15f * st);                        // -0.80 .. -0.95 (dispersion needs |a| near 1)
+    apN  = juce::jlimit(1, 6, 1 + juce::roundToInt(st * 5.0f));
+    const float tdc = (1.0f - apC) / (1.0f + apC);       // DC group delay per stage (samples)
+    const float L0  = (float) (sr / juce::jmax(20.0, baseF));
+    comp = (float) apN * tdc;                            // subtracted from the loop so the FUNDAMENTAL stays in tune
+    if (comp > 0.45f * L0)                               // short string: only as much dispersion as the period fits
+    {
+        apN  = juce::jmax(1, (int) std::floor(0.45f * L0 / tdc));
+        comp = (float) apN * tdc;
+    }
+}
 
 // 4-point cubic Hermite (Catmull-Rom) interpolation. fr is 0..1 between y1 and y2.
 static inline float hermite4(float fr, float y0, float y1, float y2, float y3) noexcept
@@ -176,12 +206,15 @@ static inline float eqProcess(const Biquad& c, float* z1, float* z2, float x, in
 }
 static constexpr float kPi = juce::MathConstants<float>::pi;
 
-// One basic waveform (shape: 0 Sine, 1 Tri, 2 Square, 3 Saw). Shared by the Analog
-// and FM carriers (and the FM/Analog Wave A->B morph).
-// Oscillator basic shapes. 0 Sine, 1 Tri, 2 Square, 3 Saw, 4 Ramp-down, 5 Pulse, 6 Hump (half-sine).
-// Extra (harmonic-rich) oscillator shapes 7..16 - built once as band-limited single cycles (additive).
+// Oscillator shapes, shared by the Analog and FM carriers - the v5 list: 0 Sine, 1 Hump,
+// 2 Tri, 3 Square, 4 Saw, 5 Pulse (25%); 6.. = the additive bank below. v1.1.0 TRIM (user:
+// "ramp and saw sound basically the same"): Ramp (reversed saw = identical spectrum), Vowel E
+// (between A and O) and Voice (~= Vowel A) were REMOVED; Hump was cut too but the user asked
+// for it back "right after sine" (= the v4->v5 renumber). readSlots remaps pre-v4 and v4
+// indices so old projects keep their sound. Do not re-add near-duplicate shapes.
+// Extra (harmonic-rich) oscillator shapes 6..13 - built once as band-limited single cycles (additive).
 namespace {
-constexpr int OSCT_EXTRA = 10;
+constexpr int OSCT_EXTRA = 8;
 constexpr int OSCT_LEN   = 1024;   // power of two
 struct OscShapeBank {
     std::vector<float> d;
@@ -198,48 +231,56 @@ struct OscShapeBank {
     }
     OscShapeBank() {
         auto g = [](int h, float c, float w){ return std::exp(-((h - c) * (h - c)) / (2.0f * w * w)); };
-        add(40, [&](int h){ return g(h,3,1.2f) + 0.6f*g(h,7,2.0f); });                         // 7  Vowel A
-        add(40, [&](int h){ return g(h,4,1.2f) + 0.5f*g(h,12,3.0f); });                        // 8  Vowel E
-        add(40, [&](int h){ return g(h,2,1.0f) + 0.6f*g(h,5,1.5f); });                         // 9  Vowel O
-        add(40, [&](int h){ return g(h,6,1.4f); });                                            // 10 Formant
-        add(40, [&](int h){ if ((h&(h-1))!=0) return 0.0f; float o=std::log2((float)h); return 1.0f/(o+1.0f); }); // 11 Organ
-        add(40, [&](int h){ static const int p[]={1,2,3,5,7,11}; for(int q:p) if(q==h) return 1.0f/(float)h; return 0.0f; }); // 12 Bell
-        add(40, [&](int h){ return (h%2==1)? 1.0f/std::sqrt((float)h) : 0.0f; });              // 13 Glass (bright odd)
-        add(24, [&](int h){ return (h%2==1)? 1.0f/(float)h : 0.0f; });                         // 14 Reed (clarinet)
-        add(40, [&](int h){ return (1.0f/(float)h) * (1.0f + 1.5f*g(h,5,2.0f)); });            // 15 Brass (saw+formant)
-        add(40, [&](int h){ return g(h,3,1.2f)+0.6f*g(h,6,1.5f)+0.4f*g(h,11,2.5f); });         // 16 Voice
+        add(40, [&](int h){ return g(h,3,1.2f) + 0.6f*g(h,7,2.0f); });                         // 6  Vowel A
+        add(40, [&](int h){ return g(h,2,1.0f) + 0.6f*g(h,5,1.5f); });                         // 7  Vowel O
+        add(40, [&](int h){ return g(h,6,1.4f); });                                            // 8  Formant
+        add(40, [&](int h){ if ((h&(h-1))!=0) return 0.0f; float o=std::log2((float)h); return 1.0f/(o+1.0f); }); // 9 Organ
+        add(40, [&](int h){ static const int p[]={1,2,3,5,7,11}; for(int q:p) if(q==h) return 1.0f/(float)h; return 0.0f; }); // 10 Bell
+        add(40, [&](int h){ return (h%2==1)? 1.0f/std::sqrt((float)h) : 0.0f; });              // 11 Glass (bright odd)
+        add(24, [&](int h){ return (h%2==1)? 1.0f/(float)h : 0.0f; });                         // 12 Reed (clarinet)
+        add(40, [&](int h){ return (1.0f/(float)h) * (1.0f + 1.5f*g(h,5,2.0f)); });            // 13 Brass (saw+formant)
     }
 };
 static const OscShapeBank& oscBank() { static OscShapeBank b; return b; }
 } // namespace
 
-static constexpr int NUM_OSC_SHAPES = 7 + OSCT_EXTRA;   // 0..6 analytic + 7..16 bank = 17
+static constexpr int NUM_OSC_SHAPES = 6 + OSCT_EXTRA;   // 0..5 analytic + 6..13 bank = 14
 static inline float waveShape(double phase, int shape) noexcept
 {
     const double tp = 2.0 * (double) kPi;
     const float ph = (float)(phase / tp - std::floor(phase / tp));
-    if (shape >= 7) {                                    // harmonic-rich bank shape (Vowel/Formant/...)
-        const float* w = oscBank().shape(juce::jlimit(0, OSCT_EXTRA - 1, shape - 7));
+    if (shape >= 6) {                                    // harmonic-rich bank shape (Vowel/Formant/...)
+        const float* w = oscBank().shape(juce::jlimit(0, OSCT_EXTRA - 1, shape - 6));
         const float sp = ph * OSCT_LEN; const int i0 = ((int) sp) & (OSCT_LEN - 1), i1 = (i0 + 1) & (OSCT_LEN - 1);
         return w[i0] + (w[i1] - w[i0]) * (sp - (float) (int) sp);
     }
     switch (shape) {
-        case 1:  return 1.0f - 4.0f * std::abs(ph - 0.5f);   // triangle
-        case 2:  return (ph < 0.5f) ? 1.0f : -1.0f;          // square
-        case 3:  return 2.0f * ph - 1.0f;                    // saw (ramp up)
-        case 4:  return 1.0f - 2.0f * ph;                    // ramp down (reverse saw)
-        case 5:  return (ph < 0.25f) ? 1.0f : -1.0f;         // pulse (25% duty)
-        case 6:  return 2.0f * std::sin((float) kPi * ph) - 1.0f;  // hump (rectified-sine bump)
-        default: return (float) std::sin(phase);             // sine
+        case DrumChannel::WvHump:   return 2.0f * std::sin((float) kPi * ph) - 1.0f;  // hump (rectified-sine bump)
+        case DrumChannel::WvTri:    return 1.0f - 4.0f * std::abs(ph - 0.5f);   // triangle
+        case DrumChannel::WvSquare: return (ph < 0.5f) ? 1.0f : -1.0f;          // square
+        case DrumChannel::WvSaw:    return 2.0f * ph - 1.0f;                    // saw (ramp up)
+        case DrumChannel::WvPulse:  return (ph < 0.25f) ? 1.0f : -1.0f;         // pulse (25% duty)
+        default:                    return (float) std::sin(phase);             // sine
     }
 }
 // Public accessors (for the UI's Wave fader + visual).
 int         DrumChannel::oscShapeCount()          { return NUM_OSC_SHAPES; }
 const char* DrumChannel::oscShapeName(int s) {
-    static const char* n[NUM_OSC_SHAPES] = { "Sine","Tri","Square","Saw","Ramp","Pulse","Hump",
-        "Vowel A","Vowel E","Vowel O","Formant","Organ","Bell","Glass","Reed","Brass","Voice" };
+    static const char* n[NUM_OSC_SHAPES] = { "Sine","Hump","Tri","Square","Saw","Pulse",
+        "Vowel A","Vowel O","Formant","Organ","Bell","Glass","Reed","Brass" };
     return n[juce::jlimit(0, NUM_OSC_SHAPES - 1, s)];
 }
+// Pre-v4 slot files used the old 17-shape list (with Ramp/Vowel E/Voice) - map those indices
+// onto the closest surviving v5 shape so old projects sound the same.
+static inline int remapPreV4Shape(int s)
+{
+    static const int m[17] = { 0, /*Tri*/2, /*Square*/3, /*Saw*/4, /*Ramp*/4, /*Pulse*/5, /*Hump*/1,
+                               /*VowelA*/6, /*VowelE*/6, /*VowelO*/7, /*Formant*/8, /*Organ*/9,
+                               /*Bell*/10, /*Glass*/11, /*Reed*/12, /*Brass*/13, /*Voice*/6 };
+    return m[juce::jlimit(0, 16, s)];
+}
+// v4 files (the brief 13-shape list without Hump) -> v5 (Hump re-inserted at index 1).
+static inline int remapV4Shape(int s) { return s == 0 ? 0 : juce::jlimit(0, 16, s) + 1; }
 float       DrumChannel::oscShapeSample(int shape, float ph01) {
     return waveShape((double)(ph01 - std::floor(ph01)) * 2.0 * (double) kPi, shape);
 }
@@ -268,10 +309,10 @@ static inline float polyBLEP(float t, float dt) noexcept
 static inline float morphWaveBL(double phase, float pos, float dt) noexcept
 {
     float y = morphWave(phase, pos);
-    if (pos > 3.0f) return y;   // new shapes (ramp-down/pulse/hump): rely on the 2x oversampling
-    pos = juce::jlimit(0.0f, 3.0f, pos);
-    const float wSaw = (pos > 2.0f) ? (pos - 2.0f) : 0.0f;
-    const float wSq  = (pos <= 2.0f) ? juce::jmax(0.0f, pos - 1.0f) : (3.0f - pos);
+    if (pos > 4.0f) return y;   // Pulse + the additive bank shapes: rely on the 2x oversampling
+    pos = juce::jlimit(0.0f, 4.0f, pos);   // v5 indices: ..2 Tri, 3 Square, 4 Saw (Sine/Hump need no BLEP)
+    const float wSaw = (pos > 3.0f) ? (pos - 3.0f) : 0.0f;
+    const float wSq  = (pos <= 3.0f) ? juce::jmax(0.0f, pos - 2.0f) : (4.0f - pos);
     if (wSaw <= 0.0f && wSq <= 0.0f) return y;   // sine/triangle: no discontinuity to correct
     const double tp = 2.0 * (double) kPi;
     const float ph = (float)(phase / tp - std::floor(phase / tp));
@@ -399,7 +440,9 @@ void DrumChannel::buildSlotsFromLegacy()
                 break;
             case SrcOsc:
                 sl.sustain = oscSustain; sl.vibrato = oscVibrato;
-                sl.oscShape = layerOscShape; sl.oscFreq = layerSineFreq;
+                { static const int leg2wv[4] = { WvSine, WvTri, WvSquare, WvSaw };   // legacy 0..3 -> v5 slot index
+                  sl.oscShape = leg2wv[juce::jlimit(0, 3, layerOscShape)]; }
+                sl.oscFreq = layerSineFreq;
                 sl.oscPEnvAmt = layerSinePEnvAmt; sl.oscPEnvTime = layerSinePEnvTime; sl.oscPOffset = layerSinePOffset;
                 sl.oscUnison = oscUnison; sl.oscDetune = oscDetune;
                 sl.fmDepth = 0.0f; sl.fmSpread = 0.0f; sl.fmFeedback = 0.0f; sl.fmSub = 0.0f;   // pure analog (FM section off)
@@ -411,6 +454,7 @@ void DrumChannel::buildSlotsFromLegacy()
                 sl.oscFreq  = juce::jlimit(20.0f, 1000.0f, (float)(220.0 * std::pow(2.0, (double) fmPitch / 12.0)));  // Pitch(st) -> Freq(Hz)
                 sl.fmSpread = fmSpread; sl.fmDepth = fmDepth; sl.fmFeedback = fmFeedback; sl.fmSub = fmSub;
                 sl.oscPEnvAmt = fmPitchEnvAmt; sl.oscPEnvTime = fmPitchEnvTime; sl.oscPOffset = fmPitchOffset;  // FM pitch env -> osc slot
+                sl.fmEnvFollow = legacyFmEnvFollow;   // channel-level bridge (survives applyPreset's rebuild)
                 break;
             case SrcPhys:
                 sl.sustain = physSustain; sl.vibrato = physVibrato;
@@ -462,6 +506,31 @@ void DrumChannel::buildSlotsFromLegacy()
             }
         }
     }
+    // Per-slot FILTER migration: a legacy sound's CHANNEL LowPass (Acid Bass, Filter Bass, etc.)
+    // now lives on each built slot instead. A linear LP on each slot, summed, == the same LP on
+    // the mix, so the sound is unchanged - but it's now per-slot (it only filters its own engine,
+    // and it shows on the slot's EQ, not "All"). Clear the channel filter so it isn't ALSO applied
+    // on the mix (that would filter twice). Only LowPass migrates; Formant/other stay channel-wide.
+    if (filterType == LowPass && si > 0)
+    {
+        for (int k = 0; k < si; ++k)
+        {
+            slots[k].filterType   = filterType;   slots[k].filterCutoff = filterCutoff;
+            slots[k].filterReso   = filterReso;   slots[k].filterEnvAmt = filterEnvAmt;
+        }
+        filterType = FilterOff;   // no longer on the mix
+    }
+    // Channel DRIVE migration (SINGLE-slot sounds only): like the filter above, the legacy channel
+    // drive is an invisible factory-only stage (no knob) that made the "All" spectrum differ from
+    // the slot's with nothing visibly enabled. With ONE slot at weight 1, drive-on-the-slot ==
+    // drive-on-the-mix (at full velocity), so move it to the slot's visible/editable FX Drive.
+    // MULTI-slot sounds keep the channel stage: a nonlinear drive on the MIX (inter-modulating
+    // both slots) cannot be split per slot without changing the sound.
+    if (si == 1 && driveType != DriveOff && driveAmount > 0.0f && slots[0].fxDrive <= 0.0001f)
+    {
+        slots[0].fxDriveType = driveType;  slots[0].fxDrive = driveAmount;
+        driveType = DriveOff;  driveAmount = 0.0f;
+    }
     ensureKsBuffers();   // a legacy Physical source needs the KS lines (message thread)
 }
 
@@ -474,6 +543,8 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("eng", s.engine, nullptr); st.setProperty("w", s.weight, nullptr);
         st.setProperty("v2", 1, nullptr);   // merged-engine era marker (Analog now carries an FM section)
         st.setProperty("v3", 1, nullptr);   // Warp = wavefold era (old phase-skew warp is dropped on load)
+        st.setProperty("v4", 1, nullptr);   // trimmed wave list era (pre-v4 indices remapped on load)
+        st.setProperty("v5", 1, nullptr);   // 14-shape list: Hump back at index 1 (v4 indices shifted)
         st.setProperty("atk", s.atk, nullptr); st.setProperty("hld", s.hold, nullptr);
         st.setProperty("dec", s.dec, nullptr); st.setProperty("sus", s.sustain, nullptr);
         st.setProperty("rel", s.release, nullptr); st.setProperty("vib", s.vibrato, nullptr);
@@ -488,6 +559,7 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("fPi", s.fmPitch, nullptr); st.setProperty("fSp", s.fmSpread, nullptr); st.setProperty("fDe", s.fmDepth, nullptr);
         st.setProperty("fEA", s.fmPEnvAmt, nullptr); st.setProperty("fET", s.fmPEnvTime, nullptr); st.setProperty("fOf", s.fmPOffset, nullptr);
         st.setProperty("fFb", s.fmFeedback, nullptr); st.setProperty("fSu", s.fmSub, nullptr);
+        st.setProperty("fFo", s.fmEnvFollow, nullptr);   // FM Amount follows the amp envelope
         st.setProperty("pFr", s.physFreq, nullptr); st.setProperty("pTo", s.physTone, nullptr); st.setProperty("pMa", s.physMaterial, nullptr); st.setProperty("pPo", s.physPosition, nullptr);
         st.setProperty("pSt", s.physStiff, nullptr); st.setProperty("pEx", s.physExcite, nullptr);
         st.setProperty("pEA", s.physPEnvAmt, nullptr); st.setProperty("pET", s.physPEnvTime, nullptr); st.setProperty("pOf", s.physPOffset, nullptr);
@@ -500,6 +572,7 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
                                                  st.setProperty("rH" + juce::String(r), s.smpRegHi[r], nullptr); }
         st.setProperty("sSl", s.smpSlices, nullptr); st.setProperty("sStr", s.smpStretch, nullptr);
         st.setProperty("sGn", s.smpGain, nullptr);
+        st.setProperty("sEnv", s.smpEnvOn, nullptr);   // opt-in sample amp envelope
         st.setProperty("sFile", slotSample[b].file.getFullPathName(), nullptr);   // per-slot sample (reloaded)
         st.setProperty("yFo", s.oscFold, nullptr); st.setProperty("yOL", s.oscLevel, nullptr);
         st.setProperty("yNL", s.noiseLevel, nullptr); st.setProperty("yRs", s.resonAmt, nullptr);
@@ -509,6 +582,7 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("mMa", s.modalMaterial, nullptr); st.setProperty("mDe", s.modalDecay, nullptr);   // modal
         st.setProperty("mTo", s.modalTone, nullptr); st.setProperty("mSt", s.modalStruct, nullptr);
         st.setProperty("mHi", s.modalHit, nullptr); st.setProperty("mDp", s.modalDamp, nullptr);
+        st.setProperty("mMo", s.modalMorph, nullptr);   // material morph (toward the next material)
         // 4-point pitch envelope (pitch + time fraction per dot)
         st.setProperty("zP0", s.pEnvP[0], nullptr); st.setProperty("zP1", s.pEnvP[1], nullptr); st.setProperty("zP2", s.pEnvP[2], nullptr); st.setProperty("zP3", s.pEnvP[3], nullptr);
         st.setProperty("zT0", s.pEnvT[0], nullptr); st.setProperty("zT1", s.pEnvT[1], nullptr); st.setProperty("zT2", s.pEnvT[2], nullptr); st.setProperty("zT3", s.pEnvT[3], nullptr);
@@ -519,6 +593,16 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
             st.setProperty(k + "g", eb.gainDb, nullptr); st.setProperty(k + "q", eb.q, nullptr);
         }
         // === PER-SLOT EQ (end) ===
+        // === PER-SLOT FILTER (begin) ===
+        st.setProperty("flT", s.filterType, nullptr); st.setProperty("flC", s.filterCutoff, nullptr);
+        st.setProperty("flR", s.filterReso, nullptr); st.setProperty("flE", s.filterEnvAmt, nullptr);
+        // === PER-SLOT FILTER (end) ===
+        // Per-slot LFOs: one rate+amount PER DESTINATION (0=filter 1=pitch 2=vol), all independent.
+        for (int d2 = 0; d2 < 3; ++d2)
+        {
+            st.setProperty("lfR" + juce::String(d2), s.lfoRate[d2], nullptr);
+            st.setProperty("lfA" + juce::String(d2), s.lfoAmt[d2], nullptr);
+        }
         parent.addChild(st, -1, nullptr);
     }
 }
@@ -538,6 +622,8 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         s.dec = (float)st.getProperty("dec", d.dec); s.sustain = (float)st.getProperty("sus", d.sustain);
         s.release = (float)st.getProperty("rel", d.release); s.vibrato = (float)st.getProperty("vib", d.vibrato);
         s.oscShape = (int)st.getProperty("oSh", d.oscShape); s.oscShapeB = (int)st.getProperty("oSB", s.oscShape); s.oscFreq = (float)st.getProperty("oFr", d.oscFreq);
+        if      (! st.hasProperty("v4")) { s.oscShape = remapPreV4Shape(s.oscShape); s.oscShapeB = remapPreV4Shape(s.oscShapeB); }  // old 17-shape list
+        else if (! st.hasProperty("v5")) { s.oscShape = remapV4Shape(s.oscShape);    s.oscShapeB = remapV4Shape(s.oscShapeB); }     // brief 13-shape list
         s.oscPEnvAmt = (float)st.getProperty("oEA", d.oscPEnvAmt); s.oscPEnvTime = (float)st.getProperty("oET", d.oscPEnvTime); s.oscPOffset = (float)st.getProperty("oOf", d.oscPOffset);
         s.oscUnison = (int)st.getProperty("oUn", d.oscUnison); s.oscDetune = (float)st.getProperty("oDt", d.oscDetune);
         s.oscUniCenter = (bool)st.getProperty("oUC", d.oscUniCenter);
@@ -549,6 +635,7 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         s.fmPitch = (float)st.getProperty("fPi", d.fmPitch); s.fmSpread = (float)st.getProperty("fSp", d.fmSpread); s.fmDepth = (float)st.getProperty("fDe", d.fmDepth);
         s.fmPEnvAmt = (float)st.getProperty("fEA", d.fmPEnvAmt); s.fmPEnvTime = (float)st.getProperty("fET", d.fmPEnvTime); s.fmPOffset = (float)st.getProperty("fOf", d.fmPOffset);
         s.fmFeedback = (float)st.getProperty("fFb", d.fmFeedback); s.fmSub = (float)st.getProperty("fSu", d.fmSub);
+        s.fmEnvFollow = (bool)st.getProperty("fFo", d.fmEnvFollow);
         // Pre-merge projects: an Analog slot saved fmDepth=0.4 (then unused). Now Analog HAS an FM
         // section, so zero those fields for old Analog slots or they'd suddenly be FM-modulated.
         if (! st.hasProperty("v2") && s.engine == SrcOsc) { s.fmDepth = 0.0f; s.fmSpread = 0.0f; s.fmFeedback = 0.0f; s.fmSub = 0.0f; }
@@ -567,6 +654,7 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         { s.smpRegN = 1; s.smpRegLo[0] = s.smpStart; s.smpRegHi[0] = s.smpEnd; }
         s.smpSlices = (int)st.getProperty("sSl", d.smpSlices); s.smpStretch = (float)st.getProperty("sStr", d.smpStretch);
         s.smpGain = (float)st.getProperty("sGn", d.smpGain);
+        s.smpEnvOn = (bool)st.getProperty("sEnv", d.smpEnvOn);
         s.oscFold = (float)st.getProperty("yFo", d.oscFold); s.oscLevel = (float)st.getProperty("yOL", d.oscLevel);
         s.noiseLevel = (float)st.getProperty("yNL", d.noiseLevel); s.resonAmt = (float)st.getProperty("yRs", d.resonAmt);
         s.resonDrive = (float)st.getProperty("yRD", d.resonDrive);
@@ -576,6 +664,7 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         s.modalMaterial = (int)st.getProperty("mMa", d.modalMaterial); s.modalDecay = (float)st.getProperty("mDe", d.modalDecay);
         s.modalTone = (float)st.getProperty("mTo", d.modalTone); s.modalStruct = (float)st.getProperty("mSt", d.modalStruct);
         s.modalHit = (float)st.getProperty("mHi", d.modalHit); s.modalDamp = (float)st.getProperty("mDp", d.modalDamp);
+        s.modalMorph = (float)st.getProperty("mMo", d.modalMorph);
         s.pEnvP[0] = (float)st.getProperty("zP0", d.pEnvP[0]); s.pEnvP[1] = (float)st.getProperty("zP1", d.pEnvP[1]); s.pEnvP[2] = (float)st.getProperty("zP2", d.pEnvP[2]); s.pEnvP[3] = (float)st.getProperty("zP3", d.pEnvP[3]);
         s.pEnvT[0] = (float)st.getProperty("zT0", d.pEnvT[0]); s.pEnvT[1] = (float)st.getProperty("zT1", d.pEnvT[1]); s.pEnvT[2] = (float)st.getProperty("zT2", d.pEnvT[2]); s.pEnvT[3] = (float)st.getProperty("zT3", d.pEnvT[3]);
         // === PER-SLOT EQ (begin) ===
@@ -585,6 +674,22 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
             eb.gainDb = (float)st.getProperty(k + "g", 0.0f); eb.q = (float)st.getProperty(k + "q", de.q);
         }
         // === PER-SLOT EQ (end) ===
+        // === PER-SLOT FILTER (begin) ===
+        s.filterType = (int)st.getProperty("flT", d.filterType); s.filterCutoff = (float)st.getProperty("flC", d.filterCutoff);
+        s.filterReso = (float)st.getProperty("flR", d.filterReso); s.filterEnvAmt = (float)st.getProperty("flE", d.filterEnvAmt);
+        // === PER-SLOT FILTER (end) ===
+        // Per-slot LFOs (per-dest). Legacy single-LFO files (lfR/lfA/lfD) migrate onto their dest's LFO.
+        for (int d2 = 0; d2 < 3; ++d2)
+        {
+            s.lfoRate[d2] = (float)st.getProperty("lfR" + juce::String(d2), d.lfoRate[d2]);
+            s.lfoAmt[d2]  = (float)st.getProperty("lfA" + juce::String(d2), d.lfoAmt[d2]);
+        }
+        if (st.hasProperty("lfD") && ! st.hasProperty("lfA0"))
+        {
+            const int ld = juce::jlimit(0, 2, (int)st.getProperty("lfD", 0));
+            s.lfoRate[ld] = (float)st.getProperty("lfR", 4.0f);
+            s.lfoAmt[ld]  = (float)st.getProperty("lfA", 0.0f);
+        }
         // Reload this slot's sample file (smpStretch was just read, so updateStretch uses the right value).
         { juce::String sp = st.getProperty("sFile", "").toString();
           slotSample[n].buf.setSize(1, 0); slotSample[n].original.setSize(1, 0);
@@ -828,7 +933,32 @@ void DrumChannel::getWaveformPeaks(int slot, int numBuckets, std::vector<float>&
     }
 }
 
-void DrumChannel::trigger(float velocityGain, float pitchSemis, float pan)
+float DrumChannel::getSamplePlayheadFrac(int slot) const
+{
+    if (slot < 0 || slot >= NUM_SLOTS) return -1.0f;
+    if (slots[slot].engine != SrcSample) return -1.0f;
+    const int len = slotSample[slot].buf.getNumSamples();
+    if (len <= 0) return -1.0f;
+    // Newest active voice = the hit the user is hearing most prominently.
+    long newest = -1; double head = -1.0;
+    for (const auto& v : voices)
+        if (v.active() && (newest < 0 || v.voiceSamples < newest)) { newest = v.voiceSamples; head = v.sv[slot].smpHead; }
+    if (head < 0.0) return -1.0f;
+    float frac = juce::jlimit(0.0f, 1.0f, (float)(head / (double) len));
+    if (slots[slot].smpReverse)   // the head advances forward; the READ position is mirrored in the region
+        frac = juce::jlimit(0.0f, 1.0f, slotSample[slot].curRegLo + slotSample[slot].curRegHi - frac);
+    return frac;
+}
+
+// (The 303-tie slideTo() is GONE: slide is a retriggered portamento now - see Sequencer::fireEvent.)
+
+float DrumChannel::physDecayScale(int material)
+{
+    return kPhysModels[juce::jlimit(0, kNumPhysModels - 1, material)].decScale;
+}
+
+void DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long gateSamples,
+                          float glideToSemis, long glideSamples)
 {
     // If this is the channel the editor is analysing, start a fresh spectrum
     // capture aligned to this hit's attack so repeats look identical.
@@ -863,16 +993,28 @@ void DrumChannel::trigger(float velocityGain, float pitchSemis, float pan)
     v.playHead = 0.0;          // alive (per-slot sample heads do the reading)
     v.voiceSamples = 0;
     v.killing = false; v.killGain = 1.0f;   // fresh hit cancels any choke fade on this voice
+    v.gateLen = gateSamples;                // per-step Length gate (0 = play naturally)
+    // SLIDE: start at THIS step's own pitch (normal attack) and glide per-sample toward the
+    // NEXT step's pitch, landing exactly when the glide time (= the step span) runs out.
+    if (glideSamples > 0) { v.glideRemain = glideSamples;
+                            v.glideStep = (glideToSemis - pitchSemis) / (float) glideSamples; }
+    else                  { v.glideRemain = 0; v.glideStep = 0.0f; }
 
     for (int s = 0; s < NUM_SLOTS; ++s)
     {
         SlotVoice& sv = v.sv[s];
         const Slot& sl = slots[s];
+        // Per-step LENGTH: rescale THIS slot's decay so attack+hold+fall fills the note length.
+        // Frozen here (per voice) - ties extend the voice's life but never reshape a running decay.
+        sv.gateDec = gateSamples > 0
+            ? juce::jmax(0.01f, (float) gateSamples / (float) sr - sl.atk - sl.hold) : 0.0f;
+        sv.lfoPhase[0] = sv.lfoPhase[1] = sv.lfoPhase[2] = 0.0;  // per-hit LFO restart (wobbles lock to the groove)
         sv.sinePhase = 0.0;
         sv.noiseBP.reset();
         sv.pinkB[0] = sv.pinkB[1] = sv.pinkB[2] = 0.0f;
         sv.brownState = sv.prevWhite = 0.0f;
         sv.greyZ1 = sv.greyZ2 = 0.0f;
+        sv.filtZ1[0] = sv.filtZ1[1] = sv.filtZ2[0] = sv.filtZ2[1] = 0.0f;   // per-slot filter starts clean each hit (no retrigger click)
         sv.fmCarrier = sv.fmMod = sv.fmSubPhase = 0.0; sv.fmFbState = 0.0f;
         sv.wtPhase = 0.0; sv.modalInit = false;   // re-strike the modal bank on this hit
         for (int m = 0; m < MODAL_MODES; ++m) { sv.modalY1[m] = 0.0f; sv.modalY2[m] = 0.0f; }  // clean state every hit
@@ -921,7 +1063,12 @@ void DrumChannel::trigger(float velocityGain, float pitchSemis, float pan)
         if (ksPluck)
         {
             const float ksFreq = (sl.engine == SrcPhys) ? sl.physFreq : sl.oscFreq;
-            const int L = juce::jlimit(2, KS_MAX - 2, (int) std::round(sr / juce::jmax(20.0f, ksFreq)));
+            // User stiffness adds allpass DC delay to the loop - compensate the burst-fill length the
+            // same way the render compensates its read length (designStiffChain), so pitch matches.
+            float apComp = 0.0f;
+            if (sl.engine == SrcPhys && sl.physStiff > 0.01f)
+            { float ac; int an; designStiffChain(sl.physStiff, (double) sl.physFreq, sr, ac, an, apComp); }
+            const int L = juce::jlimit(2, KS_MAX - 2, (int) std::round(sr / juce::jmax(20.0f, ksFreq) - apComp));
             const int mdl = juce::jlimit(0, kNumPhysModels - 1, (int) std::lround(sl.physMaterial));
             // EXCITATION shapes how the string/bar is set in motion: Pluck = full-length noise burst (rich);
             // Strike = a short sharp burst at the start (percussive mallet hit); Mallet = a soft, rounded burst.
@@ -993,9 +1140,12 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         float  greyB0 = 1, greyB1 = 0, greyB2 = 0, greyA1 = 0, greyA2 = 0;   // grey = white through a mid-scoop peaking biquad
         double fmCarrierF = 220, fmModF = 220; float fmIndex = 0, fmPEnvAmt = 0, fmPEnvTime = 0.05f, fmPOffset = 0, fmFeedback = 0, fmSub = 0;
         float  fmRatio = 1.0f;   // Analog+FM merge: modulator freq = carrier freq * fmRatio (per-sample, tracks vibrato/pitch)
+        bool   fmEnvF = false;   // FM Amount follows the amp envelope (bright attack -> mellow decay)
         const PhysModel* pm = &kPhysModels[0]; float ksFb = 0, ksLpC = 0.5f, ksApC = 0; int ksApN = 0;
+        float ksApComp = 0;   // loop-length compensation for the user-stiffness chain's DC delay (keeps tuning)
         double physBaseF = 110; float physPEnvAmt = 0, physPEnvTime = 0.05f, physPOffset = 0, physVibFac = 1;
         float  crushStep = 0; double speed = 1; float smpPitch = 0, smpPEnvAmt = 0, smpPEnvTime = 0.04f, smpPOffset = 0; bool reverse = false;
+        bool   smpEnv = false;   // opt-in amp envelope on the sample (off = legacy full-length playback)
         const juce::AudioBuffer<float>* buf = nullptr; int srcLen = 0, regLo = 0, regHi = 0, slices = 1;  // per-slot sample
         float  smpGain = 1.0f;   // sample output boost
         // -- Synth (unified) extras: section levels + fold + resonator on --
@@ -1014,6 +1164,12 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         // === PER-SLOT EQ (begin) - coeffs (state lives per-voice in SlotVoice) ===
         bool   eqAny = false; bool eqUse[7] = {}; Biquad eqBq[7];
         // === PER-SLOT EQ (end) ===
+        // === PER-SLOT FILTER (begin) - resonant LP; raw params here, coeffs recomputed per BLOCK
+        //     (env-follow) into 'filt' just before the voice loop; state lives per-voice ===
+        bool   filtOn = false; double filtCutoff = 1000; float filtReso = 0.707f, filtEnvAmt = 0; Biquad filt;
+        // === PER-SLOT FILTER (end) ===
+        // Per-slot LFOs (3 independent sines, restart each hit). Index: 0 filter cutoff / 1 pitch / 2 volume.
+        float  lfoRate[3] = { 4.0f, 4.0f, 4.0f }, lfoAmt[3] = { 0.0f, 0.0f, 0.0f };
     } sc[NUM_SLOTS];
 
     bool anySlotActive = false;
@@ -1026,6 +1182,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         if (sl.engine == SrcSample && slotSample[s].buf.getNumSamples() == 0) continue;
         c.engine = sl.engine; c.weight = sl.weight;
         c.fxDriveType = sl.fxDriveType; c.fxDrive = sl.fxDrive; c.fxRevSend = sl.fxReverbSend; c.fxDelSend = sl.fxDelaySend;  // per-slot FX
+        for (int d2 = 0; d2 < 3; ++d2) { c.lfoRate[d2] = juce::jlimit(0.05f, 30.0f, sl.lfoRate[d2]);
+                                         c.lfoAmt[d2]  = juce::jlimit(0.0f, 1.0f, sl.lfoAmt[d2]); }   // per-slot LFOs
         c.atk = sl.atk; c.hold = sl.hold; c.dec = sl.dec; c.sustain = sl.sustain; c.release = sl.release;
         // 4-point pitch envelope + the sound length its time-axis is measured against
         // (mirror the amp-envelope length the UI shows as "ENVELOPE ~X s").
@@ -1051,6 +1209,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 c.fmRatio    = 1.0f + (float) sl.fmSpread * 5.0f;
                 c.fmIndex    = sl.fmDepth * 12.0f;
                 c.fmFeedback = sl.fmFeedback; c.fmSub = sl.fmSub;
+                c.fmEnvF     = sl.fmEnvFollow;
                 c.reson = false;   // resonator REMOVED from Analog+FM (use the standalone Physical engine instead)
                 break;
             case SrcNoise:
@@ -1085,12 +1244,13 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 c.pm    = &kPhysModels[juce::jlimit(0, kNumPhysModels - 1, (int) std::lround(sl.physMaterial))];
                 c.ksFb  = std::exp(-3.0f / juce::jmax(0.02f, sl.dec * c.pm->decScale) / (float) sr);
                 c.ksLpC = juce::jlimit(0.02f, 1.0f, (0.05f + 0.95f * sl.physTone) * c.pm->briScale);
-                // STIFFNESS = user dispersion: stretches the partials inharmonic (string -> bar -> bell). 0 = the
-                // material's own value (factory unchanged); raising it adds allpass coefficient + stages.
+                // STIFFNESS = user dispersion: stretches the partials SHARP (string -> bar -> bell).
+                // 0 = the material's own chain (factory bit-identical). >0 = the negative-coefficient
+                // design (designStiffChain) - the positive-coefficient approach was inaudible at the
+                // 2x engine rate (twice reported by the user; see the function comment for the math).
                 { const float st = juce::jlimit(0.0f, 1.0f, sl.physStiff);
-                  c.ksApC = juce::jlimit(-0.92f, 0.92f, c.pm->apC + st * 0.85f * (c.pm->apC < 0.0f ? -1.0f : 1.0f));
-                  c.ksApN = (st > 0.01f) ? juce::jlimit(0, 6, juce::jmax(c.pm->apStages, juce::roundToInt(st * 6.0f)))
-                                         : c.pm->apStages; }
+                  if (st > 0.01f) designStiffChain(st, (double) sl.physFreq, sr, c.ksApC, c.ksApN, c.ksApComp);
+                  else { c.ksApC = c.pm->apC; c.ksApN = c.pm->apStages; c.ksApComp = 0.0f; } }
                 c.physBaseF  = juce::jlimit(20.0, sr * 0.45, (double) sl.physFreq);
                 c.physPEnvAmt = sl.physPEnvAmt; c.physPEnvTime = sl.physPEnvTime; c.physPOffset = sl.physPOffset;
                 c.physVibFac = 1.0f + juce::jlimit(0.0f, 1.0f, sl.vibrato) * 0.07f * vibLfo;
@@ -1110,6 +1270,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                            ? juce::jlimit(1, c.srcLen, (int)(slotSample[s].curRegHi * c.srcLen)) : c.srcLen;
                 c.slices = 1;   // manual regions replace auto-slicing
                 c.smpGain = juce::jlimit(0.0f, 4.0f, sl.smpGain);
+                c.smpEnv  = sl.smpEnvOn;   // opt-in amp envelope (off = legacy full-length playback)
                 c.oscVibFac = 1.0f + juce::jlimit(0.0f, 1.0f, sl.vibrato) * 0.09f * vibLfo;  // vibrato = varispeed wobble
                 break; }
             case SrcSynth: {
@@ -1154,7 +1315,13 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 break;
             case SrcModal: {
                 // Build the resonator bank from the Material + base pitch + Decay/Tone/Structure.
-                const auto& M = kModalMaterials[juce::jlimit(0, kNumModalMaterials - 1, sl.modalMaterial)];
+                // MORPH crossfades this material's mode table toward the NEXT material in the list
+                // (ratios/gains/decays lerped per mode; modes missing on one side fade in/out). 0 = pure.
+                const int   mi = juce::jlimit(0, kNumModalMaterials - 1, sl.modalMaterial);
+                const auto& A  = kModalMaterials[mi];
+                const auto& B  = kModalMaterials[juce::jmin(mi + 1, kNumModalMaterials - 1)];
+                const float mo = juce::jlimit(0.0f, 1.0f, sl.modalMorph);
+                const int   nModes = (mo > 0.001f) ? juce::jmax(A.n, B.n) : A.n;
                 const double baseF = juce::jlimit(20.0, sr * 0.45, (double) sl.oscFreq);
                 const float  decaySec = 0.05f + juce::jlimit(0.0f, 1.0f, sl.modalDecay) * 3.95f;     // 0.05..4 s
                 const float  tone   = juce::jlimit(0.0f, 1.0f, sl.modalTone);
@@ -1163,13 +1330,23 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 const float  damp = juce::jlimit(0.0f, 1.0f, sl.modalDamp);   // extra ring damping (0 = none)
                 const float  hitPos = 0.5f * hit;                            // strike point moves edge -> centre
                 c.modalN = 0;
-                for (int i = 0; i < M.n && i < MODAL_MODES; ++i) {
-                    double ratio = 1.0 + (M.ratio[i] - 1.0) * stretch;                                 // inharmonicity
+                for (int i = 0; i < nModes && i < MODAL_MODES; ++i) {
+                    const bool inA = i < A.n, inB = i < B.n;
+                    const float rA = inA ? A.ratio[i]    : (inB ? B.ratio[i] : 1.0f);
+                    const float rB = inB ? B.ratio[i]    : rA;
+                    const float gA = inA ? A.gain[i]     : 0.0f;              // missing on a side -> fades to silent
+                    const float gB = inB ? B.gain[i]     : 0.0f;
+                    const float dA = inA ? A.decayMul[i] : (inB ? B.decayMul[i] : 1.0f);
+                    const float dB = inB ? B.decayMul[i] : dA;
+                    const float mRatio = rA + (rB - rA) * mo;
+                    const float mGain  = gA + (gB - gA) * mo;
+                    const float mDec   = dA + (dB - dA) * mo;
+                    double ratio = 1.0 + ((double) mRatio - 1.0) * stretch;                            // inharmonicity
                     double f = baseF * ratio;
                     if (f >= sr * 0.48) continue;                                                      // skip modes above Nyquist
-                    const float hi = (float) i / (float) juce::jmax(1, M.n - 1);                       // 0..1 mode height
+                    const float hi = (float) i / (float) juce::jmax(1, nModes - 1);                    // 0..1 mode height
                     // decay: per-material, shortened for higher modes - more so when dark (low tone), more with Damp.
-                    const float dmul = M.decayMul[i] * (1.0f - (1.0f - tone) * 0.6f * hi) * (1.0f - damp * (0.3f + 0.7f * hi));
+                    const float dmul = mDec * (1.0f - (1.0f - tone) * 0.6f * hi) * (1.0f - damp * (0.3f + 0.7f * hi));
                     const float dSec = juce::jmax(0.02f, decaySec * dmul);
                     const float r  = std::exp(-1.0f / (dSec * (float) sr));                            // per-sample pole radius
                     const double w = 2.0 * kPi * f / sr;
@@ -1178,7 +1355,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     c.modalA2[k] = r * r;
                     // gain: material gain, tilted by Tone (dark damps highs). x sin(w) = the impulse-input
                     // coefficient so each mode's ring is ~gain amplitude regardless of its frequency.
-                    float g = M.gain[i] * (0.35f + 0.65f * (tone * 0.5f + 0.5f) * (1.0f - 0.5f * hi * (1.0f - tone)));
+                    float g = mGain * (0.35f + 0.65f * (tone * 0.5f + 0.5f) * (1.0f - 0.5f * hi * (1.0f - tone)));
                     // Hit position: striking at a node of a mode doesn't excite it (comb). hit=0 -> full (no comb).
                     const float comb = std::abs(std::sin((float)(i + 1) * juce::MathConstants<float>::pi * hitPos));
                     g *= (1.0f - hit) + hit * comb;
@@ -1186,6 +1363,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 }
                 c.oscFreq = baseF;
                 c.modalDecaySec = decaySec;
+                // Pitch-envelope time base = the audible Strike + Ring (matches the editor's axis).
+                c.voiceLenSamp = juce::jmax(1.0, (double)((sl.atk + decaySec) * (float) sr));
                 break; }
             default: break;
         }
@@ -1209,6 +1388,13 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             for (bool u : c.eqUse) c.eqAny |= u;
         }
         // === PER-SLOT EQ (end) ===
+        // === PER-SLOT FILTER (begin) - stash the raw params; the coeffs are baked per BLOCK below
+        //     (env-follow needs the running amp level), not here. ===
+        c.filtOn      = (sl.filterType == LowPass);
+        c.filtCutoff  = juce::jlimit(20.0, sr * 0.49, (double) sl.filterCutoff);
+        c.filtReso    = juce::jlimit(0.3f, 12.0f, sl.filterReso);
+        c.filtEnvAmt  = juce::jlimit(-1.0f, 1.0f, sl.filterEnvAmt);
+        // === PER-SLOT FILTER (end) ===
     }
 
     if (! anySlotActive)
@@ -1245,8 +1431,10 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         const long ahdEnd = (long) ((c.atk + c.hold) * (float) sr) + (long) (3.2f * c.dec * (float) sr) + 8;
         if (c.engine == SrcSample)
         {
-            // Samples ignore AHDSR - play the full (trimmed) sample, then a short anti-click fade.
-            const long natural = (long) ((double) (c.regHi - c.regLo) * (double) engineOS / juce::jmax(0.05, c.speed) / (double) c.slices) + 8;
+            // Samples play the full (trimmed) sample + a short anti-click fade. With the OPT-IN amp
+            // envelope on, the voice can end at the envelope's end instead (whichever is shorter).
+            long natural = (long) ((double) (c.regHi - c.regLo) * (double) engineOS / juce::jmax(0.05, c.speed) / (double) c.slices) + 8;
+            if (c.smpEnv) natural = juce::jmin(natural, ahdEnd);
             voiceEnd = juce::jmax(voiceEnd, natural);
         }
         else if (c.engine == SrcPhys)
@@ -1263,7 +1451,6 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         else
             voiceEnd = juce::jmax(voiceEnd, ahdEnd + (c.sustain > 0.001f ? susTail : 0));
     }
-
     renderBuf.setSize(2, numSamples, false, false, true);
     renderBuf.clear();
     float* outL = renderBuf.getWritePointer(0);
@@ -1286,6 +1473,34 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
     // KS delay lines are lazily allocated; never touch them until ensureKsBuffers() ran.
     const bool ksOk = ksReady.load(std::memory_order_acquire);
 
+    // === PER-SLOT FILTER (begin) - bake this block's coeffs. The env-follow sweep uses the
+    //     PREVIOUS block's per-slot amp level (slotFiltEnv, ~one block latency = a few ms), same
+    //     spirit as the channel filter's per-block sweep. blockSlotEnv accrues THIS block's level. ===
+    float blockSlotEnv[NUM_SLOTS] = {};
+    {
+        const double nyq = sr * 0.49;
+        for (int s = 0; s < NUM_SLOTS; ++s)
+        {
+            SC& c = sc[s];
+            if (! c.filtOn) continue;
+            double cutoff = c.filtCutoff;
+            if (c.filtEnvAmt != 0.0f)
+                cutoff *= std::pow(2.0, (double) c.filtEnvAmt * (double) slotFiltEnv[s] * 5.0);   // +/-5 octaves
+            // Per-slot LFO -> FILTER cutoff (dest 0): +/-3 octaves at full Amount, sampled per block
+            // from the NEWEST voice's phase (same block-rate design as the env sweep; the wobble use
+            // case is a mono bass, and a fresh hit restarts the phase anyway).
+            if (c.lfoAmt[0] > 0.001f)
+            {
+                const Voice* nv = nullptr;
+                for (auto& v : voices) if (v.active() && (nv == nullptr || v.voiceSamples < nv->voiceSamples)) nv = &v;
+                if (nv != nullptr)
+                    cutoff *= std::pow(2.0, std::sin(nv->sv[s].lfoPhase[0]) * (double) c.lfoAmt[0] * 3.0);
+            }
+            c.filt.lowpass(sr, juce::jlimit(20.0, nyq, cutoff), (double) c.filtReso);
+        }
+    }
+    // === PER-SLOT FILTER (end) ===
+
     // ---- Voice loop -----------------------------------------------------------
     for (int vi = 0; vi < POLY; ++vi)
     {
@@ -1300,8 +1515,10 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         // Channel PITCH (semitones). SYNTHS shift frequency here (vPitchMul). SAMPLES get the channel/slot
         // pitch baked into their buffer by SoundTouch (pitch-shift, no length change) - so they use ONLY
         // the per-step pitch here (vStepMul, still varispeed since it's per-hit). Both include voicePitch.
-        const double vStepMul  = v.voicePitch != 0.0f ? std::pow(2.0, (double) v.voicePitch / 12.0) : 1.0;  // samples
-        const double vPitchMul = pitch != 0.0f ? vStepMul * std::pow(2.0, (double) pitch / 12.0) : vStepMul; // synths
+        // NON-const: a 303 slide updates voicePitch per sample and these track it.
+        const double chanMul   = pitch != 0.0f ? std::pow(2.0, (double) pitch / 12.0) : 1.0;
+        double vStepMul  = v.voicePitch != 0.0f ? std::pow(2.0, (double) v.voicePitch / 12.0) : 1.0;  // samples
+        double vPitchMul = vStepMul * chanMul; // synths
         // Per-step PAN: balance this voice's stereo output before it sums in (rides ON TOP of the
         // channel pan applied later). 0 = centre, -1 = hard left, +1 = hard right.
         const float vPanL = v.voicePan <= 0.0f ? 1.0f : 1.0f - v.voicePan;
@@ -1309,12 +1526,35 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         // Choke fade: ~3 ms ramp to zero instead of a hard cut (a mid-sample discontinuity
         // clicks when the choking hit is quieter than the tail being cut).
         const float killStep = 1.0f / juce::jmax(1.0f, 0.003f * (float) sr);
+        // Per-step LENGTH: this voice's end comes from its RESCALED decays (gateDec), not the
+        // authored ones - a long note lives to the end of its stretched fall, a short note ends
+        // early. Ties may have extended gateLen past the env's tail; keep the voice alive to there.
+        long veEnd = voiceEnd;
+        if (v.gateLen > 0)
+        {
+            veEnd = v.gateLen + (long)(0.05f * (float) sr);
+            for (int s = 0; s < NUM_SLOTS; ++s)
+                if (sc[s].engine >= 0)
+                    veEnd = juce::jmax(veEnd, (long)((sc[s].atk + sc[s].hold + 3.2f * v.sv[s].gateDec) * (float) sr) + 8);
+        }
+        // KS + Length: the string's own feedback decay is rescaled too (same rule as the env),
+        // else a held pluck's loop would die at its authored rate under a slower envelope.
+        float ksFbGate[NUM_SLOTS];
+        for (int s = 0; s < NUM_SLOTS; ++s)
+            ksFbGate[s] = (sc[s].engine == SrcPhys && v.sv[s].gateDec > 0.0f)
+                ? std::exp(-3.0f / juce::jmax(0.02f, v.sv[s].gateDec * sc[s].pm->decScale) / (float) sr) : -1.0f;
         bool finished = false;
 
         for (int i = 0; i < numSamples; ++i)
         {
             const long t = v.voiceSamples;
             const float kg = v.killing ? v.killGain : 1.0f;
+            if (v.glideRemain > 0)   // 303 slide: per-sample pitch glide toward this step's pitch
+            {
+                v.voicePitch += v.glideStep; --v.glideRemain;
+                vStepMul  = std::pow(2.0, (double) v.voicePitch / 12.0);
+                vPitchMul = vStepMul * chanMul;
+            }
             float vEnv = 0.0f, mixL = 0.0f, mixR = 0.0f;
             const float be = bloomAmt > 0.0001f ? (1.0f - std::exp(-(float) t * bloomRise)) : 1.0f;
             const float bGate = (1.0f - bloomAmt) + bloomAmt * be;
@@ -1333,11 +1573,15 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     const float frac = juce::jlimit(0.0f, 1.0f, (float)((double) t / c.voiceLenSamp));
                     pe3Mul *= std::pow(2.0, (double) pitchEnv4(frac, c.pEnvP, c.pEnvT) / 12.0);
                 }
+                // Per-slot PITCH LFO: sine bend, +/-1 octave at full Amount (sirens, dive wobble,
+                // vibrato at small amounts). Phase advances after the engine renders.
+                if (c.lfoAmt[1] > 0.001f)
+                    pe3Mul *= std::pow(2.0, std::sin(sv.lfoPhase[1]) * (double) c.lfoAmt[1]);
 
                 switch (c.engine)
                 {
                     case SrcOsc: {
-                        env = ahdsEnv(t, c.atk, c.hold, c.dec, c.sustain, c.release);
+                        env = ahdsEnv(t, c.atk, c.hold, sv.gateDec > 0.0f ? sv.gateDec : c.dec, c.sustain, c.release);
                         double sSemis = (c.oscPEnvAmt != 0.0f) ? (double) c.oscPEnvAmt * pitchEnvShape(t, c.oscPEnvTime, c.oscPOffset) : 0.0;
                         double freq = c.oscFreq * std::pow(2.0, sSemis / 12.0) * vPitchMul * c.oscVibFac * pe3Mul;
                         // Single "Wave" selector (the From/To over-the-note morph was retired - it sounded harsh).
@@ -1349,7 +1593,9 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         if (c.fmIndex > 0.0001f) {
                             const float modOut = (float) std::sin(sv.fmMod + c.fmFeedback * 6.0f * sv.fmFbState);
                             sv.fmFbState = 0.5f * (sv.fmFbState + modOut);
-                            fmAdd = c.fmIndex * modOut;
+                            // Env-follow: the FM index rides the amp envelope (classic FM drum -
+                            // bright modulated attack that mellows to the plain carrier as it decays).
+                            fmAdd = (c.fmEnvF ? c.fmIndex * env : c.fmIndex) * modOut;
                             sv.fmMod += 2.0 * kPi * freq * (double) c.fmRatio / sr;
                             if (sv.fmMod > 2.0 * kPi) sv.fmMod -= 2.0 * kPi;
                         }
@@ -1387,7 +1633,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         sv.sinePhase = sv.uniPhase[0];
                         break; }
                     case SrcNoise: {
-                        env = ahdsEnv(t, c.atk, c.hold, c.dec, c.sustain, c.release);
+                        env = ahdsEnv(t, c.atk, c.hold, sv.gateDec > 0.0f ? sv.gateDec : c.dec, c.sustain, c.release);
                         float w = whiteNoise(sv.noiseState), col;
                         switch (c.noiseType) {
                             case 1:
@@ -1418,7 +1664,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         sig = nOut * env;
                         break; }
                     case SrcFM: {
-                        env = ahdsEnv(t, c.atk, c.hold, c.dec, c.sustain, c.release);
+                        env = ahdsEnv(t, c.atk, c.hold, sv.gateDec > 0.0f ? sv.gateDec : c.dec, c.sustain, c.release);
                         double fmPMul = (c.fmPEnvAmt != 0.0f) ? std::pow(2.0, (double) c.fmPEnvAmt * pitchEnvShape(t, c.fmPEnvTime, c.fmPOffset) / 12.0) : 1.0;
                         float modOut = (float) std::sin(sv.fmMod + c.fmFeedback * 6.0f * sv.fmFbState);
                         sv.fmFbState = 0.5f * (sv.fmFbState + modOut);
@@ -1439,11 +1685,11 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         break; }
                     case SrcPhys: {
                         if (! ksOk) break;   // KS line not allocated (engine assigned without ensureKsBuffers - silent, no crash)
-                        env = ahdsEnv(t, c.atk, c.hold, c.dec, c.sustain, c.release);
+                        env = ahdsEnv(t, c.atk, c.hold, sv.gateDec > 0.0f ? sv.gateDec : c.dec, c.sustain, c.release);
                         double pSemis = (c.physPEnvAmt != 0.0f) ? (double) c.physPEnvAmt * pitchEnvShape(t, c.physPEnvTime, c.physPOffset) : 0.0;
                         if (c.pm->pitchDrop != 0.0f) pSemis += (double) c.pm->pitchDrop * std::exp(-(float) t * 3.0f / (0.06f * (float) sr));
                         double f = c.physBaseF * std::pow(2.0, pSemis / 12.0) * vPitchMul * c.physVibFac * pe3Mul;
-                        double L = juce::jlimit(2.0, (double)(KS_MAX - 2), sr / juce::jmax(20.0, f));
+                        double L = juce::jlimit(2.0, (double)(KS_MAX - 2), sr / juce::jmax(20.0, f) - (double) c.ksApComp);
                         double rp = sv.ksWrite - L; while (rp < 0.0) rp += (double) KS_MAX;
                         const int ri = (int) rp; const float fr = (float)(rp - ri);
                         const float k0 = sv.ksBuf[ri], k1 = sv.ksBuf[(ri + 1) % KS_MAX];
@@ -1456,7 +1702,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         // plucked string can't be "held", so DURING the amp-env HOLD window we sustain it (near-
                         // lossless ring) so amp-env Hold actually holds. Hold=0 -> the window is empty -> this is a
                         // no-op (bit-identical to a pure pluck); only sounds with Hold>0 ring through the hold.
-                        float ksFb = c.ksFb;
+                        float ksFb = ksFbGate[s] > 0.0f ? ksFbGate[s] : c.ksFb;   // Length rescales the string's own decay too
                         const long aS = (long) (c.atk * (float) sr), hS = (long) (c.hold * (float) sr);
                         // Sustain the string through the STRIKE (a slow attack) + any hold, so the amp env swells the
                         // pluck to FULL instead of fading in an already-decaying string (the weak-peak with slow attacks).
@@ -1466,11 +1712,14 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         sig = (ss * 1.4f) * env;
                         break; }
                     case SrcSample: {
-                        // No AHDSR for samples - play at full level with short anti-click
-                        // fades at the very start and just before the (trimmed) end.
-                        env = 1.0f;
+                        // Default: no envelope - play at full level with short anti-click fades at the
+                        // very start and just before the (trimmed) end. With the OPT-IN amp envelope on
+                        // (smpEnvOn), the AHD env shapes the sample too (fade-in / tame a long tail).
+                        // A per-step LENGTH gate applies the gated env even when the opt-in sample env is off,
+                        // so Length can shorten a sample too (holds full, then releases at the gate).
+                        env = (c.smpEnv || sv.gateDec > 0.0f) ? ahdsEnv(t, c.atk, c.hold, sv.gateDec > 0.0f ? sv.gateDec : c.dec, c.sustain, c.release) : 1.0f;
                         const long fin = (long) (0.003 * sr), fout = (long) (0.010 * sr), endN = (long) c.voiceLenSamp;
-                        if (fin  > 0 && t < fin)          env  = (float) t / (float) fin;
+                        if (fin  > 0 && t < fin)          env *= (float) t / (float) fin;
                         if (fout > 0 && t > endN - fout)  env *= juce::jmax(0.0f, (float)(endN - t) / (float) fout);
                         const double head = sv.smpHead;
                         const int idx = (int) head;
@@ -1504,7 +1753,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         break; }
                     case SrcSynth: {
                         // ---- Unified voice: (osc+FM+fold) + noise -> optional resonator ----
-                        env = ahdsEnv(t, c.atk, c.hold, c.dec, c.sustain, c.release);
+                        env = ahdsEnv(t, c.atk, c.hold, sv.gateDec > 0.0f ? sv.gateDec : c.dec, c.sustain, c.release);
                         const double pMul = (c.oscPEnvAmt != 0.0f)
                             ? std::pow(2.0, (double) c.oscPEnvAmt * pitchEnvShape(t, c.oscPEnvTime, c.oscPOffset) / 12.0) : 1.0;
 
@@ -1600,7 +1849,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             sig = ex * env;
                         break; }
                     case SrcWave: {
-                        env = ahdsEnv(t, c.atk, c.hold, c.dec, c.sustain, c.release);
+                        env = ahdsEnv(t, c.atk, c.hold, sv.gateDec > 0.0f ? sv.gateDec : c.dec, c.sustain, c.release);
                         const double freq = c.oscFreq * vPitchMul * c.oscVibFac * pe3Mul;
                         sv.wtPhase += freq / sr;                          // 0..1 per cycle
                         if (sv.wtPhase >= 1.0) sv.wtPhase -= std::floor(sv.wtPhase);
@@ -1609,24 +1858,33 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     case SrcModal: {
                         // Strike: feed ONE impulse into the resonator bank (a bank of 2-pole resonators =
                         // decaying sines). Each mode rings + decays on its own from there.
+                        // PITCH: the bank is built from the per-block base coeffs at the strike, scaled by
+                        // per-step + channel pitch (vPitchMul) AND the 4-dot pitch envelope (pe3Mul). With a
+                        // pitch env active the bank is RE-TUNED once per block (block-rate sweep - a
+                        // per-sample sweep would be 16 biquad recomputes per sample). Mid-ring only the pole
+                        // ANGLE moves (a1); radius + gain stay, so the ring keeps decaying smoothly.
                         const bool strike = ! sv.modalInit;
-                        if (strike) {
-                            // Re-pitch the bank for THIS voice (per-step + channel pitch = vPitchMul), once at the
-                            // strike. Each mode's angle w scales with frequency; reconstruct r/w0/g from the per-block
-                            // coeffs (a1=2r*cos w0, a2=r^2, gain=g*sin w0) and rebuild at w = w0 * vPitchMul.
-                            const double pm = vPitchMul;
-                            sv.modalNV = c.modalN;        // this voice's bank size (immune to a mid-ring Material change)
-                            for (int m = 0; m < c.modalN; ++m) {
-                                sv.modalY1[m] = 0.0f; sv.modalY2[m] = 0.0f;
+                        if (strike || (c.pEnvOn && i == 0)) {
+                            const double pm = vPitchMul * pe3Mul;
+                            if (strike) sv.modalNV = c.modalN;   // bank size fixed at the strike (immune to a mid-ring Material change)
+                            for (int m = 0; m < sv.modalNV; ++m) {
+                                if (strike) { sv.modalY1[m] = 0.0f; sv.modalY2[m] = 0.0f; }
                                 const float a2 = c.modalA2[m];
                                 const float r  = std::sqrt(juce::jmax(0.0f, a2));
-                                const float c0 = (r > 1.0e-6f) ? juce::jlimit(-1.0f, 1.0f, c.modalA1[m] / (2.0f * r)) : 1.0f;
+                                if (r <= 1.0e-6f) { if (strike) { sv.modalA1[m] = 0.0f; sv.modalA2[m] = 0.0f; sv.modalGain[m] = 0.0f; } continue; }
+                                const float c0 = juce::jlimit(-1.0f, 1.0f, c.modalA1[m] / (2.0f * r));
                                 const float w0 = std::acos(c0);
-                                const float s0 = std::sin(w0);
-                                const float g  = (s0 > 1.0e-6f) ? c.modalGain[m] / s0 : 0.0f;
                                 const double w = (double) w0 * pm;
-                                if (w >= kPi * 0.98 || w <= 0.0) { sv.modalA1[m] = 0.0f; sv.modalA2[m] = 0.0f; sv.modalGain[m] = 0.0f; }  // above Nyquist -> mute
-                                else { sv.modalA1[m] = 2.0f * r * (float) std::cos(w); sv.modalA2[m] = a2; sv.modalGain[m] = g * (float) std::sin(w); }
+                                if (strike && (w >= kPi * 0.98 || w <= 0.0))   // above Nyquist at the strike -> mute
+                                { sv.modalA1[m] = 0.0f; sv.modalA2[m] = 0.0f; sv.modalGain[m] = 0.0f; continue; }
+                                const double wc = juce::jlimit(0.001, (double) kPi * 0.98, w);   // retune mid-ring: clamp, never mute (a cut would click)
+                                sv.modalA1[m] = 2.0f * r * (float) std::cos(wc);
+                                sv.modalA2[m] = a2;
+                                if (strike) {
+                                    const float s0 = std::sin(w0);
+                                    const float gg = (s0 > 1.0e-6f) ? c.modalGain[m] / s0 : 0.0f;
+                                    sv.modalGain[m] = gg * (float) std::sin((float) wc);
+                                }
                             }
                         }
                         float out = 0.0f;
@@ -1640,11 +1898,39 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         // STRIKE (attack ramp) = a soft/swelled onset (the modes self-decay = the RING). Gated so
                         // atk <= 5 ms (every factory Modal sound, default 0.003) keeps env=1 = instant = bit-identical.
                         env = (c.atk > 0.005f) ? juce::jmin(1.0f, (float) t / juce::jmax(1.0f, c.atk * (float) sr)) : 1.0f;
+                        // Per-step LENGTH on Modal: the bank self-decays (a ring can't be EXTENDED), but a
+                        // SHORTER note is shaped by the same rescaled fall, so Length still tightens bells.
+                        if (sv.gateDec > 0.0f)
+                            env *= decayCurve(juce::jmax((long) 0, t - (long)((c.atk + c.hold) * (float) sr)), sv.gateDec);
                         if (! std::isfinite(out)) { for (int m = 0; m < sv.modalNV; ++m) { sv.modalY1[m] = sv.modalY2[m] = 0.0f; } out = 0.0f; }  // self-heal a runaway
                         sig = juce::jlimit(-4.0f, 4.0f, out) * 0.4f * env;   // bound the bank sum to a musical level, then the Strike ramp
                         break; }
                     default: break;
                 }
+
+                // Per-slot VOLUME LFO: tremolo on this slot's signal (full Amount dips to silence -
+                // helicopter/chopper at fast rates, pumping at slow). Then advance every ACTIVE
+                // LFO's phase once per sample (the filter LFO's phase is read per block).
+                if (c.lfoAmt[2] > 0.001f) {
+                    const float g = 1.0f - c.lfoAmt[2] * 0.5f * (1.0f + (float) std::sin(sv.lfoPhase[2]));
+                    if (stereo) { sL *= g; sR *= g; } else sig *= g;
+                }
+                for (int d2 = 0; d2 < 3; ++d2)
+                    if (c.lfoAmt[d2] > 0.001f) {
+                        sv.lfoPhase[d2] += 2.0 * kPi * (double) c.lfoRate[d2] / sr;
+                        if (sv.lfoPhase[d2] > 2.0 * kPi) sv.lfoPhase[d2] -= 2.0 * kPi;
+                    }
+
+                // === PER-SLOT FILTER (begin) - resonant LP on THIS slot's source (before its EQ),
+                //     so it never touches the other slot's engine. State is per-voice. ===
+                if (c.filtOn) {
+                    if (stereo) { sL = eqProcess(c.filt, sv.filtZ1, sv.filtZ2, sL, 0);
+                                  sR = eqProcess(c.filt, sv.filtZ1, sv.filtZ2, sR, 1); }
+                    else          sig = eqProcess(c.filt, sv.filtZ1, sv.filtZ2, sig, 0);
+                }
+                // Track this slot's max amp level this block -> next block's env-follow cutoff.
+                blockSlotEnv[s] = juce::jmax(blockSlotEnv[s], env * v.velGain);
+                // === PER-SLOT FILTER (end) ===
 
                 // === PER-SLOT EQ (begin) - filter THIS slot's signal before it's mixed ===
                 if (c.eqAny) {
@@ -1686,16 +1972,21 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             outR[i] += mixR * v.velGain * vPanR * kg;
             maxEnvLevel = juce::jmax(maxEnvLevel, vEnv * v.velGain);
 
+            // (Per-step LENGTH no longer hard-cuts here: it's a HOLD handled in the amp env - the note
+            //  sustains until the gate, then the env decays as the release. Only CHOKES set v.killing now.)
             if (v.killing)
             {
                 v.killGain -= killStep;                                   // choke fade advances per sample
                 if (v.killGain <= 0.0f) { finished = true; break; }       // fade complete -> voice ends
             }
-            if (++v.voiceSamples >= voiceEnd) { finished = true; break; }
+            if (++v.voiceSamples >= veEnd) { finished = true; break; }
         }
 
         if (finished) v.playHead = -1.0;
     }
+
+    // Per-slot filter env-follow: remember this block's per-slot level for next block's sweep.
+    for (int s = 0; s < NUM_SLOTS; ++s) slotFiltEnv[s] = blockSlotEnv[s];
 
     // ---- PUNCH (transient shaper) + GLUE (gentle compression) on the mix - both REMOVED (-> 0). -----
     const float punchAmt = 0.0f;

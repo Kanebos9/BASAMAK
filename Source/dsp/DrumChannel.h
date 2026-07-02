@@ -117,7 +117,7 @@ public:
     static const int VALID_STEP_COUNTS[];
     static constexpr int NUM_VALID_STEP_COUNTS = 20;
 
-    DrumChannel() { for (int i = 0; i < MAX_STEPS; ++i) { stepVel[i] = 1.0f; stepPitch[i] = 0.0f; stepProb[i] = 1.0f; stepRoll[i] = 1; stepRollDecay[i] = 0.0f; stepNoteLen[i] = 0.25f; stepPan[i] = 0.0f; stepCondLen[i] = 1; stepCondMask[i] = 0; } }
+    DrumChannel() { for (int i = 0; i < MAX_STEPS; ++i) { stepVel[i] = 1.0f; stepPitch[i] = 0.0f; stepProb[i] = 1.0f; stepRoll[i] = 1; stepRollDecay[i] = 0.0f; stepNoteLen[i] = 0.0f; stepPan[i] = 0.0f; stepSlide[i] = false; stepCondLen[i] = 1; stepCondMask[i] = 0; } }
 
     //-- Sequencer state (per step)
     bool   steps[MAX_STEPS] = {};
@@ -126,8 +126,9 @@ public:
     float  stepProb[MAX_STEPS];       // 0..1 chance the step fires (default 1) - legacy, superseded by stepCond*
     int    stepRoll[MAX_STEPS];       // 1..6 ratchet/roll sub-hits per step (default 1)
     float  stepRollDecay[MAX_STEPS];  // 0..1 roll fade: 0 = all hits equal, 1 = last hit silent
-    float  stepNoteLen[MAX_STEPS];    // 0..1 -> note length 0.1..4 steps (MIDI-out only; ignored for sound)
+    float  stepNoteLen[MAX_STEPS];    // NOTE LENGTH: 0 = off (natural ring / 1 step for MIDI-out); 0..1 = fraction of ONE step the note lasts - the DECAY is rescaled to fill it (attack keeps its punch; long = slow fall, short = tight gate)
     float  stepPan[MAX_STEPS];        // -1..+1 stereo pan per step (default 0 = centre; internal sounds only)
+    bool   stepSlide[MAX_STEPS];      // SLIDE: this step's pitch glides across the step to land on the NEXT active step's pitch
     // Per-step LOOP condition (the "Prob" mode): the step fires only on certain pattern loops. stepCondLen = the
     // cycle length N (1 = every loop = default); stepCondMask = bitmask of which loops (0-based) within the cycle fire.
     int    stepCondLen[MAX_STEPS];    // 1..10 (1 = always)
@@ -171,6 +172,9 @@ public:
 
     // Fill min/max peaks for a cached waveform display of ONE slot (message thread, lock-free try).
     void getWaveformPeaks(int slot, int numBuckets, std::vector<float>& mins, std::vector<float>& maxs);
+    // The newest playing voice's sample playhead for a slot, as a fraction of the buffer (-1 = none).
+    // Display-only (message thread; a torn double read is harmless). Mirrors within the region for reverse.
+    float getSamplePlayheadFrac(int slot) const;
     int  getSampleNumFrames(int slot = 0) const
          { return slotSample[juce::jlimit(0, NUM_SLOTS - 1, slot)].buf.getNumSamples(); }
     double getSampleRateHz()  const { return sr; }
@@ -208,11 +212,17 @@ public:
     static constexpr int MODAL_MODES = 16;             // max resonant modes per voice
     static int         modalMaterialCount();
     static const char* modalMaterialName(int m);
-    // Analog+FM oscillator shapes (the single "Wave" fader scans these; ~17, incl. Vowel/Formant/etc.).
+    static int         modalModeCount(int material);              // modes in a material's table
+    static float       modalModeGain(int material, int mode);     // base gain of one mode (0 if out of range)
+    // Analog+FM oscillator shapes (the single "Wave" fader scans these; 14, incl. Vowel/Formant/etc.).
     static int         oscShapeCount();
     static const char* oscShapeName(int s);
     static float       oscShapeSample(int shape, float phase01);
+    // LEGACY encoding: OscShape (0..3) is ONLY for the per-channel layerOscShape field (old
+    // projects persist it raw - never renumber). SLOT wave indices use the v5 "Wave" list below;
+    // buildSlotsFromLegacy translates between the two.
     enum OscShape { OscSine = 0, OscTriangle, OscSquare, OscSaw };
+    enum Wave { WvSine = 0, WvHump, WvTri, WvSquare, WvSaw, WvPulse };   // analytic v5 slot indices (bank follows at 6)
 
     bool  srcOn[NUM_SOURCES]     = { true, true, true, true, false };       // Physical off by default
     float srcWeight[NUM_SOURCES] = { 0.25f, 0.25f, 0.25f, 0.25f, 0.0f };    // even blend (4 on)
@@ -334,11 +344,13 @@ public:
         float modalStruct = 0.5f;       // inharmonicity: stretch/compress the mode ratios (0.5 = native)
         float modalHit = 0.0f;          // strike position: combs which modes get excited (0 = full/no comb)
         float modalDamp = 0.0f;         // extra damping: shortens the ring, highs more (0 = none)
+        float modalMorph = 0.0f;        // crossfade this Material toward the NEXT one in the list (0 = pure)
         // -- Noise --
         int   noiseType = 0; float noiseCenter = 3000.0f, noiseWidth = 0.0f;
         float noiseRes = 0.0f, noiseDrive = 0.0f, noiseCrackle = 0.0f;   // resonance (filter Q), saturation, granular dust
         // -- FM (merged into the Oscillator engine; Depth 0 = pure analog, so it defaults OFF) --
         float fmPitch = 0.0f, fmSpread = 0.0f, fmDepth = 0.0f, fmPEnvAmt = 0.0f, fmPEnvTime = 0.05f, fmPOffset = 0.0f, fmFeedback = 0.0f, fmSub = 0.0f;
+        bool  fmEnvFollow = false;      // FM Amount follows the amp envelope (classic FM drum: bright attack -> mellow decay)
         // -- Physical --
         float physFreq = 110.0f, physTone = 0.5f, physMaterial = 0.0f, physPosition = 0.0f, physPEnvAmt = 0.0f, physPEnvTime = 0.05f, physPOffset = 0.0f;
         float physStiff = 0.0f;          // Stiffness/inharmonicity: extra dispersion allpass (0 = pure string -> bar/bell)
@@ -356,10 +368,18 @@ public:
         float smpStretch = 1.0f;                // time-stretch (needs SoundTouch); rebuilds slotSample.buf
         int   smpSlices = 1;                    // 1 = whole; N = chop region into N slices, advance per hit
         float smpGain = 1.0f;                   // sample output boost (samples are quieter than the synth engines)
+        bool  smpEnvOn = false;                 // OPT-IN amp envelope on the sample (off = play full length, legacy-identical)
         // -- Per-slot FX (per sound). Drive = an insert on this slot's signal; Reverb/Delay = this slot's
         //    SEND amount into the shared reverb/delay engines (character set in the FX box). --
         int   fxDriveType = 0;                  // DrumChannel::DriveType
         float fxDrive = 0.0f, fxReverbSend = 0.0f, fxDelaySend = 0.0f;
+        // -- Per-slot LFOs ("wobble"): THREE independent sines, one per destination, each with its
+        //    own rate + amount, all RESTARTING on every hit (locked to the groove, no tempo-sync UI
+        //    needed). amt 0 = that LFO off (all-default = bit-identical). Dest index: 0 = the slot
+        //    FILTER's cutoff (+/-3 oct; needs the slot filter ON), 1 = pitch (+/-1 octave),
+        //    2 = volume (tremolo). Any mix can run at once. Edited on the LFO visual (FX box). --
+        float lfoRate[3] = { 4.0f, 4.0f, 4.0f };
+        float lfoAmt[3]  = { 0.0f, 0.0f, 0.0f };
         // -- Synth (SrcSynth) only -- the unified engine reuses the osc/FM/noise/phys
         // fields above and adds these section controls:
         //   oscFold  = wavefold amount (metallic / FM-ish harmonics from one knob)
@@ -387,8 +407,26 @@ public:
             defaultEqBand(0), defaultEqBand(1), defaultEqBand(2), defaultEqBand(3), defaultEqBand(4) };
         bool  eqOn() const { for (auto& b : eqBand) if (b.on) return true; return false; }
         // === PER-SLOT EQ (end) ===
+        // === PER-SLOT FILTER (begin) - a resonant LowPass on THIS slot's signal (before its EQ),
+        //     so a filtered sound (e.g. Acid Bass) doesn't filter the OTHER slot's engine. Edited on
+        //     the slot's EQ display (F diamond). Off by default = identical to before. ===
+        int   filterType   = FilterOff;   // Off / LowPass (Formant reserved for the channel filter)
+        float filterCutoff = 1000.0f, filterReso = 0.707f, filterEnvAmt = 0.0f;
+        // === PER-SLOT FILTER (end) ===
     };
     Slot slots[NUM_SLOTS];
+    float slotFiltEnv[NUM_SLOTS] = {}; // runtime: per-slot amp-env level from the PREVIOUS block, feeds the per-slot filter's env-follow sweep
+    // Legacy-authoring bridge: factory sounds built via buildSlotsFromLegacy can't set slot fields
+    // directly (applyPreset re-runs the build and would wipe them) - this channel-level flag is
+    // copied onto the built FM slot instead, so FM sounds keep env-follow inside presets too.
+    bool legacyFmEnvFollow = false;
+    // UI: the newest active voice's LFO phase for this slot + destination (radians; < 0 = no voice).
+    double getLfoPhase(int slot, int dest) const
+    {
+        const Voice* nv = nullptr;
+        for (auto& v : voices) if (v.active() && (nv == nullptr || v.voiceSamples < nv->voiceSamples)) nv = &v;
+        return nv != nullptr ? nv->sv[juce::jlimit(0, NUM_SLOTS - 1, slot)].lfoPhase[juce::jlimit(0, 2, dest)] : -1.0;
+    }
 
     // PER-SLOT sample storage: each Sample slot has its OWN buffer + region + speed + reverse, so both
     // slots can hold different samples (each with its own waveform/trim/reverse). Public so the
@@ -505,7 +543,11 @@ public:
     // buildSlotsFromLegacy / the editor's engine-change path. Lazily allocating these cut the
     // idle memory of 32 patterns x 16 channels x 8 voices x 2 slots from ~130 MB to ~0.
     void ensureKsBuffers();
-    void trigger(float velocityGain = 1.0f, float pitchSemis = 0.0f, float pan = 0.0f);
+    // gateSamples > 0 = cut this hit after that many samples (soft 3 ms fade - the per-step Length).
+    // glideSamples > 0 = SLIDE: the pitch starts at pitchSemis and glides to glideToSemis over that time.
+    void trigger(float velocityGain = 1.0f, float pitchSemis = 0.0f, float pan = 0.0f, long gateSamples = 0,
+                 float glideToSemis = 0.0f, long glideSamples = 0);
+    static float physDecayScale(int material);   // material ring-length multiplier (for the UI's tail read-out)
     void renderInto(juce::AudioBuffer<float>& dest, int startSample, int numSamples, bool anySolo,
                     juce::AudioBuffer<float>* reverbSendBus = nullptr,
                     juce::AudioBuffer<float>* delaySendBus  = nullptr);
@@ -575,11 +617,22 @@ private:
         std::vector<float> ksBuf;        // KS delay line: empty until ensureKsBuffers(), then KS_MAX floats
         double   ksWrite = 0.0;
         float    ksLp = 0.0f;
-        float    ksApSt[6] = { 0,0,0,0,0,0 };   // dispersion allpass state (up to 6 stages for user Stiffness)
+        float    ksApSt[12] = {};        // dispersion allpass state (up to 12 stages for user Stiffness -
+                                         // the 2x engine oversampling halves per-stage dispersion, so the
+                                         // old 6-stage cap made the knob nearly inaudible)
         double   smpHead = 0.0;          // this slot's sample playhead
         // === PER-SLOT EQ (begin) - filter state for HP(2)+bells(3)+LP(2); coeffs live in SC ===
         float    eqZ1[7][2] = {}, eqZ2[7][2] = {};
         // === PER-SLOT EQ (end) ===
+        // === PER-SLOT FILTER (begin) - resonant LP state (stereo); coeffs live in SC ===
+        float    filtZ1[2] = {}, filtZ2[2] = {};
+        // === PER-SLOT FILTER (end) ===
+        // Per-step LENGTH: effective decay (seconds) replacing this slot's dec so the note's fall
+        // FILLS the note length (attack/hold untouched). 0 = no gate = the authored decay. FROZEN
+        // at trigger - a 303 tie (slideTo) extends the voice's life but never reshapes the decay,
+        // so tied chains keep falling naturally (re-gating the env mid-decay would step/pop).
+        float    gateDec = 0.0f;
+        double   lfoPhase[3] = {}; // per-slot LFO phases (radians), one per dest, reset at trigger (per-hit restart)
     };
     struct Voice
     {
@@ -589,8 +642,12 @@ private:
         float    velGain = 1.0f;    // per-step velocity (volume) for this hit
         float    voicePitch = 0.0f; // per-step pitch offset (semitones) for this hit
         float    voicePan = 0.0f;   // per-step stereo pan (-1..+1) for this hit (0 = centre)
-        bool     killing  = false;  // choke: fade this voice out (~3 ms) then stop - no hard-cut click
+        bool     killing  = false;  // choke/gate: fade this voice out (~3 ms) then stop - no hard-cut click
         float    killGain = 1.0f;   // current fade gain while killing
+        long     gateLen  = 0;      // per-step Length: the note's length in samples (0 = off). The audible shaping
+                                    // lives in SlotVoice::gateDec (rescaled decay); this also keeps a tied voice alive.
+        float    glideStep  = 0.0f; // 303 slide: semitones added to voicePitch per sample while gliding
+        long     glideRemain = 0;   // samples of glide left (0 = not gliding)
         const juce::AudioBuffer<float>* smpBuf = nullptr;  // velocity-layer buffer chosen at trigger
         SlotVoice sv[NUM_SLOTS];
         bool active() const { return playHead >= 0.0; }

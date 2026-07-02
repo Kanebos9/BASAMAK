@@ -34,6 +34,10 @@ public:
         bool  mono   = false;
         float limit  = 0.003f;          // 0 = limiter off; default ~-0.1 dB ceiling (light/transparent)
         float glue   = 0.0f;            // 0 = off; master bus "glue" compressor amount (before the limiter)
+        // Master TONE + colour (drum + bass bus). Signal order: Tilt -> Sat -> Glue -> Limiter.
+        float tilt   = 0.5f;            // one-knob tilt EQ around ~700 Hz: 0 = dark (bass up/treble down),
+                                        // 0.5 = flat (bit-identical), 1 = bright (treble up/bass down). +/-6 dB.
+        float sat    = 0.0f;            // 0 = off (bit-identical); master saturation (tanh warmth/drive), 0..1.
     };
 
     struct Pattern
@@ -49,7 +53,7 @@ public:
         int   chainLoops[CHAIN_MAX] = {  2, 2, 2, 2, 2, 2, 2, 2 };
         int   chainLen = 0;
         int   chainStep = 0;
-        float swing        = 0.0f; // 0 = straight .. ~0.7 delays the off-steps
+        float swing        = 0.0f; // 0 = straight .. 1 = max (MPC 50%..75%: off-step at 0.5+swing*0.25 of the pair)
         MasterFX master;          // per-pattern master FX + output
     };
 
@@ -71,7 +75,10 @@ public:
     // offset = SAMPLE-ACCURATE position of the hit within this block (at the engine's rate).
     // The render is split at these offsets so triggers land exactly on the grid instead of
     // being quantised to block starts (which jittered up to a whole buffer, ~12 ms at 512).
-    struct TriggerEvent { int channel; int step; float velScale = 1.0f; int sub = 0; int roll = 1; int offset = 0; };
+    struct TriggerEvent { int channel; int step; float velScale = 1.0f; int sub = 0; int roll = 1; int offset = 0;
+                          long gate = 0;      // gate > 0 = cut the hit after this many samples (per-step Length)
+                          long slideLen = 0;      // slide glide time in samples (0 = step has no slide)
+                          float slideTo = 0.0f; };// slide TARGET pitch (the NEXT active step's pitch, semitones)
 
     // [start, end) of step `s` (bar fraction 0..1) with this pattern's swing applied. The
     // MIDI exporter reuses it so exported clips carry the same groove the engine plays.

@@ -174,11 +174,21 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             {
                 const int   n   = msg.getNoteNumber();
                 const float vel = msg.getFloatVelocity();
+                bool matched = false;
                 for (int c = 0; c < Sequencer::NUM_CHANNELS; ++c)
                 {
                     auto& chan = sequencer.channel(c);
                     if (! chan.midiOut && chan.midiNote == n)   // sound channels only
-                        chan.trigger(vel, 0.0f);
+                    { chan.trigger(vel, 0.0f); matched = true; }
+                }
+                // PITCH TRACKING: an unmatched note plays the SELECTED channel transposed by the
+                // distance from its base note - so any channel is playable as a (bass) instrument
+                // from a keyboard in Keys mode. Matched notes keep the old drum-pad behaviour.
+                if (! matched)
+                {
+                    auto& sel = sequencer.channel(juce::jlimit(0, Sequencer::NUM_CHANNELS - 1, lastSelectedChannel));
+                    if (! sel.midiOut)
+                        sel.trigger(vel, (float) (n - sel.midiNote), 0.0f);
                 }
             }
             continue;   // consumed by Keys mode (don't also treat it as a Launchpad pad)
@@ -221,21 +231,16 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         }
     }
 
-    // While the transport is NOT advancing steps (stopped / auditioning via TEST or Auto Test), the per-step arm
-    // in the Sequencer never fires. Re-arm here on a FIXED ~10 Hz grid (every 0.1 s) so a held / long-attack /
-    // still-ringing sound keeps refreshing and switching the analysed slot updates. The grid is PHASE-ALIGNED
-    // to the hit (the test handler below resets analysisArmCtr to 0 for BOTH the TEST button and Auto Test, which
-    // share the testTriggerRequest path), so every tap captures the sound at the SAME points in time -> a
-    // consistent spectrum. Before this alignment the grid was free-running, so a hit landed at a random offset
-    // within it and each tap caught the decay at a different phase = the "different wave every time" bug.
-    // Playback still uses the step-aligned arm.
-    if (! sequencer.isCurrentlyPlaying)
+    // Spectrum refresh: a FIXED 20 Hz grid (every 0.05 s) - ALWAYS, playing or stopped (user request:
+    // step-rate refresh was too slow at low tempos / long steps; TEST/Auto-Test used 0.1 s). The grid
+    // stays PHASE-ALIGNED to hits: DrumChannel::trigger() re-arms the tap at every hit's attack and the
+    // TEST handler below resets this counter, so repeated hits are captured at the SAME time offsets ->
+    // the display stays consistent (the old free-running-window inconsistency does not come back).
     {
         analysisArmCtr += audio.getNumSamples();
-        const int armEvery = juce::jmax(1, (int) (0.1 * currentSampleRate));
+        const int armEvery = juce::jmax(1, (int) (0.05 * currentSampleRate));
         if (analysisArmCtr >= armEvery) { analysisArmCtr = 0; spectrumTap.arm(); }
     }
-    else analysisArmCtr = 0;
 
     //-- Audition trigger from the TEST button
     {
@@ -325,7 +330,8 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         // held note went out on so its note-off matches even if the routing changes mid-note.
         bool triggered[Sequencer::NUM_CHANNELS] = {};
 
-        // One step's duration in samples = bar / steps. stepNoteLen (0..1) maps to 0.1..4 steps.
+        // One step's duration in samples = bar / steps. stepNoteLen: 0 = one full step (default),
+        // else the fraction of a step (the same per-step Length that gates internal sounds).
         const double qpb = juce::jmax(1, currentTimeSigNum) * 4.0 / juce::jmax(1, currentTimeSigDen);
         const double barSamples = (qpb * 60.0 / juce::jmax(1.0, currentBpm)) * currentSampleRate;
 
@@ -346,7 +352,8 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             midi.addEvent(juce::MidiMessage::noteOn(midiCh, note, vel), hostOff);
             activeMidiChan[e.channel] = midiCh;
             const double samplesPerStep = barSamples / juce::jmax(1, ch.numSteps);
-            const double lenSteps = 0.1 + juce::jlimit(0.0f, 1.0f, ch.stepNoteLen[e.step]) * 3.9;  // 0.1..4 steps
+            const float  gl = juce::jlimit(0.0f, 1.0f, ch.stepNoteLen[e.step]);
+            const double lenSteps = gl > 0.001f ? (double) gl : 1.0;   // 0 = a full step; else fraction of a step
             const int len = juce::jmax(1, (int)(lenSteps * samplesPerStep));
             if (hostOff + len < numSamples) { midi.addEvent(juce::MidiMessage::noteOff(midiCh, note), hostOff + len); activeMidiNote[e.channel] = -1; }
             else                            { activeMidiNote[e.channel] = note; midiNoteCountdown[e.channel] = len - (numSamples - hostOff); }
@@ -426,6 +433,37 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         // mix together (stereo-LINKED detector = same gain on L+R, stable image), with drum-friendly fixed
         // character: medium attack so transients survive, tempo-ish release so it "pumps". The knob lowers the
         // threshold + raises make-up together. The limiter/soft-clip after it still catch any peaks.
+        // TILT EQ + SATURATION (drum + bass master colour). Signal order: Tilt -> Sat -> Glue -> Limiter.
+        // Tilt = one-knob spectral balance around a ~700 Hz pivot: a one-pole splits low/high bands, then
+        // recombines with COMPLEMENTARY gains (+/-6 dB). 0.5 = both gains 1.0 = bit-identical.
+        const float tiltT     = (mfx.tilt - 0.5f) * 2.0f;                 // -1 (dark) .. +1 (bright)
+        const bool  tiltOn    = std::abs(tiltT) > 0.001f;
+        const float tiltDb    = tiltT * 6.0f;
+        const float tiltHiG   = std::pow(10.0f,  tiltDb / 20.0f);         // bright: high up / low down
+        const float tiltLoG   = std::pow(10.0f, -tiltDb / 20.0f);
+        const float tiltK     = 1.0f - std::exp(-2.0f * juce::MathConstants<float>::pi * 700.0f / (float) currentSampleRate);
+        // Sat = ASYMMETRIC tube-style saturation. Unlike Glue (a compressor that reduces dynamics +
+        // pumps), Sat adds HARMONICS - and the asymmetry (positive half shaped harder than the
+        // negative) generates EVEN harmonics = a warm, "fat", audibly coloured DRIVE, clearly not
+        // compression. Unity small-signal (/drive) so quiet passages stay clean, crossfaded by the
+        // amount (0 = dry = bit-identical), driven harder as the master gets louder (analog-ish).
+        // A ~5 Hz DC blocker removes the asymmetric bias (won't touch bass).
+        const bool  satOn     = mfx.sat > 0.0001f;
+        const float satDrive  = 1.0f + mfx.sat * 5.0f;                    // 1 .. 6 (wide = clearly grittier at the top)
+        const float satWet    = mfx.sat;
+        const float satDcR    = 1.0f - 2.0f * juce::MathConstants<float>::pi * 5.0f / (float) currentSampleRate;
+        auto tiltSat = [&](float& x, int chn) {
+            if (tiltOn) { float& lp = (chn == 0) ? masterTiltL : masterTiltR;
+                          lp += (x - lp) * tiltK; x = lp * tiltLoG + (x - lp) * tiltHiG; }
+            if (satOn)  {
+                const float y = x * satDrive;
+                const float shaped = ((y >= 0.0f) ? std::tanh(y) : std::tanh(y * 0.85f)) / satDrive;  // asymmetric -> even harmonics
+                const float wet = x + satWet * (shaped - x);
+                float& xz = satDcX[chn]; float& yz = satDcY[chn];   // 1-pole DC blocker (kills the bias)
+                const float o = wet - xz + satDcR * yz; xz = wet; yz = o; x = o;
+            }
+        };
+
         const bool  glueOn    = mfx.glue > 0.0001f;
         const float gThr      = std::pow(10.0f, (-8.0f - mfx.glue * 16.0f) / 20.0f);   // -8 dB .. -24 dB
         const float gRatio    = 1.0f + mfx.glue * 3.0f;                                // 1:1 .. 4:1
@@ -458,6 +496,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                 if (mono) { float m = 0.5f * (l + r); l = m; r = m; }
                 l *= gL; r *= gR;
 
+                tiltSat(l, 0); tiltSat(r, 1);   // master tone + saturation (pre-glue)
                 if (glueOn) { const float gg = glueGain(l, r); l *= gg; r *= gg; }   // bus glue (pre-limiter)
 
                 // Lookahead: output the DELAYED sample while the gain envelope tracks the INCOMING
@@ -484,6 +523,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             for (int i = 0; i < numSamples; ++i)
             {
                 float m = M[i] * mfx.volume;
+                tiltSat(m, 0);   // master tone + saturation (pre-glue)
                 if (glueOn) { const float gg = glueGain(m, m); m *= gg; }   // bus glue (pre-limiter)
                 if (limOn)
                 {
@@ -616,6 +656,8 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
     if (pid == "global_delayFB")    { masterFX().delayFeedback = norm * 0.95f;        return; }
     if (pid == "global_delayWet")   { for (auto& pat : sequencer.patterns) pat.master.delayWet = norm; return; }
     if (pid == "global_masterGlue") { for (auto& pat : sequencer.patterns) pat.master.glue = norm; return; }
+    if (pid == "global_masterTilt") { for (auto& pat : sequencer.patterns) pat.master.tilt = norm; return; }
+    if (pid == "global_masterSat")  { for (auto& pat : sequencer.patterns) pat.master.sat  = norm; return; }
 
     // UI-only controls (edit-mode buttons + influence) -> relayed to the editor.
     if (pid == "ui_mode_vel")   { if (on) uiMidiEditMode.store(1); return; }
@@ -623,6 +665,7 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
     if (pid == "ui_mode_prob")  { if (on) uiMidiEditMode.store(3); return; }
     if (pid == "ui_mode_roll")  { if (on) uiMidiEditMode.store(4); return; }
     if (pid == "ui_mode_pan")   { if (on) uiMidiEditMode.store(5); return; }
+    if (pid == "ui_mode_len")   { if (on) uiMidiEditMode.store(6); return; }
     if (pid.startsWith("ui_influence_ch")) { if (on) uiMidiInfluence.store(pid.substring(15).getIntValue()); return; }
 
     // Pattern-scoped controls:  "p{P}_..."
@@ -847,9 +890,9 @@ juce::File DrumSequencerProcessor::exportMidiFile()
             const int note = juce::jlimit(0, 127, channel.midiNote + juce::roundToInt(channel.stepPitch[step]));
             // Note length: MIDI-out channels use their per-step length (0.1..4 steps); sound
             // channels get a solid default slightly shorter than the (sub-)step.
-            const double lenSteps = channel.midiOut
-                                  ? 0.1 + juce::jlimit(0.0f, 1.0f, channel.stepNoteLen[step]) * 3.9
-                                  : 0.8 / (double) roll;
+            const float  gl = juce::jlimit(0.0f, 1.0f, channel.stepNoteLen[step]);
+            const double lenSteps = gl > 0.001f ? (double) gl
+                                  : (channel.midiOut ? 1.0 : 0.8 / (double) roll);
 
             for (int j = 0; j < roll; ++j)
             {
@@ -1000,9 +1043,12 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
     chState.setProperty("stepRoll",  rollStr,  nullptr);
     chState.setProperty("stepRollDec", rollDecStr, nullptr);
     chState.setProperty("stepNoteLen", noteLenStr, nullptr);
+    chState.setProperty("lenV", 2, nullptr);   // v2 = Length is a 0..1 GATE (0 = off); v1 mapped 0..1 -> 0.1..4 steps
     chState.setProperty("stepPan", panStr, nullptr);
     chState.setProperty("stepCondLen",  condLenStr,  nullptr);
     chState.setProperty("stepCondMask", condMaskStr, nullptr);
+    { juce::String sl; for (int s = 0; s < DrumChannel::MAX_STEPS; ++s) sl += ch.stepSlide[s] ? "1" : "0";
+      chState.setProperty("stepSlide", sl, nullptr); }
 
     ch.writeSlots(chState);   // 2-slot model (duplicate engines survive save/load + undo)
 
@@ -1119,7 +1165,16 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
         loadArr("stepPitch", ch.stepPitch, 0.0f);
         loadArr("stepProb",  ch.stepProb,  1.0f);
         loadArr("stepRollDec", ch.stepRollDecay, 0.0f);
-        loadArr("stepNoteLen", ch.stepNoteLen, 0.25f);
+        loadArr("stepNoteLen", ch.stepNoteLen, 0.0f);
+        // MIGRATE v1 note lengths (MIDI-out only; 0..1 -> 0.1..4 steps, default 0.25 ~= 1 step):
+        // the old default becomes "off" (0 = one full step for MIDI-out = same behaviour), other
+        // values clamp into the new one-step gate range.
+        if ((int) child.getProperty("lenV", 1) < 2)
+            for (int i = 0; i < DrumChannel::MAX_STEPS; ++i) {
+                const float v = ch.stepNoteLen[i];
+                ch.stepNoteLen[i] = (std::abs(v - 0.25f) < 0.005f) ? 0.0f
+                                  : juce::jlimit(0.0f, 1.0f, 0.1f + 3.9f * v);
+            }
         loadArr("stepPan", ch.stepPan, 0.0f);
         {
             juce::String rs = child.getProperty("stepRoll", "").toString();
@@ -1127,6 +1182,11 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
             for (int i = 0; i < DrumChannel::MAX_STEPS; ++i)
                 ch.stepRoll[i] = (i < toks.size() && toks[i].isNotEmpty())
                                ? juce::jlimit(1, 6, toks[i].getIntValue()) : 1;
+        }
+        {
+            juce::String sl = child.getProperty("stepSlide", "").toString();
+            for (int i = 0; i < DrumChannel::MAX_STEPS; ++i)
+                ch.stepSlide[i] = (i < sl.length() && sl[i] == '1');
         }
         {
             auto cl = juce::StringArray::fromTokens(child.getProperty("stepCondLen",  "").toString(), ",", "");
@@ -1243,6 +1303,8 @@ void DrumSequencerProcessor::getStateInformation(juce::MemoryBlock& dest)
         patState.setProperty("mMono",   m.mono,          nullptr);
         patState.setProperty("mLimit",  m.limit,         nullptr);
         patState.setProperty("mGlue",   m.glue,          nullptr);
+        patState.setProperty("mTilt",   m.tilt,          nullptr);
+        patState.setProperty("mSat",    m.sat,           nullptr);
 
         for (int i = 0; i < Sequencer::NUM_CHANNELS; ++i)
         {
@@ -1261,6 +1323,11 @@ void DrumSequencerProcessor::getStateInformation(juce::MemoryBlock& dest)
 
 void DrumSequencerProcessor::setStateInformation(const void* data, int sizeInBytes)
 {
+    // Fresh STANDALONE = factory defaults: ignore the JUCE standalone's ONE startup auto-restore
+    // (it fires before the editor exists). Preset-file loads + undo call this AFTER createEditor,
+    // so they still work; VST hosts are untouched (a saved project restores as normal).
+    if (wrapperType == wrapperType_Standalone && ! uiCreatedOnce) return;
+
     juce::ValueTree state = juce::ValueTree::readFromData(data, (size_t)sizeInBytes);
     if (!state.isValid()) return;
 
@@ -1275,7 +1342,7 @@ void DrumSequencerProcessor::setStateInformation(const void* data, int sizeInByt
     visibleChannels = (int) state.getProperty("visChans", 8);
     visiblePatterns = juce::jlimit(16, Sequencer::NUM_PATTERNS, (int) state.getProperty("visPats", 16));
     keysMode.store((bool) state.getProperty("keysMode", false));
-    auditionOnEdit.store((bool) state.getProperty("audEdit", false));
+    auditionOnEdit.store((bool) state.getProperty("audEdit", true));   // default ON (matches a fresh instance)
 
     for (int i = 0; i < state.getNumChildren(); ++i)
     {
@@ -1313,6 +1380,8 @@ void DrumSequencerProcessor::setStateInformation(const void* data, int sizeInByt
             m.mono          = (bool) child.getProperty("mMono",   false);
             m.limit         = (float)child.getProperty("mLimit",  0.003f);
             m.glue          = (float)child.getProperty("mGlue",   0.0f);
+            m.tilt          = (float)child.getProperty("mTilt",   0.5f);
+            m.sat           = (float)child.getProperty("mSat",    0.0f);
 
             int chIdx = 0;
             for (int j = 0; j < child.getNumChildren() && chIdx < Sequencer::NUM_CHANNELS; ++j)

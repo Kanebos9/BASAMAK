@@ -39,7 +39,7 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
     std::sort(events.begin(), events.end(),
               [](const TriggerEvent& a, const TriggerEvent& b) { return a.offset < b.offset; });
 
-    auto fireEvent = [this](const TriggerEvent& e)
+    auto fireEvent = [this, sampleRate](const TriggerEvent& e)
     {
         auto& c = patterns[playPattern].channels[e.channel];   // steps fire from the PLAYING pattern
         if (c.midiOut) return;   // MIDI-out channels make no internal sound (they emit notes in the processor)
@@ -50,7 +50,13 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
             for (int o = 0; o < NUM_CHANNELS; ++o)
                 if (o != e.channel && patterns[playPattern].channels[o].chokeGroup == c.chokeGroup)
                     patterns[playPattern].channels[o].fadeOutVoices();
-        c.trigger(c.stepVel[e.step] * e.velScale, c.stepPitch[e.step], c.stepPan[e.step]);   // velScale = roll ramp
+        // SLIDE = glide TOWARD THE NEXT STEP: the slid step plays its own attack at its own pitch,
+        // then bends across the WHOLE step to land exactly on the next active step's pitch at the
+        // boundary (which then takes over seamlessly). Needs different Pitch values on the steps -
+        // equal pitches = nothing to glide. (Glide-FROM-previous and the authentic 303 tie were both
+        // tried and rejected: from-previous was inaudible in normal use, the tie "skipped the step".)
+        c.trigger(c.stepVel[e.step] * e.velScale, c.stepPitch[e.step], c.stepPan[e.step], e.gate,
+                  e.slideLen > 0 ? e.slideTo : 0.0f, e.slideLen);   // velScale = roll ramp
     };
 
     // Each rendered pattern is muted against ITS OWN solo flags (solo is per pattern).
@@ -322,7 +328,25 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
 
                 const int off = baseOffset + (int) juce::jlimit(0.0, (double) spanSamples - 1.0,
                                                 (pos - oldPos) / span * (double) spanSamples);
-                events.add({ ch, s, velScale, j, roll, off });
+                // Per-step LENGTH: gate the hit after (Length x this step's duration). 0 = off (natural).
+                long gate = 0;
+                const float gl = juce::jlimit(0.0f, 1.0f, c.stepNoteLen[s]);
+                if (gl > 0.001f)
+                    gate = (long) juce::jmax(64.0, (en - st) / span * (double) spanSamples * (double) gl);
+                // SLIDE: glide across the FULL step so the pitch lands on the NEXT active step's
+                // pitch exactly at the boundary (that step then continues at the landed pitch).
+                long slideLen = 0; float slideTo = 0.0f;
+                if (c.stepSlide[s])
+                {
+                    slideTo = c.stepPitch[s];             // fallback: no other active step = no bend
+                    for (int k = 1; k <= c.numSteps; ++k) // next ACTIVE step, wrapping round the bar
+                    {
+                        const int ns = (s + k) % juce::jmax(1, c.numSteps);
+                        if (c.steps[ns]) { slideTo = c.stepPitch[ns]; break; }
+                    }
+                    slideLen = (long) juce::jmax(256.0, (en - st) / span * (double) spanSamples);
+                }
+                events.add({ ch, s, velScale, j, roll, off, gate, slideLen, slideTo });
             }
         }
     }
