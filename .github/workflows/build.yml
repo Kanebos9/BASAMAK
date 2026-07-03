@@ -58,6 +58,7 @@ jobs:
           find build -name "BASAMAK.app"       -maxdepth 8 -exec cp -R {} "$OUT/" \;   # Standalone (macOS)
           find build -path "*Standalone/BASAMAK" -type f -maxdepth 8 -exec cp {} "$OUT/" \;   # Standalone (Linux)
           cp -R Resources/Samples "$OUT/Samples"                                        # bundled CC0 sample library
+          cp -R Resources/TouchOSC "$OUT/TouchOSC"                                       # TouchOSC control-surface template
           grep -m1 'project(DrumSequencer VERSION' CMakeLists.txt | sed -E 's/.*VERSION ([0-9.]+).*/\1/' > "$OUT/VERSION"
           cp Distribution/INSTALL.txt "$OUT/" 2>/dev/null || true
           if [ "${{ matrix.name }}" = "macOS" ]; then
@@ -80,6 +81,7 @@ jobs:
           $exe = Get-ChildItem -Recurse -File build -Filter BASAMAK.exe | Select-Object -First 1
           if ($exe) { Copy-Item $exe.FullName "$out\BASAMAK.exe" }   # Standalone (Windows)
           Copy-Item Resources/Samples "$out\Samples" -Recurse        # bundled CC0 sample library
+          Copy-Item Resources/TouchOSC "$out\TouchOSC" -Recurse      # TouchOSC control-surface template
           Copy-Item Distribution/scripts/install-windows.bat "$out\"
           Copy-Item Distribution/INSTALL.txt "$out\" -ErrorAction SilentlyContinue
           Compress-Archive -Path $out -DestinationPath "$out.zip" -Force

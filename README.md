@@ -23,6 +23,7 @@ Built with [JUCE](https://juce.com). Licensed under the **GNU AGPL v3** (see [`L
 - Drawable amp/pitch envelopes, a Strike/Ring envelope for the struck engines, and a Unison/Detune/Vibrato visual.
 - Per-sound drawable EQ, drive, reverb/delay sends; a master **FDN reverb**, **delay**, one-knob **Tilt** tone, tube **Saturation**, **Glue** bus-compressor, and a look-ahead **limiter**.
 - Every control (and every step) is **MIDI-learnable**; **MIDI-out** mode turns any channel into a note generator; per-channel multi-output routing and Novation **Launchpad Mini MK3** grid support.
+- A ready-made **TouchOSC** control surface is bundled (in the download's `TouchOSC/` folder): an 8×8 step grid plus per-channel Mute/Solo/Overlap and Play/Stop. Load the **"Ch1 8x8 + M/S/OV + Play"** map from the MIDI dropdown and it pairs with the template out of the box (see `TouchOSC/TouchOSC-README.txt` for the one-time MIDI-bridge setup).
 - Faithful **drag-out MIDI export** of the current pattern (velocity, pitch, rolls, note length, swing, tempo).
 - A bundled **CC0 sample library** (see [`ATTRIBUTIONS.md`](ATTRIBUTIONS.md)).
 

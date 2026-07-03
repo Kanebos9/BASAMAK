@@ -4047,7 +4047,7 @@ void DrumSequencerEditor::rebuildMidiMenu()
     comboMidi.clear(juce::dontSendNotification);
     comboMidi.addItem("Save MIDI pattern...", 9101);           // saves the CURRENT pattern's note grid
     comboMidi.addSectionHeading("Factory MIDI patterns");
-    comboMidi.addItem("Ch1 8x8", 9105);                        // MIDI-learn map: ch1-8 steps 1-8 -> CC 1-64 (MIDI ch 1)
+    comboMidi.addItem("Ch1 8x8 + M/S/OV + Play", 9105);        // MIDI-learn map: steps CC1-64, M/S/OV 65-88, Play/Stop 89/90 (MIDI ch 1)
     comboMidi.addSectionHeading("Saved MIDI patterns");
     if (midiPatternFiles.isEmpty())
         comboMidi.addItem("(none saved yet)", -1);
@@ -4083,16 +4083,22 @@ void DrumSequencerEditor::handleMidiMenuChange()
                 rebuildMidiMenu();
             });
     }
-    else if (id == 9105)     // Factory example map: this pattern's first 8 steps of channels 1-8 -> CC 1-64 (MIDI ch 1)
-    {
+    else if (id == 9105)     // Factory example map (the TouchOSC template matches this). All on MIDI ch 1:
+    {                        //   CC 1-64 = 8x8 steps, 65-72 Mute, 73-80 Solo, 81-88 Overlap, 89 Play, 90 Stop.
         const int p = currentPattern();
+        const juce::String pp = "p" + juce::String(p) + "_";
         for (int ch = 0; ch < 8; ++ch)
+        {
             for (int st = 0; st < 8; ++st)
-            {
                 // paramId MUST match StepGridComponent::stepParamId: "p{P}_step_{ch}_{step}".
-                const juce::String pid = "p" + juce::String(p) + "_step_" + juce::String(ch) + "_" + juce::String(st);
-                proc.midiLearn.assign(pid, ch * 8 + st + 1, 1);   // CC = ch*8+step+1 (1..64), all on MIDI channel 1
-            }
+                proc.midiLearn.assign(pp + "step_" + juce::String(ch) + "_" + juce::String(st), ch * 8 + st + 1, 1);
+            // Per-channel Mute / Solo / Overlap (paramIds match updateStripParamIds()).
+            proc.midiLearn.assign(pp + "ch" + juce::String(ch) + "_mute",    65 + ch, 1);
+            proc.midiLearn.assign(pp + "ch" + juce::String(ch) + "_solo",    73 + ch, 1);
+            proc.midiLearn.assign(pp + "ch" + juce::String(ch) + "_overlap", 81 + ch, 1);
+        }
+        proc.midiLearn.assign("global_play", 89, 1);   // transport (global, pattern-independent)
+        proc.midiLearn.assign("global_stop", 90, 1);
         stepGrid.repaint(); content.repaint();   // the grid draws each step's assigned CC
     }
     else if (id == 9102)     // Refresh MIDI pattern folder
@@ -4360,7 +4366,9 @@ void DrumSequencerEditor::setupComponents()
     content.addAndMakeVisible(comboMidi);
     comboMidi.setTooltip("MIDI: save or load a MIDI-learn map (the MIDI channel + CC number assigned to each "
                          "parameter and step - NOT their values) as *.basamakpattern in your MIDI Patterns folder, "
-                         "refresh/open that folder, or clear all MIDI-learn assignments.");
+                         "refresh/open that folder, or clear all MIDI-learn assignments.\n\n"
+                         "The 'Ch1 8x8 + M/S/OV + Play' factory map is compatible with the TouchOSC file that comes "
+                         "with your download.");
     rebuildMidiMenu();
     comboMidi.onChange = [this] { handleMidiMenuChange(); };
 
