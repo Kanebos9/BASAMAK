@@ -5883,6 +5883,22 @@ void DrumSequencerEditor::setShapeSlot(int s)
     content.repaint();   // redraw the slot-box highlight (the selected slot is emphasised)
     loadEnvIntoEditor();
     loadPitchAndVoice();
+    // The FX box (Drive / Reverb / Delay / LFO) + Sample Slices/Stretch ALSO follow the selected
+    // slot - reload them too, or switching slots left them showing the OTHER slot's settings (the
+    // LFO is per-slot in the DSP; only the display wasn't refreshing).
+    auto& ch = proc.sequencer.channel(selectedChannel);
+    auto& sl = ch.slots[envTargetSlot()];
+    knobSlices.setValue (sl.smpSlices,   juce::dontSendNotification);
+    knobStretch.setValue(sl.smpStretch,  juce::dontSendNotification);
+    { const bool smp = (sl.engine == DrumChannel::SrcSample);
+      knobSlices.setEnabled(smp);  knobSlices.setAlpha(smp ? 1.0f : 0.4f);  lblSlices.setAlpha(smp ? 1.0f : 0.4f);
+      knobStretch.setEnabled(smp); knobStretch.setAlpha(smp ? 1.0f : 0.4f); lblStretch.setAlpha(smp ? 1.0f : 0.4f); }
+    knobDrive.setValue (sl.fxDrive,       juce::dontSendNotification);
+    knobReverb.setValue(sl.fxReverbSend,  juce::dontSendNotification);
+    knobDelay.setValue (sl.fxDelaySend,   juce::dontSendNotification);
+    comboDriveType.setSelectedId(sl.fxDriveType + 1, juce::dontSendNotification);
+    lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.filterType == DrumChannel::LowPass,
+                         envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8));
 }
 
 // Show the selected slot's amp envelope in the graph.
