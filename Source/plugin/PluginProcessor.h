@@ -157,6 +157,13 @@ public:
     std::atomic<uint32_t> midiInCount { 0 };
     std::atomic<int> lastCcNum { -1 }, lastCcVal { -1 }, lastCcChan { -1 };
 
+    // Audio-callback heartbeat: bumped at the top of every processBlock. The editor watches it -
+    // if it stops moving, the HOST isn't sending us audio (device off/missing, FX offline), which
+    // freezes the whole plugin (transport, TEST, meters). The Play button's tooltip then explains
+    // why "nothing plays" instead of leaving the user thinking the plugin is broken (this exact
+    // confusion cost a debugging session: Reaper was pointed at an unplugged interface).
+    std::atomic<uint32_t> processHeartbeat { 0 };
+
     // Export sequence as MIDI file for drag-to-DAW
     juce::File exportMidiFile();
 

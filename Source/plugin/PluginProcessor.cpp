@@ -144,6 +144,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
 {
     juce::ScopedNoDenormals noDenormals;
     audio.clear();
+    processHeartbeat.fetch_add(1, std::memory_order_relaxed);   // editor watches this to detect a frozen host
 
     const int numSamples = audio.getNumSamples();
 

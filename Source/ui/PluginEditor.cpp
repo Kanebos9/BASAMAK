@@ -6441,6 +6441,30 @@ void DrumSequencerEditor::refreshEqTarget()
 
 void DrumSequencerEditor::timerCallback()
 {
+    // HOST-FROZEN detector: if the audio callback stops (audio device off/missing/misconfigured,
+    // or the host took the FX offline), the WHOLE plugin freezes - no sound, sequencer doesn't
+    // move, TEST does nothing - and it looks broken. Watch the processBlock heartbeat and swap
+    // the Play button's tooltip for a "Not playing?" explanation while frozen (~1 s of silence
+    // from the host = frozen; one moving block = instantly healthy again).
+    {
+        const uint32_t hb = proc.processHeartbeat.load(std::memory_order_relaxed);
+        if (hb != lastHeartbeat) { lastHeartbeat = hb; heartbeatStaleTicks = 0; }
+        else if (heartbeatStaleTicks <= 30) ++heartbeatStaleTicks;   // timer runs at 24 Hz
+        const bool frozen = heartbeatStaleTicks > 24;
+        if (frozen != hostFrozen)
+        {
+            hostFrozen = frozen;
+            btnPlay.setTooltip(frozen
+                ? juce::String("NOT PLAYING? BASAMAK is not receiving audio from the host right now, so "
+                               "everything is paused - no sound, the sequencer will not move, and TEST does "
+                               "nothing. This is almost always the AUDIO DEVICE: it is off, unplugged or "
+                               "misconfigured (in a DAW check its audio device settings and that this FX is "
+                               "not offline/bypassed; in the standalone check Options > Audio Settings). "
+                               "BASAMAK unfreezes by itself as soon as audio is back.")
+                : juce::String("Start playback (used when DAW Sync is off, so the plugin runs on its own)."));
+        }
+    }
+
     // Close any open dropdown / popup menu when the user clicks OUTSIDE the plugin - into the
     // host's own UI or another application. JUCE auto-dismisses only for clicks inside OUR
     // windows, so a combo menu left open while the user switched to the DAW hung around.

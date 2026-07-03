@@ -1234,6 +1234,9 @@ private:
     juce::TextButton btnToggleDetail { "HIDE SOUND EDITOR" };   // collapse/expand the sound-editing panel
     bool detailShown = true;                   // when false, only the sequencer is shown (window shrinks)
     void  refreshAuditionButton();
+    // Host-frozen detector: if processHeartbeat stops moving (~1 s), the host isn't sending us
+    // audio - the Play tooltip flips to a "Not playing?" explanation (see timerCallback).
+    uint32_t lastHeartbeat = 0; int heartbeatStaleTicks = 0; bool hostFrozen = false;
     // Step-grid edit-mode radio buttons (none selected = normal on/off steps).
     LearnableButton btnModeVel { "Vel" }, btnModeLen { "Len" }, btnModePitch { "Pitch" }, btnModeProb { "Loop" }, btnModeRoll { "Roll" }, btnModePan { "Pan" };
     juce::Label      lblEditMode;
