@@ -34,8 +34,8 @@ Built with [JUCE](https://juce.com). Licensed under the **GNU AGPL v3** (see [`L
 
 ---
 
-## Download (pre-built)
-If GitHub Actions is enabled, every push produces ready-to-install builds for all three OSes under the repo's **Actions → latest run → Artifacts**. Tagging a commit `v1.0.0` drafts a Release with the three zips attached. Unzip the one for your OS and run the included installer (`Install BASAMAK.command` / `install-windows.bat` / `install-linux.sh`).
+## Download (for regular users)
+Go to the [Releases](https://github.com/Kanebos9/BASAMAK/releases) page, download the zip for your OS (windows, mac or linux) from the latest release, unzip it, and run the included installer.
 
 ## Building from source
 
