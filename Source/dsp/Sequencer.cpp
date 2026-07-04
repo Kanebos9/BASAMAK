@@ -43,6 +43,7 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
     {
         auto& c = patterns[playPattern].channels[e.channel];   // steps fire from the PLAYING pattern
         if (c.midiOut) return;   // MIDI-out channels make no internal sound (they emit notes in the processor)
+        if (e.isDraw) { c.trigger(c.drawVel, e.drawPitch, c.drawPan, e.gate); return; }   // DRAW mode mono note
         // Choke groups: a hit FADES OUT (~3 ms) the ringing tails of other channels in the same
         // group (e.g. a closed hi-hat silencing an open one). A hard cut clicked whenever the
         // choking hit was quieter than the tail it cut.
@@ -278,6 +279,40 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
     for (int ch = 0; ch < NUM_CHANNELS; ++ch)
     {
         auto& c = pp.channels[ch];
+
+        // DRAW mode: a continuous mono pitch lane. Scan the columns crossed this block; articulate
+        // a fresh note at each SEGMENT onset (gap->note, or a semitone change) and gate it for the
+        // whole segment. The channel is mono, so each note cuts the previous = a single melodic line.
+        if (c.drawMode)
+        {
+            const int R = DrumChannel::DRAW_RES;
+            const int col0 = (int) std::floor(oldPos * R), col1 = (int) std::floor(newPos * R);
+            for (int col = col0; col <= col1; ++col)
+            {
+                const double colPos = (double) col / (double) R;      // bar-fraction of this column's start
+                const bool atZero = (oldPos == 0.0 && colPos == 0.0);
+                if (! atZero && ! (colPos > oldPos && colPos <= newPos)) continue;
+                const int cc = ((col % R) + R) % R;
+                const int semi = c.drawSemi[cc];
+                if (semi == DrumChannel::DRAW_GAP) continue;           // silence here
+                const int prev = c.drawSemi[(cc - 1 + R) % R];
+                if (cc != 0 && prev == semi) continue;                 // mid-segment (col 0 always re-articulates)
+                if (lastTick[ch] == 100000 + cc && lastTickLoop[ch] == loopCount) continue;   // seam dedupe
+                lastTick[ch] = 100000 + cc; lastTickLoop[ch] = loopCount;
+                if (auto* tap = c.analysisTap) tap->arm();
+                int len = 1;                                           // segment length in columns (same semi, no gap)
+                while (len < R) { const int nx = (cc + len) % R; if (nx == 0 || c.drawSemi[nx] != semi) break; ++len; }
+                const double segBars = (double) len / (double) R;
+                const long gate = (long) juce::jmax(64.0, segBars / span * (double) spanSamples);
+                const int off = baseOffset + (int) juce::jlimit(0.0, (double) spanSamples - 1.0,
+                                                (colPos - oldPos) / span * (double) spanSamples);
+                TriggerEvent e; e.channel = ch; e.step = 0; e.offset = off; e.gate = gate;
+                e.isDraw = true; e.drawPitch = (float) semi;
+                events.add(e);
+            }
+            continue;
+        }
+
         const int n = c.numSteps;
         if (n <= 0) continue;
 
@@ -312,6 +347,8 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
                     condOk = ((c.stepCondMask[s] >> bar) & 1) != 0;
                 }
                 if (! c.steps[s] || ! condOk) continue;
+                if (c.stepMerge[s]) continue;   // MERGE: a continuation step never re-fires - the
+                                                // chain HEAD's gate (below) rings through it.
 
                 // Roll ramp: each successive sub-hit ramps in velocity across the ratchet. The amount
                 // (stepRollDecay, -1..+1) is set by the Roll cell's X-drag: negative = fade out (each
@@ -329,10 +366,21 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
                 const int off = baseOffset + (int) juce::jlimit(0.0, (double) spanSamples - 1.0,
                                                 (pos - oldPos) / span * (double) spanSamples);
                 // Per-step LENGTH: gate the hit after (Length x this step's duration). 0 = off (natural).
+                // MERGE chains: following merged steps EXTEND this head's duration (one long note,
+                // piano-roll style), so the gate covers the whole chain; Length (if set) is a
+                // fraction of the WHOLE chain. A merged chain always gates (even Length 0) so the
+                // note actually spans/holds through the merged steps (sustain holds, AHD rescales).
                 long gate = 0;
                 const float gl = juce::jlimit(0.0f, 1.0f, c.stepNoteLen[s]);
-                if (gl > 0.001f)
-                    gate = (long) juce::jmax(64.0, (en - st) / span * (double) spanSamples * (double) gl);
+                double chainFrac = (en - st) / span;                  // this step's share of the bar span
+                for (int k = s + 1; k < n && c.stepMerge[k]; ++k)
+                {
+                    double st2, en2; stepSpan(k, n, pp.swing, st2, en2);
+                    chainFrac += (en2 - st2) / span;
+                }
+                const bool mergedChain = chainFrac > (en - st) / span + 1.0e-9;
+                if (gl > 0.001f || mergedChain)
+                    gate = (long) juce::jmax(64.0, chainFrac * (double) spanSamples * (double)(gl > 0.001f ? gl : 1.0f));
                 // SLIDE: glide across the FULL step so the pitch lands on the NEXT active step's
                 // pitch exactly at the boundary (that step then continues at the landed pitch).
                 long slideLen = 0; float slideTo = 0.0f;

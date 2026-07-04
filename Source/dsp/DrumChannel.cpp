@@ -5,7 +5,7 @@
 #endif
 
 const int DrumChannel::VALID_STEP_COUNTS[] =
-    { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 20, 21, 24, 32 };
+    { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 20, 21, 24, 32 };   // 48/64 removed (overkill; Draw mode covers fine timing)
 
 //==============================================================================
 // WAVETABLE BANK (SrcWave engine). A set of named tables, each = WT_FRAMES single-cycle waveforms
@@ -551,6 +551,7 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("oSh", s.oscShape, nullptr); st.setProperty("oSB", s.oscShapeB, nullptr); st.setProperty("oFr", s.oscFreq, nullptr);
         st.setProperty("oEA", s.oscPEnvAmt, nullptr); st.setProperty("oET", s.oscPEnvTime, nullptr); st.setProperty("oOf", s.oscPOffset, nullptr);
         st.setProperty("oUn", s.oscUnison, nullptr); st.setProperty("oDt", s.oscDetune, nullptr);
+        st.setProperty("chd", s.chordMode, nullptr); st.setProperty("chdU", s.chordUnison, nullptr);
         st.setProperty("oUC", s.oscUniCenter, nullptr); st.setProperty("oDM", s.oscDetuneMode, nullptr);
         st.setProperty("fxDt", s.fxDriveType, nullptr); st.setProperty("fxDr", s.fxDrive, nullptr);
         st.setProperty("fxRv", s.fxReverbSend, nullptr); st.setProperty("fxDl", s.fxDelaySend, nullptr);
@@ -626,6 +627,7 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         else if (! st.hasProperty("v5")) { s.oscShape = remapV4Shape(s.oscShape);    s.oscShapeB = remapV4Shape(s.oscShapeB); }     // brief 13-shape list
         s.oscPEnvAmt = (float)st.getProperty("oEA", d.oscPEnvAmt); s.oscPEnvTime = (float)st.getProperty("oET", d.oscPEnvTime); s.oscPOffset = (float)st.getProperty("oOf", d.oscPOffset);
         s.oscUnison = (int)st.getProperty("oUn", d.oscUnison); s.oscDetune = (float)st.getProperty("oDt", d.oscDetune);
+        s.chordMode = (int) st.getProperty("chd", d.chordMode); s.chordUnison = (int) st.getProperty("chdU", d.chordUnison);
         s.oscUniCenter = (bool)st.getProperty("oUC", d.oscUniCenter);
         s.oscDetuneMode = (int)st.getProperty("oDM", d.oscDetuneMode);
         s.fxDriveType = (int)st.getProperty("fxDt", d.fxDriveType); s.fxDrive = (float)st.getProperty("fxDr", d.fxDrive);
@@ -757,7 +759,7 @@ void DrumChannel::ensureKsBuffers()
     if (! needs) return;
     for (auto& v : voices)
         for (auto& sv : v.sv)
-            sv.ksBuf.assign((size_t) KS_MAX, 0.0f);
+            sv.ksBuf.assign((size_t) (KS_UNI * KS_MAX), 0.0f);
     ksReady.store(true, std::memory_order_release);
 }
 
@@ -957,17 +959,36 @@ float DrumChannel::physDecayScale(int material)
     return kPhysModels[juce::jlimit(0, kNumPhysModels - 1, material)].decScale;
 }
 
-void DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long gateSamples,
-                          float glideToSemis, long glideSamples)
+// Chord-mode intervals (semitones): unison voice u plays triad note u%3, +1 octave per wrap.
+// Major = root / +4 (major third) / +7 (perfect fifth); minor = root / +3 (minor third) / +7.
+// Chord tables: semitone offset from the root for unison voice k, octave-extended past the
+// core so any voice count works. chordMode: 0 = STD (plain detune), 1..7 = these. Shared by
+// Osc / Modal / Physical so all three engines voice a chord the same way.
+static const int8_t kChordTab[7][6] = {
+    { 0, 12, 24, 36, 48, 60 },   // 1 Oct   (octaves)
+    { 0,  7, 12, 19, 24, 31 },   // 2 5th   (power chord)
+    { 0,  4,  7, 12, 16, 19 },   // 3 Maj
+    { 0,  3,  7, 12, 15, 19 },   // 4 Min
+    { 0,  5,  7, 12, 17, 19 },   // 5 Sus4
+    { 0,  4,  7, 11, 12, 16 },   // 6 Maj7
+    { 0,  3,  7, 10, 12, 15 },   // 7 Min7
+};
+static inline int chordSemis(int chordMode, int k)
+{ return (chordMode >= 1 && chordMode <= 7) ? (int) kChordTab[chordMode - 1][juce::jlimit(0, 5, k)] : 0; }
+
+int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long gateSamples,
+                         float glideToSemis, long glideSamples, bool forceOverlap)
 {
     // If this is the channel the editor is analysing, start a fresh spectrum
     // capture aligned to this hit's attack so repeats look identical.
     if (analysisTap != nullptr) analysisTap->arm();
 
     // Pick a voice. Mono: always voice 0 and silence the rest (cuts previous).
-    // Overlap: a free voice, or steal the one nearest its end.
+    // Overlap: a free voice, or steal the one nearest its end. KEYS always force overlap:
+    // on a mono channel the reuse of voice 0 hard-reset the still-sounding note = the slide
+    // CRACKLE (the 15 ms handover fade needs the old note on its own voice to fade).
     int vi = 0;
-    if (allowOverlap)
+    if (allowOverlap || forceOverlap)
     {
         vi = -1;
         for (int i = 0; i < POLY; ++i) if (!voices[i].active()) { vi = i; break; }
@@ -992,8 +1013,9 @@ void DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long 
     v.voicePan   = juce::jlimit(-1.0f, 1.0f, pan);
     v.playHead = 0.0;          // alive (per-slot sample heads do the reading)
     v.voiceSamples = 0;
-    v.killing = false; v.killGain = 1.0f;   // fresh hit cancels any choke fade on this voice
+    v.killing = false; v.killGain = 1.0f; v.killStep = 0.0f;   // fresh hit cancels any choke fade on this voice
     v.gateLen = gateSamples;                // per-step Length gate (0 = play naturally)
+    v.isKey = false; v.keyOff = -1;         // sequencer hit by default (keyDown() patches these after)
     // SLIDE: start at THIS step's own pitch (normal attack) and glide per-sample toward the
     // NEXT step's pitch, landing exactly when the glide time (= the step span) runs out.
     if (glideSamples > 0) { v.glideRemain = glideSamples;
@@ -1009,6 +1031,7 @@ void DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long 
         sv.gateDec = gateSamples > 0
             ? juce::jmax(0.01f, (float) gateSamples / (float) sr - sl.atk - sl.hold) : 0.0f;
         sv.lfoPhase[0] = sv.lfoPhase[1] = sv.lfoPhase[2] = 0.0;  // per-hit LFO restart (wobbles lock to the groove)
+        sv.keySemis = 0.0f; sv.keyMute = false;   // plain hit: no keyboard re-tune / muting
         sv.sinePhase = 0.0;
         sv.noiseBP.reset();
         sv.pinkB[0] = sv.pinkB[1] = sv.pinkB[2] = 0.0f;
@@ -1016,8 +1039,9 @@ void DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long 
         sv.greyZ1 = sv.greyZ2 = 0.0f;
         sv.filtZ1[0] = sv.filtZ1[1] = sv.filtZ2[0] = sv.filtZ2[1] = 0.0f;   // per-slot filter starts clean each hit (no retrigger click)
         sv.fmCarrier = sv.fmMod = sv.fmSubPhase = 0.0; sv.fmFbState = 0.0f;
-        sv.wtPhase = 0.0; sv.modalInit = false;   // re-strike the modal bank on this hit
-        for (int m = 0; m < MODAL_MODES; ++m) { sv.modalY1[m] = 0.0f; sv.modalY2[m] = 0.0f; }  // clean state every hit
+        sv.wtPhase = 0.0; sv.modalInit = false; sv.modalHold = false;   // re-strike the modal bank on this hit
+        for (auto& row : sv.modalY1) for (auto& v2 : row) v2 = 0.0f;   // clean resonator state every hit
+        for (auto& row : sv.modalY2) for (auto& v2 : row) v2 = 0.0f;
         sv.noiseState = 0x1234567u + (uint32_t)(vi * NUM_SLOTS + s) * 2654435761u; // distinct per voice+slot
         for (int u = 0; u <= UNI_MAX; ++u) sv.uniPhase[u] = (2.0 * kPi) * (double) u / (double) UNI_MAX;
 
@@ -1054,40 +1078,132 @@ void DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long 
         // lazily heap-allocated (ensureKsBuffers); gate on ksReady + only clear/fill it
         // for engines that actually pluck (a 16 KB memset per slot per hit otherwise).
         // (SrcOsc's retired resonator section no longer plucks - its render never reads KS.)
-        sv.ksWrite = 0.0; sv.ksLp = 0.0f;
-        for (auto& a : sv.ksApSt) a = 0.0f;
+        for (auto& w : sv.ksWrite) w = 0.0;
+        for (auto& l : sv.ksLp) l = 0.0f;
+        for (auto& row : sv.ksApSt) for (auto& a : row) a = 0.0f;
         const bool ksPluck = (ksReady.load(std::memory_order_acquire)
                               && ((sl.engine == SrcPhys)
                                   || (sl.engine == SrcSynth && sl.resonAmt > 0.001f)));
         if (ksPluck) std::fill(sv.ksBuf.begin(), sv.ksBuf.end(), 0.0f);
         if (ksPluck)
         {
-            const float ksFreq = (sl.engine == SrcPhys) ? sl.physFreq : sl.oscFreq;
+            const float ksFreq0 = (sl.engine == SrcPhys) ? sl.physFreq : sl.oscFreq;
             // User stiffness adds allpass DC delay to the loop - compensate the burst-fill length the
             // same way the render compensates its read length (designStiffChain), so pitch matches.
+            // One comp from the base freq is shared by every unison string (matches the render).
             float apComp = 0.0f;
             if (sl.engine == SrcPhys && sl.physStiff > 0.01f)
             { float ac; int an; designStiffChain(sl.physStiff, (double) sl.physFreq, sr, ac, an, apComp); }
-            const int L = juce::jlimit(2, KS_MAX - 2, (int) std::round(sr / juce::jmax(20.0f, ksFreq) - apComp));
             const int mdl = juce::jlimit(0, kNumPhysModels - 1, (int) std::lround(sl.physMaterial));
             // EXCITATION shapes how the string/bar is set in motion: Pluck = full-length noise burst (rich);
             // Strike = a short sharp burst at the start (percussive mallet hit); Mallet = a soft, rounded burst.
             const int exc = (sl.engine == SrcPhys) ? juce::jlimit(0, 2, sl.physExcite) : 0;
             const float eb = (exc == 2) ? kPhysModels[mdl].exciteBright * 0.35f   // Mallet: softer (darker burst)
                                         :  kPhysModels[mdl].exciteBright;
-            const int burst = (exc == 1) ? juce::jmax(2, L / 5) : L;              // Strike: only the first ~1/5 excited
-            uint32_t rng = sv.noiseState ^ 0x9e3779b9u;
-            float lp = 0.0f;
-            for (int i = 0; i < L; ++i) { lp += eb * (whiteNoise(rng) - lp); sv.ksBuf[i] = (i < burst) ? lp : 0.0f; }
             const float pos = juce::jlimit(0.0f, 1.0f, sl.physPosition);
-            if (pos > 0.01f)
+            // Physical unison/chord: excite one real string per note, each tuned to its own pitch
+            // (chord interval + detune). Single-voice sounds excite string 0 only = bit-identical.
+            const int nStr = (sl.engine == SrcPhys) ? juce::jlimit(1, KS_UNI, sl.oscUnison) : 1;
+
+            auto exciteString = [&](int strIdx, float freqK)
             {
-                const int d = juce::jlimit(1, L - 1, (int) std::round(pos * 0.5f * L));
-                for (int i = L - 1; i >= d; --i) sv.ksBuf[i] -= 0.85f * sv.ksBuf[i - d];
+                const int base = strIdx * KS_MAX;
+                const int L = juce::jlimit(2, KS_MAX - 2, (int) std::round(sr / juce::jmax(20.0f, freqK) - apComp));
+                const int burst = (exc == 1) ? juce::jmax(2, L / 5) : L;              // Strike: only the first ~1/5 excited
+                uint32_t rng = sv.noiseState ^ (0x9e3779b9u + (uint32_t) strIdx * 0x85ebca6bu);
+                float lp = 0.0f;
+                for (int i = 0; i < L; ++i) { lp += eb * (whiteNoise(rng) - lp); sv.ksBuf[base + i] = (i < burst) ? lp : 0.0f; }
+                // PLUCK POSITION: a DOUBLE full-depth feed-forward comb ((1 - z^-d)^2, d = position along
+                // the string) + a position-following tone tilt (middle plucks ROUNDER), with RMS make-up
+                // so only the CHARACTER moves. pos 0 = thin/twangy near the edge, pos 1 = hollow mid-string.
+                if (pos > 0.01f)
+                {
+                    double preRms = 0.0; for (int i = 0; i < L; ++i) preRms += (double) sv.ksBuf[base + i] * sv.ksBuf[base + i];
+                    const int d = juce::jlimit(1, L - 1, (int) std::round(pos * 0.5f * L));
+                    for (int p2 = 0; p2 < 2; ++p2)
+                        for (int i = L - 1; i >= d; --i) sv.ksBuf[base + i] -= sv.ksBuf[base + i - d];
+                    float sm = 0.0f; const float k = 1.0f - 0.55f * pos;   // darker toward the middle
+                    for (int i = 0; i < L; ++i) { sm += (sv.ksBuf[base + i] - sm) * k; sv.ksBuf[base + i] = sm; }
+                    double postRms = 0.0; for (int i = 0; i < L; ++i) postRms += (double) sv.ksBuf[base + i] * sv.ksBuf[base + i];
+                    if (postRms > 1.0e-12)
+                    {
+                        const float g = juce::jlimit(0.25f, 6.0f, (float) std::sqrt(preRms / postRms));
+                        for (int i = 0; i < L; ++i) sv.ksBuf[base + i] = juce::jlimit(-2.5f, 2.5f, sv.ksBuf[base + i] * g);  // keep the KS write clamp
+                    }
+                }
+                sv.ksWrite[strIdx] = (double) L;
+            };
+
+            for (int k = 0; k < nStr; ++k)
+            {
+                double uniMul = 1.0;
+                if (sl.engine == SrcPhys && nStr > 1)
+                {
+                    const double sp = 2.0 * (double) k / (double) (nStr - 1) - 1.0;
+                    uniMul = std::pow(2.0, (double) chordSemis(sl.chordMode, k) / 12.0
+                                          + sp * (double) (sl.oscDetune * 100.0f) / 1200.0);
+                }
+                exciteString(k, ksFreq0 * (float) uniMul);
             }
-            sv.ksWrite = (double) L;
         }
     }
+    return vi;
+}
+
+// KEYS (on-screen keyboard): play `midiNote` on the selected channel's ELIGIBLE slots.
+// MONO: whatever is ringing gets the 3 ms choke fade, then ONE fresh voice starts. Each eligible
+// slot is re-tuned from its OWN base Freq to the pressed note (so both slots sound the same
+// musical pitch regardless of their Freq knobs); slot 2 can be transposed DOWN by slot2Down
+// semitones (sub-oscillator style). Ineligible slots (Sample/Noise/legacy) stay silent.
+int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down)
+{
+    fadeOutVoices(0.015f);                             // mono: 15 ms handover (3 ms crackled on slides)
+    // TOUCHING the keyboard RE-BASES every eligible slot's Freq to C3 (261.63 Hz; slot 2 keeps
+    // its transpose baked in). This keeps the SEQUENCER consistent with what you hear: recorded
+    // step pitches are relative to C3, and playback re-pitches from the slot Freq - so Freq must
+    // BE C3 or the pattern would play at a different pitch than you performed. The Freq knob
+    // then works as an overall transpose afterwards.
+    constexpr double kC3 = 261.6255653;
+    for (int s = 0; s < NUM_SLOTS; ++s)
+    {
+        Slot& sl = slots[s];
+        const double base = kC3 * ((s == 1 && slot2Down > 0) ? std::pow(2.0, -(double) slot2Down / 12.0) : 1.0);
+        switch (sl.engine)
+        {
+            case SrcOsc: case SrcModal: sl.oscFreq  = (float) base; break;
+            case SrcPhys:               sl.physFreq = (float) base; break;
+            default: break;
+        }
+    }
+    const int vi = trigger(velocity, 0.0f, 0.0f, 0, 0.0f, 0, /*forceOverlap*/ true);
+    Voice& v = voices[vi];
+    v.isKey = true; v.keyOff = -1;
+    const double targetHz = 440.0 * std::pow(2.0, (double)(midiNote - 69) / 12.0);
+    for (int s = 0; s < NUM_SLOTS; ++s)
+    {
+        SlotVoice& sv = v.sv[s];
+        const Slot& sl = slots[s];
+        double base = 0.0;
+        switch (sl.engine)
+        {
+            case SrcOsc:   base = sl.oscFreq;  break;   // Analog+FM
+            case SrcModal: base = sl.oscFreq;  break;   // Modal's Freq lives on oscFreq too
+            case SrcPhys:  base = sl.physFreq; break;
+            default: sv.keyMute = true; continue;       // Sample / Noise / legacy: not playable by keys
+        }
+        double hz = targetHz;
+        if (s == 1 && slot2Down > 0) hz *= std::pow(2.0, -(double) slot2Down / 12.0);
+        sv.keySemis = (float)(12.0 * std::log2(hz / juce::jmax(1.0, base)));
+    }
+    return vi;
+}
+
+// Release the held key: the voice's env falls with the slot RELEASE from wherever it is
+// (see keyAdsr); Physical/Modal also drop their hold clamps back to the authored decay.
+void DrumChannel::keyUp()
+{
+    for (auto& v : voices)
+        if (v.active() && v.isKey && v.keyOff < 0) v.keyOff = v.voiceSamples;
 }
 
 void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, int numSamples, bool anySolo,
@@ -1135,7 +1251,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
     struct SC {
         int    engine = -1; float weight = 0, atk = 0, hold = 0, dec = 0, sustain = 0, release = 0.06f;
         int    oscShape = 0, oscShapeB = 0; double oscFreq = 0; float oscPEnvAmt = 0, oscPEnvTime = 0.04f, oscPOffset = 0;
-        int    uniVoices = 1; float uniCents = 0, uniGain = 1, oscVibFac = 1; bool uniCenter = false; int uniMode = 0;
+        int    uniVoices = 1; float uniCents = 0, uniGain = 1, oscVibFac = 1; bool uniCenter = false; int uniMode = 0; int chord = 0;
+        double uniMul[KS_UNI] = { 1.0, 1.0, 1.0 };   // per-string pitch multipliers (Physical unison/chord)
         int    noiseType = 0; bool noiseBP = false; double noiseFc = 1000, nQ = 0.7; float noiseDrive = 0, noiseCrackle = 0;
         float  greyB0 = 1, greyB1 = 0, greyB2 = 0, greyA1 = 0, greyA2 = 0;   // grey = white through a mid-scoop peaking biquad
         double fmCarrierF = 220, fmModF = 220; float fmIndex = 0, fmPEnvAmt = 0, fmPEnvTime = 0.05f, fmPOffset = 0, fmFeedback = 0, fmSub = 0;
@@ -1185,6 +1302,9 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         for (int d2 = 0; d2 < 3; ++d2) { c.lfoRate[d2] = juce::jlimit(0.05f, 30.0f, sl.lfoRate[d2]);
                                          c.lfoAmt[d2]  = juce::jlimit(0.0f, 1.0f, sl.lfoAmt[d2]); }   // per-slot LFOs
         c.atk = sl.atk; c.hold = sl.hold; c.dec = sl.dec; c.sustain = sl.sustain; c.release = sl.release;
+        // Release is FAITHFUL now (it has its own handle in the Strike/Ring editor for Phys/Modal
+        // too): whatever the user sets IS the key-up fade. No hidden floor - that was overriding
+        // the visible value. Factory sounds still author their own release.
         // 4-point pitch envelope + the sound length its time-axis is measured against
         // (mirror the amp-envelope length the UI shows as "ENVELOPE ~X s").
         c.pEnvOn = sl.pEnvOn();
@@ -1199,10 +1319,11 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             case SrcOsc:
                 c.oscShape = sl.oscShape; c.oscShapeB = sl.oscShapeB; c.oscFreq = sl.oscFreq;
                 c.oscPEnvAmt = sl.oscPEnvAmt; c.oscPEnvTime = sl.oscPEnvTime; c.oscPOffset = sl.oscPOffset;
-                c.uniVoices = juce::jlimit(1, UNI_MAX, sl.oscUnison);
+                c.uniVoices = juce::jlimit(1, UNI_MAX, sl.chordMode > 0 ? sl.chordUnison : sl.oscUnison);
                 c.uniCents  = juce::jlimit(0.0f, 1.0f, sl.oscDetune) * 100.0f;   // up to +/-100 cents (1 semitone) spread
                 c.uniCenter = sl.oscUniCenter; c.uniMode = sl.oscDetuneMode;
                 c.uniGain   = 1.0f / std::sqrt((float) (c.uniVoices + (c.uniCenter ? 1 : 0)));
+                c.chord     = juce::jlimit(0, 7, sl.chordMode);
                 c.oscVibFac = 1.0f + juce::jlimit(0.0f, 1.0f, sl.vibrato) * 0.09f * vibLfo;
                 // Merged FM section (Depth 0 = pure analog). Modulator = sine at carrier*ratio.
                 c.oscWarp    = sl.oscWarp;
@@ -1243,7 +1364,22 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             case SrcPhys:
                 c.pm    = &kPhysModels[juce::jlimit(0, kNumPhysModels - 1, (int) std::lround(sl.physMaterial))];
                 c.ksFb  = std::exp(-3.0f / juce::jmax(0.02f, sl.dec * c.pm->decScale) / (float) sr);
-                c.ksLpC = juce::jlimit(0.02f, 1.0f, (0.05f + 0.95f * sl.physTone) * c.pm->briScale);
+                // (Release is the user's own value now - see the note in the amp-env bake above.)
+                // UNISON/CHORD: pre-compute each string's pitch multiplier (chord interval + detune spread).
+                c.uniVoices = juce::jlimit(1, KS_UNI, sl.chordMode > 0 ? sl.chordUnison : sl.oscUnison);
+                c.chord     = juce::jlimit(0, 7, sl.chordMode);
+                c.uniCents  = juce::jlimit(0.0f, 1.0f, sl.oscDetune) * 100.0f;
+                for (int k = 0; k < KS_UNI; ++k)
+                {
+                    const double sp = c.uniVoices > 1 ? 2.0 * (double) k / (double)(c.uniVoices - 1) - 1.0 : 0.0;
+                    c.uniMul[k] = std::pow(2.0, (double) chordSemis(c.chord, k) / 12.0 + sp * (double) c.uniCents / 1200.0);
+                }
+                // Pluck POSITION also shades the LOOP brightness (a mid-string pluck excites fewer
+                // highs, and the burst comb alone fades from earshot once the loop filter takes
+                // over - the "position does nothing" complaint). pos 0 = the authored brightness
+                // (bit-identical), pos 1 = about half the tone coefficient = clearly rounder ring.
+                c.ksLpC = juce::jlimit(0.02f, 1.0f, (0.05f + 0.95f * sl.physTone) * c.pm->briScale
+                                                     * (1.0f - 0.5f * juce::jlimit(0.0f, 1.0f, sl.physPosition)));
                 // STIFFNESS = user dispersion: stretches the partials SHARP (string -> bar -> bell).
                 // 0 = the material's own chain (factory bit-identical). >0 = the negative-coefficient
                 // design (designStiffChain) - the positive-coefficient approach was inaudible at the
@@ -1284,7 +1420,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 // --- oscillator + FM (carrier = osc freq) ---
                 c.oscShape  = sl.oscShape; c.oscFreq = juce::jlimit(8.0, sr * 0.45, (double) sl.oscFreq);
                 c.oscPEnvAmt = sl.oscPEnvAmt; c.oscPEnvTime = sl.oscPEnvTime; c.oscPOffset = sl.oscPOffset;
-                c.uniVoices = juce::jlimit(1, UNI_MAX, sl.oscUnison);
+                c.uniVoices = juce::jlimit(1, UNI_MAX, sl.chordMode > 0 ? sl.chordUnison : sl.oscUnison);
                 c.uniCents  = juce::jlimit(0.0f, 1.0f, sl.oscDetune) * 100.0f;   // up to +/-100 cents (1 semitone) spread
                 c.uniCenter = sl.oscUniCenter; c.uniMode = sl.oscDetuneMode;
                 c.uniGain   = 1.0f / std::sqrt((float) (c.uniVoices + (c.uniCenter ? 1 : 0)));
@@ -1363,6 +1499,10 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 }
                 c.oscFreq = baseF;
                 c.modalDecaySec = decaySec;
+                c.oscVibFac = 1.0f + juce::jlimit(0.0f, 1.0f, sl.vibrato) * 0.07f * vibLfo;   // block-rate pole-angle wobble
+                c.uniVoices = juce::jlimit(1, MODAL_NOTES, sl.chordMode > 0 ? sl.chordUnison : sl.oscUnison);   // one FULL bank per chord note (cap MODAL_NOTES)
+                c.uniCents  = juce::jlimit(0.0f, 1.0f, sl.oscDetune) * 100.0f;
+                c.chord     = juce::jlimit(0, 7, sl.chordMode);
                 // Pitch-envelope time base = the audible Strike + Ring (matches the editor's axis).
                 c.voiceLenSamp = juce::jmax(1.0, (double)((sl.atk + decaySec) * (float) sr));
                 break; }
@@ -1535,7 +1675,25 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             veEnd = v.gateLen + (long)(0.05f * (float) sr);
             for (int s = 0; s < NUM_SLOTS; ++s)
                 if (sc[s].engine >= 0)
+                {
                     veEnd = juce::jmax(veEnd, (long)((sc[s].atk + sc[s].hold + 3.2f * v.sv[s].gateDec) * (float) sr) + 8);
+                    if (sc[s].sustain > 0.01f)   // gated-sustain slot: add the release tail after the gate
+                        veEnd = juce::jmax(veEnd, v.gateLen + (long)(3.2f * juce::jmax(0.005f, sc[s].release) * (float) sr) + 8);
+                }
+        }
+        // KEYS voice: alive for as long as the key is HELD (the env sustains); once released,
+        // long enough for the slowest slot RELEASE to ring out (Phys/Modal natural tails already
+        // fit inside voiceEnd, so only extend - never shorten).
+        if (v.isKey)
+        {
+            if (v.keyOff < 0) veEnd = std::numeric_limits<long>::max() / 2;
+            else
+            {
+                float relMax = 0.005f;
+                for (int s = 0; s < NUM_SLOTS; ++s)
+                    if (sc[s].engine >= 0) relMax = juce::jmax(relMax, sc[s].release);
+                veEnd = juce::jmax(veEnd, v.keyOff + (long)(3.2f * relMax * (float) sr) + 8);
+            }
         }
         // KS + Length: the string's own feedback decay is rescaled too (same rule as the env),
         // else a held pluck's loop would die at its authored rate under a slower envelope.
@@ -1577,11 +1735,24 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 // vibrato at small amounts). Phase advances after the engine renders.
                 if (c.lfoAmt[1] > 0.001f)
                     pe3Mul *= std::pow(2.0, std::sin(sv.lfoPhase[1]) * (double) c.lfoAmt[1]);
+                // KEYS: skip slots the keyboard can't play; re-tune the rest from their own base
+                // Freq to the pressed note (keySemis rides pe3Mul, so it reaches every pitched
+                // engine including the Modal strike-tuning and the KS varispeed read).
+                if (sv.keyMute) continue;
+                if (sv.keySemis != 0.0f)
+                    pe3Mul *= std::pow(2.0, (double) sv.keySemis / 12.0);
 
                 switch (c.engine)
                 {
                     case SrcOsc: {
-                        env = ahdsEnv(t, c.atk, c.hold, sv.gateDec > 0.0f ? sv.gateDec : c.dec, c.sustain, c.release);
+                        // ONE envelope rule (v1.2.0): the decay settles at SUSTAIN while a GATE is
+                        // open - a held KEYS note or the step's Note Length - then RELEASE. With
+                        // sustain at 0 (all factory sounds) this is exactly the old behaviour:
+                        // pure AHD, and Note Length = the decay-rescale (gateDec).
+                        if (v.isKey || (v.gateLen > 0 && c.sustain > 0.01f))
+                            env = keyAdsr(t, v.isKey ? v.keyOff : v.gateLen, c.atk, c.hold, c.dec, c.sustain, c.release);
+                        else
+                            env = ahdsEnv(t, c.atk, c.hold, sv.gateDec > 0.0f ? sv.gateDec : c.dec, c.sustain, c.release);
                         double sSemis = (c.oscPEnvAmt != 0.0f) ? (double) c.oscPEnvAmt * pitchEnvShape(t, c.oscPEnvTime, c.oscPOffset) : 0.0;
                         double freq = c.oscFreq * std::pow(2.0, sSemis / 12.0) * vPitchMul * c.oscVibFac * pe3Mul;
                         // Single "Wave" selector (the From/To over-the-note morph was retired - it sounded harsh).
@@ -1609,7 +1780,11 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                                 const float frac = (float) u / (float)(c.uniVoices - 1);   // 0..1
                                 sp = (c.uniMode == 1) ? frac : (c.uniMode == 2) ? -frac : (2.0f * frac - 1.0f);
                             }
-                            const double det = std::pow(2.0, (double)(sp * c.uniCents) / 1200.0);
+                            double det = std::pow(2.0, (double)(sp * c.uniCents) / 1200.0);
+                            // CHORD mode: each unison voice becomes a chord note (root/third/fifth/..);
+                            // detune still micro-spreads each note. The centre voice stays on the root.
+                            if (c.chord > 0 && ! centreVoice)
+                                det *= std::pow(2.0, (double) chordSemis(c.chord, u) / 12.0);
                             const float dt = (float)(freq * det / sr);   // cycles/sample for PolyBLEP
                             // FM active -> plain morphWave (matches the old FM engine exactly, no BLEP under
                             // phase modulation); FM off -> band-limited morphWaveBL (the clean analog path).
@@ -1633,7 +1808,10 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         sv.sinePhase = sv.uniPhase[0];
                         break; }
                     case SrcNoise: {
-                        env = ahdsEnv(t, c.atk, c.hold, sv.gateDec > 0.0f ? sv.gateDec : c.dec, c.sustain, c.release);
+                        if (v.gateLen > 0 && c.sustain > 0.01f)   // same gate rule as SrcOsc (Note Length = the gate)
+                            env = keyAdsr(t, v.gateLen, c.atk, c.hold, c.dec, c.sustain, c.release);
+                        else
+                            env = ahdsEnv(t, c.atk, c.hold, sv.gateDec > 0.0f ? sv.gateDec : c.dec, c.sustain, c.release);
                         float w = whiteNoise(sv.noiseState), col;
                         switch (c.noiseType) {
                             case 1:
@@ -1685,31 +1863,52 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         break; }
                     case SrcPhys: {
                         if (! ksOk) break;   // KS line not allocated (engine assigned without ensureKsBuffers - silent, no crash)
-                        env = ahdsEnv(t, c.atk, c.hold, sv.gateDec > 0.0f ? sv.gateDec : c.dec, c.sustain, c.release);
+                        // Same ONE-rule envelope as Osc/Noise: sustain holds while a gate is open
+                        // (held key or Note Length), then release. Sustain 0 = pure AHD (factory).
+                        // A KEY always gates (even at sustain 0: held = the same AHD, key-up = the
+                        // RELEASE cut - a faithful synth note). Sequencer Length gates need sustain.
+                        if (v.isKey || (v.gateLen > 0 && c.sustain > 0.01f))
+                            env = keyAdsr(t, v.isKey ? v.keyOff : v.gateLen, c.atk, c.hold, c.dec, c.sustain, c.release);
+                        else
+                            env = ahdsEnv(t, c.atk, c.hold, sv.gateDec > 0.0f ? sv.gateDec : c.dec, c.sustain, c.release);
                         double pSemis = (c.physPEnvAmt != 0.0f) ? (double) c.physPEnvAmt * pitchEnvShape(t, c.physPEnvTime, c.physPOffset) : 0.0;
                         if (c.pm->pitchDrop != 0.0f) pSemis += (double) c.pm->pitchDrop * std::exp(-(float) t * 3.0f / (0.06f * (float) sr));
-                        double f = c.physBaseF * std::pow(2.0, pSemis / 12.0) * vPitchMul * c.physVibFac * pe3Mul;
-                        double L = juce::jlimit(2.0, (double)(KS_MAX - 2), sr / juce::jmax(20.0, f) - (double) c.ksApComp);
-                        double rp = sv.ksWrite - L; while (rp < 0.0) rp += (double) KS_MAX;
-                        const int ri = (int) rp; const float fr = (float)(rp - ri);
-                        const float k0 = sv.ksBuf[ri], k1 = sv.ksBuf[(ri + 1) % KS_MAX];
-                        float y = k0 + fr * (k1 - k0);
-                        sv.ksLp += c.ksLpC * (y - sv.ksLp);
-                        float ss = sv.ksLp;
-                        for (int st = 0; st < c.ksApN; ++st) { float yy = c.ksApC * ss + sv.ksApSt[st]; sv.ksApSt[st] = ss - c.ksApC * yy; ss = yy; }
-                        const int wi = (int) sv.ksWrite % KS_MAX;
-                        // String feedback. Normally the Decay-derived ksFb (the string decays on its own). But a
-                        // plucked string can't be "held", so DURING the amp-env HOLD window we sustain it (near-
-                        // lossless ring) so amp-env Hold actually holds. Hold=0 -> the window is empty -> this is a
-                        // no-op (bit-identical to a pure pluck); only sounds with Hold>0 ring through the hold.
+                        double fBase = c.physBaseF * std::pow(2.0, pSemis / 12.0) * vPitchMul * c.physVibFac * pe3Mul;
+                        // Gate open (held key / Note Length) + sustain -> HOLD the string: near-lossless
+                        // feedback AND a nearly-open loop filter (the LP is what actually drains the loop -
+                        // feedback alone still lost ~18 dB in 2 s). Gate closed / sustain 0 = bit-identical.
+                        const bool ksHold = c.sustain > 0.01f
+                                         && ((v.isKey && v.keyOff < 0) || (v.gateLen > 0 && t < v.gateLen));
+                        const float lpC = ksHold ? 1.0f - (1.0f - c.ksLpC) * 0.02f : c.ksLpC;
+                        // String feedback. Normally the Decay-derived ksFb (the string decays on its own).
+                        // ksHold sustains it (bowed/ebow); the STRIKE window swells a slow attack to full.
                         float ksFb = ksFbGate[s] > 0.0f ? ksFbGate[s] : c.ksFb;   // Length rescales the string's own decay too
+                        if (ksHold) ksFb = juce::jmax(ksFb, 0.99999f);
                         const long aS = (long) (c.atk * (float) sr), hS = (long) (c.hold * (float) sr);
-                        // Sustain the string through the STRIKE (a slow attack) + any hold, so the amp env swells the
-                        // pluck to FULL instead of fading in an already-decaying string (the weak-peak with slow attacks).
-                        // Instant plucks (atk <= 5 ms, hold=0) are untouched -> factory Physical sounds stay bit-identical.
-                        if (t < aS + hS && (c.atk > 0.005f || c.hold > 0.0001f)) ksFb = 0.9997f;   // (the loop LP still dulls it)
-                        sv.ksBuf[wi] = juce::jlimit(-2.5f, 2.5f, ss * ksFb); sv.ksWrite = wi + 1;   // safety bound (pure pluck never reaches it)
-                        sig = (ss * 1.4f) * env;
+                        if (t < aS + hS && (c.atk > 0.005f || c.hold > 0.0001f)) ksFb = 0.9997f;   // instant plucks untouched (factory-safe)
+                        // UNISON/CHORD: sum nStr real strings, each tuned to its chord/detune pitch and
+                        // running its own KS delay line (offset k*KS_MAX). nStr==1 = one string = the
+                        // old single-line KS, bit-identical (uniMul[0] == 1). RMS make-up keeps loudness.
+                        const int nStr = juce::jlimit(1, KS_UNI, c.uniVoices);
+                        const float uniGain = 1.0f / std::sqrt((float) nStr);
+                        float acc = 0.0f;
+                        for (int k = 0; k < nStr; ++k)
+                        {
+                            const int base = k * KS_MAX;
+                            const double f = fBase * c.uniMul[k];
+                            double L = juce::jlimit(2.0, (double)(KS_MAX - 2), sr / juce::jmax(20.0, f) - (double) c.ksApComp);
+                            double rp = sv.ksWrite[k] - L; while (rp < 0.0) rp += (double) KS_MAX;
+                            const int ri = (int) rp; const float fr = (float)(rp - ri);
+                            const float k0 = sv.ksBuf[base + ri], k1 = sv.ksBuf[base + ((ri + 1) % KS_MAX)];
+                            float y = k0 + fr * (k1 - k0);
+                            sv.ksLp[k] += lpC * (y - sv.ksLp[k]);
+                            float ss = sv.ksLp[k];
+                            for (int st = 0; st < c.ksApN; ++st) { float yy = c.ksApC * ss + sv.ksApSt[k][st]; sv.ksApSt[k][st] = ss - c.ksApC * yy; ss = yy; }
+                            const int wi = (int) sv.ksWrite[k] % KS_MAX;
+                            sv.ksBuf[base + wi] = juce::jlimit(-2.5f, 2.5f, ss * ksFb); sv.ksWrite[k] = wi + 1;   // KS write clamp (anti-gunshot)
+                            acc += ss;
+                        }
+                        sig = (acc * 1.4f * uniGain) * env;
                         break; }
                     case SrcSample: {
                         // Default: no envelope - play at full level with short anti-click fades at the
@@ -1831,18 +2030,18 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         {
                             const double f = c.physBaseF * pMul * vPitchMul * c.oscVibFac * pe3Mul;
                             const double L = juce::jlimit(2.0, (double)(KS_MAX - 2), sr / juce::jmax(20.0, f));
-                            double rp = sv.ksWrite - L; while (rp < 0.0) rp += (double) KS_MAX;
+                            double rp = sv.ksWrite[0] - L; while (rp < 0.0) rp += (double) KS_MAX;   // legacy Synth resonator: string 0 only
                             const int ri = (int) rp; const float fr = (float)(rp - ri);
                             const float k0 = sv.ksBuf[ri], k1 = sv.ksBuf[(ri + 1) % KS_MAX];
                             float y = k0 + fr * (k1 - k0);
-                            sv.ksLp += c.ksLpC * (y - sv.ksLp);
-                            float ss = sv.ksLp;
-                            for (int st = 0; st < c.ksApN; ++st) { float yy = c.ksApC * ss + sv.ksApSt[st]; sv.ksApSt[st] = ss - c.ksApC * yy; ss = yy; }
-                            const int wi = (int) sv.ksWrite % KS_MAX;
+                            sv.ksLp[0] += c.ksLpC * (y - sv.ksLp[0]);
+                            float ss = sv.ksLp[0];
+                            for (int st = 0; st < c.ksApN; ++st) { float yy = c.ksApC * ss + sv.ksApSt[0][st]; sv.ksApSt[0][st] = ss - c.ksApC * yy; ss = yy; }
+                            const int wi = (int) sv.ksWrite[0] % KS_MAX;
                             // Cap the feedback line: a resonator driven continuously by `ex` (Drive) with
                             // feedback ~1 would build up without bound -> a huge spike -> "gunshot" that
                             // echoes via the FX sends. Real resonators saturate; so do we (bounded, no explosion).
-                            sv.ksBuf[wi] = juce::jlimit(-2.5f, 2.5f, ss * c.ksFb + ex * 0.5f); sv.ksWrite = wi + 1;
+                            sv.ksBuf[wi] = juce::jlimit(-2.5f, 2.5f, ss * c.ksFb + ex * 0.5f); sv.ksWrite[0] = wi + 1;
                             sig = (ss * 1.4f) * env;
                         }
                         else
@@ -1864,45 +2063,88 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         // per-sample sweep would be 16 biquad recomputes per sample). Mid-ring only the pole
                         // ANGLE moves (a1); radius + gain stay, so the ring keeps decaying smoothly.
                         const bool strike = ! sv.modalInit;
-                        if (strike || (c.pEnvOn && i == 0)) {
-                            const double pm = vPitchMul * pe3Mul;
+                        // SUSTAIN-HOLD (keys or a gated Length step): while the gate is open, the mode
+                        // radii are clamped toward 1 (the bank stops decaying = the bell is "bowed");
+                        // release restores the authored radii = the natural decay rings out. Re-baked
+                        // once per block while holding + once on the release transition.
+                        const bool modalGate = c.sustain > 0.01f
+                                            && ((v.isKey && v.keyOff < 0) || (v.gateLen > 0 && t < v.gateLen));
+                        // UNISON/CHORD: each chord note is its OWN FULL resonator bank (like Physical's
+                        // real strings), tuned to its chord interval + detune. nNotes==1 = one bank = the
+                        // original single bell (bit-identical). RMS make-up keeps the level across notes.
+                        const int nNotes = juce::jlimit(1, MODAL_NOTES, c.uniVoices);
+                        if (strike || ((c.pEnvOn || c.oscVibFac != 1.0f || modalGate || sv.modalHold) && i == 0)) {
+                            sv.modalHold = modalGate;
+                            const double pmBase = vPitchMul * pe3Mul * (double) c.oscVibFac;   // vibrato = block-rate pole-angle wobble
                             if (strike) sv.modalNV = c.modalN;   // bank size fixed at the strike (immune to a mid-ring Material change)
-                            for (int m = 0; m < sv.modalNV; ++m) {
-                                if (strike) { sv.modalY1[m] = 0.0f; sv.modalY2[m] = 0.0f; }
-                                const float a2 = c.modalA2[m];
-                                const float r  = std::sqrt(juce::jmax(0.0f, a2));
-                                if (r <= 1.0e-6f) { if (strike) { sv.modalA1[m] = 0.0f; sv.modalA2[m] = 0.0f; sv.modalGain[m] = 0.0f; } continue; }
-                                const float c0 = juce::jlimit(-1.0f, 1.0f, c.modalA1[m] / (2.0f * r));
-                                const float w0 = std::acos(c0);
-                                const double w = (double) w0 * pm;
-                                if (strike && (w >= kPi * 0.98 || w <= 0.0))   // above Nyquist at the strike -> mute
-                                { sv.modalA1[m] = 0.0f; sv.modalA2[m] = 0.0f; sv.modalGain[m] = 0.0f; continue; }
-                                const double wc = juce::jlimit(0.001, (double) kPi * 0.98, w);   // retune mid-ring: clamp, never mute (a cut would click)
-                                sv.modalA1[m] = 2.0f * r * (float) std::cos(wc);
-                                sv.modalA2[m] = a2;
-                                if (strike) {
-                                    const float s0 = std::sin(w0);
-                                    const float gg = (s0 > 1.0e-6f) ? c.modalGain[m] / s0 : 0.0f;
-                                    sv.modalGain[m] = gg * (float) std::sin((float) wc);
+                            double uniMul[MODAL_NOTES];
+                            for (int j = 0; j < nNotes; ++j) {
+                                const double sp = nNotes > 1 ? 2.0 * (double) j / (double)(nNotes - 1) - 1.0 : 0.0;
+                                uniMul[j] = std::pow(2.0, (double) chordSemis(c.chord, j) / 12.0 + sp * (double) c.uniCents / 1200.0);
+                            }
+                            for (int j = 0; j < nNotes; ++j) {
+                                const double pm = pmBase * uniMul[j];
+                                for (int m = 0; m < sv.modalNV; ++m) {
+                                    if (strike) { sv.modalY1[j][m] = 0.0f; sv.modalY2[j][m] = 0.0f; }
+                                    const float a2 = c.modalA2[m];
+                                    float r  = std::sqrt(juce::jmax(0.0f, a2));
+                                    if (r <= 1.0e-6f) { if (strike) { sv.modalA1[j][m] = 0.0f; sv.modalA2[j][m] = 0.0f; sv.modalGain[j][m] = 0.0f; } continue; }
+                                    const float c0 = juce::jlimit(-1.0f, 1.0f, c.modalA1[m] / (2.0f * r));
+                                    const float w0 = std::acos(c0);
+                                    const double w = (double) w0 * pm;
+                                    if (strike && (w >= kPi * 0.98 || w <= 0.0))   // above Nyquist at the strike -> mute
+                                    { sv.modalA1[j][m] = 0.0f; sv.modalA2[j][m] = 0.0f; sv.modalGain[j][m] = 0.0f; continue; }
+                                    if (modalGate)   // "bow the bell": low modes freeze, highs keep fading
+                                    {
+                                        const float fHi = sv.modalNV > 1 ? (float) m / (float)(sv.modalNV - 1) : 0.0f;
+                                        r = juce::jmax(r, 1.0f - (1.0e-7f + fHi * fHi * 3.0e-5f));
+                                    }
+                                    const double wc = juce::jlimit(0.001, (double) kPi * 0.98, w);   // retune mid-ring: clamp, never mute
+                                    sv.modalA1[j][m] = 2.0f * r * (float) std::cos(wc);
+                                    sv.modalA2[j][m] = r * r;
+                                    if (strike) {
+                                        const float s0 = std::sin(w0);
+                                        const float gg = (s0 > 1.0e-6f) ? c.modalGain[m] / s0 : 0.0f;
+                                        sv.modalGain[j][m] = gg * (float) std::sin((float) wc);
+                                    }
                                 }
                             }
                         }
                         float out = 0.0f;
-                        for (int m = 0; m < sv.modalNV; ++m) {
-                            const float x = strike ? sv.modalGain[m] : 0.0f;   // impulse only on the first sample
-                            const float y = sv.modalA1[m] * sv.modalY1[m] - sv.modalA2[m] * sv.modalY2[m] + x;
-                            sv.modalY2[m] = sv.modalY1[m]; sv.modalY1[m] = y;
-                            out += y;
-                        }
+                        for (int j = 0; j < nNotes; ++j)
+                            for (int m = 0; m < sv.modalNV; ++m) {
+                                const float x = strike ? sv.modalGain[j][m] : 0.0f;   // impulse only on the first sample
+                                const float y = sv.modalA1[j][m] * sv.modalY1[j][m] - sv.modalA2[j][m] * sv.modalY2[j][m] + x;
+                                sv.modalY2[j][m] = sv.modalY1[j][m]; sv.modalY1[j][m] = y;
+                                out += y;
+                            }
+                        out *= 1.0f / std::sqrt((float) nNotes);   // RMS make-up across chord notes
                         sv.modalInit = true;
-                        // STRIKE (attack ramp) = a soft/swelled onset (the modes self-decay = the RING). Gated so
-                        // atk <= 5 ms (every factory Modal sound, default 0.003) keeps env=1 = instant = bit-identical.
-                        env = (c.atk > 0.005f) ? juce::jmin(1.0f, (float) t / juce::jmax(1.0f, c.atk * (float) sr)) : 1.0f;
-                        // Per-step LENGTH on Modal: the bank self-decays (a ring can't be EXTENDED), but a
-                        // SHORTER note is shaped by the same rescaled fall, so Length still tightens bells.
-                        if (sv.gateDec > 0.0f)
-                            env *= decayCurve(juce::jmax((long) 0, t - (long)((c.atk + c.hold) * (float) sr)), sv.gateDec);
-                        if (! std::isfinite(out)) { for (int m = 0; m < sv.modalNV; ++m) { sv.modalY1[m] = sv.modalY2[m] = 0.0f; } out = 0.0f; }  // self-heal a runaway
+                        // With SUSTAIN: the held bank doesn't decay, so the gated ADSR shapes the note
+                        // (fall to the sustain level over the Ring, release after the gate). Sustain 0 =
+                        // the old behaviour exactly: Strike ramp only, the modes carry the decay.
+                        if (v.isKey && c.sustain <= 0.01f)
+                        {
+                            // Sustain 0 on a KEY = a faithful synth note: the bank IS the decay while
+                            // the key is held, and LETTING GO releases it (the bell used to ring on
+                            // after key-up, which read as broken). TEST/plain steps still ring free.
+                            env = (c.atk > 0.005f) ? juce::jmin(1.0f, (float) t / juce::jmax(1.0f, c.atk * (float) sr)) : 1.0f;
+                            if (v.keyOff >= 0)
+                                env *= decayCurve(t - v.keyOff, juce::jmax(0.005f, c.release));
+                        }
+                        else if ((v.isKey || v.gateLen > 0) && c.sustain > 0.01f)
+                            env = keyAdsr(t, v.isKey ? v.keyOff : v.gateLen, c.atk, 0.0f,
+                                          juce::jmax(0.05f, c.modalDecaySec), c.sustain, c.release);
+                        else {
+                            // STRIKE (attack ramp) = a soft/swelled onset (the modes self-decay = the RING). Gated so
+                            // atk <= 5 ms (every factory Modal sound, default 0.003) keeps env=1 = instant = bit-identical.
+                            env = (c.atk > 0.005f) ? juce::jmin(1.0f, (float) t / juce::jmax(1.0f, c.atk * (float) sr)) : 1.0f;
+                            // Per-step LENGTH on Modal: the bank self-decays (a ring can't be EXTENDED), but a
+                            // SHORTER note is shaped by the same rescaled fall, so Length still tightens bells.
+                            if (sv.gateDec > 0.0f)
+                                env *= decayCurve(juce::jmax((long) 0, t - (long)((c.atk + c.hold) * (float) sr)), sv.gateDec);
+                        }
+                        if (! std::isfinite(out)) { for (auto& row : sv.modalY1) for (auto& vv : row) vv = 0.0f; for (auto& row : sv.modalY2) for (auto& vv : row) vv = 0.0f; out = 0.0f; }  // self-heal a runaway
                         sig = juce::jlimit(-4.0f, 4.0f, out) * 0.4f * env;   // bound the bank sum to a musical level, then the Strike ramp
                         break; }
                     default: break;
@@ -1976,7 +2218,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             //  sustains until the gate, then the env decays as the release. Only CHOKES set v.killing now.)
             if (v.killing)
             {
-                v.killGain -= killStep;                                   // choke fade advances per sample
+                v.killGain -= (v.killStep > 0.0f ? v.killStep : killStep);   // choke fade advances per sample
                 if (v.killGain <= 0.0f) { finished = true; break; }       // fade complete -> voice ends
             }
             if (++v.voiceSamples >= veEnd) { finished = true; break; }

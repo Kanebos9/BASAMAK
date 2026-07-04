@@ -12,7 +12,6 @@ class Sequencer
 {
 public:
     static constexpr int NUM_CHANNELS = 16;   // max channels; the UI shows a user-chosen subset (4/8/12/16)
-    static constexpr int LAUNCHPAD_CH = 8;    // the Launchpad is an 8x8 grid -> it only maps the first 8 channels
     static constexpr int NUM_PATTERNS = 32;   // max patterns; the UI shows a user-chosen subset (16/24/32) + scrolls
 
     enum PlayMode { LoopForever = 0, StopAfterN = 1, NextAfterN = 2, Chain = 3 };
@@ -78,7 +77,9 @@ public:
     struct TriggerEvent { int channel; int step; float velScale = 1.0f; int sub = 0; int roll = 1; int offset = 0;
                           long gate = 0;      // gate > 0 = cut the hit after this many samples (per-step Length)
                           long slideLen = 0;      // slide glide time in samples (0 = step has no slide)
-                          float slideTo = 0.0f; };// slide TARGET pitch (the NEXT active step's pitch, semitones)
+                          float slideTo = 0.0f;   // slide TARGET pitch (the NEXT active step's pitch, semitones)
+                          bool  isDraw = false;   // DRAW mode note: use drawPitch + channel drawVel/drawPan
+                          float drawPitch = 0.0f; };
 
     // [start, end) of step `s` (bar fraction 0..1) with this pattern's swing applied. The
     // MIDI exporter reuses it so exported clips carry the same groove the engine plays.
@@ -150,6 +151,9 @@ public:
     }
 
     bool isCurrentlyPlaying = false;
+    // Playhead position within the current bar, 0..1 (KEYS recording quantises key presses
+    // to the nearest step from this).
+    double barPos() const { return barPosition; }
 
 private:
     double barPosition = 0.0;      // 0..1 fraction within current bar

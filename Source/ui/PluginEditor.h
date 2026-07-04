@@ -6,7 +6,7 @@
 // Draws the 8×N step grid. Steps fill the component's actual width, so the
 // grid stretches with the window and fewer steps means wider buttons.
 // Each step also shows its MIDI assignment ("ch6cc44" / "no midi").
-class StepGridComponent : public juce::Component
+class StepGridComponent : public juce::Component, public juce::SettableTooltipClient
 {
 public:
     // Step edit mode: 0 = on/off, 1 = Velocity, 2 = Pitch, 3 = Probability(Loop), 4 = Roll, 5 = Pan, 6 = Length.
@@ -23,12 +23,21 @@ public:
     std::function<void(int ch, int step, int len, int mask)> onStepCondChanged;
     // Called when a step's 303-SLIDE flag is toggled (bottom strip of a cell in Pitch mode).
     std::function<void(int ch, int step, bool on)> onStepSlideChanged;
+    // Called when a step's MERGE flag is toggled (cmd/shift+click; a merged step continues the previous note).
+    std::function<void(int ch, int step, bool on)> onStepMergeChanged;
+    // DRAW mode: write a run of columns [colA..colB] to a semitone (or DrumChannel::DRAW_GAP to erase).
+    std::function<void(int ch, int colA, int colB, int semi)> onDrawWrite;
+    std::function<void(int ch, float vel, float pan)> onDrawVelPan;   // whole-channel Vel/Pan in draw mode
+    std::function<void(int ch)> onDrawModeMaybeChanged;               // ch's draw-vs-step may have changed (fade buttons)
+    static constexpr int DRAW_ITEM_ID = 100;   // the "Draw" item id in the step-count dropdown
     // Influence: copy one source step's vel/pitch/prob/roll onto every step in the channel.
     std::function<void(int ch, int srcStep)> onInfluenceApply;
     std::function<void(int ch)>              onInfluenceDisarm; // un-highlight the strip button
     MidiLearnManager* midiLearn = nullptr;
 
     int rowH = 44;            // set by parent layout
+    int selectedRow = -1;     // the editor's selected channel - its row gets a soft highlight wash
+    juce::Colour selectedRowColour { 0xffe8bf4d };   // that channel's colour (wash + left accent bar)
     int visibleRows = 8;      // how many channel rows to draw at once (the viewport height in rows)
     int firstRow = 0;         // scroll offset: the topmost drawn channel (maps ch -> screen row ch-firstRow)
     int currentPattern = 0;   // which pattern's steps/assignments we display
@@ -38,6 +47,8 @@ public:
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
     void mouseDoubleClick(const juce::MouseEvent& e) override;   // value modes: reset the step to its default
+    void mouseMove(const juce::MouseEvent& e) override;          // DRAW mode: hover read-out of the note pitch
+    juce::String getTooltip() override;   // explains edit modes + MERGE (cmd/shift+click) in one place
 
     void update(const Sequencer& seq, bool anySolo);
     float getRollDec(int ch, int step) const { return rollDec[ch][step]; }
@@ -55,13 +66,31 @@ private:
     float noteLen[NCH][DrumChannel::MAX_STEPS] = {};   // per-step GATE length 0..1 of one step (0 = off/natural)
     float pan[NCH][DrumChannel::MAX_STEPS]   = {};      // per-step stereo pan -1..+1 (Pan mode; 0 = centre)
     bool  slide[NCH][DrumChannel::MAX_STEPS] = {};      // 303 slide flag (toggled in Pitch mode's bottom strip)
+    bool  merge[NCH][DrumChannel::MAX_STEPS] = {};      // MERGE continuation flags (cmd/shift+click a step)
     int   condLen[NCH][DrumChannel::MAX_STEPS]  = {};   // per-step loop-condition cycle length (Prob mode)
     int   condMask[NCH][DrumChannel::MAX_STEPS] = {};   // per-step loop-condition bitmask (0 = every loop)
     int   condDragCh = -1, condDragStep = -1, condDownBar = -1, condDownX = 0;   // Prob-mode gesture state
     bool  condDragged = false;
     int   curLoop = 0;          // the playing pattern's loop counter (highlights the current bar in Prob mode)
     bool  midiOutCh[NCH] = {};                         // is this channel routed to MIDI Out? (enables 2D Vel/Len)
-    bool  muted[NCH]       = {};
+    // DRAW mode mirror + gesture state (a free mono pitch lane replaces the step cells for this row).
+    bool   drawMode[NCH] = {};
+    int8_t drawSemi[NCH][DrumChannel::DRAW_RES] = {};
+    int    drawDragCh = -1, drawLastCol = -1;          // channel being drawn + last column written (interp)
+    bool   drawErase = false;                          // right-drag erases (writes DRAW_GAP)
+    float  playBarFrac = 0.0f;                         // current bar position 0..1 (draw-lane playhead)
+    int    drawMagCh = -1;                             // channel whose 4x-tall magnify OVERLAY is open (-1 = none)
+    int    drawRange = 36;                             // magnify view visible +/- range (36 / 24 / 12 semitones)
+    int    drawReadSemi = -128;                        // live read-out semitone (-128 = none) shown top-right
+    float  dVel[NCH] = {}, dPan[NCH] = {};             // draw-mode whole-channel Vel/Pan mirror
+    void   setDrawVelPan(int ch, int x);               // Vel/Pan modes: drag sets the one channel value
+    void   paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle<int> rect, bool overlay);
+    juce::Rectangle<int> drawRowRect(int ch) const;                  // the normal (1x) row rect
+    juce::Rectangle<int> drawOverlayRect() const;                    // the 4x magnify panel around drawMagCh
+    int    yToDrawSemi(juce::Rectangle<int> rect, int y, int range) const;   // pixel Y -> semitone, snapped, clamped to +/-range
+    void   drawStrokeTo(int ch, juce::Point<int> pos);               // write columns from drawLastCol to pos
+    int    drawColAt(int x) const;                                   // pixel X -> column
+    bool   muted[NCH]       = {};
     bool  soloed[NCH]      = {};
     int   numSteps[NCH]    = {};   // filled by update(); 0 until then
     int   playStep[NCH]    = {};   // filled by update(); 0 here is harmless (no cursor drawn until playing)
@@ -72,10 +101,11 @@ private:
     void  applyInfluence(int ch, int srcStep); // copy srcStep onto every step in the channel
 
 public:
-    // STEP MAGNIFIER (value modes): while the mouse is down on a step, that cell is drawn (and its
-    // value mapped) at 2x, ANCHORED so the cursor keeps its exact fractional position inside the
-    // cell - the click therefore lands on the same value as unmagnified, and the drag gets 2x
-    // finer travel (needed with 32 steps, where a raw cell is tiny). Cleared on mouseUp.
+    // STEP MAGNIFIER (value modes): while the mouse is down on a step, that cell is drawn (and
+    // its value mapped) enlarged - 2x when the channel has <= 15 steps (cells are already big),
+    // 3.5x from 16 steps up - ANCHORED so the cursor keeps its fractional position inside the
+    // cell, then CLAMPED into the editor bounds (edge cells used to poke outside the plugin
+    // window; clamping shifts the anchor there, visibility wins). Cleared on mouseUp.
     int   magCh = -1, magStep = -1;
     juce::Rectangle<int> magRect;
     juce::Component* magOverlay = nullptr;   // top-most sibling that paints the magnified cell above the top bar
@@ -85,9 +115,17 @@ public:
         const auto r = stepRect(ch, step);
         const float fx = (float)(pos.x - r.getX()) / (float) juce::jmax(1, r.getWidth());
         const float fy = (float)(pos.y - r.getY()) / (float) juce::jmax(1, r.getHeight());
-        const int mw = r.getWidth() * 2, mh = r.getHeight() * 2;
+        const bool few = numSteps[ch] <= 15;    // big cells need less magnification
+        const int mw = few ? r.getWidth()  * 2 : (r.getWidth()  * 7) / 2;
+        const int mh = few ? r.getHeight() * 2 : (r.getHeight() * 7) / 2;
         magCh = ch; magStep = step;
         magRect = { pos.x - juce::roundToInt(fx * (float) mw), pos.y - juce::roundToInt(fy * (float) mh), mw, mh };
+        if (auto* p = getParentComponent())   // keep it fully inside the editor (content) bounds
+        {
+            const auto lim = p->getLocalBounds() - getPosition();   // content rect in grid coords
+            magRect.setX(juce::jlimit(lim.getX(), juce::jmax(lim.getX(), lim.getRight()  - mw), magRect.getX()));
+            magRect.setY(juce::jlimit(lim.getY(), juce::jmax(lim.getY(), lim.getBottom() - mh), magRect.getY()));
+        }
         notifyMag();
     }
     void endMagnify() { if (magCh >= 0) { magCh = magStep = -1; notifyMag(); } }
@@ -112,6 +150,7 @@ private:
     void handleClick(juce::Point<int> pos, bool setDragState);
     void paintCellExtras(juce::Graphics& g, int ch, int step, juce::Rectangle<int> rr,
                          juce::Rectangle<float> r, bool isActive, bool isCurrent);
+    void paintMergeArrow(juce::Graphics& g, int ch, int step, juce::Rectangle<float> r);
     bool lastDragState = false;
 };
 
@@ -368,6 +407,39 @@ private:
     }
 };
 
+//==============================================================================
+// KEYS: the on-screen piano panel. Covers the detail area RIGHT of the slot boxes (amp/EQ,
+// pitch, FX + master columns) when the KEYS view is on; the slot boxes stay visible so the
+// sound is still editable. MONO piano at the bottom (a held-note stack gives real mono-synth
+// behaviour: releasing the top key falls back to the previous held key); a control strip on
+// top: REC (+ mode), Takes, Quantize (= the channel's step count), Slot-2 transpose, and
+// Sustain/Release for the selected slot (live for KEY voices only - see DrumChannel::keyAdsr).
+// The EDITOR wires + refreshes everything; this class just owns the widgets/layout/painting.
+class KeysPanel : public juce::Component, private juce::MidiKeyboardState::Listener
+{
+public:
+    KeysPanel();
+    ~KeysPanel() override { kbState.removeListener(this); }
+    std::function<void(int note, float vel)> onKeyDown;   // -> processor (mono handled here)
+    std::function<void(int)> onKeyUp;   // which note was released (slide-safe mono pairing)
+
+    juce::TextButton btnRec   { "REC" };
+    juce::ComboBox   comboRecMode, comboSlot2;
+    juce::TextButton btnTakes { "Takes (0)" };
+    juce::Label      lblRecMode, lblSlot2, lblHint;
+    int countdown = 0;                                    // count-in ticks left (drawn as a big 3-2-1)
+
+    void paint(juce::Graphics&) override;
+    void resized() override;
+private:
+    juce::MidiKeyboardState     kbState;
+    juce::MidiKeyboardComponent kb { kbState, juce::MidiKeyboardComponent::horizontalKeyboard };
+    juce::Array<int> held;                                // mono note stack (message thread only)
+    float lastVel = 0.8f;
+    void handleNoteOn (juce::MidiKeyboardState*, int, int note, float vel) override;
+    void handleNoteOff(juce::MidiKeyboardState*, int, int note, float) override;
+};
+
 class SlotEditor : public juce::Component,
                    public juce::FileDragAndDropTarget   // drop an audio file anywhere on the box -> load it as a Sample
 {
@@ -504,7 +576,12 @@ public:
     void setValues(float a, float h, float d, float s, float r);  // load (no callback)
     void setPlayheads(const float* sec, int n);                   // live voice positions (seconds) -> moving dots
     void setEnabledLook(bool en) { if (en == enabledLook) return; enabledLook = en; repaint(); }  // grey out (samples have no AHDSR)
-    void setStrikeRing(bool sr) { if (sr == strikeRing) return; strikeRing = sr; repaint(); }      // Physical: 2-handle Strike/Ring (no Hold)
+    // Physical/Modal: 2-handle Strike/Ring (no Hold). allowSus lets the Ring handle carry a
+    // SUSTAIN level on its Y axis (Physical only: a held key/gated note keeps the string ringing).
+    void setStrikeRing(bool sr, bool allowSus = false)
+    { if (sr == strikeRing && allowSus == srSus) return; strikeRing = sr; srSus = allowSus; repaint(); }
+    // Samples don't gate -> their editor hides the meaningless Sustain/Release entirely.
+    void setSusRelVisible(bool v) { if (v == ! noSusRel) return; noSusRel = ! v; repaint(); }
     void setNa(const juce::String& main, const juce::String& sub) { if (main == naMain && sub == naSub) return; naMain = main; naSub = sub; repaint(); }  // greyed-state message
     // Sample slots: the amp env is OPT-IN. When toggleable, double-clicking the (greyed or active)
     // graph fires onToggleRequest so the editor can flip Slot::smpEnvOn.
@@ -522,7 +599,7 @@ public:
     void mouseUp(const juce::MouseEvent&) override { const bool ed = drag >= 0; drag = -1; repaint(); if (ed && onDragEnd) onDragEnd(); }
     juce::String getTooltip() override;
 
-    static constexpr float maxA = 6.0f, maxH = 6.0f, maxD = 6.0f, maxR = 0.05f;  // A/H/D up to 6 s (Release retired from UI)
+    static constexpr float maxA = 6.0f, maxH = 6.0f, maxD = 6.0f, maxR = 2.0f;   // A/H/D up to 6 s; Release up to 2 s (live via a gate: held key / Note Length)
     static constexpr float maxAStrike = 0.05f;   // Strike/Ring mode: attack (Strike) maxes at 50 ms (a strike is short)
     static constexpr float kMinHold = 14.0f;   // px the Hold handle sits right of Attack (so it's visible at hold=0)
     static constexpr float kSkew = 0.22f;      // <1 => lots of room / fine control at the low (ms) end (very slow start)
@@ -531,8 +608,10 @@ private:
     bool  enabledLook = true;      // false for sample slots (no amp envelope)
     bool  toggleable  = false;     // sample slots: double-click toggles the opt-in envelope
     bool  strikeRing  = false;     // Physical engine: show a 2-handle Strike(attack)/Ring(decay) envelope, no Hold
+    bool  srSus       = false;     // Strike/Ring WITH a sustain level on the Ring handle's Y (Physical)
+    bool  noSusRel    = false;     // hide Sustain/Release (Sample slots - nothing to gate)
     juce::String naMain = "AMP ENVELOPE (n/a - sample)", naSub = "sample plays full length";  // greyed-state text
-    int   drag = -1, hover = -1;   // handle index: 0=A 1=H 2=Decay (to zero), -1=none. Release removed; sustain not edited here.
+    int   drag = -1, hover = -1;   // handle index: 0=A 1=H 2=Decay(x)+Sustain(y) 3=Release, -1=none
     static constexpr int kMaxHeads = 8;
     float heads[kMaxHeads] = {}; int numHeads = 0;   // live playhead times (seconds)
     juce::Point<float> playheadXY(float ts) const;   // a time -> point on the drawn curve
@@ -628,9 +707,10 @@ class VoiceModDisplay : public juce::Component, public juce::SettableTooltipClie
 {
 public:
     static constexpr int kMaxUni = 7;
-    void setValues(int unison, float detune, float vibrato, bool centre, int detuneMode);
+    void setValues(int unison, int chordUnison, float detune, float vibrato, bool centre, int detuneMode, int chordMode);
     void setSupport(bool uniSupported, bool vibSupported, juce::String naReason);
-    std::function<void(int unison, float detune, float vibrato, bool centre, int detuneMode)> onChange;
+    void setMaxUni(int m) { const int c = juce::jlimit(1, kMaxUni, m); if (c == maxUni) return; maxUni = c; if (uni > maxUni) uni = maxUni; if (uniChord > maxUni) uniChord = maxUni; repaint(); }  // per-engine unison cap
+    std::function<void(int unison, float detune, float vibrato, bool centre, int detuneMode, int chordMode)> onChange;
     std::function<void()> onDragEnd;                              // released after editing (for auto-audition)
     void paint(juce::Graphics& g) override;
     void mouseDown(const juce::MouseEvent& e) override;
@@ -641,18 +721,23 @@ public:
     void mouseUp(const juce::MouseEvent&) override { const bool ed = drag >= 0; drag = -1; repaint(); if (ed && onDragEnd) onDragEnd(); }
     juce::String getTooltip() override;
 private:
-    int   uni = 1;
+    int   uni = 1;         // STD-mode voice count
+    int   uniChord = 3;   // CHORD-mode voice count (SEPARATE from STD - switching modes shows each one's own)
+    int   curUni() const { return chord > 0 ? uniChord : uni; }   // the ACTIVE mode's count
     float det = 0.0f, vib = 0.0f;
     bool  centre = false;          // also play the original/undetuned pitch (toggled by double-click on Detune)
     int   mode = 0;                // detune direction: 0 = symmetric (drag right), 1 = up (drag up), 2 = down (drag down)
     bool  uniOn = true, vibOn = true;
+    int   maxUni = 7;              // per-engine unison cap (Osc 7 / Modal 4 / Physical 3)
+    int   chord = 0;               // 0 = STD (detuned copies); 1-7 = chord types (in CHORD mode the detune dot picks the type)
+    juce::Rectangle<float> chip[3];   // [0]=STD [1]=CHORD toggle chips ([2] unused now - the type is the detune dot)
     juce::String reason;
     int   drag = -1, hover = -1;   // 0 = Unison, 1 = Detune, 2 = Vibrato
     struct Geo { float left, right, top, bottom, cy, hh, uX, dX, vX;
                  float rangeX, rangeY, dPtX, dPtY; };   // detune handle: range + its mode-aware position
     Geo  geom() const;
     int  nearestHandle(juce::Point<float> p) const;
-    void emit() { if (onChange) onChange(uni, det, vib, centre, mode); }
+    void emit() { if (onChange) onChange(curUni(), det, vib, centre, mode, chord); }
 };
 
 //==============================================================================
@@ -1173,7 +1258,7 @@ private:
     // restores the previous preset name (not just the underlying parameters).
     struct UndoEntry
     {
-        juce::MemoryBlock state;
+        juce::ValueTree   state;   // the state TREE (no serialize/deserialize - fast undo/redo)
         juce::String      presetName;
         juce::int64       presetBaselineHash = 0;
         bool              presetModified = false;
@@ -1182,6 +1267,8 @@ private:
     std::vector<UndoEntry> undoStack, redoStack;
     static constexpr int kUndoMax = 24;
     juce::int64 lastUndoHash = 0;
+    juce::int64 undoTickHash = 0;   // this tick's stateHash, reused by the modified-marker check
+    int timerCounter = 0;   // 60 Hz tick counter; heavy per-project hashing runs every 3rd tick
     int  undoStableTicks = 0;
     bool undoDirty = false;
     bool applyingUndo = false;
@@ -1228,12 +1315,38 @@ private:
     bool  lastPlayingState = false;            // timer edge-detection for the playing marker
     int   lastPlayPattern = -1;
     void  refreshFollowButton();
-    juce::TextButton btnKeys { "Keys" };       // global toggle: MIDI keyboard plays channel sounds (proc.keysMode)
-    void  refreshKeysButton();
     juce::TextButton btnAudition { "Auto" };   // global toggle: knob edits auto-play a TEST hit (proc.auditionOnEdit)
-    juce::TextButton btnToggleDetail { "HIDE SOUND EDITOR" };   // collapse/expand the sound-editing panel
+    juce::TextButton btnToggleDetail { "HIDE SOUND EDITOR/KEYS" };   // collapse/expand the sound-editing panel
     bool detailShown = true;                   // when false, only the sequencer is shown (window shrinks)
     void  refreshAuditionButton();
+    // ==== KEYS view (on-screen piano). Radio with the sound editor: the KEYS button shows the
+    // OTHER view's name. The panel covers everything right of the slot boxes. =================
+    KeysPanel        keysPanel;
+    juce::TextButton btnKeysView { "KEYS" };
+    bool keysView = false;                     // session-only; the sound editor is the default view
+    // Takes live on the PROCESSOR (proc.keysTakes - persisted with the state/preset). The editor
+    // ASSEMBLES them from the audio thread's event log: a 0xFF marker = loop boundary = the take
+    // so far is closed and the next loop starts a fresh one (parseKeysEvents, called from the
+    // timer while recording + once more on stop).
+    int  keysEvtCursor = 0;                    // how far into proc.keysEvts we've parsed
+    std::vector<DrumSequencerProcessor::KeyEvt> keysPendingEvts;   // the take being played right now
+    int  keysCountdownTicks = 0;               // 3 s count-in (timer runs at 24 Hz)
+    int  keysUiHash = -999;                    // change detector for the cheap panel refresh
+    bool keysRecWasPlaying = false;            // transport ran during this take -> stop = finalize
+    void applyKeysView();
+    void keysStartRecord();
+    void keysStopRecord(bool finalize);
+    void keysDeleteTake(int idx);
+    void keysLoadTake(int idx);
+    void drainDrawTake();   // pull a finished-loop draw lane from the handshake into a take
+    int    keysLoadedTakeIdx = -1;    // the take currently loaded onto its channel (for save-to/save-as-new)
+    juce::int64 keysLoadedTakeHash = 0;
+    juce::int64 takeDataHash(const DrumSequencerProcessor::KeysTake& t) const;   // fingerprint a take's data
+    DrumSequencerProcessor::KeysTake captureTakeFromChannel(int ch, int pat) const;  // snapshot the live channel as a take
+    bool   keysTakeDirty(int idx) const;   // has the loaded take's channel been hand-edited?
+    int    takesForChannel(int ch) const;   // count of takes belonging to a channel (per-channel 20 cap)                // write a take's notes onto its channel (view/play it)
+    void parseKeysEvents();                    // drain the audio event log into takes (live)
+    void refreshKeysPanel();
     // Host-frozen detector: if processHeartbeat stops moving (~1 s), the host isn't sending us
     // audio - the Play tooltip flips to a "Not playing?" explanation (see timerCallback).
     uint32_t lastHeartbeat = 0; int heartbeatStaleTicks = 0; bool hostFrozen = false;
@@ -1554,6 +1667,8 @@ private:
     void setupGroupHeader(juce::Label& lbl, const char* txt);
 
     void selectChannel(int ch);
+    void refreshDrawModeButtons();   // grey Len/Pitch/Roll for a draw-mode channel
+    void quantizeDrawToSteps(DrumChannel& c, int n);   // draw lane -> N steps (with a confirm)
     void selectPattern(int p);
     void copyPatternContent(int src, int dst);   // duplicate src's steps + per-pattern settings into dst
     int  currentPattern() const { return proc.sequencer.currentPattern; }

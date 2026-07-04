@@ -51,7 +51,8 @@ jobs:
         if: matrix.name != 'Windows'
         shell: bash
         run: |
-          OUT="BASAMAK-${{ matrix.name }}"
+          VER=$(grep -m1 'project(DrumSequencer VERSION' CMakeLists.txt | sed -E 's/.*VERSION ([0-9.]+).*/\1/')
+          OUT="BASAMAK-$VER-${{ matrix.name }}"   # version in the FILE name (was BASAMAK-<os>.zip = confusing across versions)
           mkdir -p "$OUT"
           find build -name "BASAMAK.vst3"      -maxdepth 8 -exec cp -R {} "$OUT/" \;
           find build -name "BASAMAK.component" -maxdepth 8 -exec cp -R {} "$OUT/" \;   # AU (macOS)
@@ -59,7 +60,7 @@ jobs:
           find build -path "*Standalone/BASAMAK" -type f -maxdepth 8 -exec cp {} "$OUT/" \;   # Standalone (Linux)
           cp -R Resources/Samples "$OUT/Samples"                                        # bundled CC0 sample library
           cp -R Resources/TouchOSC "$OUT/TouchOSC"                                       # TouchOSC control-surface template
-          grep -m1 'project(DrumSequencer VERSION' CMakeLists.txt | sed -E 's/.*VERSION ([0-9.]+).*/\1/' > "$OUT/VERSION"
+          echo "$VER" > "$OUT/VERSION"
           cp Distribution/INSTALL.txt "$OUT/" 2>/dev/null || true
           if [ "${{ matrix.name }}" = "macOS" ]; then
             cp Distribution/scripts/install-macos.command "$OUT/Install BASAMAK.command"; chmod +x "$OUT/Install BASAMAK.command"
@@ -74,7 +75,8 @@ jobs:
         if: matrix.name == 'Windows'
         shell: pwsh
         run: |
-          $out = "BASAMAK-Windows"
+          $ver = (Select-String -Path CMakeLists.txt -Pattern 'project\(DrumSequencer VERSION ([0-9.]+)').Matches[0].Groups[1].Value
+          $out = "BASAMAK-$ver-Windows"
           New-Item -ItemType Directory -Force $out | Out-Null
           $vst3 = Get-ChildItem -Recurse -Directory build -Filter BASAMAK.vst3 | Select-Object -First 1
           Copy-Item $vst3.FullName "$out\BASAMAK.vst3" -Recurse
@@ -90,7 +92,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: BASAMAK-${{ matrix.name }}
-          path: BASAMAK-${{ matrix.name }}.zip
+          path: BASAMAK-*-${{ matrix.name }}.zip
 
   # When you publish a GitHub Release, this builds all three OSes and attaches
   # the platform zips to that Release automatically (no manual download/upload).

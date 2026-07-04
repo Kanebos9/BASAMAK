@@ -1,7 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
 #include "Sequencer.h"
-#include "LaunchpadController.h"
 #include "MidiLearnManager.h"
 #include "../dsp/FDNReverb.h"
 
@@ -40,10 +39,13 @@ public:
 
     void getStateInformation(juce::MemoryBlock& dest) override;
     void setStateInformation(const void* data, int sizeInBytes) override;
+    // Undo/redo capture + restore the state as a ValueTree DIRECTLY (no binary serialize/deserialize
+    // roundtrip - that made the undo/redo buttons feel laggy). getStateInformation just wraps these.
+    juce::ValueTree captureStateTree();
+    void applyStateTree(const juce::ValueTree& state);
 
     //-- Public state (accessed from editor on message thread — use mutex)
     Sequencer           sequencer;
-    LaunchpadController launchpad;
     MidiLearnManager    midiLearn;
 
     // Duplicate a whole pattern (sounds + steps + per-pattern settings) into another slot.
@@ -58,17 +60,13 @@ public:
     // pattern, so the editor can refresh its UI on the next timer tick.
     std::atomic<bool> patternChangedByMidi { false };
 
-    // The whole synth engine renders at this internal oversampling factor (anti-aliasing),
-    // then the processor downsamples to the host rate. renderInto/channels are unaware (they
-    // just run at the higher sr). Reverb/delay/master run at the host rate after downsampling.
-    // "Keys" mode: incoming MIDI notes play channel sounds (each channel listens on its MIDI note),
-    // instead of being read as Launchpad pads. Off by default so the Launchpad keeps working.
-    std::atomic<bool> keysMode { false };
-
     // Auto-audition: when ON, releasing a slot knob/fader fires a TEST hit so you hear the edit. ON by
     // default (user request); toggled from the top bar. A fresh instance starts ON; saved state restores.
     std::atomic<bool> auditionOnEdit { true };
 
+    // The whole synth engine renders at this internal oversampling factor (anti-aliasing),
+    // then the processor downsamples to the host rate. renderInto/channels are unaware (they
+    // just run at the higher sr). Reverb/delay/master run at the host rate after downsampling.
     static constexpr int kEngineOS = 2;
     std::unique_ptr<juce::dsp::Oversampling<float>> engineOS;
     double spectrumRate() const { return currentSampleRate * kEngineOS; }   // analysis tap runs at OS rate
@@ -87,9 +85,6 @@ public:
     // every channel of every pattern (~16 MB of idle RAM).
     std::vector<float> analysisScratch;
 
-    // Launchpad device name (partial match)
-    juce::String launchpadDeviceName = "Launchpad Mini MK3";
-
     // Whether any channel is soloed
     bool anySolo = false;
 
@@ -100,9 +95,6 @@ public:
     bool followPlayback = false;   // global (whole-instrument): editor view follows the playing pattern
     int  visibleChannels = 8;      // how many channel rows the editor shows (4/8/12/16); UI-only
     int  visiblePatterns = 16;     // how many patterns the editor shows/uses (16/24/32); UI-only
-
-    // Page B state per channel (which 8 steps are visible on Launchpad)
-    bool channelPageB[8] = {};
 
     // A fresh STANDALONE must open at FACTORY DEFAULTS, not restore its last session (the JUCE
     // standalone auto-persists + reloads state on launch). We skip that ONE startup restore - it
@@ -132,9 +124,6 @@ public:
     // Called by editor to toggle a step
     void toggleStep(int channel, int step);
 
-    // Called by editor to trigger a Launchpad refresh
-    void requestLaunchpadRefresh() { launchpadRefreshPending.store(true); }
-
     // Called by editor to trigger standalone play/stop. Stop also cuts any
     // ringing voice tails (handled on the audio thread via silenceRequest).
     void standalonePlay()  { sequencer.startStandalone(); }
@@ -157,6 +146,62 @@ public:
     std::atomic<uint32_t> midiInCount { 0 };
     std::atomic<int> lastCcNum { -1 }, lastCcVal { -1 }, lastCcChan { -1 };
 
+    // ==== KEYS (the on-screen keyboard panel) =====================================
+    // Note events from the editor's piano (message thread) -> audio thread, MONO. Packed
+    // (gen << 16) | (midiNote << 8) | velocity7bit; gen bumps every event so re-pressing the
+    // same note retriggers. keysUpEvt carries just a gen. The audio thread plays them on the
+    // SELECTED channel via DrumChannel::keyDown/keyUp.
+    std::atomic<uint32_t> keysDownEvt { 0 }, keysUpEvt { 0 };
+    std::atomic<int>      keysSlot2Down { 0 };     // slot-2 transpose DOWN in semitones (0..24), persisted
+    void pushKeyDown(int note, float vel01)
+    {
+        const uint32_t gen = ((keysDownEvt.load(std::memory_order_relaxed) >> 16) + 1) & 0xffff;
+        keysDownEvt.store((gen << 16) | ((uint32_t)(note & 0x7f) << 8)
+                          | (uint32_t) juce::jlimit(1, 127, (int) std::lround(vel01 * 127.0f)),
+                          std::memory_order_release);
+    }
+    // Key-up carries WHICH note was released ((gen << 8) | note). The audio thread only
+    // applies it if that note is still the held one: a keyboard SLIDE emits up(old) before
+    // down(new) on the message thread, but both land in the same audio block and the block
+    // processes down first - an unchecked up would kill the freshly slid-to note (heard as
+    // "Analog+FM only plays the first key"; Phys/Modal masked it with their natural tails).
+    void pushKeyUp(int note)
+    {
+        const uint32_t gen = ((keysUpEvt.load(std::memory_order_relaxed) >> 8) + 1) & 0xffffff;
+        keysUpEvt.store((gen << 8) | (uint32_t)(note & 0x7f), std::memory_order_release);
+    }
+
+    // -- KEYS recording (audio thread stamps steps + logs take events; editor assembles takes) --
+    // The REFERENCE is FIXED: C3 (MIDI 60) = step pitch 0; the piano's C1..C7 range = +/-36 st.
+    std::atomic<bool> keysRecording { false };     // live: key presses are written into steps
+    std::atomic<int>  keysRecMode { 0 };           // 0/1 = this pattern (key-start / count-in), 2/3 = chain
+    std::atomic<int>  keysArmedPattern { -1 };     // the pattern armed by "this pattern" modes
+    // Fixed-capacity take-event log (audio thread appends, editor's timer drains). flags bit0 =
+    // MERGE continuation (the held key crossed into this step). pattern 0xFF = a LOOP BOUNDARY
+    // marker: in "this pattern" modes each pattern loop is its OWN take, and the channel restarts
+    // CLEAN (steps off / pitch 0 / unmerged) for the next pass.
+    struct KeyEvt { uint8_t pattern, step; int8_t semis; uint8_t flags; };
+    static constexpr int KEYS_EVT_CAP = 8192;
+    KeyEvt keysEvts[KEYS_EVT_CAP];
+    std::atomic<int> keysEvtCount { 0 };
+    uint32_t keysDownSeen = 0, keysUpSeen = 0;     // audio-thread only: last processed event gens
+    std::atomic<int> keysHeldNote { -1 };          // audio-thread writes; the held key (for auto-merge)
+    std::atomic<int> keysLastStampStep { -1 };     // last step stamped for the held key (auto-merge chain)
+    std::atomic<int> keysDrawLastCol   { -1 };     // DRAW recording: last column written (unquantized lane capture)
+    std::atomic<int> keysLoopSeen { -1 };          // loopCount at the last take boundary (-1 = reset)
+    std::atomic<int> keysLastPlayPat { -1 };       // playPattern at the last boundary (chain-mode splits)
+    // Recorded TAKES (message thread only; PERSISTED in the plugin state, so presets keep them).
+    // A take = the events of one loop pass (or one whole chain-mode session). Loading = clear the
+    // channel in every pattern the take touches, then replay its events.
+    struct KeysTake { juce::String name; int channel = 0; std::vector<KeyEvt> evts;
+                      bool isDraw = false; int drawPat = 0; std::vector<int8_t> drawLane; };  // draw takes store the lane
+    std::vector<KeysTake> keysTakes;
+    // DRAW-take handshake (audio thread snapshots a finished loop's lane -> editor drains into a take).
+    std::atomic<bool> keysDrawTakeReady { false };
+    std::atomic<int>  keysDrawTakeChan  { -1 };
+    std::atomic<int>  keysDrawTakePat   { -1 };
+    int8_t keysDrawTakeBuf[DrumChannel::DRAW_RES] = {};
+
     // Audio-callback heartbeat: bumped at the top of every processBlock. The editor watches it -
     // if it stops moving, the HOST isn't sending us audio (device off/missing, FX offline), which
     // freezes the whole plugin (transport, TEST, meters). The Play button's tooltip then explains
@@ -165,7 +210,7 @@ public:
     std::atomic<uint32_t> processHeartbeat { 0 };
 
     // Export sequence as MIDI file for drag-to-DAW
-    juce::File exportMidiFile();
+    juce::File exportMidiFile(int channel);   // Drag MIDI: the SELECTED channel only, as a melody
 
 private:
     double currentSampleRate  = 44100.0;
@@ -197,16 +242,8 @@ private:
     int activeMidiChan   [Sequencer::NUM_CHANNELS] = { 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1 };  // channel each held note went out on
     int midiNoteCountdown[Sequencer::NUM_CHANNELS] = {};
 
-    std::atomic<bool> launchpadRefreshPending { true };
-    std::atomic<bool> launchpadInitPending    { true };
-
-    // MIDI output buffer to Launchpad (written audio thread, sent by editor)
-    juce::CriticalSection launchpadMidiLock;
-    juce::MidiBuffer pendingLaunchpadMidi;
-
     void routeCC(const juce::MidiMessage& msg);
     void updateAnySolo();
     void processDelay(juce::AudioBuffer<float>& audio, juce::AudioBuffer<float>& send, int numSamples);
     void processReverb(juce::AudioBuffer<float>& audio, juce::AudioBuffer<float>& send, int numSamples);
-    void sendLaunchpadRefresh(const juce::Array<Sequencer::TriggerEvent>& events);
 };

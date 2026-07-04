@@ -113,11 +113,24 @@ public:
 class DrumChannel
 {
 public:
-    static constexpr int MAX_STEPS = 32;
+    static constexpr int MAX_STEPS = 64;
     static const int VALID_STEP_COUNTS[];
     static constexpr int NUM_VALID_STEP_COUNTS = 20;
 
-    DrumChannel() { for (int i = 0; i < MAX_STEPS; ++i) { stepVel[i] = 1.0f; stepPitch[i] = 0.0f; stepProb[i] = 1.0f; stepRoll[i] = 1; stepRollDecay[i] = 0.0f; stepNoteLen[i] = 0.0f; stepPan[i] = 0.0f; stepSlide[i] = false; stepCondLen[i] = 1; stepCondMask[i] = 0; } }
+    DrumChannel() { for (int i = 0; i < MAX_STEPS; ++i) { stepVel[i] = 1.0f; stepPitch[i] = 0.0f; stepProb[i] = 1.0f; stepRoll[i] = 1; stepRollDecay[i] = 0.0f; stepNoteLen[i] = 0.0f; stepPan[i] = 0.0f; stepSlide[i] = false; stepMerge[i] = false; stepCondLen[i] = 1; stepCondMask[i] = 0; }
+                    for (int i = 0; i < DRAW_RES; ++i) drawSemi[i] = DRAW_GAP; }
+
+    // ===== DRAW MODE (free piano-draw, an alternative to steps for one channel) =====
+    // A monophonic pitch LANE across the whole bar at fine time resolution: each column holds a
+    // SEMITONE (-36..+36, relative to the slot base / Freq) or DRAW_GAP = silence. Time is
+    // continuous (no step quantise); pitch snaps to semitones (fine tune via the Freq knob).
+    // Playback (Sequencer::checkChannelTriggers) articulates a new mono note at each segment onset
+    // and gates it for the segment length; the engine's unison/detune/chord apply per note.
+    static constexpr int  DRAW_RES = 384;      // columns/bar (divisible by every step count -> clean quantise)
+    static constexpr int8_t DRAW_GAP = -128;   // a column with no note
+    bool   drawMode = false;
+    int8_t drawSemi[DRAW_RES];
+    float  drawVel = 1.0f, drawPan = 0.0f;     // whole-channel in draw mode (no per-note vel/pan)
 
     //-- Sequencer state (per step)
     bool   steps[MAX_STEPS] = {};
@@ -129,6 +142,7 @@ public:
     float  stepNoteLen[MAX_STEPS];    // NOTE LENGTH: 0 = off (natural ring / 1 step for MIDI-out); 0..1 = fraction of ONE step the note lasts - the DECAY is rescaled to fill it (attack keeps its punch; long = slow fall, short = tight gate)
     float  stepPan[MAX_STEPS];        // -1..+1 stereo pan per step (default 0 = centre; internal sounds only)
     bool   stepSlide[MAX_STEPS];      // SLIDE: this step's pitch glides across the step to land on the NEXT active step's pitch
+    bool   stepMerge[MAX_STEPS];      // MERGE: this step CONTINUES the previous step's note (no retrigger; the head's gate extends through it - piano-roll style long notes; head's values apply)
     // Per-step LOOP condition (the "Prob" mode): the step fires only on certain pattern loops. stepCondLen = the
     // cycle length N (1 = every loop = default); stepCondMask = bitmask of which loops (0-based) within the cycle fire.
     int    stepCondLen[MAX_STEPS];    // 1..10 (1 = always)
@@ -210,6 +224,7 @@ public:
     // sine "modes"). Excited by an impulse; each Material picks the mode ratios/gains/decays.
     static constexpr int SrcModal = NUM_SOURCES + 2;   // = 7
     static constexpr int MODAL_MODES = 16;             // max resonant modes per voice
+    static constexpr int MODAL_NOTES = 3;              // Modal unison/chord: up to this many FULL banks (one per note)
     static int         modalMaterialCount();
     static const char* modalMaterialName(int m);
     static int         modalModeCount(int material);              // modes in a material's table
@@ -335,6 +350,8 @@ public:
         float oscFreq = 60.0f, oscPEnvAmt = 0.0f, oscPEnvTime = 0.04f, oscPOffset = 0.0f;
         int   oscUnison = 1; float oscDetune = 0.0f; bool oscUniCenter = false;   // dry/centre voice alongside detuned copies
         int   oscDetuneMode = 0;         // detune direction: 0 = symmetric (both ways), 1 = up only (sharp), 2 = down only (flat)
+        int   chordMode = 0;             // 0 = STD (detuned copies); 1-7 = chord types (Oct/5th/Maj/Min/Sus4/Maj7/Min7) - Osc/Modal/Physical
+        int   chordUnison = 3;           // unison count used in CHORD mode (SEPARATE from oscUnison so STD + CHORD don't share)
         // -- Wavetable (SrcWave) -- which table + scan position (0..1); pitch reuses oscFreq.
         int   waveTable = 0; float wavePos = 0.0f;
         // -- Modal (SrcModal) -- struck resonant body. Base pitch reuses oscFreq.
@@ -545,8 +562,16 @@ public:
     void ensureKsBuffers();
     // gateSamples > 0 = cut this hit after that many samples (soft 3 ms fade - the per-step Length).
     // glideSamples > 0 = SLIDE: the pitch starts at pitchSemis and glides to glideToSemis over that time.
-    void trigger(float velocityGain = 1.0f, float pitchSemis = 0.0f, float pan = 0.0f, long gateSamples = 0,
-                 float glideToSemis = 0.0f, long glideSamples = 0);
+    // Returns the voice index it used (keyDown patches key data onto it; other callers ignore it).
+    int  trigger(float velocityGain = 1.0f, float pitchSemis = 0.0f, float pan = 0.0f, long gateSamples = 0,
+                 float glideToSemis = 0.0f, long glideSamples = 0, bool forceOverlap = false);
+    // KEYS (on-screen keyboard): MONO - fades whatever is ringing, then starts one voice playing
+    // the pressed MIDI note on every ELIGIBLE slot (Analog+FM / Physical / Modal; each slot is
+    // re-tuned from its own base Freq, so the Freq knobs are ignored). slot2Down = extra
+    // transpose DOWN (semitones) applied to slot 2 only. keyUp() releases into the slot's
+    // release tail (sustain/release are live for key voices only - see keyAdsr).
+    int  keyDown(int midiNote, float velocity, int slot2Down);
+    void keyUp();
     static float physDecayScale(int material);   // material ring-length multiplier (for the UI's tail read-out)
     void renderInto(juce::AudioBuffer<float>& dest, int startSample, int numSamples, bool anySolo,
                     juce::AudioBuffer<float>* reverbSendBus = nullptr,
@@ -575,7 +600,10 @@ public:
     void silenceAllVoices() { for (auto& v : voices) v.playHead = -1.0; for (auto& ss : slotSample) ss.sliceCounter = 0; }
     // CHOKE-group cut: fade every ringing voice out over ~3 ms instead of a hard cut
     // (a mid-sample discontinuity clicks when the choking hit is quieter than the tail).
-    void fadeOutVoices() { for (auto& v : voices) if (v.active()) v.killing = true; }
+    // Fade every active voice out. Chokes keep the default 3 ms; the KEYS mono handover uses
+    // ~15 ms (a loud sustained tone cut in 3 ms reads as a CRACKLE when sliding across keys).
+    void fadeOutVoices(float sec = 0.0f)
+    { for (auto& v : voices) if (v.active()) { v.killing = true; if (sec > 0.0f) v.killStep = 1.0f / juce::jmax(1.0f, sec * (float) sr); } }
     bool anyVoiceActive() const { for (auto& v : voices) if (v.active()) return true; return false; }
 
 private:
@@ -591,6 +619,7 @@ private:
     static constexpr int POLY      = 8;
     static constexpr int UNI_MAX   = 7;      // max unison voices for the oscillator
     static constexpr int KS_MAX    = 4096;   // Karplus-Strong delay buffer (min ~11 Hz @ 44.1k)
+    static constexpr int KS_UNI    = 3;      // Physical unison/chord: up to this many real strings per voice
     // Per-slot synthesis state: each of the 2 slots runs its own engine, so it
     // needs its own oscillator phases / noise colour state / Karplus-Strong line /
     // sample playhead. The KS line (16 KB) is HEAP-allocated lazily by ensureKsBuffers()
@@ -602,24 +631,26 @@ private:
         double   uniPhase[UNI_MAX + 1] = { 0,0,0,0,0,0,0,0 };   // +1 for the optional dry/centre voice
         double   fmCarrier = 0.0, fmMod = 0.0, fmSubPhase = 0.0;
         double   wtPhase = 0.0;           // wavetable (SrcWave) phase, 0..1
-        float    modalY1[MODAL_MODES] = {}, modalY2[MODAL_MODES] = {};   // modal resonator-bank state
+        float    modalY1[MODAL_NOTES][MODAL_MODES] = {}, modalY2[MODAL_NOTES][MODAL_MODES] = {};   // resonator state, one FULL bank per chord note
         // Per-voice modal coefficients (re-pitched at the strike from the per-block bank by this voice's pitch),
         // so Modal follows per-step + channel pitch. (a2 = pole radius is pitch-independent but stored for speed.)
-        float    modalA1[MODAL_MODES] = {}, modalA2[MODAL_MODES] = {}, modalGain[MODAL_MODES] = {};
+        float    modalA1[MODAL_NOTES][MODAL_MODES] = {}, modalA2[MODAL_NOTES][MODAL_MODES] = {}, modalGain[MODAL_NOTES][MODAL_MODES] = {};
         int      modalNV = 0;             // mode count captured at the strike (this voice's bank size)
         bool     modalInit = false;       // excitation impulse injected on the first sample
+        bool     modalHold = false;       // KEYS/gate sustain: bank radius clamped ~1 last block (re-bake on change)
         float    fmFbState = 0.0f;
         Biquad   noiseBP;
         float    pinkB[3] = { 0,0,0 };
         float    brownState = 0.0f, prevWhite = 0.0f;
         float    greyZ1 = 0.0f, greyZ2 = 0.0f;   // grey-noise mid-scoop biquad state (inverse equal-loudness)
         uint32_t noiseState = 0x1234567u;
-        std::vector<float> ksBuf;        // KS delay line: empty until ensureKsBuffers(), then KS_MAX floats
-        double   ksWrite = 0.0;
-        float    ksLp = 0.0f;
-        float    ksApSt[12] = {};        // dispersion allpass state (up to 12 stages for user Stiffness -
-                                         // the 2x engine oversampling halves per-stage dispersion, so the
-                                         // old 6-stage cap made the knob nearly inaudible)
+        // KS delay lines: empty until ensureKsBuffers(), then KS_UNI * KS_MAX floats (one region
+        // per unison STRING, string k at offset k*KS_MAX). Physical unison/chord plays several
+        // real strings; single-voice sounds use string 0 only (bit-identical to the old 1-line KS).
+        std::vector<float> ksBuf;
+        double   ksWrite[KS_UNI] = {};
+        float    ksLp[KS_UNI]    = {};
+        float    ksApSt[KS_UNI][12] = {};   // dispersion allpass state per string (up to 12 stages for Stiffness)
         double   smpHead = 0.0;          // this slot's sample playhead
         // === PER-SLOT EQ (begin) - filter state for HP(2)+bells(3)+LP(2); coeffs live in SC ===
         float    eqZ1[7][2] = {}, eqZ2[7][2] = {};
@@ -633,6 +664,12 @@ private:
         // so tied chains keep falling naturally (re-gating the env mid-decay would step/pop).
         float    gateDec = 0.0f;
         double   lfoPhase[3] = {}; // per-slot LFO phases (radians), one per dest, reset at trigger (per-hit restart)
+        // KEYS (on-screen keyboard): this slot re-tuned from its own base freq to the pressed
+        // note, in semitones (multiplies pe3Mul, so it reaches every pitched engine incl. the
+        // Modal strike-tuning). keyMute = the slot's engine can't be played by keys (Sample/
+        // Noise/legacy) -> silent for this key voice only.
+        float    keySemis = 0.0f;
+        bool     keyMute  = false;
     };
     struct Voice
     {
@@ -644,10 +681,13 @@ private:
         float    voicePan = 0.0f;   // per-step stereo pan (-1..+1) for this hit (0 = centre)
         bool     killing  = false;  // choke/gate: fade this voice out (~3 ms) then stop - no hard-cut click
         float    killGain = 1.0f;   // current fade gain while killing
+        float    killStep = 0.0f;   // per-sample fade rate override (0 = the default 3 ms choke)
         long     gateLen  = 0;      // per-step Length: the note's length in samples (0 = off). The audible shaping
                                     // lives in SlotVoice::gateDec (rescaled decay); this also keeps a tied voice alive.
         float    glideStep  = 0.0f; // 303 slide: semitones added to voicePitch per sample while gliding
         long     glideRemain = 0;   // samples of glide left (0 = not gliding)
+        bool     isKey  = false;    // KEYS voice: held-note ADSR (sustain/release live) + per-slot keySemis
+        long     keyOff = -1;       // voiceSamples when the key was RELEASED (-1 = still held / not a key voice)
         const juce::AudioBuffer<float>* smpBuf = nullptr;  // velocity-layer buffer chosen at trigger
         SlotVoice sv[NUM_SLOTS];
         bool active() const { return playHead >= 0.0; }
@@ -702,6 +742,23 @@ private:
         const float h = hold * (float) sr;
         if (ht < h) return 1.0f;                                          // hold
         return decayCurve((long) (ht - h), dec);                          // decay -> 0
+    }
+    // KEYS (held-note) envelope: attack/hold identical to AHD, but the decay settles at the
+    // SUSTAIN level while the key is held, then falls with RELEASE from wherever it was when
+    // the key was let go. ONLY key voices use this - sequencer hits keep the pure AHD above,
+    // so factory sounds + the amp-env graph are untouched (sus/rel are live on the keyboard only).
+    inline float keyAdsr(long t, long tOff, float atk, float hold, float dec, float sus, float rel) const noexcept
+    {
+        sus = juce::jlimit(0.0f, 1.0f, sus);
+        auto held = [&](long tt) -> float {
+            const float a = atk * (float) sr;
+            if ((float) tt < a) return a > 1.0f ? (float) tt / a : 1.0f;  // attack
+            const float ht = (float) tt - a, h = hold * (float) sr;
+            if (ht < h) return 1.0f;                                       // hold
+            return sus + (1.0f - sus) * decayCurve((long)(ht - h), dec);   // decay -> sustain floor
+        };
+        if (tOff < 0 || t < tOff) return held(t);                          // key held
+        return held(tOff) * decayCurve(t - tOff, juce::jmax(0.005f, rel)); // released -> release tail
     }
     inline float whiteNoise(uint32_t& st) const noexcept
     {

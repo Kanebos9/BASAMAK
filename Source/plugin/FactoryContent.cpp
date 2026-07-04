@@ -49,8 +49,11 @@ static void setSteps(DC& c, int n, std::initializer_list<int> on)
     c.numSteps = n;
     for (int i = 0; i < DC::MAX_STEPS; ++i)
     { c.steps[i] = false; c.stepVel[i] = 1.0f; c.stepPitch[i] = 0.0f; c.stepProb[i] = 1.0f; c.stepRoll[i] = 1;
-      c.stepRollDecay[i] = 0.0f; c.stepNoteLen[i] = 0.0f; c.stepPan[i] = 0.0f; c.stepCondLen[i] = 1; c.stepCondMask[i] = 0; }
+      c.stepRollDecay[i] = 0.0f; c.stepNoteLen[i] = 0.0f; c.stepPan[i] = 0.0f; c.stepSlide[i] = false;
+      c.stepMerge[i] = false; c.stepCondLen[i] = 1; c.stepCondMask[i] = 0; }
     for (int s : on) if (s >= 0 && s < n) c.steps[s] = true;
+    c.drawMode = false; c.drawVel = 1.0f; c.drawPan = 0.0f;   // presets/sounds are step-mode
+    for (int i = 0; i < DC::DRAW_RES; ++i) c.drawSemi[i] = DC::DRAW_GAP;
 }
 
 //==============================================================================
@@ -776,6 +779,64 @@ static void eChopper(DC& c) {       // helicopter: brown noise chopped by a fast
     c.volume = 0.85f;
 }
 
+// -- KEYS bank (v1.2.0): built for the on-screen keyboard - real SUSTAIN levels + release tails
+//    (live for KEY voices only; a sequencer hit still plays the pure AHD graph, so these behave
+//    like normal decaying sounds in patterns too). All slot-authored -> never use from presets. --
+static void kKeysBass(DC& c) {      // mono-synth keys bass: saw + square sub, holds while a key is down
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 55.0f;
+    s.oscUnison = 2; s.oscDetune = 0.18f;
+    s.atk = 0.002f; s.dec = 0.5f; s.sustain = 0.55f; s.release = 0.12f;
+    s.filterType = DC::LowPass; s.filterCutoff = 520.0f; s.filterReso = 1.6f; s.filterEnvAmt = 0.5f;
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.15f;
+    auto& b = mkSlot2(c, DC::SrcOsc, 0.58f);
+    b.oscShape = b.oscShapeB = DC::WvSquare; b.oscFreq = 55.0f;      // same base: use Slot-2 pitch in KEYS for the sub
+    b.atk = 0.002f; b.dec = 0.55f; b.sustain = 0.55f; b.release = 0.12f;
+    b.filterType = DC::LowPass; b.filterCutoff = 300.0f; b.filterReso = 0.8f;
+    c.volume = 0.8f;
+}
+static void kEPiano(DC& c) {        // FM e-piano: sine + env-following FM = bell attack, mellow held tone
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSine; s.oscFreq = 220.0f;
+    s.fmDepth = 0.4f; s.fmPitch = 0.4f;                              // ratio ~3x (snapped range 1-6)
+    s.fmEnvFollow = true;                                            // bright strike -> soft sustain
+    s.atk = 0.002f; s.dec = 1.2f; s.sustain = 0.3f; s.release = 0.35f;
+    auto& b = mkSlot2(c, DC::SrcOsc, 0.7f);
+    b.oscShape = b.oscShapeB = DC::WvSine; b.oscFreq = 220.0f;       // clean body under the FM tine
+    b.atk = 0.002f; b.dec = 1.0f; b.sustain = 0.35f; b.release = 0.35f;
+    c.reverbSend = 0.28f; c.volume = 0.78f;   // more audible reverb on the E-Piano (was 0.12 = masked by its long tail)
+}
+static void kSoftPad(DC& c) {       // slow airy pad: wide detuned saws, high sustain, long release
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 220.0f;
+    s.oscUnison = 4; s.oscDetune = 0.3f; s.oscUniCenter = true;
+    s.atk = 0.18f; s.dec = 1.5f; s.sustain = 0.8f; s.release = 0.7f;
+    s.filterType = DC::LowPass; s.filterCutoff = 1400.0f; s.filterReso = 0.9f;
+    c.reverbSend = 0.25f; c.volume = 0.68f;
+}
+static void kOrgan(DC& c) {         // drawbar-ish organ: octave-stack wave at FULL sustain (gate on/off)
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = 9;                                    // Organ (additive octave stack)
+    s.oscFreq = 261.63f;
+    s.atk = 0.005f; s.dec = 0.3f; s.sustain = 1.0f; s.release = 0.08f;
+    c.reverbSend = 0.10f; c.volume = 0.72f;
+}
+static void kSquareLead(DC& c) {    // hollow mono lead: detuned squares, holds while a key is down
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSquare; s.oscFreq = 261.63f;
+    s.oscUnison = 2; s.oscDetune = 0.12f;
+    s.atk = 0.003f; s.dec = 0.4f; s.sustain = 0.7f; s.release = 0.12f;
+    s.filterType = DC::LowPass; s.filterCutoff = 2200.0f; s.filterReso = 1.2f;
+    c.volume = 0.72f;
+}
+static void kStringKeys(DC& c) {    // bowed/ebow string: a HELD key keeps the string energised
+    auto& s = mkSlot(c, DC::SrcPhys);                                // (Physical sustain-hold, keys only)
+    s.physFreq = 261.63f; s.physMaterial = 1.0f;                     // steel
+    s.physTone = 0.6f; s.physPosition = 0.25f;
+    s.atk = 0.01f; s.dec = 1.2f; s.sustain = 0.7f; s.release = 1.2f;   // long ring-out on key-up
+    c.reverbSend = 0.15f; c.volume = 0.8f;
+}
+
 // -- New plucked strings + mallets (Physical / Karplus-Strong; material 0=Nylon 1=Steel 2=Wood 3=Glass 4=Metal 5=Skin;
 //    physPosition low = plucked near the bridge = brighter/twangier). These are one-shot/decaying = a natural fit. --
 static void mNylonGuitar(DC& c){ clearSound(c); c.srcOn[DC::SrcPhys] = true; c.srcWeight[DC::SrcPhys] = 1.0f; c.physFreq = 165.0f; c.physTone = 0.50f; c.physMaterial = 0.0f; c.physPosition = 0.35f; c.srcDec[DC::SrcPhys] = 1.0f; c.volume = 0.84f; }       // warm nylon
@@ -853,6 +914,10 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     // ---- LFO showcases ----
     { "Wobble Bass",  bWobbleBass,  "Bass" },
     { "Siren",        eSiren,       "FX & Synth" },     { "Chopper",      eChopper,    "FX & Synth" },
+    // ---- KEYS bank (v1.2.0): sustain/release live on the on-screen keyboard ----
+    { "Keys Bass",    kKeysBass,    "Keys" },           { "E-Piano",      kEPiano,     "Keys" },
+    { "Soft Pad",     kSoftPad,     "Keys" },           { "Organ",        kOrgan,      "Keys" },
+    { "Square Lead",  kSquareLead,  "Keys" },           { "String Keys",  kStringKeys, "Keys" },
     // ---- MODAL engine (struck resonant bodies). Names carry no "(Modal)" - the tag adds it. ----
     { "Mod Marimba",   moMarimba,    "Modal" }, { "Mod Tubular Bell", moTubular,   "Modal" },
     { "Mod Glass",     moGlass,      "Modal" }, { "Mod Tom",          moTomDrum,   "Modal" },

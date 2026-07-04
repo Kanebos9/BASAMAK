@@ -33,7 +33,7 @@ static juce::String noteNameFor(double hz)
     const int    n     = (int) std::lround(midi);
     const int    cents = (int) std::lround((midi - (double) n) * 100.0);
     static const char* nm[12] = { "C","C#","D","D#","E","F","F#","G","G#","A","A#","B" };
-    juce::String note = juce::String(nm[((n % 12) + 12) % 12]) + juce::String(n / 12 - 1);
+    juce::String note = juce::String(nm[((n % 12) + 12) % 12]) + juce::String(n / 12 - 2);   // C3 = middle C (MIDI 60), matches the keyboard
     if (std::abs(cents) >= 10) note += (cents > 0 ? "+" : "") + juce::String(cents);
     return note;
 }
@@ -140,10 +140,11 @@ juce::Array<SlotParam> slotParamsFor(int engine)
         case DrumChannel::SrcPhys:
             // Position + Tone are edited on the interactive STRING visual (drag the dot: X = Position,
             // Y = Tone) - they're no longer knobs here.
-            p.add(F ("Freq", 20, 2000, &S::physFreq, "nHz", false,
+            p.add(F ("Freq", 20, 2093, &S::physFreq, "nHz", false,
                      "Base pitch of the plucked/struck string. CLICK the value read-out to switch Hz <-> NOTE mode "
-                     "(note mode: shows A1/C2..., dragging snaps to semitones, SHIFT = free, green = exactly on a "
-                     "note). Also follows per-step pitch."));
+                     "(shows A1/C2...; dragging snaps to semitones, SHIFT = free). Also follows per-step pitch. "
+                     "KEYS: touching the piano snaps this to C3 so recordings play back as performed - transpose "
+                     "with it afterwards."));
             p.add(Fc("Material", 0, 5, &S::physMaterial, { "Nylon","Steel","Wood","Glass","Metal","Skin" },
                      "The string/body material - changes the damping + overtone character (Nylon = soft, Steel/Metal = "
                      "bright + long, Wood/Skin = short + dull)."));
@@ -199,7 +200,7 @@ juce::Array<SlotParam> slotParamsFor(int engine)
         case DrumChannel::SrcModal: {
             juce::StringArray mats;
             for (int i = 0; i < DrumChannel::modalMaterialCount(); ++i) mats.add(DrumChannel::modalMaterialName(i));
-            p.add(F ("Freq", 20, 2000, &S::oscFreq, "nHz", false, "Base pitch of the struck body. CLICK the value read-out to switch Hz <-> NOTE mode (snaps to semitones there, SHIFT = free, green = on a note). Follows per-step pitch + the pitch envelope."));
+            p.add(F ("Freq", 20, 2093, &S::oscFreq, "nHz", false, "Base pitch of the struck body. CLICK the value read-out to switch Hz <-> NOTE mode (snaps to semitones there, SHIFT = free). Follows per-step pitch + the pitch envelope. KEYS: touching the piano snaps this to C3 so recordings play back as performed - transpose with it afterwards."));
             p.add(Ic("Material", 0, juce::jmax(0, DrumChannel::modalMaterialCount() - 1), &S::modalMaterial, mats,
                      "The struck body - sets each mode's frequency, gain + decay (Marimba/Tubular Bell/Glass/Membrane/"
                      "Metal Plate/Wood Block/Kalimba/Cowbell). The starting point Decay/Tone/Struct then shape."));
@@ -655,21 +656,22 @@ void SlotEditor::init(int idx, MidiLearnManager& mlm, juce::LookAndFeel* knobLNF
     { DrumChannel::Slot d;
       freqFader->setDoubleClickReturnValue (true, d.oscFreq);
       depthFader->setDoubleClickReturnValue(true, d.fmDepth); }
-    freqFader->setRange(20.0, 2000.0, 0.0);   // match the Physical engine's range (so its sounds can be dialed in)
+    freqFader->setRange(20.0, 2093.0, 0.0);   // reach +36 st above C3 (MIDI 96 = 2093 Hz), the KEYS/Draw top
     freqFader->setSkewFactorFromMidPoint(500.0);   // middle of the fader ~= 500 Hz (gently slow, not too slow)
     freqFader->textFromValueFunction = [](double v) {   // Hz by default; the NOTE in note mode (click the read-out)
         return gFreqNotesMode ? noteNameFor(v) : juce::String(juce::roundToInt(v)) + " Hz";
     };
     freqFader->setTooltip("Frequency: the oscillator's base pitch (Hz). CLICK the value read-out to switch to NOTE "
-                          "mode - it shows the note (A1, C2...), dragging snaps to semitones (SHIFT = free) and the "
-                          "text turns GREEN on an exact note. Click again for Hz. Shared by the analog/FM tone AND "
-                          "the resonator string tuning.");
+                          "mode (shows A1, C2...; dragging snaps to semitones, SHIFT = free). Click again for Hz.\n\n"
+                          "KEYS: the moment you touch the on-screen piano this snaps to C3, so recorded step pitches "
+                          "play back EXACTLY as performed (step pitch 0 = C3). Use this knob AFTERWARDS to transpose "
+                          "the whole sound.");
     freqFader->onValueChange = [this] {
         if (auto* s = getSlot ? getSlot() : nullptr) {
             double v = freqFader->getValue();
             if (gFreqNotesMode && ! juce::ModifierKeys::getCurrentModifiers().isShiftDown()) {   // note mode: park on a semitone
                 const double midi = std::round(69.0 + 12.0 * std::log2(juce::jmax(1.0, v) / 440.0));
-                v = juce::jlimit(20.0, 2000.0, 440.0 * std::pow(2.0, (midi - 69.0) / 12.0));
+                v = juce::jlimit(20.0, 2093.0, 440.0 * std::pow(2.0, (midi - 69.0) / 12.0));
                 freqFader->setValue(v, juce::dontSendNotification);
             }
             s->oscFreq = (float) v; if (onEdit) onEdit(); morphView.repaint();
@@ -1106,13 +1108,21 @@ void StepGridComponent::update(const Sequencer& seq, bool hasSolo)
             rollDec[ch][s] = c.stepRollDecay[s];
             noteLen[ch][s] = c.stepNoteLen[s];
             slide[ch][s]   = c.stepSlide[s];
+            merge[ch][s]   = c.stepMerge[s];
             pan[ch][s]     = c.stepPan[s];
             condLen[ch][s]  = c.stepCondLen[s];
             condMask[ch][s] = c.stepCondMask[s];
         }
+        drawMode[ch] = c.drawMode;
+        dVel[ch] = c.drawVel; dPan[ch] = c.drawPan;
+        if (c.drawMode)
+            for (int i = 0; i < DrumChannel::DRAW_RES; ++i) drawSemi[ch][i] = c.drawSemi[i];
+        else if (drawMagCh == ch || drawDragCh == ch)   // channel left draw mode -> tidy overlay/stroke state
+        { if (drawMagCh == ch) drawMagCh = -1; if (drawDragCh == ch) drawDragCh = -1; drawReadSemi = -128; }
     }
     anySolo = hasSolo;
     curLoop = seq.loopCount;   // for the Prob-mode current-loop indicator
+    playBarFrac = (seq.currentPattern == seq.playPattern && seq.isCurrentlyPlaying) ? (float) seq.barPos() : 0.0f;
     repaint();
 }
 
@@ -1144,6 +1154,7 @@ void StepGridComponent::paintValueCell(juce::Graphics& g, int ch, int step, juce
         auto r = rr.toFloat().reduced(3.5f, 2.0f);
         const bool isActive  = steps[ch][step];
         const bool isCurrent = (playStep[ch] == step);
+        const bool isMerged  = merge[ch][step];
         {
                 // Value mode: each cell is a fader (Velocity/Probability) or a bipolar bar centred
                 // on 0 (Pitch/Pan). ACTIVE steps get a brighter bg + a green outline so they read
@@ -1179,9 +1190,9 @@ void StepGridComponent::paintValueCell(juce::Graphics& g, int ch, int step, juce
                 }
                 else if (editMode == ModePitch)
                 {
-                    const float semis = juce::jlimit(-24.0f, 24.0f, pit[ch][step]);
+                    const float semis = juce::jlimit(-36.0f, 36.0f, pit[ch][step]);
                     const float midY = r.getCentreY();
-                    const float frac = semis / 24.0f;                 // -1..1
+                    const float frac = semis / 36.0f;                 // -1..1 (+/-36 st = the KEYS piano range around C3)
                     const float h = std::abs(frac) * (r.getHeight() * 0.5f);
                     juce::Rectangle<float> bar = frac >= 0
                         ? juce::Rectangle<float>(r.getX(), midY - h, r.getWidth(), h)
@@ -1290,7 +1301,12 @@ void StepGridComponent::paintValueCell(juce::Graphics& g, int ch, int step, juce
                     }
                 }
                 if (isCurrent) { g.setColour(juce::Colour(0xffffcc33)); g.drawRoundedRectangle(r, 4.0f, 1.5f); }
-                if (rr.getWidth() > 20 || magnified)
+                if (isMerged)
+                {
+                    paintMergeArrow(g, ch, step, r);   // thin purple arrow: run start -> run end
+                    txt = "";
+                }
+                if ((rr.getWidth() > 20 || magnified) && txt.isNotEmpty())
                 {
                     g.setColour(juce::Colours::white.withAlpha(isActive ? 0.9f : 0.4f));
                     g.setFont(juce::Font(magnified ? 15.0f : 9.5f, juce::Font::bold));
@@ -1307,6 +1323,171 @@ void StepGridComponent::paintValueCell(juce::Graphics& g, int ch, int step, juce
     }
 }
 
+// MERGE visual: ONE thin purple ARROW per merged run - from the middle of the run's FIRST
+// step to the middle of its LAST step, passing straight through anything in between. Each
+// merged cell draws its shaft segment back to the previous cell's centre; the run's last
+// cell adds the arrowhead (its tip sits at that cell's centre).
+void StepGridComponent::paintMergeArrow(juce::Graphics& g, int ch, int step, juce::Rectangle<float> r)
+{
+    const bool isLast = step + 1 >= numSteps[ch] || ! merge[ch][step + 1];
+    const float cy = r.getCentreY(), cx = r.getCentreX();
+    const float th = r.getHeight() * 0.20f;                     // half the old band height
+    const float prevCX = (float) stepRect(ch, step - 1).getCentreX();   // step 0 can't be merged
+    const float headLen = isLast ? r.getHeight() * 0.32f : 0.0f;
+    g.setColour(juce::Colour(0xffb46bff).withAlpha(0.85f));
+    g.fillRect(juce::Rectangle<float>(prevCX, cy - th * 0.5f, cx - headLen - prevCX, th));
+    if (isLast)
+    {
+        juce::Path p;
+        p.addTriangle(cx, cy, cx - headLen, cy - r.getHeight() * 0.24f,
+                              cx - headLen, cy + r.getHeight() * 0.24f);
+        g.fillPath(p);
+    }
+}
+
+// ===== DRAW MODE canvas =====================================================
+juce::Rectangle<int> StepGridComponent::drawRowRect(int ch) const
+{ return { 0, (ch - firstRow) * rowH, getWidth(), rowH }; }
+
+// The 4x-tall magnify OVERLAY panel around the open channel (clamped inside the grid). It is a
+// TOGGLE (a lens button on the row opens it, close/click-outside dismisses) - not a while-drag
+// zoom, so the cursor never jumps to a re-mapped pitch on click.
+juce::Rectangle<int> StepGridComponent::drawOverlayRect() const
+{
+    if (drawMagCh < 0) return {};
+    const int y = (drawMagCh - firstRow) * rowH;
+    const int mh = rowH * 4;
+    int my = juce::jlimit(0, juce::jmax(0, getHeight() - mh), y + rowH / 2 - mh / 2);
+    return { 0, my, getWidth(), mh };
+}
+
+int StepGridComponent::drawColAt(int x) const
+{ return juce::jlimit(0, DrumChannel::DRAW_RES - 1, (int) ((float) x / (float) juce::jmax(1, getWidth()) * (float) DrumChannel::DRAW_RES)); }
+
+int StepGridComponent::yToDrawSemi(juce::Rectangle<int> rect, int y, int range) const
+{
+    const float half = juce::jmax(1.0f, rect.getHeight() * 0.5f - 4.0f);
+    const float frac = ((float) rect.getCentreY() - (float) y) / half;   // +1 top .. -1 bottom
+    return juce::jlimit(-range, range, (int) std::lround(frac * (float) range));
+}
+
+void StepGridComponent::drawStrokeTo(int ch, juce::Point<int> pos)
+{
+    const int R = DrumChannel::DRAW_RES;
+    const bool inOverlay = (drawMagCh == ch);
+    const auto rect = inOverlay ? drawOverlayRect() : drawRowRect(ch);
+    const int range = inOverlay ? drawRange : 36;
+    const int semi = drawErase ? (int) DrumChannel::DRAW_GAP : yToDrawSemi(rect, pos.y, range);
+    const int col = drawColAt(pos.x);
+    const int lo = juce::jmin(col, drawLastCol < 0 ? col : drawLastCol);
+    const int hi = juce::jmax(col, drawLastCol < 0 ? col : drawLastCol);
+    for (int c = lo; c <= hi; ++c) drawSemi[ch][c] = (int8_t) semi;
+    if (onDrawWrite) onDrawWrite(ch, lo, hi, semi);
+    drawLastCol = col;
+    drawReadSemi = drawErase ? -128 : semi;   // live read-out
+    repaint();
+}
+
+void StepGridComponent::setDrawVelPan(int ch, int x)
+{
+    const float t = juce::jlimit(0.0f, 1.0f, (float) x / (float) juce::jmax(1, getWidth()));
+    if (editMode == ModePan) dPan[ch] = t * 2.0f - 1.0f; else dVel[ch] = t;
+    if (onDrawVelPan) onDrawVelPan(ch, dVel[ch], dPan[ch]);
+    repaint();
+}
+
+void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle<int> rect, bool overlay)
+{
+    if (! overlay && (editMode == ModeVel || editMode == ModePan))
+    {   // DRAW mode: Vel/Pan are ONE value for the whole channel (no per-note drawing).
+        g.setColour(juce::Colour(0xff141426)); g.fillRect(rect);
+        const bool isPan = (editMode == ModePan);
+        const float v = isPan ? (dPan[ch] * 0.5f + 0.5f) : dVel[ch];
+        auto bar = rect.reduced(6, 8).toFloat();
+        g.setColour(juce::Colour(0xff26263c)); g.fillRoundedRectangle(bar, 3.0f);
+        g.setColour(isPan ? juce::Colour(0xff8a6bff) : juce::Colour(0xff2f9e57));
+        if (isPan) { const float cx = bar.getCentreX(), x = bar.getX() + v * bar.getWidth();
+                     g.fillRect(juce::Rectangle<float>(juce::jmin(cx, x), bar.getY(), std::abs(x - cx), bar.getHeight())); }
+        else       { g.fillRoundedRectangle(bar.withWidth(juce::jmax(2.0f, v * bar.getWidth())), 3.0f); }
+        g.setColour(juce::Colours::white.withAlpha(0.85f)); g.setFont(juce::Font(11.0f, juce::Font::bold));
+        g.drawText(isPan ? ("Pan " + juce::String((int) std::lround(dPan[ch] * 100.0f)))
+                         : ("Vel " + juce::String((int) std::lround(dVel[ch] * 100.0f)) + "%"),
+                   rect, juce::Justification::centred, false);
+        if (ch == selectedRow) { g.setColour(juce::Colour(0xffff3b30)); g.drawRect(rect.reduced(1), 2); }
+        return;
+    }
+    const int R = DrumChannel::DRAW_RES;
+    const int range = overlay ? drawRange : 36;
+    const int headH = overlay ? 15 : 0;                       // overlay reserves a header strip for controls
+    juce::Rectangle<int> lane = rect.withTrimmedTop(headH);
+    g.setColour(juce::Colour(overlay ? 0xff1c1c34 : 0xff141426)); g.fillRect(rect);
+    const float cy = (float) lane.getCentreY();
+    const float half = juce::jmax(1.0f, lane.getHeight() * 0.5f - 4.0f);
+    auto yFor = [&](int semi) { return cy - (float) semi / (float) range * half; };
+    // gridlines every 12 st (or every semitone when the range is tight) + the pitch-0 centre line
+    g.setColour(juce::Colour(0x18ffffff));
+    const int gstep = (range <= 12) ? 1 : 12;
+    for (int s = -range; s <= range; s += gstep) if (s != 0) g.drawHorizontalLine((int) yFor(s), (float) lane.getX(), (float) lane.getRight());
+    g.setColour(juce::Colour(0x66ffe9b0)); g.fillRect(juce::Rectangle<float>((float) lane.getX(), cy - 0.5f, (float) lane.getWidth(), 1.0f));
+    // note bars (runs of the same semitone). Out-of-range notes are CLAMPED to the edge (kept, just off-view).
+    const float colW = (float) lane.getWidth() / (float) R;
+    const bool dim = muted[ch] || (anySolo && ! soloed[ch]);
+    for (int c = 0; c < R; )
+    {
+        const int semi = drawSemi[ch][c];
+        if (semi == DrumChannel::DRAW_GAP) { ++c; continue; }
+        int c2 = c; while (c2 < R && drawSemi[ch][c2] == semi) ++c2;
+        const float x1 = (float) lane.getX() + (float) c * colW, x2 = (float) lane.getX() + (float) c2 * colW;
+        const bool outOfView = std::abs(semi) > range;
+        const float y = yFor(juce::jlimit(-range, range, semi));
+        g.setColour(dim ? juce::Colour(0xff5f6a78) : outOfView ? juce::Colour(0x8035c0ff) : juce::Colour(0xff35c0ff));
+        g.fillRect(juce::Rectangle<float>(x1, y - 2.0f, juce::jmax(2.0f, x2 - x1 - 1.0f), outOfView ? 2.0f : 4.0f));
+        c = c2;
+    }
+    if (playBarFrac > 0.0f) { const float px = (float) lane.getX() + playBarFrac * (float) lane.getWidth();
+        g.setColour(juce::Colour(0x88ffcc33)); g.fillRect(juce::Rectangle<float>(px - 0.5f, (float) lane.getY(), 1.0f, (float) lane.getHeight())); }
+
+    if (! overlay)
+    {
+        // the LENS button (top-left) that opens the magnify overlay - a drawn magnifier glyph
+        // (font emoji don't render in JUCE's default typeface). A subtle pill behind it for a target.
+        juce::Rectangle<float> lb((float) rect.getX() + 2.0f, (float) rect.getY() + 2.0f, 18.0f, 15.0f);
+        g.setColour(juce::Colour(0x33ffffff)); g.fillRoundedRectangle(lb, 3.0f);
+        g.setColour(juce::Colour(0xcce8e8f4));
+        g.drawEllipse(lb.getX() + 3.0f, lb.getY() + 3.0f, 7.0f, 7.0f, 1.4f);            // lens
+        g.drawLine(lb.getX() + 9.5f, lb.getY() + 9.5f, lb.getX() + 13.5f, lb.getY() + 12.5f, 1.6f);  // handle
+    }
+    else
+    {
+        // header: range radios (left) + close (right) + read-out
+        g.setColour(juce::Colour(0xff262646)); g.fillRect(rect.getX(), rect.getY(), rect.getWidth(), headH);
+        static const int ranges[4] = { 6, 12, 24, 36 };
+        for (int i = 0; i < 4; ++i) {
+            juce::Rectangle<int> rr(rect.getX() + 4 + i * 38, rect.getY() + 1, 34, headH - 2);
+            const bool on = (drawRange == ranges[i]);
+            g.setColour(on ? juce::Colour(0xff35c0ff) : juce::Colour(0xff33335a)); g.fillRoundedRectangle(rr.toFloat(), 3.0f);
+            g.setColour(on ? juce::Colours::black : juce::Colour(0xffb8b8d0)); g.setFont(juce::Font(9.5f, juce::Font::bold));
+            g.drawText(juce::String::fromUTF8("\xc2\xb1") + juce::String(ranges[i]), rr, juce::Justification::centred, false);
+        }
+        juce::Rectangle<int> cl(rect.getRight() - 18, rect.getY() + 1, 15, headH - 2);
+        g.setColour(juce::Colour(0xff5a2a2a)); g.fillRoundedRectangle(cl.toFloat(), 3.0f);
+        g.setColour(juce::Colours::white); g.setFont(juce::Font(11.0f, juce::Font::bold));
+        g.drawText("x", cl, juce::Justification::centred, false);
+    }
+    // read-out (semitones from 0): a big low-alpha WATERMARK in the top-right (unclickable, just
+    // easy to see while drawing / hovering).
+    if (drawReadSemi != -128)
+    {
+        const juce::String t = (drawReadSemi > 0 ? "+" : "") + juce::String(drawReadSemi);
+        const float fs = overlay ? 34.0f : juce::jmin(30.0f, (float) rect.getHeight() * 0.7f);
+        g.setColour(juce::Colours::white.withAlpha(0.16f)); g.setFont(juce::Font(fs, juce::Font::bold));
+        g.drawText(t + " st", rect.getRight() - 150, rect.getY() + (overlay ? headH : 0), 146,
+                   overlay ? rect.getHeight() - headH : rect.getHeight(), juce::Justification::centredRight, false);
+    }
+    if (overlay) { g.setColour(juce::Colours::white.withAlpha(0.85f)); g.drawRect(rect, 2); }
+    if (ch == selectedRow && ! overlay) { g.setColour(juce::Colour(0xffff3b30)); g.drawRect(rect.reduced(1), 2); }
+}
+
 void StepGridComponent::paint(juce::Graphics& g)
 {
     g.fillAll(juce::Colour(0xff161626));
@@ -1314,8 +1495,20 @@ void StepGridComponent::paint(juce::Graphics& g)
     const int last = juce::jmin(firstRow + visibleRows, Sequencer::NUM_CHANNELS);
     for (int ch = juce::jmax(0, firstRow); ch < last; ++ch)
     {
+        if (drawMode[ch]) { paintDrawLane(g, ch, drawRowRect(ch), false); continue; }   // DRAW lane replaces the step cells
         bool effectiveMute = muted[ch] || (anySolo && !soloed[ch]);
         int n = numSteps[ch];
+
+        // SELECTED channel: a bright RED outline around the whole row (washes/bars were either
+        // invisible or muddy on the dark UI - user picked the outline).
+        if (ch == selectedRow && n > 0)
+        {
+            auto r0 = stepRect(ch, 0), r1 = stepRect(ch, n - 1);
+            g.setColour(juce::Colour(0xffff3b30));
+            g.drawRoundedRectangle((float) r0.getX() - 3.0f, (float) r0.getY() + 0.5f,
+                                   (float)(r1.getRight() - r0.getX()) + 6.0f, (float) r0.getHeight() - 1.0f,
+                                   5.0f, 1.6f);
+        }
 
         for (int step = 0; step < n; ++step)
         {
@@ -1352,6 +1545,9 @@ void StepGridComponent::paint(juce::Graphics& g)
                 g.drawRoundedRectangle(r, 4.0f, 0.5f);
             }
 
+            if (merge[ch][step])   // MERGE: the previous step's note holds THROUGH this one
+                paintMergeArrow(g, ch, step, r);
+
             // MIDI assignment label (top of cell). Assigned = two proportional
             // lines: "ch{N}" over "cc{N}"; the font scales with the cell width so
             // it stays readable with few steps and still fits when there are many.
@@ -1386,6 +1582,28 @@ void StepGridComponent::paint(juce::Graphics& g)
     }
     // The magnified cell is drawn by StepMagnifierOverlay (a top-most sibling) so it can float
     // above the top bar / channel strips, which would otherwise clip a first-row / -column cell.
+
+    // DRAW mode 4x-vertical magnify: while a stroke is in progress, redraw that row's lane enlarged
+    // ON TOP so the pitch is placeable (the base row is only ~44 px for +/-36 semitones).
+    if (drawMagCh >= 0)
+        paintDrawLane(g, drawMagCh, drawOverlayRect(), true);
+}
+
+juce::String StepGridComponent::getTooltip()
+{
+    const int dch = firstRow + juce::jmax(0, getMouseXYRelative().y) / juce::jmax(1, rowH);
+    if (dch >= 0 && dch < NCH && drawMode[dch])
+        return juce::String("DRAW LANE (free piano-draw, no steps). LEFT-drag draws the pitch line (snaps to "
+                            "semitones; the centre line = the slot's Freq = pitch 0). RIGHT-drag erases (a gap = "
+                            "silence). The magnifier button (top-left) opens a tall zoom with +/-6/12/24/36 range "
+                            "and a live semitone read-out. In Vel or Pan edit mode the row sets ONE value for the "
+                            "whole channel. Pick a number in the step-count dropdown to QUANTISE the lane to steps.");
+    return juce::String("STEP GRID. Click = toggle steps; the buttons top-right switch edit modes (Vel/Len/Pitch/"
+                        "Loop/Roll/Pan). Hold a step in any value mode to MAGNIFY it for fine edits.\n\n"
+                        "MERGE: Shift + CLICK a step to merge it into the previous step's note - the run plays as "
+                        "ONE long note (shown as a purple ARROW through the run; great for held bass notes / keys "
+                        "recordings). Click the same way again to unmerge. A merged step uses its run's first step's "
+                        "values - editing it edits that first step.");
 }
 
 bool StepGridComponent::findStepAt(juce::Point<int> pos, int& outCh, int& outStep) const
@@ -1440,11 +1658,11 @@ void StepGridComponent::handleValueDrag(juce::Point<int> pos)
     // HARD LOCK: a value drag ONLY ever edits the step the gesture started on (set in mouseDown). No per-move
     // findStepAt fallback - so once you click a step you can NEVER drag onto a neighbour's parameter.
     if (dragChannel < 0 || dragStep < 0) return;
-    const int ch = dragChannel, step = dragStep;
-    auto r = activeStepRect(ch, step);   // the magnified rect while held = 1.5x finer value travel
+    const int ch = dragChannel, step = dragStep;   // dragStep is already the chain head (see mouseDown)
+    auto r = activeStepRect(ch, step);             // the magnified rect while held = finer value travel
     const float v01 = juce::jlimit(0.0f, 1.0f, 1.0f - (float)(pos.y - r.getY()) / (float) juce::jmax(1, r.getHeight()));
     float value = v01;                                   // Velocity / Probability
-    if (editMode == ModePitch)     value = (v01 * 2.0f - 1.0f) * 24.0f;     // -24..+24 semis
+    if (editMode == ModePitch)     value = (v01 * 2.0f - 1.0f) * 36.0f;     // -36..+36 semis (matches the KEYS range)
     else if (editMode == ModeRoll) value = (float)(1 + juce::roundToInt(v01 * 5.0f)); // 1..6
     else if (editMode == ModePan)  { const float xn = (float)(pos.x - r.getX()) / (float) juce::jmax(1, r.getWidth());
                                      value = juce::jlimit(-1.0f, 1.0f, (xn - 0.5f) * 2.0f); }   // X = pan -1..+1
@@ -1502,8 +1720,63 @@ void StepGridComponent::mouseDoubleClick(const juce::MouseEvent& e)
     repaint();
 }
 
+void StepGridComponent::mouseMove(const juce::MouseEvent& e)
+{
+    // DRAW hover read-out: show the semitone of the note under the cursor (overlay or row).
+    const auto p = e.getPosition();
+    int prev = drawReadSemi; drawReadSemi = -128;
+    if (drawMagCh >= 0 && drawOverlayRect().withTrimmedTop(15).contains(p))
+    {
+        const int semi = drawSemi[drawMagCh][drawColAt(p.x)];
+        if (semi != DrumChannel::DRAW_GAP) drawReadSemi = semi;
+    }
+    else
+    {
+        const int dch = firstRow + (p.y >= 0 ? p.y / juce::jmax(1, rowH) : -1);
+        if (dch >= 0 && dch < NCH && drawMode[dch]) {
+            const int semi = drawSemi[dch][drawColAt(p.x)];
+            if (semi != DrumChannel::DRAW_GAP) drawReadSemi = semi;
+        }
+    }
+    if (drawReadSemi != prev) repaint();
+}
+
 void StepGridComponent::mouseDown(const juce::MouseEvent& e)
 {
+    const auto p = e.getPosition();
+    // DRAW mode: a free mono pitch lane. Left-drag draws (semitone-snapped, no cursor jump - it's
+    // 1:1 in the row), right-drag erases. A LENS button opens a 4x-tall magnify OVERLAY for precise
+    // work (range radios +/-12/24/36 + close). The overlay is a toggle, not a while-drag zoom.
+    if (drawMagCh >= 0)
+    {
+        const auto ov = drawOverlayRect();
+        if (ov.contains(p))
+        {
+            const int hy = ov.getY();
+            if (juce::Rectangle<int>(ov.getRight() - 18, hy + 1, 15, 13).contains(p)) { drawMagCh = -1; drawReadSemi = -128; repaint(); return; }  // close
+            static const int ranges[4] = { 6, 12, 24, 36 };
+            for (int i = 0; i < 4; ++i)
+                if (juce::Rectangle<int>(ov.getX() + 4 + i * 38, hy + 1, 34, 13).contains(p)) { drawRange = ranges[i]; repaint(); return; }   // range radio
+            if (p.y > hy + 15)   // in the lane -> draw
+            { drawDragCh = drawMagCh; drawErase = e.mods.isRightButtonDown(); drawLastCol = -1; drawStrokeTo(drawMagCh, p); }
+            return;
+        }
+        drawMagCh = -1; drawReadSemi = -128; repaint();   // click outside the overlay closes it
+        return;
+    }
+    {
+        const int dch = firstRow + (p.y >= 0 ? p.y / juce::jmax(1, rowH) : -1);
+        if (dch >= 0 && dch < NCH && drawMode[dch])
+        {
+            if (onChannelSelected) onChannelSelected(dch);
+            if (editMode == ModeVel || editMode == ModePan) { drawDragCh = dch; setDrawVelPan(dch, p.x); return; }  // whole-channel Vel/Pan
+            const auto row = drawRowRect(dch);
+            if (juce::Rectangle<int>(row.getX() + 2, row.getY() + 2, 18, 16).contains(p)) { drawMagCh = dch; drawRange = 36; repaint(); return; }  // lens -> open overlay
+            drawDragCh = dch; drawErase = e.mods.isRightButtonDown(); drawLastCol = -1;
+            drawStrokeTo(dch, p);
+            return;
+        }
+    }
     int ch, step;
     bool onStep = findStepAt(e.getPosition(), ch, step);
 
@@ -1518,6 +1791,19 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
     }
 
     if (onStep && onChannelSelected) onChannelSelected(ch);
+    // MERGE toggle: SHIFT + click a step (any edit mode) = this step CONTINUES the previous
+    // step's note (piano-roll style long note). Step 1 can't continue anything. (Cmd/Ctrl were
+    // dropped at user request - shift only.)
+    if (onStep && e.mods.isShiftDown())
+    {
+        if (step > 0)
+        {
+            merge[ch][step] = ! merge[ch][step];
+            if (onStepMergeChanged) onStepMergeChanged(ch, step, merge[ch][step]);
+            repaint();
+        }
+        return;
+    }
     if (editMode == ModeSteps) handleClick(e.getPosition(), true);
     else if (editMode == ModeProb)
     {
@@ -1555,13 +1841,22 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
                 return;   // no drag from a slide toggle
             }
         }
-        if (onStep) beginMagnify(ch, step, e.getPosition());   // 1.5x cell, anchored at the cursor
+        if (onStep)
+        {
+            // A MERGED (continuation) step has no values of its own - it belongs to its chain
+            // HEAD. Magnify AND edit the head, so the magnified cell is ALWAYS the edited one.
+            while (step > 0 && merge[ch][step]) --step;
+            auto hr = stepRect(ch, step);                      // anchor inside the head's own cell
+            beginMagnify(ch, step, { juce::jlimit(hr.getX(), hr.getRight() - 1, e.getPosition().x),
+                                     e.getPosition().y });
+        }
         dragChannel = onStep ? ch : -1; dragStep = onStep ? step : -1; handleValueDrag(e.getPosition());
     }
 }
 
 void StepGridComponent::mouseDrag(const juce::MouseEvent& e)
 {
+    if (drawDragCh >= 0) { if (editMode == ModeVel || editMode == ModePan) setDrawVelPan(drawDragCh, e.getPosition().x); else drawStrokeTo(drawDragCh, e.getPosition()); return; }
     if (e.mods.isRightButtonDown() || e.mods.isPopupMenu()) return;
     if (editMode == ModeSteps) { handleClick(e.getPosition(), false); return; }
     if (editMode == ModeProb)
@@ -1585,6 +1880,7 @@ void StepGridComponent::mouseDrag(const juce::MouseEvent& e)
 
 void StepGridComponent::mouseUp(const juce::MouseEvent&)
 {
+    if (drawDragCh >= 0) { drawDragCh = -1; drawLastCol = -1; drawReadSemi = -128; repaint(); return; }   // draw stroke ended
     // Loop-condition: a plain CLICK (no drag) toggles the bar under the cursor.
     if (editMode == ModeProb && condDragCh >= 0)
     {
@@ -1777,9 +2073,11 @@ void ADSRDisplay::setValues(float a, float h, float d, float s, float r)
 static void adsrBands(float W, float& wA, float& wH, float& wD, float& susW, float& wR)
 {
     const float Wu = juce::jmax(1.0f, W - ADSRDisplay::kMinHold);
-    // AHD only (decay to zero). A/H/D all max at 6 s, so they get EQUAL horizontal travel (1/3 each); sum 1.0 so a
-    // fully-maxed env reaches the right edge. Sustain + Release are retired from the UI (susW/wR = 0).
-    wA = Wu / 3.0f; wH = Wu / 3.0f; wD = Wu / 3.0f; susW = 0.0f; wR = 0.0f;
+    // A-H-D-S-R (v1.2.0: Sustain + Release are BACK - the decay settles at the sustain level while
+    // a GATE is open: a held KEYS note or a step's Note Length; gate closes -> release. Sustain 0 =
+    // exactly the old AHD, so factory sounds draw + play identically). A/H/D share ~72% of the
+    // width, a fixed plateau shows the sustain level, release gets the rest.
+    wA = Wu * 0.24f; wH = Wu * 0.24f; wD = Wu * 0.24f; susW = Wu * 0.10f; wR = Wu * 0.18f;
 }
 
 // Breakpoint positions from the current values. Each time stage has a FIXED skewed
@@ -1792,29 +2090,39 @@ ADSRDisplay::Geo ADSRDisplay::geom() const
     g.left = in.getX(); g.top = in.getY() + 5.0f; g.bottom = in.getBottom() - 2.0f;
     g.h = g.bottom - g.top;
     float wA, wH, wD, susW, wR; adsrBands(in.getWidth(), wA, wH, wD, susW, wR);
-    if (strikeRing) { wA = in.getWidth() * 0.42f; wD = in.getWidth() * 0.50f; wH = 0.0f; }  // 2 bands: Strike | Ring
+    if (strikeRing) { wA = in.getWidth() * 0.28f; wD = in.getWidth() * 0.34f; wH = 0.0f;   // 3 bands: Strike | Ring | Release
+                     susW = in.getWidth() * 0.06f; wR = in.getWidth() * 0.24f; }
     // Strike (attack) is a SHORT 0..50ms range on a LINEAR axis (spreads evenly); the generic AHD attack keeps its
     // ms-skewed 0..6s axis.
     g.xA = g.left + wA * (strikeRing ? juce::jlimit(0.0f, 1.0f, atk / maxAStrike) : skew(atk / maxA));
     g.xH = strikeRing ? g.xA : (g.xA + kMinHold + wH * skew(hld / maxH));   // Strike/Ring: peak is a single point (no Hold)
     g.xD = g.xH   + wD * skew(dcy / maxD);
-    g.xS = g.xD   + susW;     // susW == 0 now (sustain retired) -> xS == xD
-    g.xR = g.xS   + wR * skew(rel / maxR);   // wR == 0 -> xR == xD
-    g.susY = g.bottom;        // decay falls to ZERO (AHD); no sustain plateau
+    if (strikeRing)
+    {   // Strike | Ring(+Sustain on Y) | Release. Physical & Modal both gate now, so Release is a
+        // real handle (how fast the note fades when you let go of a key / a Length step ends).
+        g.xS = g.xD   + susW;
+        g.xR = g.xS   + wR * skew(rel / maxR);
+        g.susY = srSus ? g.bottom - g.h * juce::jlimit(0.0f, 1.0f, sus) : g.bottom;
+        return g;
+    }
+    if (noSusRel) { g.xS = g.xD; g.xR = g.xD; g.susY = g.bottom; return g; }   // samples: AHD only
+    g.xS = g.xD   + susW;                                        // sustain plateau (fixed width)
+    g.xR = g.xS   + wR * skew(rel / maxR);                       // release tail
+    g.susY = g.bottom - g.h * juce::jlimit(0.0f, 1.0f, sus);     // decay lands ON the sustain level
     return g;
 }
 
 void ADSRDisplay::handlePts(juce::Point<float> out[4]) const
 {
-    const Geo q = geom();    // 3 handles: Attack, Hold, Decay (to zero). [3] kept = Decay so old [4] callers are safe.
-    out[0] = { q.xA, q.top }; out[1] = { q.xH, q.top }; out[2] = { q.xD, q.bottom }; out[3] = out[2];
+    const Geo q = geom();    // 4 handles: Attack, Hold, Decay(x)+Sustain(y), Release.
+    out[0] = { q.xA, q.top }; out[1] = { q.xH, q.top }; out[2] = { q.xD, q.susY }; out[3] = { q.xR, q.bottom };
 }
 
 int ADSRDisplay::nearestHandle(juce::Point<float> p) const
 {
     juce::Point<float> h[4]; handlePts(h);
     int best = -1; float bd = 20.0f * 20.0f;   // only grab/hover within ~20px of a handle (else -1 = none), like the pitch env
-    for (int i = 0; i < 3; ++i) { if (strikeRing && i == 1) continue;   // no Hold handle in Strike/Ring
+    for (int i = 0; i < 4; ++i) { if ((strikeRing && i == 1) || (noSusRel && i == 3)) continue;
         float d = p.getDistanceSquaredFrom(h[i]); if (d < bd) { bd = d; best = i; } }
     return best;
 }
@@ -1845,15 +2153,17 @@ void ADSRDisplay::paint(juce::Graphics& g)
     const Geo q = geom();
     juce::Path p;
     p.startNewSubPath(q.left, q.bottom);
-    p.lineTo(q.xA, q.top); p.lineTo(q.xH, q.top); p.lineTo(q.xD, q.bottom);   // Attack / Hold / Decay-to-zero
+    p.lineTo(q.xA, q.top); p.lineTo(q.xH, q.top);
+    p.lineTo(q.xD, q.susY);                                    // decay lands on the SUSTAIN level
+    if (! noSusRel) { p.lineTo(q.xS, q.susY); p.lineTo(q.xR, q.bottom); }   // sustain plateau + release tail (Phys/Modal too)
     juce::Path fill = p; fill.lineTo(q.left, q.bottom); fill.closeSubPath();
     g.setColour(juce::Colour(0x3340cc88)); g.fillPath(fill);
     g.setColour(juce::Colour(0xff55ddaa)); g.strokePath(p, juce::PathStrokeType(1.6f));
 
     juce::Point<float> h[4]; handlePts(h);
     const int active = drag >= 0 ? drag : hover;
-    for (int i = 0; i < 3; ++i) {
-        if (strikeRing && i == 1) continue;   // Strike/Ring: no Hold handle
+    for (int i = 0; i < 4; ++i) {
+        if ((strikeRing && i == 1) || (noSusRel && i == 3)) continue;   // no Hold in Strike/Ring; no Release on samples
         const float r = (i == active) ? 5.5f : 4.0f;
         if (i == active) { g.setColour(juce::Colours::white); g.drawEllipse(h[i].x - r - 2, h[i].y - r - 2, (r + 2) * 2, (r + 2) * 2, 1.2f); }
         g.setColour(kEnvCols[i]); g.fillEllipse(h[i].x - r, h[i].y - r, r * 2, r * 2);
@@ -1875,7 +2185,7 @@ void ADSRDisplay::paint(juce::Graphics& g)
 
     if (strikeRing) {   // make it obvious this is the Physical-specific envelope (cue at top-left)
         g.setColour(juce::Colour(0xff7a8aa8)); g.setFont(juce::Font(9.5f, juce::Font::bold));
-        g.drawText("STRIKE / RING", getLocalBounds().reduced(6), juce::Justification::topLeft, false);
+        g.drawText("STRIKE / RING / REL", getLocalBounds().reduced(6), juce::Justification::topLeft, false);
     }
 
     // Live read-out of the hovered / dragged handle (top-right, above the length).
@@ -1885,7 +2195,10 @@ void ADSRDisplay::paint(juce::Graphics& g)
         switch (active) {
             case 0: t = (strikeRing ? "Strike " : "Attack ") + envTimeStr(atk); break;
             case 1: t = "Hold " + envTimeStr(hld); break;
-            case 2: t = (strikeRing ? "Ring " : "Decay ") + envTimeStr(dcy); break;
+            case 2: t = strikeRing ? ("Ring " + envTimeStr(dcy) + (srSus ? "  Sus " + juce::String(juce::roundToInt(sus * 100.0f)) + "%" : juce::String()))
+                                   : (noSusRel ? "Decay " + envTimeStr(dcy)
+                                               : "Decay " + envTimeStr(dcy) + "  Sus " + juce::String(juce::roundToInt(sus * 100.0f)) + "%"); break;
+            case 3: t = "Release " + envTimeStr(rel); break;
         }
         g.setColour(kEnvCols[active]); g.setFont(juce::Font(10.5f, juce::Font::bold));
         g.drawText(t, getLocalBounds().reduced(5), juce::Justification::topRight, false);
@@ -1901,7 +2214,10 @@ juce::Point<float> ADSRDisplay::playheadXY(float ts) const
     auto lp = [](float a, float b, float t) { return a + (b - a) * juce::jlimit(0.0f, 1.0f, t); };
     if (ts <= aEnd) { float p = aEnd > 1.0e-5f ? ts / aEnd : 1.0f;           return { lp(q.left, q.xA, p), lp(q.bottom, q.top, p) }; }
     if (ts <= hEnd) { float p = hldEff > 1.0e-5f ? (ts - aEnd) / hldEff : 1.0f; return { lp(q.xA, q.xH, p), q.top }; }
-    if (ts <= dEnd) { float p = (ts - hEnd) / dWin;                       return { lp(q.xH, q.xD, p), lp(q.top, q.bottom, p) }; }
+    if (ts <= dEnd) { float p = (ts - hEnd) / dWin;                       return { lp(q.xH, q.xD, p), lp(q.top, q.susY, p) }; }
+    // Sustaining sound: the decay settles at the SUSTAIN level, so the dot parks ON the plateau
+    // (release timing isn't knowable from elapsed time alone). Sustain 0 = silence at the end.
+    if (q.susY < q.bottom - 0.5f) return { q.xS, q.susY };
     return { q.xD, q.bottom };   // decayed to silence -> rest at the end
 }
 
@@ -1934,15 +2250,28 @@ juce::String ADSRDisplay::getTooltip()
                                   "step's note falls across its own length - those steps last longer or shorter than this graph shows.";
     const juce::String tailNote = "  The decay is exponential - at the shown length the sound is at ~5% level, so a "
                                   "quiet tail rings slightly past the moving dot.";
+    // SUSTAIN/RELEASE are GATE-driven; nothing gates a one-shot. Spell that out (user request:
+    // "why does TEST sometimes ring longer than a key I let go of").
+    const juce::String susNote = "  SUSTAIN and RELEASE only act on GATED notes: a HELD KEY (Keys view / MIDI keyboard) "
+                                 "or a step with a Length (Len edit mode). One-shots - TEST and plain steps - have no "
+                                 "gate, so they ignore Sustain/Release and ring their FULL natural decay. That is why "
+                                 "TEST can ring LONGER than a key you let go of: releasing a key fades it with Release, "
+                                 "a one-shot just rings out.";
     const int i = drag >= 0 ? drag : hover;
-    if (strikeRing) {   // Physical/Modal: Strike(attack) + Ring(decay), no Hold
+    if (strikeRing) {   // Physical/Modal: Strike(attack) + Ring(decay + sustain on Y), no Hold
         switch (i) {
             case 0: return "Strike (" + envTimeStr(atk) + ") - how soft the pluck/strike is: 0 = sharp pluck, higher = "
                            "a slow swelled strike (the string is held up so it still reaches full volume)";
-            case 2: return "Ring (" + envTimeStr(dcy) + ") - how long the string/body rings after the strike (drag left/right)";
+            case 2: return srSus
+                        ? "Ring (" + envTimeStr(dcy) + ") - drag LEFT/RIGHT: how long the string/body rings on its own. "
+                          "Drag UP/DOWN: SUSTAIN (" + juce::String((int) std::lround(sus * 100.0f)) + "%) - a HELD key "
+                          "(or a step with Length) keeps the sound alive at that level instead of letting it die; "
+                          "letting go rings out naturally. Sustain only matters on gated notes - TEST/plain steps ignore it."
+                        : "Ring (" + envTimeStr(dcy) + ") - how long the string/body rings after the strike (drag left/right)";
             default: return "Strike/Ring envelope. WHY it's different here: a plucked string / struck body carries its "
-                            "OWN natural decay, so Hold/Sustain don't apply - Strike sets the onset softness and Ring "
-                            "sets that natural decay directly." + tailNote + gateNote + warn;
+                            "OWN natural decay - Strike sets the onset softness, Ring sets that natural decay (and its "
+                            "height sets SUSTAIN: a held key keeps the body energised at that level)." + susNote
+                            + tailNote + gateNote + warn;
         }
     }
     if (toggleable) {   // sample slot with the opt-in envelope
@@ -1961,9 +2290,13 @@ juce::String ADSRDisplay::getTooltip()
     switch (i) {
         case 0: return "Attack (" + envTimeStr(atk) + ") - time to rise from silence to full level";
         case 1: return "Hold (" + envTimeStr(hld) + ") - time held at full before the decay";
-        case 2: return "Decay (" + envTimeStr(dcy) + ") - fall time from full to silence (drag left/right)." + tailNote + warn;
-        default: return "Amp envelope: drag the coloured handles to shape Attack / Hold / Decay. The 'length ~X s' "
-                        "is this envelope's length." + tailNote + gateNote + warn;
+        case 2: return "Decay (" + envTimeStr(dcy) + ") - drag LEFT/RIGHT: fall time. Drag UP/DOWN: SUSTAIN ("
+                       + juce::String((int) std::lround(sus * 100.0f)) + "%) - on a GATED note (held key / step with "
+                       "Length) the fall settles there instead of at silence. One-shots ignore Sustain." + tailNote + warn;
+        case 3: return "Release (" + envTimeStr(rel) + ") - fade-out time AFTER the gate ends (you let go of a key, or "
+                       "a step's Length runs out). One-shots (TEST, plain steps) never reach it.";
+        default: return "Amp envelope: drag the coloured handles to shape Attack / Hold / Decay+Sustain / Release. The "
+                        "'length ~X s' is this envelope's length." + susNote + tailNote + gateNote + warn;
     }
 }
 
@@ -1989,17 +2322,21 @@ void ADSRDisplay::mouseDrag(const juce::MouseEvent& e)
     const Geo q = geom();
     const float bw = getLocalBounds().toFloat().reduced(6.0f).getWidth();
     float wA, wH, wD, susW, wR; adsrBands(bw, wA, wH, wD, susW, wR);
-    if (strikeRing) { wA = bw * 0.42f; wD = bw * 0.50f; }   // match geom()'s Strike|Ring bands
+    if (strikeRing) { wA = bw * 0.28f; wD = bw * 0.34f; susW = bw * 0.06f; wR = bw * 0.24f; }   // match geom() Strike|Ring|Release
     switch (drag)
     {
         case 0: atk = strikeRing ? maxAStrike * juce::jlimit(0.0f, 1.0f, (e.position.x - q.left) / wA)
                                  : maxA * invSkew((e.position.x - q.left) / wA); break;
         case 1: hld = maxH * invSkew((e.position.x - q.xA - kMinHold) / wH); break;
-        case 2: dcy = maxD * invSkew((e.position.x - q.xH) / wD); break;   // horizontal only (decay to zero; no sustain)
+        case 2: dcy = maxD * invSkew((e.position.x - q.xH) / wD);          // x = decay time
+                if ((! strikeRing && ! noSusRel) || (strikeRing && srSus))  // y = SUSTAIN level (0 = classic AHD)
+                    sus = juce::jlimit(0.0f, 1.0f, (q.bottom - e.position.y) / juce::jmax(1.0f, q.h));
+                break;
+        case 3: if (! noSusRel) rel = maxR * invSkew((e.position.x - q.xS) / wR); break;   // x = release time
         default: break;
     }
     atk = juce::jlimit(0.0005f, strikeRing ? maxAStrike : maxA, atk); hld = juce::jlimit(0.0f, maxH, hld);
-    dcy = juce::jlimit(0.002f, maxD, dcy);  rel = juce::jlimit(0.0f, maxR, rel);
+    dcy = juce::jlimit(0.002f, maxD, dcy);  rel = juce::jlimit(0.005f, maxR, rel);
     if (strikeRing) hld = 0.0f;   // Strike/Ring has no Hold stage
     if (onChange) onChange(atk, hld, dcy, sus, rel);
     repaint();
@@ -2239,13 +2576,23 @@ void PitchEnvDisplay::mouseDrag(const juce::MouseEvent& e)
 //==============================================================================
 // VoiceModDisplay - unison / detune / vibrato as an interactive picture
 //==============================================================================
-void VoiceModDisplay::setValues(int unison, float detune, float vibrato, bool centreOn, int detuneMode)
+// Mirror of the DSP chord table (DrumChannel.cpp kChordTab) for the display + interval read-out.
+static const int8_t kUiChordTab[7][6] = {
+    { 0,12,24,36,48,60 }, { 0,7,12,19,24,31 }, { 0,4,7,12,16,19 }, { 0,3,7,12,15,19 },
+    { 0,5,7,12,17,19 }, { 0,4,7,11,12,16 }, { 0,3,7,10,12,15 } };
+static const char* kUiChordName[8] = { "STD", "Oct", "5th", "Maj", "Min", "Sus4", "Maj7", "Min7" };
+static inline int uiChordSemis(int chord, int k)
+{ return (chord >= 1 && chord <= 7) ? (int) kUiChordTab[chord - 1][juce::jlimit(0, 5, k)] : 0; }
+
+void VoiceModDisplay::setValues(int unison, int chordUnison, float detune, float vibrato, bool centreOn, int detuneMode, int chordMode)
 {
-    uni = juce::jlimit(1, kMaxUni, unison);
+    uni = juce::jlimit(1, maxUni, unison);
+    uniChord = juce::jlimit(1, maxUni, chordUnison);
     det = juce::jlimit(0.0f, 1.0f, detune);
     vib = juce::jlimit(0.0f, 1.0f, vibrato);
     centre = centreOn;
     mode = juce::jlimit(0, 2, detuneMode);
+    chord = juce::jlimit(0, 7, chordMode);
     repaint();
 }
 void VoiceModDisplay::setSupport(bool uniSupported, bool vibSupported, juce::String naReason)
@@ -2265,15 +2612,18 @@ VoiceModDisplay::Geo VoiceModDisplay::geom() const
     q.vX = q.left + w * 0.86f;   // Vibrato handle (right)
     q.rangeX = (q.vX - q.dX) * 0.7f;
     q.rangeY = q.hh * 0.85f;
-    // Detune dot: a simple vertical handle (drag up = more symmetric spread). [directional mode reverted]
-    q.dPtX = q.dX; q.dPtY = q.cy - det * q.rangeY;
+    // Detune dot: in STD mode its height = the cents spread; in CHORD mode its height PICKS the
+    // chord TYPE (1-7), so you drag the same dot to choose Maj/Min/Sus4/... (no separate button).
+    q.dPtX = q.dX;
+    q.dPtY = (chord > 0) ? q.cy - ((float)(chord - 1) / 6.0f) * q.rangeY
+                         : q.cy - det * q.rangeY;
     return q;
 }
 int VoiceModDisplay::nearestHandle(juce::Point<float> p) const
 {
     const Geo q = geom();
     juce::Point<float> pts[3] = {
-        { q.uX, q.bottom - (float)(uni - 1) / (float)(kMaxUni - 1) * (q.bottom - q.top) },  // 0 Unison
+        { q.uX, q.bottom - (float)(curUni() - 1) / (float)(juce::jmax(1, maxUni - 1)) * (q.bottom - q.top) },  // 0 Unison
         { q.dPtX, q.dPtY },                                                                 // 1 Detune (mode-aware)
         { q.vX, q.cy - vib * q.hh * 0.85f } };                                              // 2 Vibrato
     int best = -1; float bd = 22.0f * 22.0f;
@@ -2289,8 +2639,9 @@ juce::String VoiceModDisplay::getTooltip()
     if (!uniOn && !vibOn) return "Voice: " + reason;
     // Per-handle tooltip (depends on which dot the mouse is over).
     if (hover == 0 && uniOn)
-        return "UNISON (cyan): drag up/down to set how many voices are stacked (1-7). More voices = a thicker, "
-               "wider sound. Detune spreads them apart.";
+        return "UNISON (cyan): drag up/down for how many voices are stacked (1-7). More = thicker/wider. In "
+               "CHORD mode the voices become CHORD NOTES (2 = root + one interval, 3 = full triad, 4+ = 7ths / "
+               "octave doublings). Detune still spreads/thickens them.";
     if (hover == 1 && uniOn)
         return "DETUNE (amber): drag up to spread the unison voices apart (symmetrically, both sharp and flat). "
                "The cents value is how far the OUTERMOST voice sits from the original pitch, each way "
@@ -2299,8 +2650,11 @@ juce::String VoiceModDisplay::getTooltip()
     if (hover == 2 && vibOn)
         return "VIBRATO (pink): drag up for more pitch wobble at ~5.5 Hz. Shown in semitones (up to ~1.5 st).";
     juce::String s = "Voice controls for the selected slot. ";
-    if (uniOn) s += "Unison = stacked voices; Detune = spread (double-click Detune to add the dry/original pitch). ";
-    if (vibOn) s += "Vibrato = ~5.5 Hz pitch wobble.";
+    if (uniOn) s += "Unison = stacked voices; Detune = spread (double-click Detune to also play the dry pitch). "
+                    "STD chip = detuned copies. CHORD chip = the voices play a chord; the third chip cycles the "
+                    "TYPE (Oct/5th/Maj/Min/Sus4/Maj7/Min7) and shows the stacked intervals for your voice count "
+                    "e.g. Maj (+4,+3). Unison count decides how many chord notes you hear. ";
+    if (vibOn) s += "Vibrato = ~5.5 Hz pitch wobble (works on every engine here).";
     return s;
 }
 void VoiceModDisplay::paint(juce::Graphics& g)
@@ -2318,7 +2672,7 @@ void VoiceModDisplay::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0x14ffffff)); g.drawHorizontalLine((int) q.cy, q.left, q.right);  // centre pitch line
 
     // The voice cluster: `uni` lines spread symmetrically by detune, each wobbling by vibrato.
-    const int n = uniOn ? uni : 1;
+    const int n = uniOn ? curUni() : 1;
     const float spread  = uniOn ? det * q.hh * 0.85f : 0.0f;
     const float vibAmp  = vibOn ? vib * q.hh * 0.30f : 0.0f;
     const int   W = juce::jmax(2, (int) (q.right - q.left));
@@ -2333,10 +2687,27 @@ void VoiceModDisplay::paint(juce::Graphics& g)
         g.setColour(col); g.strokePath(path, juce::PathStrokeType(thick));
     };
     for (int k = 0; k < n; ++k) {
-        const float off = (n > 1) ? (-spread + 2.0f * spread * (float) k / (float)(n - 1)) : 0.0f;
-        const bool isMid = (n % 2 == 1 && k == n / 2);
-        drawVoice(off, juce::Colour(isMid ? 0xff35c0ff : 0x9935c0ff).withMultipliedAlpha(isMid ? 1.0f : 0.55f),
-                  isMid ? 1.6f : 1.0f);
+        float off = (n > 1) ? (-spread + 2.0f * spread * (float) k / (float)(n - 1)) : 0.0f;
+        if (chord > 0)            // chord mode: the lines sit at their chord notes (root at bottom)
+            off = -(float) uiChordSemis(chord, k) / 24.0f * q.hh * 0.9f + off * 0.15f;
+        const bool isRoot = chord > 0 ? (uiChordSemis(chord, k) % 12 == 0) : (n % 2 == 1 && k == n / 2);
+        drawVoice(off, juce::Colour(isRoot ? 0xff35c0ff : 0x9935c0ff).withMultipliedAlpha(isRoot ? 1.0f : 0.55f),
+                  isRoot ? 1.6f : 1.0f);
+    }
+    // Mode chips: STD = detuned copies; CHORD = the unison voices become chord notes. When CHORD
+    // is on, a third chip cycles the chord TYPE and shows the actual stacked intervals for the
+    // current voice count, e.g. "Maj (+4,+3)".
+    if (uniOn) {
+        auto drawChip = [&](juce::Rectangle<float> r, const juce::String& t, bool on, juce::Colour onCol) {
+            g.setColour(on ? onCol.withAlpha(0.85f) : juce::Colour(0xff26264a)); g.fillRoundedRectangle(r, 3.0f);
+            g.setColour(on ? juce::Colours::black : juce::Colour(0xff9a9ac0));
+            g.setFont(juce::Font(8.5f, juce::Font::bold)); g.drawText(t, r, juce::Justification::centred, false);
+        };
+        chip[0] = juce::Rectangle<float>(b.getX() + 5.0f,  b.getY() + 3.0f, 34.0f, 13.0f);
+        chip[1] = juce::Rectangle<float>(b.getX() + 41.0f, b.getY() + 3.0f, 46.0f, 13.0f);
+        drawChip(chip[0], "STD",   chord == 0, juce::Colour(0xff35c0ff));
+        drawChip(chip[1], "CHORD", chord >  0, juce::Colour(0xffb98cff));
+        chip[2] = {};   // the chord TYPE is picked by dragging the detune dot (label drawn above it)
     }
     if (uniOn && centre)   // the extra DRY/original voice (double-click Detune) - drawn white so it stands out
         drawVoice(0.0f, juce::Colour(0xffffffff).withMultipliedAlpha(0.95f), 1.8f);
@@ -2349,11 +2720,24 @@ void VoiceModDisplay::paint(juce::Graphics& g)
         g.drawText(lbl, juce::Rectangle<float>(x - 24, y - 18, 48, 12), juce::Justification::centred, false);
     };
     if (uniOn) {
-        const float uy = q.bottom - (float)(uni - 1) / (float)(kMaxUni - 1) * (q.bottom - q.top);
-        handle(q.uX, uy, juce::Colour(0xff35c0ff), 0, juce::String(uni) + "x");
-        // DETUNE: real cents spread (how far the outermost voice sits from the original, each way).
-        handle(q.dPtX, q.dPtY, juce::Colour(0xffffc23a), 1,
-               juce::String::fromUTF8("±") + juce::String(juce::roundToInt(det * 100.0f)) + "c");
+        const float uy = q.bottom - (float)(curUni() - 1) / (float)(juce::jmax(1, maxUni - 1)) * (q.bottom - q.top);
+        handle(q.uX, uy, juce::Colour(0xff35c0ff), 0, juce::String(curUni()) + "x");
+        if (chord > 0) {
+            // DETUNE dot = the chord-TYPE selector: its height picks the type. The name + the
+            // stacked intervals for the current voice count are drawn just ABOVE the dot.
+            handle(q.dPtX, q.dPtY, juce::Colour(0xffb98cff), 1, juce::String());
+            juce::String iv; int prev = 0;
+            for (int k = 1; k < curUni(); ++k) { const int sMi = uiChordSemis(chord, k);
+                iv += (iv.isEmpty() ? "" : ", ") + ("+" + juce::String(sMi - prev) + " st"); prev = sMi; }
+            g.setColour(juce::Colour(0xffcdb4ff)); g.setFont(juce::Font(9.5f, juce::Font::bold));
+            g.drawText(juce::String(kUiChordName[chord]) + (iv.isNotEmpty() ? " (" + iv + ")" : ""),
+                       juce::Rectangle<float>(q.dPtX - 80.0f, juce::jmax(q.top - 2.0f, q.dPtY - 20.0f), 160.0f, 11.0f),
+                       juce::Justification::centred, false);
+        } else {
+            // DETUNE (STD): real cents spread (how far the outermost voice sits from the original, each way).
+            handle(q.dPtX, q.dPtY, juce::Colour(0xffffc23a), 1,
+                   juce::String::fromUTF8("±") + juce::String(juce::roundToInt(det * 100.0f)) + "c");
+        }
     }
     if (vibOn) {
         // VIBRATO shown as the real peak pitch deviation in semitones (~1.5 st at full).
@@ -2365,18 +2749,29 @@ void VoiceModDisplay::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0x559a9ac0)); g.setFont(juce::Font(8.0f, juce::Font::plain));
     if (uniOn) {
         g.drawText("uni",    juce::Rectangle<float>(q.uX - 18, q.bottom - 1, 36, 9), juce::Justification::centred, false);
-        g.drawText("detune", juce::Rectangle<float>(q.dX - 24, q.bottom - 1, 48, 9), juce::Justification::centred, false);
+        g.drawText(chord > 0 ? "chord" : "detune", juce::Rectangle<float>(q.dX - 24, q.bottom - 1, 48, 9), juce::Justification::centred, false);
     }
     if (vibOn) g.drawText("vib", juce::Rectangle<float>(q.vX - 18, q.bottom - 1, 36, 9), juce::Justification::centred, false);
 }
 void VoiceModDisplay::mouseMove(const juce::MouseEvent& e) { int h = nearestHandle(e.position); if (h != hover) { hover = h; repaint(); } }
-void VoiceModDisplay::mouseDown(const juce::MouseEvent& e) { drag = nearestHandle(e.position); if (drag >= 0) mouseDrag(e); }
+void VoiceModDisplay::mouseDown(const juce::MouseEvent& e)
+{
+    if (uniOn) {
+        if (chip[0].contains(e.position)) { if (chord != 0) { chord = 0; emit(); repaint(); if (onDragEnd) onDragEnd(); } return; }
+        if (chip[1].contains(e.position)) { if (chord == 0) { chord = 3; emit(); repaint(); if (onDragEnd) onDragEnd(); } return; }  // enter CHORD (Maj); pick type by dragging the detune dot
+    }
+    drag = nearestHandle(e.position); if (drag >= 0) mouseDrag(e);
+}
 void VoiceModDisplay::mouseDrag(const juce::MouseEvent& e)
 {
     if (drag < 0) return;
     const Geo q = geom();
-    if (drag == 0) uni = juce::jlimit(1, kMaxUni, 1 + juce::roundToInt((q.bottom - e.position.y) / juce::jmax(1.0f, q.bottom - q.top) * (kMaxUni - 1)));
-    else if (drag == 1) { mode = 0; det = juce::jlimit(0.0f, 1.0f, (q.cy - e.position.y) / juce::jmax(1.0f, q.rangeY)); }
+    if (drag == 0) { int& tgt = (chord > 0) ? uniChord : uni; tgt = juce::jlimit(1, maxUni, 1 + juce::roundToInt((q.bottom - e.position.y) / juce::jmax(1.0f, q.bottom - q.top) * (float)(maxUni - 1))); }
+    else if (drag == 1) {
+        if (chord > 0)   // CHORD mode: the detune dot's height selects the chord TYPE (1-7)
+            chord = juce::jlimit(1, 7, 1 + juce::roundToInt(juce::jlimit(0.0f, 1.0f, (q.cy - e.position.y) / juce::jmax(1.0f, q.rangeY)) * 6.0f));
+        else { mode = 0; det = juce::jlimit(0.0f, 1.0f, (q.cy - e.position.y) / juce::jmax(1.0f, q.rangeY)); }
+    }
     else if (drag == 2) vib = juce::jlimit(0.0f, 1.0f, (q.cy - e.position.y) / juce::jmax(1.0f, q.hh * 0.85f));
     emit();
     repaint();
@@ -2860,6 +3255,101 @@ juce::String LfoDisplay::getTooltip()
 }
 
 //==============================================================================
+// KeysPanel (the on-screen piano)
+//==============================================================================
+KeysPanel::KeysPanel()
+{
+    kbState.addListener(this);
+    addAndMakeVisible(kb);
+    kb.setAvailableRange(24, 96);                       // C1..C7
+    kb.setLowestVisibleKey(36);                         // open around C2 (bass-friendly)
+    kb.setColour(juce::MidiKeyboardComponent::keyDownOverlayColourId, juce::Colour(0xaae8bf4d));
+    kb.setColour(juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, juce::Colour(0x44e8bf4d));
+
+    auto combo = [this](juce::ComboBox& c) { addAndMakeVisible(c); };
+    combo(comboRecMode); combo(comboSlot2);
+    addAndMakeVisible(btnRec);
+    btnRec.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
+    addAndMakeVisible(btnTakes);
+    btnTakes.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
+
+    auto lab = [this](juce::Label& l, const juce::String& t) {
+        addAndMakeVisible(l); l.setText(t, juce::dontSendNotification);
+        l.setFont(juce::Font(10.0f)); l.setJustificationType(juce::Justification::centred);
+        l.setColour(juce::Label::textColourId, juce::Colour(0xff8090b0));
+    };
+    lab(lblRecMode, "Record mode"); lab(lblSlot2, "Slot 2 pitch");
+    lab(lblHint, "");
+    lblHint.setFont(juce::Font(13.5f));                    // readable (was tiny)
+    lblHint.setColour(juce::Label::textColourId, juce::Colour(0xffb8c4dc));
+    lblHint.setJustificationType(juce::Justification::topRight);
+}
+
+void KeysPanel::resized()
+{
+    auto r = getLocalBounds().reduced(8);
+    // ONE aligned control row (label over control), the hint fills the right side, the piano
+    // takes the rest (slightly shorter than v1 so the strip isn't cramped).
+    auto strip = r.removeFromTop(50);
+    auto place = [&strip](juce::Component& c, juce::Label* l, int w) {
+        auto col = strip.removeFromLeft(w);
+        if (l) { l->setBounds(col.removeFromTop(15)); }
+        else    col.removeFromTop(15);
+        c.setBounds(col.reduced(2, 1));
+    };
+    place(btnRec,       nullptr,      78);
+    strip.removeFromLeft(6);
+    place(comboRecMode, &lblRecMode, 224);
+    strip.removeFromLeft(6);
+    place(btnTakes,     nullptr,     132);
+    strip.removeFromLeft(6);
+    place(comboSlot2,   &lblSlot2,   104);
+    strip.removeFromLeft(10);
+    lblHint.setBounds(strip);   // two-line hint uses the whole remaining strip height
+
+    r.removeFromTop(6);
+    kb.setBounds(r);
+    // white-key width so the full C1..C7 range fits the panel (43 white keys in 6 octaves)
+    kb.setKeyWidth(juce::jmax(8.0f, (float) r.getWidth() / 43.0f));
+}
+
+void KeysPanel::paint(juce::Graphics& g)
+{
+    g.fillAll(juce::Colour(0xff12121f));
+    g.setColour(juce::Colour(0xff33335a));
+    g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(1.0f), 6.0f, 1.2f);
+    g.setColour(juce::Colour(0xff7799cc));
+    g.setFont(juce::Font(11.0f, juce::Font::bold));
+    g.drawText("KEYS", 12, 2, 60, 14, juce::Justification::centredLeft, false);
+    if (countdown > 0)   // count-in overlay: big 3-2-1 over the piano
+    {
+        const int n = (countdown + 23) / 24;
+        g.setColour(juce::Colour(0xccff5544));
+        g.setFont(juce::Font(64.0f, juce::Font::bold));
+        g.drawText(juce::String(n), getLocalBounds(), juce::Justification::centred, false);
+    }
+}
+
+void KeysPanel::handleNoteOn(juce::MidiKeyboardState*, int, int note, float vel)
+{
+    held.removeFirstMatchingValue(note);
+    held.add(note);
+    lastVel = vel;
+    if (onKeyDown) onKeyDown(note, vel);
+}
+
+void KeysPanel::handleNoteOff(juce::MidiKeyboardState*, int, int note, float)
+{
+    const bool wasTop = ! held.isEmpty() && held.getLast() == note;
+    held.removeFirstMatchingValue(note);
+    if (wasTop)
+    {
+        if (held.isEmpty()) { if (onKeyUp) onKeyUp(note); }
+        else if (onKeyDown) onKeyDown(held.getLast(), lastVel);   // mono fall-back to the previous held key
+    }
+}
+
+//==============================================================================
 // SoundPad
 //==============================================================================
 static constexpr float kPadMargin = 0.14f; // inset of the shape inside the unit square
@@ -3244,7 +3734,7 @@ DrumSequencerEditor::DrumSequencerEditor(DrumSequencerProcessor& p)
                                 (area.getHeight() * 0.90) / (double) contentHeightPx);
     }
     setSize(juce::roundToInt(DESIGN_W * scale), juce::roundToInt(contentHeightPx * scale));
-    startTimerHz(24);
+    startTimerHz(60);   // smooth playhead motion (the grid/meters update every tick; heavy hashing is throttled below)
     proc.midiLearn.addListener(this);
 }
 
@@ -3259,9 +3749,11 @@ DrumSequencerEditor::~DrumSequencerEditor()
     patModeBtn.setLookAndFeel(nullptr);
     for (juce::Button* b : { (juce::Button*)&btnPlay, (juce::Button*)&btnStop, (juce::Button*)&btnUndo,
                              (juce::Button*)&btnRedo, (juce::Button*)&btnRoute, (juce::Button*)&btnSaveMix,
-                             (juce::Button*)&btnToggleDetail, (juce::Button*)&btnClearPat, (juce::Button*)&btnTooltips,
+                             (juce::Button*)&btnToggleDetail, (juce::Button*)&btnKeysView, (juce::Button*)&btnClearPat,
+                             (juce::Button*)&btnTooltips,
                              (juce::Button*)&btnCh8, (juce::Button*)&btnCh16, (juce::Button*)&btnPat16,
                              (juce::Button*)&btnPat32 }) b->setLookAndFeel(nullptr);
+    keysPanel.btnTakes.setLookAndFeel(nullptr);   // dropBtnLNF
     for (auto& s : strips)
     {
         s.btnPoly.setLookAndFeel(nullptr);
@@ -3480,7 +3972,7 @@ void DrumSequencerEditor::rebuildSoundMixMenu(int ch)
     auto facNames = Factory::mixNames();
     auto facCats  = Factory::mixCategories();
     static const char* catOrder[] = { "Kicks", "Snares & Claps", "Hats & Cymbals", "Toms",
-                                      "Percussion", "Bass", "Bells & Mallets", "Plucks & Strings", "Modal", "FX & Synth" };
+                                      "Percussion", "Bass", "Keys", "Bells & Mallets", "Plucks & Strings", "Modal", "FX & Synth" };
     // "Unified Synth" category removed - that engine + its factory mixes are retired from the UI.
     for (auto* cat : catOrder)
     {
@@ -3560,7 +4052,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         h = mix(h, sl.engine); h = mix(h, f(sl.weight));
         h = mix(h, f(sl.atk)); h = mix(h, f(sl.hold)); h = mix(h, f(sl.dec)); h = mix(h, f(sl.sustain)); h = mix(h, f(sl.release)); h = mix(h, f(sl.vibrato));
         h = mix(h, sl.oscShape); h = mix(h, sl.oscShapeB); h = mix(h, f(sl.oscFreq)); h = mix(h, f(sl.oscPEnvAmt)); h = mix(h, f(sl.oscPEnvTime)); h = mix(h, f(sl.oscPOffset));
-        h = mix(h, sl.oscUnison); h = mix(h, f(sl.oscDetune)); h = mix(h, sl.oscUniCenter ? 1 : 0); h = mix(h, sl.oscDetuneMode);
+        h = mix(h, sl.oscUnison); h = mix(h, f(sl.oscDetune)); h = mix(h, sl.oscUniCenter ? 1 : 0); h = mix(h, sl.oscDetuneMode); h = mix(h, sl.chordMode); h = mix(h, sl.chordUnison);
         h = mix(h, sl.fxDriveType); h = mix(h, f(sl.fxDrive)); h = mix(h, f(sl.fxReverbSend)); h = mix(h, f(sl.fxDelaySend));
         h = mix(h, sl.noiseType); h = mix(h, f(sl.noiseCenter)); h = mix(h, f(sl.noiseWidth)); h = mix(h, f(sl.noiseRes)); h = mix(h, f(sl.noiseDrive)); h = mix(h, f(sl.noiseCrackle));
         h = mix(h, f(sl.fmPitch)); h = mix(h, f(sl.fmSpread)); h = mix(h, f(sl.fmDepth)); h = mix(h, f(sl.fmPEnvAmt)); h = mix(h, f(sl.fmPEnvTime)); h = mix(h, f(sl.fmPOffset)); h = mix(h, f(sl.fmFeedback)); h = mix(h, f(sl.fmSub));
@@ -3625,7 +4117,10 @@ juce::int64 DrumSequencerEditor::stateHash() const
             h = mix(h, ch.numSteps);
             juce::int64 st = 0; for (int i = 0; i < DrumChannel::MAX_STEPS; ++i) st = (st << 1) | (ch.steps[i] ? 1 : 0);
             h = mix(h, st); h = mix(h, ch.mute ? 1 : 0); h = mix(h, ch.solo ? 2 : 0);
-            for (int i = 0; i < ch.numSteps; ++i) { h = mix(h, f(ch.stepVel[i])); h = mix(h, f(ch.stepPitch[i])); h = mix(h, f(ch.stepProb[i])); h = mix(h, f(ch.stepNoteLen[i])); h = mix(h, ch.stepSlide[i] ? 1 : 0); h = mix(h, ch.stepRoll[i]); h = mix(h, f(ch.stepRollDecay[i])); h = mix(h, f(ch.stepPan[i])); h = mix(h, ch.stepCondLen[i]); h = mix(h, ch.stepCondMask[i]); }
+            for (int i = 0; i < ch.numSteps; ++i) { h = mix(h, f(ch.stepVel[i])); h = mix(h, f(ch.stepPitch[i])); h = mix(h, f(ch.stepProb[i])); h = mix(h, f(ch.stepNoteLen[i])); h = mix(h, ch.stepSlide[i] ? 1 : 0); h = mix(h, ch.stepMerge[i] ? 1 : 0); h = mix(h, ch.stepRoll[i]); h = mix(h, f(ch.stepRollDecay[i])); h = mix(h, f(ch.stepPan[i])); h = mix(h, ch.stepCondLen[i]); h = mix(h, ch.stepCondMask[i]); }
+            h = mix(h, ch.drawMode ? 1 : 0);
+            if (ch.drawMode) { h = mix(h, f(ch.drawVel)); h = mix(h, f(ch.drawPan));
+                for (int i = 0; i < DrumChannel::DRAW_RES; ++i) h = mix(h, (int) ch.drawSemi[i] + 128); }
         }
     }
     h = mix(h, f(s.standaloneBpm)); h = mix(h, s.timeSigNum); h = mix(h, s.timeSigDen);
@@ -3676,6 +4171,8 @@ void DrumSequencerEditor::resetChannelToDefault(DrumChannel& c, int ch)
     // (Physical starts off so the default blend is unchanged).
     for (int i = 0; i < 4; ++i) { c.srcOn[i] = true; c.srcWeight[i] = 0.25f; }
     c.srcOn[DrumChannel::SrcPhys] = false; c.srcWeight[DrumChannel::SrcPhys] = 0.0f;
+    c.drawMode = false; c.drawVel = 1.0f; c.drawPan = 0.0f;   // fresh channel = step mode
+    for (int i = 0; i < DrumChannel::DRAW_RES; ++i) c.drawSemi[i] = DrumChannel::DRAW_GAP;
     c.padX = c.padY = 0.5f; c.padLayoutB = false;
     c.layerOscShape = 0; c.layerSineFreq = 60.0f; c.layerSinePEnvAmt = 0.0f; c.layerSinePEnvTime = 0.04f; c.layerSinePOffset = 0.0f;
     c.oscUnison = 1; c.oscDetune = 0.0f; c.oscSustain = 0.0f; c.fmSustain = 0.0f; c.physSustain = 0.0f;
@@ -3979,6 +4476,11 @@ void DrumSequencerEditor::handlePresetChange()
 {
     int id = comboPreset.getSelectedId();
 
+    // Loading a preset stops the transport (a new song shouldn't keep the old one playing).
+    const bool isLoad = (id >= FACTORY_PST_BASE && id < FACTORY_PST_BASE + Factory::presetNames().size())
+                        || id == ID_INIT_PRESET || (id >= 1 && id <= presetFiles.size());
+    if (isLoad && proc.sequencer.isCurrentlyPlaying && ! proc.sequencer.dawSync) proc.standaloneStop();
+
     if (id >= FACTORY_PST_BASE && id < FACTORY_PST_BASE + Factory::presetNames().size())
     {
         const int pi = id - FACTORY_PST_BASE;
@@ -4182,7 +4684,7 @@ void DrumSequencerEditor::initPreset()
             for (int i = 0; i < DrumChannel::MAX_STEPS; ++i) {
                 ch.steps[i] = false; ch.stepVel[i] = 1.0f; ch.stepPitch[i] = 0.0f; ch.stepProb[i] = 1.0f;
                 ch.stepRoll[i] = 1; ch.stepRollDecay[i] = 0.0f; ch.stepNoteLen[i] = 0.0f; ch.stepPan[i] = 0.0f;
-                ch.stepSlide[i] = false; ch.stepCondLen[i] = 1; ch.stepCondMask[i] = 0;
+                ch.stepSlide[i] = false; ch.stepMerge[i] = false; ch.stepCondLen[i] = 1; ch.stepCondMask[i] = 0;
             }
         }
     }
@@ -4235,7 +4737,6 @@ void DrumSequencerEditor::fullRefresh()
     selectChannel(selectedChannel);
     refreshPatternOptions();
     refreshFollowButton();
-    refreshKeysButton();
     refreshAuditionButton();
     // Routing (choke group / aux Out / MIDI Out) is CHANNEL-WIDE - it must be identical on every pattern. A load can
     // leave it inconsistent (old projects, or patterns 16-31 that weren't in the saved file), which made it "sometimes"
@@ -4257,7 +4758,7 @@ void DrumSequencerEditor::fullRefresh()
 void DrumSequencerEditor::pushUndoSnapshot()
 {
     UndoEntry e;
-    proc.getStateInformation(e.state);
+    e.state = proc.captureStateTree();          // the TREE directly - no binary roundtrip (fast)
     e.presetName         = presetName;          // remember the preset label as it is now
     e.presetBaselineHash = presetBaselineHash;
     e.presetModified     = presetModified;
@@ -4270,7 +4771,7 @@ void DrumSequencerEditor::pushUndoSnapshot()
 void DrumSequencerEditor::applyUndoState(const UndoEntry& e)
 {
     applyingUndo = true;
-    proc.setStateInformation(e.state.getData(), (int) e.state.getSize());
+    proc.applyStateTree(e.state);               // apply the TREE directly (no deserialize)
     fullRefresh();
     presetName         = e.presetName;          // restore the preset label too
     presetBaselineHash = e.presetBaselineHash;
@@ -4486,7 +4987,11 @@ void DrumSequencerEditor::setupComponents()
     updateBarLength();
 
     content.addAndMakeVisible(dragMidi);
-    dragMidi.getMidiFile = [this] { return proc.exportMidiFile(); };
+    dragMidi.getMidiFile = [this] { return proc.exportMidiFile(selectedChannel); };
+    dragMidi.setTooltip("Drag MIDI: drag this into your DAW to export the SELECTED channel as a MIDI clip. Each "
+                        "step's PITCH becomes a real note (base = slot 1's Freq, e.g. C3 after playing the keys; "
+                        "all-equal pitches = one repeated note). Merged runs export as ONE long note; velocity, "
+                        "rolls, note Length, swing and tempo all carry over.");
 
 
     // Preset menu
@@ -4545,7 +5050,7 @@ void DrumSequencerEditor::setupComponents()
             for (int s = 0; s < DrumChannel::MAX_STEPS; ++s) {
                 ch.steps[s] = false; ch.stepVel[s] = 1.0f; ch.stepPitch[s] = 0.0f; ch.stepProb[s] = 1.0f;
                 ch.stepRoll[s] = 1; ch.stepRollDecay[s] = 0.0f; ch.stepNoteLen[s] = 0.0f; ch.stepPan[s] = 0.0f;
-                ch.stepSlide[s] = false; ch.stepCondLen[s] = 1; ch.stepCondMask[s] = 0;
+                ch.stepSlide[s] = false; ch.stepMerge[s] = false; ch.stepCondLen[s] = 1; ch.stepCondMask[s] = 0;
             }
         stepGrid.update(proc.sequencer, proc.anySolo);
         refreshPatternButtons();
@@ -4583,25 +5088,15 @@ void DrumSequencerEditor::setupComponents()
     patternBar.setAutoHide(false);
     patternBar.addListener(this);
 
-    content.addAndMakeVisible(btnKeys);
-    btnKeys.setClickingTogglesState(false);
-    btnKeys.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
-    btnKeys.setTooltip("Keys mode: play the channel SOUNDS from a MIDI keyboard. ALL channels (1-16) respond - each "
-                       "triggers when you play its MIDI note (set/seen in the Routing popup; the factory defaults start "
-                       "at white keys C2..C3 and continue up the scale) - like hitting its TEST button. While ON, "
-                       "incoming MIDI notes play sounds instead of being used to edit the step grid from a pad "
-                       "controller. Sound channels only - channels routed to MIDI Out are skipped.");
-    btnKeys.onClick = [this] { proc.keysMode.store(! proc.keysMode.load()); refreshKeysButton(); };
-    refreshKeysButton();
-
     content.addAndMakeVisible(btnToggleDetail);
     btnToggleDetail.setLookAndFeel(&tinyBtnLNF);   // smaller font so the text fits + reads
     btnToggleDetail.setClickingTogglesState(false);
     btnToggleDetail.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
-    btnToggleDetail.setTooltip("Show/hide the sound-editing panel. Hide it to give the step sequencer the whole window.");
+    btnToggleDetail.setTooltip("Show/hide the sound-editing panel (or the KEYS panel, whichever is open). Hide it to "
+                               "give the step sequencer the whole window.");
     btnToggleDetail.onClick = [this] {
         detailShown = ! detailShown;
-        btnToggleDetail.setButtonText(detailShown ? "HIDE SOUND EDITOR" : "SHOW SOUND EDITOR");
+        btnToggleDetail.setButtonText(detailShown ? "HIDE SOUND EDITOR/KEYS" : "SHOW SOUND EDITOR/KEYS");
         btnToggleDetail.setColour(juce::TextButton::buttonColourId, detailShown ? juce::Colour(0xff20203a) : juce::Colour(0xff35c0ff));
         btnToggleDetail.setColour(juce::TextButton::textColourOffId, detailShown ? juce::Colours::lightgrey : juce::Colours::black);
         contentHeightPx = contentHeightFor(visibleChannels, detailShown);
@@ -4619,6 +5114,97 @@ void DrumSequencerEditor::setupComponents()
                            "the edit straight away. Turn OFF if you don't want a sound every time you tweak a knob.");
     btnAudition.onClick = [this] { proc.auditionOnEdit.store(! proc.auditionOnEdit.load()); refreshAuditionButton(); };
     refreshAuditionButton();
+
+    // ==== KEYS view: the on-screen piano (radio with the sound editor) =======================
+    content.addAndMakeVisible(btnKeysView);
+    btnKeysView.setLookAndFeel(&tinyBtnLNF);
+    btnKeysView.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
+    btnKeysView.setTooltip("Switch between the SOUND EDITOR and the on-screen KEYS piano. Keys play the selected "
+                           "channel's Analog+FM / Physical / Modal slots at the pressed pitch (their Freq knobs are "
+                           "ignored; Sample/Noise slots stay silent), MONO, with slot 2 optionally transposed down. "
+                           "You can also RECORD what you play into the pattern's steps as per-step pitch.");
+    btnKeysView.onClick = [this] { keysView = ! keysView; applyKeysView(); };
+
+    content.addChildComponent(keysPanel);   // hidden until KEYS is opened
+    keysPanel.onKeyDown = [this](int note, float vel) { proc.pushKeyDown(note, vel); };
+    keysPanel.onKeyUp   = [this](int note) { proc.pushKeyUp(note); };
+    keysPanel.btnRec.setTooltip("Record what you play on the keys into the SELECTED channel's steps (per-step pitch). "
+                                "Pick the behaviour in the mode box: record over THIS pattern only or follow the "
+                                "CHAIN, and start with the FIRST KEY you press or after a 3-second COUNT-IN. Each "
+                                "recording becomes a TAKE (up to 20) you can delete from the Takes list. The FIRST "
+                                "key you record sets the REFERENCE (= pitch 0); keys further than +/-24 semitones "
+                                "from it can't be stored in a step and are skipped with a warning.");
+    keysPanel.btnRec.onClick = [this] {
+        if (proc.keysRecording.load() || keysCountdownTicks > 0) keysStopRecord(true);
+        else keysStartRecord();
+    };
+    keysPanel.comboRecMode.addItem("This pattern - 1st key starts", 1);
+    keysPanel.comboRecMode.addItem("This pattern - 3s count-in",    2);
+    keysPanel.comboRecMode.addItem("Chained patterns - 1st key",    3);
+    keysPanel.comboRecMode.addItem("Chained patterns - 3s count-in",4);
+    keysPanel.comboRecMode.setSelectedId(1, juce::dontSendNotification);
+    keysPanel.comboRecMode.setTooltip("What RECORD writes over: only this pattern (loop-record it) or every pattern "
+                                      "the chain visits - and whether recording starts with your first key press or "
+                                      "after a 3-second count-in.");
+    for (int stn = 0; stn <= 24; ++stn)
+        keysPanel.comboSlot2.addItem(stn == 0 ? juce::String("0 st") : ("-" + juce::String(stn) + " st"), stn + 1);
+    keysPanel.comboSlot2.setSelectedId(proc.keysSlot2Down.load() + 1, juce::dontSendNotification);
+    keysPanel.comboSlot2.setTooltip("Slot 2 transpose: how many semitones LOWER slot 2 plays on the keys (slot 1 is "
+                                    "always the pressed pitch). -12 = a classic sub-oscillator an octave down.");
+    keysPanel.comboSlot2.onChange = [this] {
+        if (! ignoreKnobCallbacks) proc.keysSlot2Down.store(keysPanel.comboSlot2.getSelectedId() - 1);
+    };
+    keysPanel.btnTakes.setLookAndFeel(&dropBtnLNF);   // proper dropdown look (like the sound bank)
+    keysPanel.btnTakes.setTooltip("Your recorded takes (each pattern loop while recording = one take, up to 20; saved "
+                                  "with the preset). Click a take to LOAD it onto its channel so you can see its pitch "
+                                  "values and play it; each take also has a Delete option. Recording is disabled while "
+                                  "the list is full - delete some takes to record again.");
+    keysPanel.btnTakes.onClick = [this] {
+        juce::PopupMenu m;
+        int shown = 0;
+        for (int i = 0; i < (int) proc.keysTakes.size(); ++i)
+        {
+            const auto& t = proc.keysTakes[(size_t) i];
+            if (t.channel != selectedChannel) continue;   // takes are per-channel
+            ++shown;
+            juce::PopupMenu sub;
+            sub.addItem(1000 + i * 4,     "Load onto channel " + juce::String(t.channel + 1));
+            const bool dirty = keysTakeDirty(i);
+            if (dirty)   // this take is loaded AND its channel has been hand-edited
+            {
+                sub.addItem(1000 + i * 4 + 2, "Save changes to this take");
+                sub.addItem(1000 + i * 4 + 3, "Save changes as a NEW take");
+            }
+            sub.addItem(1000 + i * 4 + 1, "Delete this take");
+            const juce::String kind = t.isDraw ? "draw" : (juce::String((int) t.evts.size()) + " notes");
+            m.addSubMenu(t.name + "  (" + kind + (dirty ? ", edited*" : "") + ")", sub);
+        }
+        if (shown == 0) m.addItem(-1, "(no takes on channel " + juce::String(selectedChannel + 1) + " yet)", false);
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&keysPanel.btnTakes),
+                        [this](int r) {
+                            if (r < 1000) return;
+                            const int idx = (r - 1000) / 4, act = (r - 1000) % 4;
+                            if (act == 0) keysLoadTake(idx);
+                            else if (act == 1) keysDeleteTake(idx);
+                            else if (idx < (int) proc.keysTakes.size())
+                            {
+                                const auto& ot = proc.keysTakes[(size_t) idx];
+                                const int pat = ot.isDraw ? ot.drawPat : currentPattern();
+                                auto nt = captureTakeFromChannel(ot.channel, pat);
+                                if (act == 2) {   // overwrite the loaded take (keep its name)
+                                    nt.name = ot.name; proc.keysTakes[(size_t) idx] = std::move(nt);
+                                    keysLoadedTakeHash = takeDataHash(proc.keysTakes[(size_t) idx]);
+                                } else if (takesForChannel(ot.channel) < 20) {   // save as a new take (per channel)
+                                    nt.name = juce::Time::getCurrentTime().toString(true, true, true, true)
+                                              + "  #" + juce::String((int) proc.keysTakes.size() + 1);
+                                    proc.keysTakes.push_back(std::move(nt));
+                                    keysLoadedTakeIdx = (int) proc.keysTakes.size() - 1;
+                                    keysLoadedTakeHash = takeDataHash(proc.keysTakes.back());
+                                }
+                                refreshKeysPanel();
+                            }
+                        });
+    };
 
     // Per-pattern play options (apply to the current pattern)
     content.addAndMakeVisible(patModeBtn);
@@ -4708,6 +5294,18 @@ void DrumSequencerEditor::setupComponents()
         if (step < 0 || step >= DrumChannel::MAX_STEPS) return;
         proc.sequencer.channel(ch).stepSlide[step] = on;
     };
+    stepGrid.onStepMergeChanged = [this](int ch, int step, bool on) {
+        if (step < 0 || step >= DrumChannel::MAX_STEPS) return;
+        proc.sequencer.channel(ch).stepMerge[step] = on;
+    };
+    stepGrid.onDrawWrite = [this](int ch, int colA, int colB, int semi) {   // DRAW mode: write a column run
+        auto& c = proc.sequencer.channel(ch);
+        for (int col = juce::jmax(0, colA); col <= colB && col < DrumChannel::DRAW_RES; ++col)
+            c.drawSemi[col] = (int8_t) semi;
+    };
+    stepGrid.onDrawVelPan = [this](int ch, float vel, float pan) {           // DRAW mode: whole-channel Vel/Pan
+        auto& c = proc.sequencer.channel(ch); c.drawVel = vel; c.drawPan = pan;
+    };
     stepGrid.onStepCondChanged = [this](int ch, int step, int len, int mask) {
         if (step < 0 || step >= DrumChannel::MAX_STEPS) return;
         auto& c = proc.sequencer.channel(ch);
@@ -4763,7 +5361,6 @@ void DrumSequencerEditor::setupComponents()
         strip.btnMute->onClick = [this, ci] {
             selectChannel(ci);
             proc.sequencer.channel(ci).mute = strips[ci].btnMute->getToggleState();
-            proc.requestLaunchpadRefresh();
         };
 
         strip.btnSolo->setClickingTogglesState(true);
@@ -4771,7 +5368,6 @@ void DrumSequencerEditor::setupComponents()
         strip.btnSolo->onClick = [this, ci] {
             selectChannel(ci);
             proc.sequencer.channel(ci).solo = strips[ci].btnSolo->getToggleState();
-            proc.requestLaunchpadRefresh();
         };
 
         content.addAndMakeVisible(strip.comboSound);  // now the "Sound Bank" selector
@@ -4812,11 +5408,30 @@ void DrumSequencerEditor::setupComponents()
             int s = DrumChannel::VALID_STEP_COUNTS[si];
             strip.comboSteps.addItem(juce::String(s) + (s == 1 ? " step" : " steps"), s);
         }
-        strip.comboSteps.setSelectedId(proc.sequencer.channel(i).numSteps, juce::dontSendNotification);
+        strip.comboSteps.addItem("Draw", StepGridComponent::DRAW_ITEM_ID);   // free piano-draw mode (no steps)
+        { auto& c0 = proc.sequencer.channel(i);
+          strip.comboSteps.setSelectedId(c0.drawMode ? StepGridComponent::DRAW_ITEM_ID : c0.numSteps, juce::dontSendNotification); }
+        // RULES (regressed many times - keep them): read getSelectedId() FIRST; NEVER call setSelectedId()
+        // in here (re-entrant, corrupts the selection - the timer's CHANGE-ONLY refresh syncs the combo);
+        // the CONFIRM uses a PopupMenu (JUCE/native message boxes HANG in the standalone). Draw->steps with
+        // a drawn lane asks first; an empty lane or step->step is immediate.
         strip.comboSteps.onChange = [this, ci] {
-            selectChannel(ci);
-            proc.sequencer.channel(ci).numSteps = strips[ci].comboSteps.getSelectedId();
-            proc.requestLaunchpadRefresh();
+            const int id = strips[ci].comboSteps.getSelectedId();
+            auto& c = proc.sequencer.channel(ci);
+            auto finish = [this, ci] { selectChannel(ci); refreshDrawModeButtons(); stepGrid.update(proc.sequencer, proc.anySolo); };
+            if (id == StepGridComponent::DRAW_ITEM_ID) { c.drawMode = true; finish(); return; }   // -> draw (lane kept)
+            if (! c.drawMode) { c.numSteps = id; finish(); return; }                               // step -> step
+            bool any = false; for (int i = 0; i < DrumChannel::DRAW_RES; ++i) if (c.drawSemi[i] != DrumChannel::DRAW_GAP) { any = true; break; }
+            if (! any) { quantizeDrawToSteps(c, id); finish(); return; }                            // empty lane: no need to ask
+            juce::PopupMenu mm;                                                                     // draw -> steps: confirm the quantise
+            mm.addSectionHeader("Switching to " + juce::String(id) + " steps quantises your drawing (fine timing is snapped).");
+            mm.addItem(1, "Quantize to " + juce::String(id) + " steps");
+            mm.addItem(2, "Cancel - stay in Draw");
+            mm.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&strips[ci].comboSteps),
+                             [this, ci, id, finish](int r) {
+                                 if (r == 1) quantizeDrawToSteps(proc.sequencer.channel(ci), id);   // else stay in Draw (combo reverts via the change-only refresh)
+                                 finish();
+                             });
         };
 
         strip.numBtn.setTooltip("Channel number - click to select + edit its sound below. DRAG it onto another channel's "
@@ -4828,7 +5443,9 @@ void DrumSequencerEditor::setupComponents()
         strip.btnTest.setTooltip("Play this channel once with its current settings, to hear it without running the sequencer.");
         strip.btnMute->setTooltip("Mute: silence this channel.");
         strip.btnSolo->setTooltip("Solo: play only this channel (and other soloed ones), muting the rest.");
-        strip.comboSteps.setTooltip("Number of steps in this channel's pattern. The bar is split into this many even slices.");
+        strip.comboSteps.setTooltip("Number of steps in this channel's pattern (the bar is split into this many even slices), "
+                                    "or DRAW for a free piano-draw lane. Switching from Draw to a step count QUANTISES your "
+                                    "drawing onto the grid (undoable).");
     }
 
     // Detail panel
@@ -5008,7 +5625,7 @@ void DrumSequencerEditor::setupComponents()
     lblMidiNote.setFont(juce::Font(9.0f)); lblMidiNote.setJustificationType(juce::Justification::centred);
     lblMidiNote.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
     for (int n = 0; n <= 127; ++n)
-        comboMidiNote.addItem(juce::MidiMessage::getMidiNoteName(n, true, true, 4) + " (" + juce::String(n) + ")", n + 1);
+        comboMidiNote.addItem(juce::MidiMessage::getMidiNoteName(n, true, true, 3) + " (" + juce::String(n) + ")", n + 1);
     comboMidiNote.setTooltip("The MIDI note this channel sends in MIDI Out mode (e.g. C1 = 36). "
                              "Set it to whatever note the target plugin/track expects (a drum pad, or a pitch for a synth). "
                              "Per-step Pitch transposes it, step velocity + Roll set the note's dynamics. Channel-wide (all patterns).");
@@ -5043,12 +5660,12 @@ void DrumSequencerEditor::setupComponents()
             sub.addSeparator();
             // Two MIDI lines: (1) route to MIDI out keeping the current note; (2) change the note.
             sub.addItem(ch * 100 + 50,
-                        "MIDI Out (" + juce::MidiMessage::getMidiNoteName(c.midiNote, true, true, 4) + ")",
+                        "MIDI Out (" + juce::MidiMessage::getMidiNoteName(c.midiNote, true, true, 3) + ")",
                         true, c.midiOut);
             juce::PopupMenu notes;
             for (int n = 0; n <= 127; ++n)
                 notes.addItem(100000 + ch * 200 + n,
-                              juce::MidiMessage::getMidiNoteName(n, true, true, 4) + " (" + juce::String(n) + ")",
+                              juce::MidiMessage::getMidiNoteName(n, true, true, 3) + " (" + juce::String(n) + ")",
                               true, c.midiOut && c.midiNote == n);
             sub.addSubMenu("Change MIDI Out note", notes);
             // MIDI Out channel (1-16) - so different drums can drive different instruments / DAW MIDI tracks.
@@ -5065,7 +5682,7 @@ void DrumSequencerEditor::setupComponents()
             for (int g = 1; g <= 8; ++g)
                 choke.addItem(300000 + ch * 100 + g, "Group " + juce::String(g), true, c.chokeGroup == g);
             sub.addSubMenu("Choke group" + juce::String(c.chokeGroup > 0 ? " (" + juce::String(c.chokeGroup) + ")" : ""), choke);
-            const juce::String tag = c.midiOut ? "  [MIDI " + juce::MidiMessage::getMidiNoteName(c.midiNote, true, true, 4) + " ch" + juce::String(c.midiOutChannel) + "]"
+            const juce::String tag = c.midiOut ? "  [MIDI " + juce::MidiMessage::getMidiNoteName(c.midiNote, true, true, 3) + " ch" + juce::String(c.midiOutChannel) + "]"
                                                : (c.outputBus > 0 ? "  [Out " + juce::String(c.outputBus)
                                                      + ": ch " + juce::String(c.outputBus * 2 + 1) + "/" + juce::String(c.outputBus * 2 + 2) + "]" : "");
             menu.addSubMenu("Channel " + juce::String(ch + 1) + tag, sub);
@@ -5289,10 +5906,12 @@ void DrumSequencerEditor::setupComponents()
     // Unison / Detune / Vibrato as an interactive VISUAL (like the amp/pitch env editors), editing the
     // selected slot. The 1/2/3 selector (slotSelPitch) above it chooses which slot.
     content.addAndMakeVisible(voiceMod);
-    voiceMod.onChange = [this](int u, float d, float v, bool centre, int detuneMode) {
+    voiceMod.onChange = [this](int u, float d, float v, bool centre, int detuneMode, int chordMode) {
         if (ignoreKnobCallbacks) return;
         auto& sl = proc.sequencer.channel(selectedChannel).slots[envTargetSlot()];
-        sl.oscUnison = u; sl.oscDetune = d; sl.vibrato = v; sl.oscUniCenter = centre; sl.oscDetuneMode = detuneMode;
+        if (chordMode > 0) sl.chordUnison = u; else sl.oscUnison = u;   // STD + CHORD keep SEPARATE unison counts
+        sl.oscDetune = d; sl.vibrato = v; sl.oscUniCenter = centre; sl.oscDetuneMode = detuneMode;
+        sl.chordMode = chordMode;
         proc.sequencer.channel(selectedChannel).markDspDirty();
     };
 
@@ -5899,6 +6518,265 @@ void DrumSequencerEditor::setShapeSlot(int s)
     comboDriveType.setSelectedId(sl.fxDriveType + 1, juce::dontSendNotification);
     lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.filterType == DrumChannel::LowPass,
                          envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8));
+    // The EQ target follows the selected slot too (user: picking a slot shouldn't leave EQ on
+    // "All"). Picking "All" on the EQ selector afterward still works - it just isn't the default.
+    eqEditTarget = s + 1;
+    refreshEqTarget();
+    refreshKeysPanel();   // sus/rel knobs + hint follow the selected slot too
+}
+
+//==============================================================================
+// KEYS view + recording (see KeysPanel in the header for the widget layout)
+//==============================================================================
+void DrumSequencerEditor::applyKeysView()
+{
+    btnKeysView.setButtonText(keysView ? "SOUND EDITOR" : "KEYS");
+    btnKeysView.setColour(juce::TextButton::buttonColourId,
+                          keysView ? juce::Colour(0xffe8bf4d) : juce::Colour(0xff20203a));
+    btnKeysView.setColour(juce::TextButton::textColourOffId,
+                          keysView ? juce::Colours::black : juce::Colours::lightgrey);
+    if (keysView)
+    {
+        // Opening KEYS puts the selected channel into DRAW mode, so a recorded performance is
+        // captured as a free unquantized pitch lane (quantize to steps later if you want).
+        auto& ch = proc.sequencer.channel(selectedChannel);
+        ch.drawMode = true;
+        strips[selectedChannel].comboSteps.setSelectedId(StepGridComponent::DRAW_ITEM_ID, juce::dontSendNotification);
+        refreshDrawModeButtons();
+    }
+    else if (proc.keysRecording.load() || keysCountdownTicks > 0)
+        keysStopRecord(true);   // leaving the panel ends the take
+    refreshKeysPanel();
+    layoutContent();
+    content.repaint();
+}
+
+void DrumSequencerEditor::keysStartRecord()
+{
+    if (takesForChannel(selectedChannel) >= 20) { refreshKeysPanel(); return; }   // this channel full
+    proc.keysEvtCount.store(0);
+    keysEvtCursor = 0; keysPendingEvts.clear();
+    proc.keysArmedPattern.store(currentPattern());
+    keysLoadedTakeIdx = -1;   // a fresh recording is not an edit of a loaded take
+    proc.keysRecMode.store(keysPanel.comboRecMode.getSelectedId() - 1);
+    proc.keysLoopSeen.store(-1); proc.keysLastStampStep.store(-1); proc.keysLastPlayPat.store(-1);
+    keysRecWasPlaying = false;
+    // A recording ALWAYS goes into DRAW mode (user rule): if a step count was set, switch to draw.
+    // Then start from a CLEAN slate - the draw lane cleared, and the step data too (both modes).
+    proc.keysDrawLastCol.store(-1);
+    {
+        auto& pch = proc.sequencer.patterns[currentPattern()].channels[selectedChannel];
+        pch.drawMode = true;
+        for (int i = 0; i < DrumChannel::DRAW_RES; ++i) pch.drawSemi[i] = DrumChannel::DRAW_GAP;
+        for (int i = 0; i < DrumChannel::MAX_STEPS; ++i)
+        { pch.steps[i] = false; pch.stepPitch[i] = 0.0f; pch.stepMerge[i] = false; pch.stepNoteLen[i] = 0.0f; }
+        strips[selectedChannel].comboSteps.setSelectedId(StepGridComponent::DRAW_ITEM_ID, juce::dontSendNotification);
+        refreshDrawModeButtons();
+        stepGrid.update(proc.sequencer, proc.anySolo);
+    }
+    const int m = proc.keysRecMode.load();
+    if (m == 1 || m == 3) keysCountdownTicks = 72;         // 3 s count-in at the 24 Hz UI timer
+    else                  proc.keysRecording.store(true);  // live now; 1st key starts the transport
+    refreshKeysPanel();
+}
+
+// Drain the audio thread's event log into TAKES. A 0xFF marker = loop boundary: the events since
+// the previous marker become one take; the tail (no marker yet) stays pending until stop.
+void DrumSequencerEditor::parseKeysEvents()
+{
+    const int cnt = juce::jmin(proc.keysEvtCount.load(), DrumSequencerProcessor::KEYS_EVT_CAP);
+    while (keysEvtCursor < cnt)
+    {
+        const auto& e = proc.keysEvts[keysEvtCursor++];
+        if (e.pattern != 0xFF) { keysPendingEvts.push_back(e); continue; }
+        if (! keysPendingEvts.empty() && takesForChannel(selectedChannel) < 20)
+        {
+            DrumSequencerProcessor::KeysTake t;
+            t.channel = selectedChannel;
+            t.name    = juce::Time::getCurrentTime().toString(true, true, true, true)
+                        + "  #" + juce::String((int) proc.keysTakes.size() + 1);
+            t.evts    = std::move(keysPendingEvts);
+            proc.keysTakes.push_back(std::move(t));
+        }
+        keysPendingEvts.clear();
+        if (takesForChannel(selectedChannel) >= 20 && proc.keysRecording.load())
+            keysStopRecord(true);   // list full -> recording stops and can't restart until a delete
+    }
+}
+
+void DrumSequencerEditor::keysStopRecord(bool finalize)
+{
+    proc.keysDrawLastCol.store(-1);
+    const bool wasPlaying = proc.sequencer.isCurrentlyPlaying;
+    proc.keysRecording.store(false);
+    keysCountdownTicks = 0; keysPanel.countdown = 0;
+    parseKeysEvents();
+    drainDrawTake();   // grab any loop-boundary draw take waiting in the handshake
+    auto& drawCh = proc.sequencer.channel(selectedChannel);
+    if (finalize && drawCh.drawMode)
+    {
+        // save the final (partial) loop as a take too
+        bool any = false; for (int i = 0; i < DrumChannel::DRAW_RES; ++i) if (drawCh.drawSemi[i] != DrumChannel::DRAW_GAP) { any = true; break; }
+        if (any && takesForChannel(selectedChannel) < 20)
+        {
+            DrumSequencerProcessor::KeysTake t;
+            t.isDraw = true; t.channel = selectedChannel; t.drawPat = currentPattern();
+            t.drawLane.assign(drawCh.drawSemi, drawCh.drawSemi + DrumChannel::DRAW_RES);
+            t.name = juce::Time::getCurrentTime().toString(true, true, true, true) + "  #" + juce::String((int) proc.keysTakes.size() + 1);
+            proc.keysTakes.push_back(std::move(t));
+        }
+    }
+    else if (finalize && ! keysPendingEvts.empty() && takesForChannel(selectedChannel) < 20)
+    {
+        DrumSequencerProcessor::KeysTake t;
+        t.channel = selectedChannel;
+        t.name    = juce::Time::getCurrentTime().toString(true, true, true, true)
+                    + "  #" + juce::String((int) proc.keysTakes.size() + 1);
+        t.evts    = std::move(keysPendingEvts);
+        proc.keysTakes.push_back(std::move(t));
+    }
+    keysPendingEvts.clear();
+    proc.keysEvtCount.store(0); keysEvtCursor = 0;
+    if (finalize && wasPlaying && ! proc.sequencer.dawSync) proc.standaloneStop();   // stopping REC stops the sequencer too
+    refreshKeysPanel();
+    stepGrid.update(proc.sequencer, proc.anySolo);   // show the recording immediately
+}
+
+// Drain a loop-boundary draw take from the audio-thread handshake into the takes list.
+void DrumSequencerEditor::drainDrawTake()
+{
+    if (! proc.keysDrawTakeReady.load(std::memory_order_acquire)) return;
+    if (takesForChannel(juce::jlimit(0, Sequencer::NUM_CHANNELS - 1, proc.keysDrawTakeChan.load())) < 20)
+    {
+        DrumSequencerProcessor::KeysTake t;
+        t.isDraw = true;
+        t.channel = juce::jlimit(0, Sequencer::NUM_CHANNELS - 1, proc.keysDrawTakeChan.load());
+        t.drawPat = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, proc.keysDrawTakePat.load());
+        t.drawLane.assign(proc.keysDrawTakeBuf, proc.keysDrawTakeBuf + DrumChannel::DRAW_RES);
+        t.name = juce::Time::getCurrentTime().toString(true, true, true, true) + "  #" + juce::String((int) proc.keysTakes.size() + 1);
+        proc.keysTakes.push_back(std::move(t));
+    }
+    proc.keysDrawTakeReady.store(false, std::memory_order_release);
+    refreshKeysPanel();
+}
+
+// LOAD a take: clear its channel in every pattern the take touches, then replay its notes -
+// the grid shows the take's pitches and the pattern plays it.
+void DrumSequencerEditor::keysLoadTake(int idx)
+{
+    if (idx < 0 || idx >= (int) proc.keysTakes.size()) return;
+    const auto& t = proc.keysTakes[(size_t) idx];
+    if (t.isDraw)
+    {
+        auto& c = proc.sequencer.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, t.drawPat)].channels[t.channel];
+        c.drawMode = true;
+        for (int i = 0; i < DrumChannel::DRAW_RES; ++i)
+            c.drawSemi[i] = (i < (int) t.drawLane.size()) ? t.drawLane[(size_t) i] : DrumChannel::DRAW_GAP;
+        selectChannel(t.channel);
+        strips[t.channel].comboSteps.setSelectedId(StepGridComponent::DRAW_ITEM_ID, juce::dontSendNotification);
+        refreshDrawModeButtons();
+        stepGrid.update(proc.sequencer, proc.anySolo);
+        keysLoadedTakeIdx = idx; keysLoadedTakeHash = takeDataHash(t);   // track for save-to / save-as-new
+        return;
+    }
+    bool touched[Sequencer::NUM_PATTERNS] = {};
+    for (const auto& e : t.evts) if (e.pattern < Sequencer::NUM_PATTERNS) touched[e.pattern] = true;
+    for (int pp = 0; pp < Sequencer::NUM_PATTERNS; ++pp)
+        if (touched[pp])
+        {
+            auto& c = proc.sequencer.patterns[pp].channels[t.channel];
+            for (int i = 0; i < DrumChannel::MAX_STEPS; ++i)
+            { c.steps[i] = false; c.stepPitch[i] = 0.0f; c.stepMerge[i] = false; c.stepNoteLen[i] = 0.0f; }
+        }
+    for (const auto& e : t.evts)
+        if (e.pattern < Sequencer::NUM_PATTERNS && e.step < DrumChannel::MAX_STEPS)
+        {
+            auto& c = proc.sequencer.patterns[e.pattern].channels[t.channel];
+            if (e.flags & 2) { c.stepNoteLen[e.step] = juce::jlimit(0, 100, (int) e.semis) / 100.0f; continue; }
+            c.steps[e.step] = true; c.stepPitch[e.step] = (float) e.semis;
+            c.stepMerge[e.step] = (e.flags & 1) != 0;
+        }
+    selectChannel(t.channel);
+    stepGrid.update(proc.sequencer, proc.anySolo);
+    keysLoadedTakeIdx = idx; keysLoadedTakeHash = takeDataHash(t);   // track for save-to / save-as-new
+}
+
+void DrumSequencerEditor::keysDeleteTake(int idx)
+{
+    if (idx < 0 || idx >= (int) proc.keysTakes.size()) return;
+    proc.keysTakes.erase(proc.keysTakes.begin() + idx);   // snapshots only - the channel keeps what's loaded
+    keysLoadedTakeIdx = -1;   // indices shifted - drop the loaded-take link
+    refreshKeysPanel();
+}
+
+// Fingerprint a take's data (draw lane or step events) - used to tell if a loaded take was edited.
+juce::int64 DrumSequencerEditor::takeDataHash(const DrumSequencerProcessor::KeysTake& t) const
+{
+    juce::int64 h = 5381;
+    auto mix = [&](juce::int64 v) { h = h * 33 ^ v; };
+    mix(t.channel); mix(t.isDraw ? 1 : 0);
+    if (t.isDraw) { mix(t.drawPat); for (auto v : t.drawLane) mix((int) v + 128); }
+    else for (auto& e : t.evts) { mix(e.pattern); mix(e.step); mix((int) e.semis + 128); mix(e.flags); }
+    return h;
+}
+
+// Snapshot the live channel (in pattern `pat`) as a take - the reverse of keysLoadTake.
+DrumSequencerProcessor::KeysTake DrumSequencerEditor::captureTakeFromChannel(int ch, int pat) const
+{
+    DrumSequencerProcessor::KeysTake t; t.channel = juce::jlimit(0, Sequencer::NUM_CHANNELS - 1, ch);
+    auto& c = proc.sequencer.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, pat)].channels[t.channel];
+    if (c.drawMode)
+    {
+        t.isDraw = true; t.drawPat = pat;
+        t.drawLane.assign(c.drawSemi, c.drawSemi + DrumChannel::DRAW_RES);
+    }
+    else for (int s = 0; s < c.numSteps; ++s) if (c.steps[s])
+    {
+        t.evts.push_back({ (uint8_t) pat, (uint8_t) s, (int8_t) juce::roundToInt(c.stepPitch[s]), (uint8_t) (c.stepMerge[s] ? 1 : 0) });
+        if (c.stepNoteLen[s] > 0.001f)
+            t.evts.push_back({ (uint8_t) pat, (uint8_t) s, (int8_t) juce::jlimit(0, 100, juce::roundToInt(c.stepNoteLen[s] * 100.0f)), (uint8_t) 2 });
+    }
+    return t;
+}
+
+int DrumSequencerEditor::takesForChannel(int ch) const
+{ int n = 0; for (auto& t : proc.keysTakes) if (t.channel == ch) ++n; return n; }
+
+bool DrumSequencerEditor::keysTakeDirty(int idx) const
+{
+    if (idx < 0 || idx != keysLoadedTakeIdx || idx >= (int) proc.keysTakes.size()) return false;
+    const auto& t = proc.keysTakes[(size_t) idx];
+    const int pat = t.isDraw ? t.drawPat : currentPattern();
+    return takeDataHash(captureTakeFromChannel(t.channel, pat)) != keysLoadedTakeHash;
+}
+
+void DrumSequencerEditor::refreshKeysPanel()
+{
+    const bool recLive = proc.keysRecording.load() || keysCountdownTicks > 0;
+    keysPanel.btnRec.setButtonText(recLive ? juce::String::charToString(0x25A0) + " STOP"    // filled square
+                                           : juce::String::charToString(0x25CF) + " REC");   // filled circle
+    keysPanel.btnRec.setColour(juce::TextButton::buttonColourId,
+                               recLive ? juce::Colour(0xffcc2222) : juce::Colour(0xff20203a));
+    keysPanel.btnRec.setColour(juce::TextButton::textColourOffId,
+                               recLive ? juce::Colours::white : juce::Colour(0xffff5548));   // red dot + text when idle
+    keysPanel.btnRec.setEnabled(recLive || takesForChannel(selectedChannel) < 20);
+    keysPanel.btnTakes.setButtonText("Takes (" + juce::String(takesForChannel(selectedChannel))   // per-channel count, matches the filtered menu
+                                     + (takesForChannel(selectedChannel) >= 20 ? "/20 FULL)" : ")"));
+    const bool prevIgnore = ignoreKnobCallbacks;
+    ignoreKnobCallbacks = true;
+    keysPanel.comboSlot2.setSelectedId(proc.keysSlot2Down.load() + 1, juce::dontSendNotification);
+    ignoreKnobCallbacks = prevIgnore;
+    // eligibility hint: which slots the keyboard will actually play on this channel
+    auto elig = [](int eng) { return eng == DrumChannel::SrcOsc || eng == DrumChannel::SrcPhys || eng == DrumChannel::SrcModal; };
+    const auto& c = proc.sequencer.channel(selectedChannel);
+    const bool e0 = c.slots[0].engine >= 0 && c.slots[0].weight > 0.0f && elig(c.slots[0].engine);
+    const bool e1 = c.slots[1].engine >= 0 && c.slots[1].weight > 0.0f && elig(c.slots[1].engine);
+    keysPanel.lblHint.setText(
+        (!e0 && !e1) ? "No keys-playable slot on this channel:\nuse an Analog+FM, Physical or Modal engine."
+                     : juce::String("Playing ") + (e0 ? "slot 1" : "") + (e0 && e1 ? " + " : "") + (e1 ? "slot 2" : "")
+                       + " (mono; a key touch re-tunes Freq to C3)\n"
+                         "Sustain/Release live on the AMP ENVELOPE graph.",
+        juce::dontSendNotification);
 }
 
 // Show the selected slot's amp envelope in the graph.
@@ -5918,7 +6796,9 @@ void DrumSequencerEditor::loadEnvIntoEditor()
     envEditor.setToggleable(isSample);
     // Physical + Modal (both struck/plucked) get a tailored 2-handle Strike(onset softness)/Ring(decay) editor - no
     // Hold/Sustain (they don't fit a struck body). For Physical the Strike sustains the string so a slow strike hits full.
-    envEditor.setStrikeRing(s.engine == DrumChannel::SrcPhys || isModal);
+    envEditor.setStrikeRing(s.engine == DrumChannel::SrcPhys || isModal,
+                            /*allowSus: both bodies can be HELD now (string ebow / bell bow)*/ true);
+    envEditor.setSusRelVisible(! isSample);   // samples don't gate - hide the meaningless S/R
 }
 
 // The pitch-envelope X-axis length. For samples it's the (trimmed) SAMPLE length taken
@@ -5955,18 +6835,21 @@ void DrumSequencerEditor::loadPitchAndVoice()
     // X-axis = the sound's length (sample length for samples, else amp env) so the dots/playhead stay synced.
     pitchEditor.setLengthSec(pitchEnvLenSec(envTargetSlot()));
     const juce::ScopedValueSetter<bool> guard(ignoreKnobCallbacks, true);
-    // Voice visual: Unison/Detune = oscillator engines only (Analog+FM / Synth); Vibrato = those + Physical
-    // + Sample (varispeed). Noise has no pitch. Modal DOES follow channel + per-step pitch (re-pitched at
-    // the strike) - it just can't be continuously bent, so no vibrato/unison; say that, not "fixed-pitch".
+    // Voice visual: Unison/Detune/Chord + Vibrato work on the pitched engines - Oscillator, Modal
+    // (bank-split notes) AND Physical (real multi-string KS, cap 3). Sample gets Vibrato only
+    // (varispeed wobble); Noise has no pitch.
     const int e = sl.engine;
-    const bool uniOn = (e == DrumChannel::SrcOsc || e == DrumChannel::SrcFM || e == DrumChannel::SrcSynth);
-    const bool vibOn = uniOn || e == DrumChannel::SrcPhys || e == DrumChannel::SrcSample;
+    const bool uniOn = (e == DrumChannel::SrcOsc || e == DrumChannel::SrcFM || e == DrumChannel::SrcSynth
+                        || e == DrumChannel::SrcModal || e == DrumChannel::SrcPhys);
+    const bool vibOn = uniOn || e == DrumChannel::SrcSample;
     juce::String naReason;
     if (!uniOn && !vibOn)
-        naReason = (e == DrumChannel::SrcNoise)  ? "(n/a - noise has no pitch)"
-                 : (e == DrumChannel::SrcModal)  ? "(n/a - Modal follows Pitch, but its resonators can't be bent live)"
-                 : "(no engine)";
-    voiceMod.setValues((int) sl.oscUnison, sl.oscDetune, sl.vibrato, sl.oscUniCenter, sl.oscDetuneMode);
+        naReason = (e == DrumChannel::SrcNoise) ? "(n/a - noise has no pitch)" : "(no engine)";
+    // Per-engine unison cap so you can't select more voices than the engine builds: Physical = 3
+    // real strings, Modal = 4 banks, Oscillator = 7. (User: "up to 3 for physical but I can select
+    // more" - now the handle stops at the real max.)
+    voiceMod.setMaxUni((e == DrumChannel::SrcPhys || e == DrumChannel::SrcModal) ? 3 : 7);
+    voiceMod.setValues((int) sl.oscUnison, sl.chordUnison, sl.oscDetune, sl.vibrato, sl.oscUniCenter, sl.oscDetuneMode, sl.chordMode);
     voiceMod.setSupport(uniOn, vibOn, naReason);
 }
 
@@ -5975,7 +6858,10 @@ void DrumSequencerEditor::applyEnvToTargets(float a, float h, float d, float s, 
 {
     auto& sl = proc.sequencer.channel(selectedChannel).slots[envTargetSlot()];
     if (sl.engine == DrumChannel::SrcModal) {   // Ring handle (seconds) -> modalDecay (0..1; inverse of 0.05..4 s)
+        // Sustain (Ring handle Y) + Release (Release handle) MUST be written here too - they were
+        // missing, so dragging them did nothing on Modal (the DSP honoured them, the UI never set them).
         sl.atk = a; sl.modalDecay = juce::jlimit(0.0f, 1.0f, (d - 0.05f) / 3.95f);
+        sl.sustain = s; sl.release = r;
     } else {
         sl.atk = a; sl.hold = h; sl.dec = d; sl.sustain = s; sl.release = r;
     }
@@ -6140,14 +7026,60 @@ void DrumSequencerEditor::setupKnob(LearnableKnob& k, juce::Label& lbl, const ju
 }
 
 //==============================================================================
+// Convert a free-draw lane onto an N-step grid: each step takes the note that dominates its
+// column span (gaps -> step off); a held note across steps becomes a merged run.
+void DrumSequencerEditor::quantizeDrawToSteps(DrumChannel& c, int n)
+{
+    n = juce::jlimit(1, DrumChannel::MAX_STEPS, n);
+    const int R = DrumChannel::DRAW_RES;
+    int prevPitch = -999; bool prevOn = false;
+    for (int s = 0; s < n; ++s)
+    {
+        const int c0 = s * R / n, c1 = (s + 1) * R / n;
+        int cnt[73] = {}; int gap = 0;
+        for (int col = c0; col < c1; ++col) { const int v = c.drawSemi[col];
+            if (v == DrumChannel::DRAW_GAP) ++gap; else ++cnt[juce::jlimit(0, 72, v + 36)]; }
+        int best = -1, bestc = 0; for (int k = 0; k < 73; ++k) if (cnt[k] > bestc) { bestc = cnt[k]; best = k; }
+        if (best >= 0 && bestc >= gap)   // a note dominates this step
+        {
+            const int semi = best - 36;
+            c.steps[s] = true; c.stepPitch[s] = (float) semi;
+            c.stepMerge[s] = (prevOn && s > 0 && semi == prevPitch);   // held note -> merged run
+            prevPitch = semi; prevOn = true;
+        }
+        else { c.steps[s] = false; c.stepMerge[s] = false; prevOn = false; }
+    }
+    for (int i = n; i < DrumChannel::MAX_STEPS; ++i) { c.steps[i] = false; c.stepMerge[i] = false; }
+    c.drawMode = false; c.numSteps = n;
+}
+
+// In DRAW mode the pitch line IS the pitch, drawing sets the timing/length, and rolls make no
+// sense - so grey + disable Len/Pitch/Roll for a draw channel. Vel/Pan stay (whole-channel).
+void DrumSequencerEditor::refreshDrawModeButtons()
+{
+    const bool draw = proc.sequencer.channel(selectedChannel).drawMode;
+    for (auto* b : { &btnModeLen, &btnModePitch, &btnModeRoll, &btnModeProb })   // Loop conditions need steps
+    { b->setEnabled(! draw); b->setAlpha(draw ? 0.4f : 1.0f); }
+    if (draw && (stepGrid.editMode == StepGridComponent::ModeLen
+              || stepGrid.editMode == StepGridComponent::ModePitch
+              || stepGrid.editMode == StepGridComponent::ModeRoll
+              || stepGrid.editMode == StepGridComponent::ModeProb))
+        setStepEditMode(0);   // don't leave a disabled mode active on a draw channel
+}
+
 void DrumSequencerEditor::selectChannel(int ch)
 {
+    // LOCKED while recording: the audio thread stamps onto the selected channel, so switching
+    // mid-take would split the take across channels.
+    if (proc.keysRecording.load() || keysCountdownTicks > 0) return;
     selectedChannel = ch;
     proc.lastSelectedChannel = ch; // remember across editor open/close
+    stepGrid.selectedRow = ch;     // red row outline in the grid
     proc.analyzeChannel.store(ch); // analyse the channel we're inspecting
     for (int i = 0; i < Sequencer::NUM_CHANNELS; ++i)
         strips[i].numBtn.setToggleState(i == ch, juce::dontSendNotification);
     updateKnobParamIds();
+    refreshDrawModeButtons();   // grey Len/Pitch/Roll when this channel is a draw lane
     syncBoxesFromSrcOn();   // set boxEngine[] from this channel's active sources
     refreshDetailPanel();
     layoutContent();        // re-place the slot boxes for this channel's engines
@@ -6250,6 +7182,7 @@ void DrumSequencerEditor::refreshDetailPanel()
       comboDriveType.setSelectedId(sl.fxDriveType + 1, juce::dontSendNotification);
       lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.filterType == DrumChannel::LowPass,
                            envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8)); }
+    refreshKeysPanel();   // the KEYS panel follows the selected channel/slot too
 
     // Double-click on any master knob returns it to its FACTORY DEFAULT (set once in setupKnob) -
     // which is exactly what a freshly-added VST / a fresh standalone shows (the standalone no longer
@@ -6364,7 +7297,10 @@ void DrumSequencerEditor::refreshChannelStrips()
         strips[i].btnMute->setToggleState (proc.sequencer.channel(i).mute,        juce::dontSendNotification);
         strips[i].btnSolo->setToggleState (proc.sequencer.channel(i).solo,        juce::dontSendNotification);
         strips[i].btnPoly.setToggleState  (proc.sequencer.channel(i).allowOverlap, juce::dontSendNotification);
-        strips[i].comboSteps.setSelectedId(proc.sequencer.channel(i).numSteps,    juce::dontSendNotification);
+        { auto& cc = proc.sequencer.channel(i);
+          const int tgt = cc.drawMode ? StepGridComponent::DRAW_ITEM_ID : cc.numSteps;
+          if (strips[i].comboSteps.getSelectedId() != tgt)   // change-ONLY (touching it every tick fought the open dropdown)
+              strips[i].comboSteps.setSelectedId(tgt, juce::dontSendNotification); }
         updateStripMixLabel(i);   // per-pattern sound-mix name (+ * if edited)
     }
     refreshRouting();   // recolour strips by MIDI/aux routing
@@ -6425,14 +7361,6 @@ void DrumSequencerEditor::applyTooltipsSetting()
     btnTooltips.repaint();
 }
 
-void DrumSequencerEditor::refreshKeysButton()
-{
-    const bool on = proc.keysMode.load();
-    btnKeys.setColour(juce::TextButton::buttonColourId, on ? juce::Colour(0xff35d07a) : juce::Colour(0xff20203a));
-    btnKeys.setColour(juce::TextButton::textColourOffId, on ? juce::Colours::black : juce::Colours::lightgrey);
-    btnKeys.setButtonText(on ? "Keys: On" : "Keys: Off");
-    btnKeys.repaint();
-}
 
 void DrumSequencerEditor::refreshAuditionButton()
 {
@@ -6465,6 +7393,7 @@ void DrumSequencerEditor::refreshEqTarget()
 
 void DrumSequencerEditor::timerCallback()
 {
+    ++timerCounter;   // 60 Hz; heavy refreshes are throttled to every 3rd tick (~20 Hz) below
     // HOST-FROZEN detector: if the audio callback stops (audio device off/missing/misconfigured,
     // or the host took the FX offline), the WHOLE plugin freezes - no sound, sequencer doesn't
     // move, TEST does nothing - and it looks broken. Watch the processBlock heartbeat and swap
@@ -6473,8 +7402,8 @@ void DrumSequencerEditor::timerCallback()
     {
         const uint32_t hb = proc.processHeartbeat.load(std::memory_order_relaxed);
         if (hb != lastHeartbeat) { lastHeartbeat = hb; heartbeatStaleTicks = 0; }
-        else if (heartbeatStaleTicks <= 30) ++heartbeatStaleTicks;   // timer runs at 24 Hz
-        const bool frozen = heartbeatStaleTicks > 24;
+        else if (heartbeatStaleTicks <= 80) ++heartbeatStaleTicks;   // timer runs at 60 Hz
+        const bool frozen = heartbeatStaleTicks > 60;
         if (frozen != hostFrozen)
         {
             hostFrozen = frozen;
@@ -6486,6 +7415,40 @@ void DrumSequencerEditor::timerCallback()
                                "not offline/bypassed; in the standalone check Options > Audio Settings). "
                                "BASAMAK unfreezes by itself as soon as audio is back.")
                 : juce::String("Start playback (used when DAW Sync is off, so the plugin runs on its own)."));
+        }
+    }
+
+    // KEYS: 3s count-in, auto-finalise the take when the transport stops, the +/-24 reference
+    // warning flash, and cheap UI refresh whenever the recording state / ref / take count moves.
+    if (keysView)
+    {
+        if (keysCountdownTicks > 0)
+        {
+            keysPanel.countdown = keysCountdownTicks;
+            if (--keysCountdownTicks == 0)
+            {
+                keysPanel.countdown = 0;
+                proc.keysRecording.store(true);
+                if (! proc.sequencer.isCurrentlyPlaying && ! proc.sequencer.dawSync)
+                    proc.standalonePlay();
+            }
+            keysPanel.repaint();
+        }
+        if (proc.keysRecording.load())
+        {
+            parseKeysEvents();   // live: each finished loop becomes a take while you keep playing
+            drainDrawTake();     // draw mode: each finished loop's lane -> a take
+            if (proc.sequencer.isCurrentlyPlaying) keysRecWasPlaying = true;
+            else if (keysRecWasPlaying) keysStopRecord(true);   // transport stopped -> take is done
+        }
+        const int uiHash = (proc.keysRecording.load() ? 1 : 0) + (keysCountdownTicks > 0 ? 2 : 0)
+                         + (int) proc.keysTakes.size() * 1024
+                         + (int)(proc.keysDownEvt.load(std::memory_order_relaxed) >> 16) * 32768;
+        if (uiHash != keysUiHash)
+        {
+            keysUiHash = uiHash;
+            refreshKeysPanel();
+            slotEd[0].pushValues(); slotEd[1].pushValues();   // key touch re-tunes Freq to C3 -> show it
         }
     }
 
@@ -6508,7 +7471,7 @@ void DrumSequencerEditor::timerCallback()
                     if (auto* peer = dc->getPeer())
                         if (peer->isFocused()) anyFocused = true;
         }
-        if (! anyFocused && ++outsideFocusTicks >= 2) { outsideFocusTicks = 0; juce::PopupMenu::dismissAllActiveMenus(); }
+        if (! anyFocused && ++outsideFocusTicks >= 6) { outsideFocusTicks = 0; juce::PopupMenu::dismissAllActiveMenus(); }   // ~100ms at 60Hz (was 2 = 33ms, dismissed dropdowns as they opened)
         else if (anyFocused) outsideFocusTicks = 0;
     }
     else outsideFocusTicks = 0;
@@ -6603,8 +7566,8 @@ void DrumSequencerEditor::timerCallback()
         strips[ic].btnInfluence.setToggleState(ns, juce::dontSendNotification);
     }
 
-    stepGrid.update(proc.sequencer, proc.anySolo);
-    refreshChannelStrips();
+    stepGrid.update(proc.sequencer, proc.anySolo);      // 60 Hz: smooth playhead
+    if (timerCounter % 3 == 0) refreshChannelStrips();  // 20 Hz: strips/combo/labels (was hammering the UI at 60 Hz -> laggy dropdowns)
     updateVisuals();
 
     // MIDI-in monitor: flash green + show the last CC whenever MIDI arrives.
@@ -6624,35 +7587,27 @@ void DrumSequencerEditor::timerCallback()
         if (midiFlash > 0) --midiFlash;
     }
 
-    // Undo history (per-action): snapshot once a change has settled AND the mouse
-    // button isn't held. So each discrete click (a step toggle, a button) is its
-    // own undo step, while a continuous knob / grid / pad DRAG (mouse held the
-    // whole time) collapses into a single step, captured when you release.
-    if (! applyingUndo)
+    // Undo history + "modified" detection hash the WHOLE project, so run them at ~20 Hz (every 3rd
+    // of the 60 Hz ticks), not on every frame - the heavy per-tick hashing was dropping the playhead
+    // to a stutter while recording. The playhead/grid/meters still update at the full 60 Hz below.
+    // (per-action snapshots: settled + no mouse button held -> one undo step; a drag = one step.)
+    if (! applyingUndo && ! proc.keysRecording.load() && timerCounter % 3 == 0)
     {
         juce::int64 h = stateHash();
+        undoTickHash = h;   // reuse for the "modified since saved" check below (avoid a 2nd full hash)
         const bool mouseHeld = juce::ModifierKeys::getCurrentModifiers().isAnyMouseButtonDown();
         if (undoStack.empty()) { pushUndoSnapshot(); lastUndoHash = h; }   // baseline
         else
         {
             if (h != lastUndoHash) { lastUndoHash = h; undoDirty = true; undoStableTicks = 0; }
-            if (undoDirty && ! mouseHeld && ++undoStableTicks >= 3) { pushUndoSnapshot(); undoDirty = false; }
+            if (undoDirty && ! mouseHeld && ++undoStableTicks >= 2) { pushUndoSnapshot(); undoDirty = false; }
         }
-    }
-
-    // Detect "modified since saved" for the * markers (cheap once already dirty).
-    {
+        // Detect "modified since saved" for the * markers (same throttle - it reuses undoTickHash).
         auto& sc = proc.sequencer.channel(selectedChannel);
         if (!sc.mixModified && channelSoundHash(sc) != sc.mixHash)
-        {
-            sc.mixModified = true;
-            updateStripMixLabel(selectedChannel);
-        }
-        if (!presetModified && stateHash() != presetBaselineHash)
-        {
-            presetModified = true;
-            updatePresetLabel();
-        }
+        { sc.mixModified = true; updateStripMixLabel(selectedChannel); }
+        if (!presetModified && undoTickHash != presetBaselineHash)
+        { presetModified = true; updatePresetLabel(); }
     }
 
     // Live spectrum: if the audio thread handed us a block, FFT it here.
@@ -6982,13 +7937,12 @@ void DrumSequencerEditor::layoutContent()
     btnRedo.setBounds     (888, 7, 28,  26);   // ↷ icon
     lblMidiIn.setBounds   (922, 8, 92, 24);
     comboMidi.setBounds(1018, 7, 72, 26);         // ends at 1090; "MIDI" is short, so this leaves an 8px gap
-    btnAudition.setBounds (1098, 7, 70, 26);      // "Auto Test"
+    btnAudition.setBounds (1104, 7, 76, 26);      // "Auto Test" (right-side group spread into the old Keys button's gap)
     comboVisChannels.setBounds(0, 0, 0, 0); comboNumPat.setBounds(0, 0, 0, 0);   // replaced by the toggle buttons
     // Where the Channels/Patterns count boxes used to be: Tooltips toggle + the (global) Follow toggle.
-    btnTooltips.setBounds(1172, 7, 66, 26);
-    btnFollow.setBounds  (1242, 7, 66, 26);   // moved up from the pattern row (it's a GLOBAL setting)
-    btnKeys.setBounds     (W - 190, 7, 62, 26);   // right-anchored, just left of Drag MIDI
-    dragMidi.setBounds    (W - 108, 7, 100, 26);
+    btnTooltips.setBounds(1188, 7, 74, 26);
+    btnFollow.setBounds  (1270, 7, 74, 26);   // moved up from the pattern row (it's a GLOBAL setting)
+    dragMidi.setBounds    (W - 156, 7, 148, 26);   // wider - fills the space the old Keys toggle left
 
     // Pattern row: a window of the pattern buttons (16 visible; 24/32 scroll via patternBar).
     lblPatterns.setBounds(6, PAT_Y + 8, 60, 18);
@@ -7115,7 +8069,9 @@ void DrumSequencerEditor::layoutContent()
     const int detailY = GRID_TOP + viewRows() * ROW_H + 24;   // detail panel sits below the viewport (<= 8 rows)
     // Title-strip buttons: raised a couple px (clear of the box outlines below) + wide enough for the full UPPERCASE
     // text (no "..." truncation).
-    btnToggleDetail.setBounds(DESIGN_W - 160, detailY - 2, 150, 18);   // collapse/expand (always visible)
+    btnToggleDetail.setBounds(DESIGN_W - 200, detailY - 2, 190, 18);   // collapse/expand (always visible)
+    btnKeysView.setBounds(DESIGN_W - 200 - 116, detailY - 2, 110, 18); // KEYS <-> SOUND EDITOR (radio)
+    btnKeysView.setVisible(detailShown);
     lblSelected.setVisible(detailShown); btnSaveMix.setVisible(detailShown);
     lblSelected.setBounds(12, detailY - 2, 200, 18);
     btnSaveMix.setBounds(214, detailY - 2, 172, 18);
@@ -7395,6 +8351,19 @@ void DrumSequencerEditor::layoutContent()
     }
     if (! zoomed) for (auto& zb : zoomBtns) zb.toFront(false);
     for (auto& c : slotCombo) c.toFront(false);   // engine dropdowns must stay clickable on top
+
+    // ==== KEYS panel: covers everything RIGHT of the slot boxes (amp/EQ, pitch env, FX and
+    // master columns) when the KEYS view is on. Added ON TOP (z-order) so the covered controls
+    // stay laid out underneath but can't be seen or clicked; only the magnifier overlay floats
+    // above it. Same column maths as the detail panel (cxAmp-6 .. right edge).
+    {
+        const int kx = 12 + 376 + 10 - 6;                        // cxAmp - 6
+        const int kr = 12 + 376 + 10 + 330 + 10 + 250 + 10 + 200 + 10 + 290;   // cxMaster + masterW
+        keysPanel.setBounds(kx, detailY + 18, kr - kx, 366 - 18 + 4);
+        keysPanel.setVisible(keysView && detailShown);
+        if (keysPanel.isVisible()) keysPanel.toFront(false);
+    }
+    stepMagOverlay.toFront(false);   // the held-step magnifier stays top-most
 
     juce::ignoreUnused(group, knob, combo, groupW, curHy, curKy, x);
 }
