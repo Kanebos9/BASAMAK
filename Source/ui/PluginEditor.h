@@ -1322,8 +1322,6 @@ private:
     juce::TextButton patModeBtn;   // opens the Loop/Stop/Go-to menu; shows a summary
     juce::TextButton btnFollow { "Follow" };   // global toggle: view follows the playing pattern (proc.followPlayback)
     juce::TextButton btnClearPat { "Clear" };  // wipe the current pattern's steps/values back to default
-    juce::ComboBox   comboVisChannels;         // (legacy, hidden) replaced by the 8/16 buttons
-    juce::ComboBox   comboNumPat;              // (legacy, hidden) replaced by the 16/32 buttons
     juce::TextButton btnCh8 { "8" }, btnCh16 { "16" };     // channel-count toggle (pattern row, by the loop dropdown; "Ch")
     juce::TextButton btnPat16 { "16" }, btnPat32 { "32" }; // pattern-count toggle (pattern row, by the loop dropdown; "Pat")
     juce::Label      lblChannels { {}, "Ch" }, lblNumPat { {}, "Pat" };   // compact captions (moved to the pattern row)
@@ -1369,7 +1367,8 @@ private:
     juce::int64 takeDataHash(const DrumSequencerProcessor::KeysTake& t) const;   // fingerprint a take's data
     DrumSequencerProcessor::KeysTake captureTakeFromChannel(int ch, int pat) const;  // snapshot the live channel as a take
     bool   keysTakeDirty(int idx) const;   // has the loaded take's channel been hand-edited?
-    int    takesForChannel(int ch) const;   // count of takes belonging to a channel (per-channel 20 cap)                // write a take's notes onto its channel (view/play it)
+    int    takePatternOf(const DrumSequencerProcessor::KeysTake& t) const;   // which pattern a take belongs to
+    int    takesForPatChan(int pat, int ch) const;   // count of takes for one pattern+channel (20 cap each)                // write a take's notes onto its channel (view/play it)
     void parseKeysEvents();                    // drain the audio event log into takes (live)
     void refreshKeysPanel();
     // Host-frozen detector: if processHeartbeat stops moving (~1 s), the host isn't sending us
@@ -1379,8 +1378,6 @@ private:
     LearnableButton btnModeVel { "Vel" }, btnModeLen { "Len" }, btnModePitch { "Pitch" }, btnModeProb { "Loop" }, btnModeRoll { "Roll" }, btnModePan { "Pan" };
     juce::Label      lblEditMode;
     void setStepEditMode(int mode);   // 0 normal, 1 vel, 2 pitch, 3 prob
-    juce::Slider     sliderPatN;   // repeat count N
-    juce::Label      lblLoopCount { {}, "Loop count" };  // caption above sliderPatN
 
     // A channel's number button that doubles as a drag-copy handle: drag it onto another
     // channel's number to copy this channel's whole sound + steps there. Stays a TextButton
@@ -1438,7 +1435,6 @@ private:
     // Level meters: one horizontal bar per channel strip + a stereo (L/R) master meter. The
     // ballistics (dB scaling, fast attack / slow release, peak-hold) live in timerCallback.
     LevelMeter stripMeter[Sequencer::NUM_CHANNELS];
-    LevelMeter masterMeter[2];                 // [0]=L, [1]=R (vertical)
     float meterVal[Sequencer::NUM_CHANNELS] = {};
     float meterPk [Sequencer::NUM_CHANNELS] = {};
     int   meterHold[Sequencer::NUM_CHANNELS] = {};
@@ -1510,13 +1506,12 @@ private:
     VoiceModDisplay  voiceMod;                    // unison/detune/vibrato visual (replaces the 3 knobs)
     SlotSelector     slotSelAmp, slotSelPitch, slotSelFx;   // 1/2 slot pickers (synced via setShapeSlot)
     SlotSelector     slotSelVoice;                          // 1/2 picker under UNISON/DETUNE/VIBRATO (synced with slotSelPitch)
-    juce::Label      hdrBlend2, hdrAmpEnv, hdrEqBox, hdrVoice;   // box/section titles (row 1)
+    juce::Label      hdrAmpEnv, hdrEqBox, hdrVoice;   // box/section titles (row 1)
     // === PER-SLOT EQ (begin) - target picker: 0 = All (channel EQ), 1/2/3 = that slot's EQ ===
     SlotSelector     slotSelEq;
     int              eqEditTarget = 0;
     void             refreshEqTarget();          // point freqDisplay at the chosen EQ
     // === PER-SLOT EQ (end) ===
-    juce::Label      lblShapeSlot, lblPitchSlot;
     int   envTargetSlot() const;               // 0/1/2 (the shared selected slot)
     void  setShapeSlot(int s);                 // change the selected slot + reload all shape editors
     void  loadEnvIntoEditor();                 // selected slot -> amp envelope display

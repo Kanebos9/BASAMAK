@@ -523,6 +523,7 @@ public:
     //   exclusive with internal sound (outputBus is then irrelevant).
     bool  midiOut = false;
     int   midiOutChannel = 1;   // MIDI channel (1-16) the midiOut notes are sent on (channel-wide)
+    int   keysSlot2Down = 0;    // KEYS: extra transpose DOWN (0-24 st) applied to slot 2 only, PER pattern/channel
 
     //-- Polyphony: when true, a new trigger does not cut the previous sound
     //   (voices overlap and ring out); when false the channel is monophonic.

@@ -233,10 +233,32 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         const int  chIdx = juce::jlimit(0, Sequencer::NUM_CHANNELS - 1, lastSelectedChannel);
         const bool rec   = keysRecording.load(std::memory_order_relaxed);
         const bool chain = keysRecMode.load(std::memory_order_relaxed) >= 2;
+        // Which pattern the keyboard plays (and records into):
+        //  - chain record: the PLAYING pattern (follow the chain -> its loaded sound + slot-2 setting);
+        //  - this-pattern record: always the ARMED pattern (the chain may play others, but we only
+        //    play/record the one we armed);
+        //  - not recording: the VIEWED pattern.
+        const int  armedP = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, keysArmedPattern.load(std::memory_order_relaxed));
+        const int  keyPat = (rec && sequencer.isCurrentlyPlaying)
+                              ? (chain ? juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, sequencer.playPattern) : armedP)
+                              : juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, sequencer.currentPattern);
+        // RECORDING is ALWAYS a draw lane: if the playing pattern's channel isn't draw yet (a chain
+        // may visit a step-mode pattern), force it into draw now. Step data is KEPT (draw ignores it),
+        // so switching back to steps later restores it.
+        if (rec && sequencer.isCurrentlyPlaying)
+        {
+            auto& pc = sequencer.patterns[keyPat].channels[chIdx];
+            if (! pc.drawMode)
+            {
+                pc.drawMode = true;
+                for (int i = 0; i < DrumChannel::DRAW_RES; ++i) pc.drawSemi[i] = DrumChannel::DRAW_GAP;
+                keysDrawLastCol.store(-1, std::memory_order_relaxed);
+            }
+        }
         // DRAW mode records into a free unquantized pitch LANE (no steps): the per-block writer below
         // stamps the held note's semitone into the columns as the playhead moves. The step-based
         // stamping / merge / take-boundary logic is skipped for a draw channel.
-        const bool drawRec = sequencer.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, sequencer.playPattern)].channels[chIdx].drawMode;
+        const bool drawRec = sequencer.patterns[keyPat].channels[chIdx].drawMode;
         auto logEvt = [this](int pat, int st, int semis, int flags) {
             const int cnt = keysEvtCount.load(std::memory_order_relaxed);
             if (cnt < KEYS_EVT_CAP)
@@ -327,8 +349,8 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                     keysLastStampStep.store(st, std::memory_order_relaxed);
                 }
             }
-            sequencer.channel(chIdx).keyDown(note, juce::jlimit(0.05f, 1.0f, vel),
-                                             keysSlot2Down.load(std::memory_order_relaxed));
+            auto& kc = sequencer.patterns[keyPat].channels[chIdx];
+            kc.keyDown(note, juce::jlimit(0.05f, 1.0f, vel), kc.keysSlot2Down);   // slot-2 transpose = THIS pattern's channel setting
             keysHeldNote.store(note, std::memory_order_relaxed);
         }
         const uint32_t u = keysUpEvt.load(std::memory_order_acquire);
@@ -357,7 +379,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                     logEvt(pat, head, (int) std::lround(len * 100.0f), 2);   // flags bit1 = LENGTH event
                 }
             }
-            sequencer.channel(chIdx).keyUp();
+            sequencer.patterns[keyPat].channels[chIdx].keyUp();
             keysHeldNote.store(-1, std::memory_order_relaxed);
             keysLastStampStep.store(-1, std::memory_order_relaxed);
         }
@@ -444,7 +466,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
 
     // Average-downsample the send buses to the host rate (cheap; reverb/delay are latency-tolerant).
     {
-        auto downAvg = [this, numSamples](juce::AudioBuffer<float>& src, juce::AudioBuffer<float>& dst)
+        auto downAvg = [numSamples](juce::AudioBuffer<float>& src, juce::AudioBuffer<float>& dst)
         {
             const float inv = 1.0f / (float) kEngineOS;
             for (int ch = 0; ch < 2; ++ch)
@@ -996,6 +1018,29 @@ juce::File DrumSequencerProcessor::exportMidiFile(int channel)
             baseNote = juce::jlimit(0, 127, (int) std::lround(69.0 + 12.0 * std::log2(juce::jmax(20.0, hz) / 440.0)));
         }
 
+        // DRAW mode: the melody is the drawn lane (per-column semitone), not the steps. Each
+        // contiguous run of the SAME semitone = one note; DRAW_GAP = a rest. Freely exported at
+        // the lane's resolution (no need to quantise to steps first).
+        if (chn.drawMode)
+        {
+            const int    R        = DrumChannel::DRAW_RES;
+            const double colTicks = barTicks / (double) R;
+            const auto   vel      = (juce::uint8) juce::jlimit(1, 127,
+                                        juce::roundToInt(juce::jlimit(0.0f, 1.0f, chn.drawVel) * 127.0f));
+            int c = 0;
+            while (c < R)
+            {
+                const int s = (int) chn.drawSemi[c];
+                if (s == (int) DrumChannel::DRAW_GAP) { ++c; continue; }
+                int e = c + 1;
+                while (e < R && (int) chn.drawSemi[e] == s) ++e;   // extend the run of the same note
+                const int note = juce::jlimit(0, 127, baseNote + s);
+                seq.addEvent(juce::MidiMessage::noteOn (midiCh, note, vel), (double) c * colTicks);
+                seq.addEvent(juce::MidiMessage::noteOff(midiCh, note),      (double) e * colTicks);
+                c = e;
+            }
+        }
+        else
         for (int step = 0; step < n; ++step)
         {
             if (! chn.steps[step] || chn.stepMerge[step]) continue;   // merged steps ride their head
@@ -1131,6 +1176,7 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
     chState.setProperty("outBus",   ch.outputBus,      nullptr);   // multi-out routing (channel-wide)
     chState.setProperty("midiOut",  ch.midiOut,        nullptr);   // route to MIDI out instead of sound
     chState.setProperty("midiCh",   ch.midiOutChannel, nullptr);   // MIDI out channel (1-16)
+    chState.setProperty("keys2Dn",  ch.keysSlot2Down,  nullptr);   // KEYS slot-2 transpose (per pattern/channel)
     chState.setProperty("chokeGrp", ch.chokeGroup,     nullptr);   // choke group (channel-wide)
     chState.setProperty("numSteps", ch.numSteps,       nullptr);
     chState.setProperty("sound",    (int)ch.soundType, nullptr);
@@ -1274,6 +1320,7 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
     ch.outputBus   = (int)  child.getProperty("outBus",  0);
     ch.midiOut     = (bool) child.getProperty("midiOut", false);
     ch.midiOutChannel = juce::jlimit(1, 16, (int) child.getProperty("midiCh", 1));
+    ch.keysSlot2Down  = juce::jlimit(0, 24, (int) child.getProperty("keys2Dn", 0));   // KEYS slot-2 transpose (per channel)
     ch.chokeGroup  = (int)  child.getProperty("chokeGrp", 0);
     ch.numSteps    = (int)child.getProperty("numSteps",   8);
     ch.soundType   = (DrumSoundGenerator::Type)(int)child.getProperty("sound", 0);
@@ -1561,7 +1608,7 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
                     const int cch = (i < ds.length()) ? (int) ds[i] : 33;
                     t.drawLane[(size_t) i] = (cch == 33) ? DrumChannel::DRAW_GAP : (int8_t) juce::jlimit(-36, 36, cch - 70);
                 }
-                if (keysTakes.size() < 320) keysTakes.push_back(std::move(t));
+                if (keysTakes.size() < KEYS_TAKES_MAX) keysTakes.push_back(std::move(t));
                 continue;
             }
             juce::StringArray evs = juce::StringArray::fromTokens(tt.getProperty("evts", "").toString(), ",", "");
@@ -1572,7 +1619,7 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
                 t.evts.push_back({ (uint8_t) f[0].getIntValue(), (uint8_t) f[1].getIntValue(),
                                    (int8_t)  f[2].getIntValue(), (uint8_t) f[3].getIntValue() });
             }
-            if (! t.evts.empty() && keysTakes.size() < 320) keysTakes.push_back(std::move(t));
+            if (! t.evts.empty() && keysTakes.size() < KEYS_TAKES_MAX) keysTakes.push_back(std::move(t));
         }
 
     for (int i = 0; i < state.getNumChildren(); ++i)

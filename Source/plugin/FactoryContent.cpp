@@ -1221,6 +1221,7 @@ static void resetAll(Sequencer& s)
             clearSound(ch);
             ch.mute = false; ch.solo = false;
             ch.chokeGroup = 0; ch.outputBus = 0; ch.midiOut = false; ch.midiOutChannel = 1;   // routing/choke are preset-level -> reset them
+            ch.keysSlot2Down = 0;   // KEYS slot-2 transpose (channel-wide) is preset-level too
             ch.mixName = {}; ch.mixModified = false;
             setSteps(ch, 8, {});
         }

@@ -87,12 +87,6 @@ juce::Array<SlotParam> slotParamsFor(int engine)
         sp.set = [f](S& s, double v) { s.*f = (float) std::lround(v); };
         return sp;
     };
-    auto I = [](juce::String lab, double mn, double mx, int S::* f, juce::String suf) {
-        SlotParam sp; sp.label = lab; sp.min = mn; sp.max = mx; sp.suffix = suf;
-        sp.get = [f](const S& s) { return (double)(s.*f); };
-        sp.set = [f](S& s, double v) { s.*f = (int) std::lround(v); };
-        return sp;
-    };
     switch (engine)
     {
         case DrumChannel::SrcOsc:
@@ -1373,7 +1367,6 @@ int StepGridComponent::yToDrawSemi(juce::Rectangle<int> rect, int y, int range) 
 
 void StepGridComponent::drawStrokeTo(int ch, juce::Point<int> pos)
 {
-    const int R = DrumChannel::DRAW_RES;
     const bool inOverlay = (drawMagCh == ch);
     const auto rect = inOverlay ? drawOverlayRect() : drawRowRect(ch);
     const int range = inOverlay ? drawRange : 36;
@@ -1914,8 +1907,8 @@ void DragMidiSource::paint(juce::Graphics& g)
     g.setColour(juce::Colours::lightblue);
     g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(1), 5.0f, 1.0f);
     g.setColour(juce::Colours::white);
-    g.setFont(juce::Font(11.0f));
-    g.drawText("Drag MIDI", getLocalBounds(), juce::Justification::centred);
+    g.setFont(juce::Font(13.0f, juce::Font::bold));
+    g.drawText("DRAG PITCH AS MIDI", getLocalBounds(), juce::Justification::centred);
 }
 
 void DragMidiSource::mouseDrag(const juce::MouseEvent& e)
@@ -3638,7 +3631,6 @@ static constexpr int FACTORY_MIX_BASE = 5000;   // factory sound mixes: 5000 + i
 static constexpr int FACTORY_PST_BASE = 6000;   // factory presets:     6000 + index
 static constexpr int ID_INIT_PRESET   = 9003;
 static constexpr int ID_INIT_MIX      = 9996;
-static constexpr int ID_NONE          = 9997;
 static constexpr int ID_REFRESH_SAMPLES = 9990;  // rescan the Samples folder so newly-added files appear in the dropdown
 static constexpr int ID_SHOW_SAMPLES    = 9989;  // reveal the Samples folder in Finder/Explorer
 static constexpr int ID_REFRESH_BANK    = 9995;  // rescan the Sound Bank folder
@@ -4166,6 +4158,7 @@ void DrumSequencerEditor::resetChannelToDefault(DrumChannel& c, int ch)
     for (int i = 0; i < 4; ++i) { c.srcOn[i] = true; c.srcWeight[i] = 0.25f; }
     c.srcOn[DrumChannel::SrcPhys] = false; c.srcWeight[DrumChannel::SrcPhys] = 0.0f;
     c.drawMode = false; c.drawVel = 1.0f; c.drawPan = 0.0f;   // fresh channel = step mode
+    c.keysSlot2Down = 0;                                      // KEYS slot-2 transpose (channel-wide) resets too
     for (int i = 0; i < DrumChannel::DRAW_RES; ++i) c.drawSemi[i] = DrumChannel::DRAW_GAP;
     c.padX = c.padY = 0.5f; c.padLayoutB = false;
     c.layerOscShape = 0; c.layerSineFreq = 60.0f; c.layerSinePEnvAmt = 0.0f; c.layerSinePEnvTime = 0.04f; c.layerSinePOffset = 0.0f;
@@ -4479,6 +4472,7 @@ void DrumSequencerEditor::handlePresetChange()
     {
         const int pi = id - FACTORY_PST_BASE;
         Factory::applyPreset(proc.sequencer, pi);
+        proc.keysTakes.clear(); keysLoadedTakeIdx = -1; keysLoadedTakeHash = 0;   // takes are preset-level (applyPreset/resetAll only reset the sequencer)
         syncAfterStateChange();
         rebaselinePreset(Factory::presetNames()[pi]);   // shows name, clean baseline
     }
@@ -4492,6 +4486,7 @@ void DrumSequencerEditor::handlePresetChange()
         if (presetFiles[id - 1].loadFileAsData(mb))
         {
             proc.setStateInformation(mb.getData(), (int) mb.getSize());
+            keysLoadedTakeIdx = -1; keysLoadedTakeHash = 0;   // takes were reloaded from the file
             fullRefresh();
             rebaselinePreset(presetFiles[id - 1].getFileNameWithoutExtension());
         }
@@ -4662,11 +4657,14 @@ void DrumSequencerEditor::initPreset()
 {
     auto& s = proc.sequencer;
     s.standaloneBpm = 120.0f; s.timeSigNum = 4; s.timeSigDen = 4; s.currentPattern = 0;
+    // Recorded takes are preset-level (like the factory + file-load paths) - a fresh preset has none.
+    proc.keysTakes.clear(); keysLoadedTakeIdx = -1; keysLoadedTakeHash = 0;
     for (int p = 0; p < Sequencer::NUM_PATTERNS; ++p)
     {
         auto& P = s.patterns[p];
         P.swing = 0.0f; P.playMode = Sequencer::LoopForever; P.repeatTarget = 2; P.gotoPattern = 0;
         P.chainLen = 0; P.chainStep = 0;
+        P.master = Sequencer::MasterFX();   // reset reverb/delay/tilt/sat/vol/limiter - was LEAKING from the old preset
         for (int c = 0; c < Sequencer::NUM_CHANNELS; ++c)
         {
             auto& ch = P.channels[c];
@@ -4982,10 +4980,8 @@ void DrumSequencerEditor::setupComponents()
 
     content.addAndMakeVisible(dragMidi);
     dragMidi.getMidiFile = [this] { return proc.exportMidiFile(selectedChannel); };
-    dragMidi.setTooltip("Drag MIDI: drag this into your DAW to export the SELECTED channel as a MIDI clip. Each "
-                        "step's PITCH becomes a real note (base = slot 1's Freq, e.g. C3 after playing the keys; "
-                        "all-equal pitches = one repeated note). Merged runs export as ONE long note; velocity, "
-                        "rolls, note Length, swing and tempo all carry over.");
+    dragMidi.setTooltip("Dragging pitch values works for selected channel, not for the whole pattern. It is useful "
+                        "when steps have different pitch values.");
 
 
     // Preset menu
@@ -5138,34 +5134,40 @@ void DrumSequencerEditor::setupComponents()
         if (proc.keysRecording.load() || keysCountdownTicks > 0) keysStopRecord(true);
         else keysStartRecord();
     };
-    keysPanel.comboRecMode.addItem("This pattern - 1st key starts", 1);
-    keysPanel.comboRecMode.addItem("This pattern - 3s count-in",    2);
-    keysPanel.comboRecMode.addItem("Chained patterns - 1st key",    3);
-    keysPanel.comboRecMode.addItem("Chained patterns - 3s count-in",4);
+    keysPanel.comboRecMode.addItem("This pattern only - key starts",  1);
+    keysPanel.comboRecMode.addItem("This pattern only - 3s count-in", 2);
+    keysPanel.comboRecMode.addItem("Follow chain, record each - key", 3);
+    keysPanel.comboRecMode.addItem("Follow chain, record each - 3s",  4);
     keysPanel.comboRecMode.setSelectedId(1, juce::dontSendNotification);
-    keysPanel.comboRecMode.setTooltip("What RECORD writes over: only this pattern (loop-record it) or every pattern "
-                                      "the chain visits - and whether recording starts with your first key press or "
-                                      "after a 3-second count-in.");
+    keysPanel.comboRecMode.setTooltip("WHERE recording writes (the chain plays either way):\n"
+                                      "- This pattern only: record just the pattern you're on; each loop of it = one "
+                                      "take. Other patterns the chain visits play but are NOT recorded.\n"
+                                      "- Follow chain, record each: record into EVERY pattern the chain visits - each "
+                                      "pattern+channel keeps its own separate takes.\n"
+                                      "'key' = recording starts on your first key press; '3s' = a 3-second count-in.");
     for (int stn = 0; stn <= 24; ++stn)
         keysPanel.comboSlot2.addItem(stn == 0 ? juce::String("0 st") : ("-" + juce::String(stn) + " st"), stn + 1);
-    keysPanel.comboSlot2.setSelectedId(proc.keysSlot2Down.load() + 1, juce::dontSendNotification);
+    keysPanel.comboSlot2.setSelectedId(proc.sequencer.channel(selectedChannel).keysSlot2Down + 1, juce::dontSendNotification);
     keysPanel.comboSlot2.setTooltip("Slot 2 transpose: how many semitones LOWER slot 2 plays on the keys (slot 1 is "
                                     "always the pressed pitch). -12 = a classic sub-oscillator an octave down.");
     keysPanel.comboSlot2.onChange = [this] {
-        if (! ignoreKnobCallbacks) proc.keysSlot2Down.store(keysPanel.comboSlot2.getSelectedId() - 1);
+        if (ignoreKnobCallbacks) return;
+        const int v = keysPanel.comboSlot2.getSelectedId() - 1;
+        proc.sequencer.channel(selectedChannel).keysSlot2Down = v;   // PER pattern/channel now
+        proc.keysSlot2Down.store(v);                                 // global mirror (persist default / old projects)
     };
     keysPanel.btnTakes.setLookAndFeel(&dropBtnLNF);   // proper dropdown look (like the sound bank)
-    keysPanel.btnTakes.setTooltip("Your recorded takes (each pattern loop while recording = one take, up to 20; saved "
-                                  "with the preset). Click a take to LOAD it onto its channel so you can see its pitch "
-                                  "values and play it; each take also has a Delete option. Recording is disabled while "
-                                  "the list is full - delete some takes to record again.");
+    keysPanel.btnTakes.setTooltip("Recorded takes for the CURRENT pattern + selected channel (each pattern loop while "
+                                  "recording = one take, up to 20 per pattern+channel; saved with the preset). Click a "
+                                  "take to LOAD it (see its pitches + play it); each has Save/Delete, plus 'Delete all' "
+                                  "for this pattern+channel. Recording pauses when full (max 1000 takes per preset).");
     keysPanel.btnTakes.onClick = [this] {
         juce::PopupMenu m;
         int shown = 0;
         for (int i = 0; i < (int) proc.keysTakes.size(); ++i)
         {
             const auto& t = proc.keysTakes[(size_t) i];
-            if (t.channel != selectedChannel) continue;   // takes are per-channel
+            if (t.channel != selectedChannel || takePatternOf(t) != currentPattern()) continue;   // per PATTERN + channel
             ++shown;
             juce::PopupMenu sub;
             sub.addItem(1000 + i * 4,     "Load onto channel " + juce::String(t.channel + 1));
@@ -5179,9 +5181,23 @@ void DrumSequencerEditor::setupComponents()
             const juce::String kind = t.isDraw ? "draw" : (juce::String((int) t.evts.size()) + " notes");
             m.addSubMenu(t.name + "  (" + kind + (dirty ? ", edited*" : "") + ")", sub);
         }
-        if (shown == 0) m.addItem(-1, "(no takes on channel " + juce::String(selectedChannel + 1) + " yet)", false);
+        const juce::String where = "Pattern " + juce::String(currentPattern() + 1)
+                                   + " Channel " + juce::String(selectedChannel + 1);
+        if (shown == 0) m.addItem(-1, "(no takes in " + where + " yet)", false);
+        else { m.addSeparator(); m.addItem(500, "Delete all takes in " + where); }
         m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&keysPanel.btnTakes),
                         [this](int r) {
+                            if (r == 500)   // delete every take in this pattern+channel
+                            {
+                                auto& v = proc.keysTakes;
+                                v.erase(std::remove_if(v.begin(), v.end(),
+                                            [this](const DrumSequencerProcessor::KeysTake& t)
+                                            { return t.channel == selectedChannel && takePatternOf(t) == currentPattern(); }),
+                                        v.end());
+                                keysLoadedTakeIdx = -1;   // indices shifted
+                                refreshKeysPanel();
+                                return;
+                            }
                             if (r < 1000) return;
                             const int idx = (r - 1000) / 4, act = (r - 1000) % 4;
                             if (act == 0) keysLoadTake(idx);
@@ -5194,7 +5210,8 @@ void DrumSequencerEditor::setupComponents()
                                 if (act == 2) {   // overwrite the loaded take (keep its name)
                                     nt.name = ot.name; proc.keysTakes[(size_t) idx] = std::move(nt);
                                     keysLoadedTakeHash = takeDataHash(proc.keysTakes[(size_t) idx]);
-                                } else if (takesForChannel(ot.channel) < 20) {   // save as a new take (per channel)
+                                } else if (takesForPatChan(takePatternOf(ot), ot.channel) < 20
+                                           && (int) proc.keysTakes.size() < DrumSequencerProcessor::KEYS_TAKES_MAX) {   // save as a new take
                                     nt.name = juce::Time::getCurrentTime().toString(true, true, true, true)
                                               + "  #" + juce::String((int) proc.keysTakes.size() + 1);
                                     proc.keysTakes.push_back(std::move(nt));
@@ -5252,20 +5269,6 @@ void DrumSequencerEditor::setupComponents()
             });
     };
 
-    content.addAndMakeVisible(lblLoopCount);
-    lblLoopCount.setFont(juce::Font(10.0f));
-    lblLoopCount.setColour(juce::Label::textColourId, juce::Colour(0xff9090b0));
-    lblLoopCount.setJustificationType(juce::Justification::centred);
-
-    content.addAndMakeVisible(sliderPatN);
-    sliderPatN.setSliderStyle(juce::Slider::IncDecButtons);
-    sliderPatN.setRange(1.0, 99.0, 1.0);
-    sliderPatN.setValue(2.0, juce::dontSendNotification);
-    sliderPatN.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 34, 22);
-    sliderPatN.onValueChange = [this] {
-        proc.sequencer.patterns[currentPattern()].repeatTarget = (int) sliderPatN.getValue();
-        refreshPatternOptions();
-    };
 
     // Step grid
     content.addAndMakeVisible(stepGrid);
@@ -5423,7 +5426,10 @@ void DrumSequencerEditor::setupComponents()
             if (id == StepGridComponent::DRAW_ITEM_ID) { c.drawMode = true; finish(); return; }   // -> draw (lane kept)
             if (! c.drawMode) { c.numSteps = id; finish(); return; }                               // step -> step
             bool any = false; for (int i = 0; i < DrumChannel::DRAW_RES; ++i) if (c.drawSemi[i] != DrumChannel::DRAW_GAP) { any = true; break; }
-            if (! any) { quantizeDrawToSteps(c, id); finish(); return; }                            // empty lane: no need to ask
+            // NOTHING drawn: just leave draw mode. The channel's original steps (on/off, pitch, merge,
+            // Length, Loop, Roll, ...) were never touched by draw, so they're restored as-is - no quantise
+            // (quantising an empty lane would wipe them). Only a REAL drawing quantises (fresh) below.
+            if (! any) { c.drawMode = false; c.numSteps = id; finish(); return; }
             juce::PopupMenu mm;                                                                     // draw -> steps: confirm the quantise
             mm.addSectionHeader("Switching to " + juce::String(id) + " steps quantises your drawing (fine timing is snapped).");
             mm.addItem(1, "Quantize to " + juce::String(id) + " steps");
@@ -5470,9 +5476,6 @@ void DrumSequencerEditor::setupComponents()
     auto fmtMs   = [](double v){ return v < 1.0 ? juce::String(juce::roundToInt(v * 1000.0)) + "ms"
                                                 : juce::String(v, 2) + "s"; };
     auto fmtPct  = [](double v){ return juce::String(juce::roundToInt(v * 100.0)) + "%"; };
-    auto fmtDb   = [](double v){ bool whole = std::abs(v - std::round(v)) < 0.05;
-                                 juce::String s = whole ? juce::String((int) std::round(v)) : juce::String(v, 1);
-                                 return (v >= 0 ? "+" : "") + s + "dB"; };
     auto fmtHz   = [](double v){ if (v >= 1000.0) { bool whole = std::fmod(v, 1000.0) < 1.0;
                                      return juce::String(v / 1000.0, whole ? 0 : 1) + "k"; }
                                  return juce::String(juce::roundToInt(v)); };
@@ -5758,9 +5761,6 @@ void DrumSequencerEditor::setupComponents()
                                           : (d > 0 ? "Br +" + juce::String(d) : "Dk " + juce::String(d)); });
     setupKnob(knobMasterSat,   lblMasterSat,   "Sat",    0.0, 1.0,  0.0,  1.0, fmtPct);   // 0 = off; master saturation
 
-    for (auto& m : masterMeter) { m.horizontal = false; content.addAndMakeVisible(m); }
-    masterMeter[0].setTooltip ("Master output level (L / R), post everything. Green ok - amber hot - red = clipping.");
-    masterMeter[1].setTooltip ("Master output level (L / R), post everything. Green ok - amber hot - red = clipping.");
 
     knobPitch.onValueChange   = [this] { if (!ignoreKnobCallbacks)   proc.sequencer.channel(selectedChannel).sampleCrush = (float)knobPitch.getValue(); };
     knobVolume.onValueChange  = [this] { if (!ignoreKnobCallbacks)   proc.sequencer.channel(selectedChannel).volume  = (float)knobVolume.getValue(); };
@@ -5787,9 +5787,11 @@ void DrumSequencerEditor::setupComponents()
     knobReverbWidth.onValueChange = [this, allM] { allM([this](Sequencer::MasterFX& m){ m.reverbWidth = (float)knobReverbWidth.getValue(); }); };
     knobDelayFB.onValueChange     = [this, allM] { allM([this](Sequencer::MasterFX& m){ m.delayFeedback = (float)knobDelayFB.getValue(); }); };
     knobDelayWet.onValueChange    = [this, allM] { allM([this](Sequencer::MasterFX& m){ m.delayWet = (float)knobDelayWet.getValue(); }); };
-    knobMasterVol.onValueChange   = [this] { if (!ignoreKnobCallbacks) proc.masterFX().volume = (float)knobMasterVol.getValue(); };
-    knobMasterPan.onValueChange   = [this] { if (!ignoreKnobCallbacks) proc.masterFX().pan    = (float)knobMasterPan.getValue(); };
-    knobMasterLimit.onValueChange = [this] { if (!ignoreKnobCallbacks) proc.masterFX().limit  = (float)knobMasterLimit.getValue(); };
+    // Volume / Pan / Limiter are MASTER-level too now (write ALL patterns) - the whole master section
+    // is preset-wide, so it doesn't change as the chain moves between patterns.
+    knobMasterVol.onValueChange   = [this, allM] { allM([this](Sequencer::MasterFX& m){ m.volume = (float)knobMasterVol.getValue(); }); };
+    knobMasterPan.onValueChange   = [this] { if (!ignoreKnobCallbacks) proc.masterFX().pan = (float)knobMasterPan.getValue(); };   // (Pan is REMOVED from the UI - dead knob, left as-is)
+    knobMasterLimit.onValueChange = [this, allM] { allM([this](Sequencer::MasterFX& m){ m.limit  = (float)knobMasterLimit.getValue(); }); };
     // Glue is a MASTER bus compressor (one shared setting for the whole kit) -> write ALL patterns, like the FX flavour.
     knobMasterGlue.onValueChange  = [this, allM] { allM([this](Sequencer::MasterFX& m){ m.glue = (float)knobMasterGlue.getValue(); }); };
     // Tilt + Sat = master TONE/colour (shared kit sound) -> also write ALL patterns.
@@ -5894,7 +5896,6 @@ void DrumSequencerEditor::setupComponents()
     content.addAndMakeVisible(slotSelFx);    slotSelFx.onSelect    = pickSlot;
     setupGroupHeader(hdrPitch, "PITCH ENVELOPE");
     setupGroupHeader(hdrVoice, "UNISON / DETUNE / VIBRATO");   // sub-title above the voice visual
-    setupGroupHeader(hdrBlend2, "SOUND BLEND");
     setupGroupHeader(hdrAmpEnv, "AMP ENVELOPE");
     setupGroupHeader(hdrEqBox,  "EQ");
     // === PER-SLOT EQ (begin) - target picker (All / 1 / 2 / 3) ===
@@ -5902,7 +5903,6 @@ void DrumSequencerEditor::setupComponents()
     content.addAndMakeVisible(slotSelEq);
     slotSelEq.onSelect = [this](int s) { if (ignoreKnobCallbacks) return; eqEditTarget = s; refreshEqTarget(); };
     // === PER-SLOT EQ (end) ===
-    setupGroupHeader(lblShapeSlot, "EDIT SLOT"); setupGroupHeader(lblPitchSlot, "EDIT SLOT");
 
     // Unison / Detune / Vibrato as an interactive VISUAL (like the amp/pitch env editors), editing the
     // selected slot. The 1/2/3 selector (slotSelPitch) above it chooses which slot.
@@ -6214,7 +6214,8 @@ void DrumSequencerEditor::setupComponents()
     lblMasterMono.setFont(juce::Font(9.5f)); lblMasterMono.setJustificationType(juce::Justification::centred);
     lblMasterMono.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
     content.addAndMakeVisible(swMasterMono);
-    swMasterMono.onClick = [this] { if (!ignoreKnobCallbacks) proc.masterFX().mono = swMasterMono.getToggleState(); };
+    swMasterMono.onClick = [this] { if (ignoreKnobCallbacks) return;   // Mono is preset-wide too -> write ALL patterns
+        const bool on = swMasterMono.getToggleState(); for (auto& p : proc.sequencer.patterns) p.master.mono = on; };
 
     content.addAndMakeVisible(btnSaveMix);
     btnSaveMix.setLookAndFeel(&tinyBtnLNF);   // smaller font so the long text fits + reads
@@ -6233,9 +6234,9 @@ void DrumSequencerEditor::setupComponents()
     btnPlay.setTooltip("Start playback (used when DAW Sync is off, so the plugin runs on its own).");
     btnStop.setTooltip("Stop playback (used when DAW Sync is off).");
     comboPreset.setTooltip("Save or load a whole-kit preset: all channels, patterns and settings at once.");
-    dragMidi.setTooltip("Drag this onto a track in your DAW to export the current pattern as a MIDI clip.");
+    dragMidi.setTooltip("Dragging pitch values works for selected channel, not for the whole pattern. It is useful "
+                        "when steps have different pitch values.");
     patModeBtn.setTooltip("What happens after this pattern finishes: loop forever, stop after N loops, or jump to another pattern.");
-    sliderPatN.setTooltip("How many times the pattern loops before the chosen action (stop / go to another pattern) happens.");
 
     freqDisplay.setTooltip("Live spectrum (the frequencies of what's playing) + the EQ/filter curve. The spectrum "
                            "refreshes once per step, so channels with more steps show the frequencies at a higher resolution.\n\n"
@@ -6554,7 +6555,9 @@ void DrumSequencerEditor::applyKeysView()
 
 void DrumSequencerEditor::keysStartRecord()
 {
-    if (takesForChannel(selectedChannel) >= 20) { refreshKeysPanel(); return; }   // this channel full
+    if (takesForPatChan(currentPattern(), selectedChannel) >= 20
+        || (int) proc.keysTakes.size() >= DrumSequencerProcessor::KEYS_TAKES_MAX)
+    { refreshKeysPanel(); return; }   // this pattern+channel (or the whole preset) is full
     proc.keysEvtCount.store(0);
     keysEvtCursor = 0; keysPendingEvts.clear();
     proc.keysArmedPattern.store(currentPattern());
@@ -6563,6 +6566,10 @@ void DrumSequencerEditor::keysStartRecord()
     proc.keysRecMode.store(keysPanel.comboRecMode.getSelectedId() - 1);
     proc.keysLoopSeen.store(-1); proc.keysLastStampStep.store(-1); proc.keysLastPlayPat.store(-1);
     keysRecWasPlaying = false;
+    // Recording auto-enables FOLLOW so the view tracks the playing pattern (essential in chain mode:
+    // you record into whatever pattern is playing, so you want to see it).
+    proc.followPlayback = true; refreshFollowButton();
+    if (proc.sequencer.isCurrentlyPlaying) selectPattern(proc.sequencer.playPattern);
     // A recording ALWAYS goes into DRAW mode (user rule): if a step count was set, switch to draw.
     // Then start from a CLEAN slate - the draw lane cleared, and the step data too (both modes).
     proc.keysDrawLastCol.store(-1);
@@ -6591,18 +6598,23 @@ void DrumSequencerEditor::parseKeysEvents()
     {
         const auto& e = proc.keysEvts[keysEvtCursor++];
         if (e.pattern != 0xFF) { keysPendingEvts.push_back(e); continue; }
-        if (! keysPendingEvts.empty() && takesForChannel(selectedChannel) < 20)
+        if (! keysPendingEvts.empty())
         {
-            DrumSequencerProcessor::KeysTake t;
-            t.channel = selectedChannel;
-            t.name    = juce::Time::getCurrentTime().toString(true, true, true, true)
-                        + "  #" + juce::String((int) proc.keysTakes.size() + 1);
-            t.evts    = std::move(keysPendingEvts);
-            proc.keysTakes.push_back(std::move(t));
+            const int tp = (int) keysPendingEvts[0].pattern;   // this take lives in one pattern
+            if (takesForPatChan(tp, selectedChannel) < 20 && (int) proc.keysTakes.size() < DrumSequencerProcessor::KEYS_TAKES_MAX)
+            {
+                DrumSequencerProcessor::KeysTake t;
+                t.channel = selectedChannel;
+                t.name    = juce::Time::getCurrentTime().toString(true, true, true, true)
+                            + "  #" + juce::String((int) proc.keysTakes.size() + 1);
+                t.evts    = std::move(keysPendingEvts);
+                proc.keysTakes.push_back(std::move(t));
+            }
         }
         keysPendingEvts.clear();
-        if (takesForChannel(selectedChannel) >= 20 && proc.keysRecording.load())
-            keysStopRecord(true);   // list full -> recording stops and can't restart until a delete
+        if ((takesForPatChan(currentPattern(), selectedChannel) >= 20
+             || (int) proc.keysTakes.size() >= DrumSequencerProcessor::KEYS_TAKES_MAX) && proc.keysRecording.load())
+            keysStopRecord(true);   // this pattern+channel (or the whole preset) is full -> stop until a delete
     }
 }
 
@@ -6620,7 +6632,8 @@ void DrumSequencerEditor::keysStopRecord(bool finalize)
     {
         // save the final (partial) loop as a take too
         bool any = false; for (int i = 0; i < DrumChannel::DRAW_RES; ++i) if (drawCh.drawSemi[i] != DrumChannel::DRAW_GAP) { any = true; break; }
-        if (any && takesForChannel(selectedChannel) < 20)
+        if (any && takesForPatChan(currentPattern(), selectedChannel) < 20
+                && (int) proc.keysTakes.size() < DrumSequencerProcessor::KEYS_TAKES_MAX)
         {
             DrumSequencerProcessor::KeysTake t;
             t.isDraw = true; t.channel = selectedChannel; t.drawPat = currentPattern();
@@ -6629,7 +6642,9 @@ void DrumSequencerEditor::keysStopRecord(bool finalize)
             proc.keysTakes.push_back(std::move(t));
         }
     }
-    else if (finalize && ! keysPendingEvts.empty() && takesForChannel(selectedChannel) < 20)
+    else if (finalize && ! keysPendingEvts.empty()
+             && takesForPatChan((int) keysPendingEvts[0].pattern, selectedChannel) < 20
+             && (int) proc.keysTakes.size() < DrumSequencerProcessor::KEYS_TAKES_MAX)
     {
         DrumSequencerProcessor::KeysTake t;
         t.channel = selectedChannel;
@@ -6653,17 +6668,23 @@ void DrumSequencerEditor::keysStopRecord(bool finalize)
 void DrumSequencerEditor::drainDrawTake()
 {
     if (! proc.keysDrawTakeReady.load(std::memory_order_acquire)) return;
-    if (takesForChannel(juce::jlimit(0, Sequencer::NUM_CHANNELS - 1, proc.keysDrawTakeChan.load())) < 20)
+    const int dChan = juce::jlimit(0, Sequencer::NUM_CHANNELS - 1, proc.keysDrawTakeChan.load());
+    const int dPat  = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, proc.keysDrawTakePat.load());
+    if (takesForPatChan(dPat, dChan) < 20 && (int) proc.keysTakes.size() < DrumSequencerProcessor::KEYS_TAKES_MAX)
     {
         DrumSequencerProcessor::KeysTake t;
         t.isDraw = true;
-        t.channel = juce::jlimit(0, Sequencer::NUM_CHANNELS - 1, proc.keysDrawTakeChan.load());
-        t.drawPat = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, proc.keysDrawTakePat.load());
+        t.channel = dChan;
+        t.drawPat = dPat;
         t.drawLane.assign(proc.keysDrawTakeBuf, proc.keysDrawTakeBuf + DrumChannel::DRAW_RES);
         t.name = juce::Time::getCurrentTime().toString(true, true, true, true) + "  #" + juce::String((int) proc.keysTakes.size() + 1);
         proc.keysTakes.push_back(std::move(t));
     }
     proc.keysDrawTakeReady.store(false, std::memory_order_release);
+    // If this pattern+channel just filled up (or the preset hit the cap), stop recording.
+    if ((takesForPatChan(dPat, dChan) >= 20 || (int) proc.keysTakes.size() >= DrumSequencerProcessor::KEYS_TAKES_MAX)
+        && proc.keysRecording.load())
+        keysStopRecord(true);
     refreshKeysPanel();
 }
 
@@ -6746,8 +6767,13 @@ DrumSequencerProcessor::KeysTake DrumSequencerEditor::captureTakeFromChannel(int
     return t;
 }
 
-int DrumSequencerEditor::takesForChannel(int ch) const
-{ int n = 0; for (auto& t : proc.keysTakes) if (t.channel == ch) ++n; return n; }
+int DrumSequencerEditor::takePatternOf(const DrumSequencerProcessor::KeysTake& t) const
+{
+    if (t.isDraw) return juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, t.drawPat);
+    return t.evts.empty() ? 0 : juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, (int) t.evts[0].pattern);
+}
+int DrumSequencerEditor::takesForPatChan(int pat, int ch) const
+{ int n = 0; for (auto& t : proc.keysTakes) if (t.channel == ch && takePatternOf(t) == pat) ++n; return n; }
 
 bool DrumSequencerEditor::keysTakeDirty(int idx) const
 {
@@ -6766,12 +6792,14 @@ void DrumSequencerEditor::refreshKeysPanel()
                                recLive ? juce::Colour(0xffcc2222) : juce::Colour(0xff20203a));
     keysPanel.btnRec.setColour(juce::TextButton::textColourOffId,
                                recLive ? juce::Colours::white : juce::Colour(0xffff5548));   // red dot + text when idle
-    keysPanel.btnRec.setEnabled(recLive || takesForChannel(selectedChannel) < 20);
-    keysPanel.btnTakes.setButtonText("Takes (" + juce::String(takesForChannel(selectedChannel))   // per-channel count, matches the filtered menu
-                                     + (takesForChannel(selectedChannel) >= 20 ? "/20 FULL)" : ")"));
+    const int patTakes = takesForPatChan(currentPattern(), selectedChannel);   // takes for THIS pattern+channel
+    const bool presetFull = (int) proc.keysTakes.size() >= DrumSequencerProcessor::KEYS_TAKES_MAX;
+    keysPanel.btnRec.setEnabled(recLive || (patTakes < 20 && ! presetFull));
+    keysPanel.btnTakes.setButtonText("Takes (" + juce::String(patTakes)   // per pattern+channel count, matches the filtered menu
+                                     + (patTakes >= 20 ? "/20 FULL)" : (presetFull ? " - preset full)" : ")")));
     const bool prevIgnore = ignoreKnobCallbacks;
     ignoreKnobCallbacks = true;
-    keysPanel.comboSlot2.setSelectedId(proc.keysSlot2Down.load() + 1, juce::dontSendNotification);
+    keysPanel.comboSlot2.setSelectedId(proc.sequencer.channel(selectedChannel).keysSlot2Down + 1, juce::dontSendNotification);
     ignoreKnobCallbacks = prevIgnore;
     // eligibility hint: which slots the keyboard will actually play on this channel
     auto elig = [](int eng) { return eng == DrumChannel::SrcOsc || eng == DrumChannel::SrcPhys || eng == DrumChannel::SrcModal; };
@@ -7038,6 +7066,15 @@ void DrumSequencerEditor::setupKnob(LearnableKnob& k, juce::Label& lbl, const ju
 void DrumSequencerEditor::quantizeDrawToSteps(DrumChannel& c, int n)
 {
     n = juce::jlimit(1, DrumChannel::MAX_STEPS, n);
+    // A REAL drawing quantises to a FRESH step pattern: clear the step-only values that draw mode
+    // doesn't use (Length / Roll / Loop / Slide / Pan / Vel) so a drawn line doesn't inherit stale
+    // step settings (user rule: drawn -> quantise = start fresh).
+    for (int i = 0; i < DrumChannel::MAX_STEPS; ++i)
+    {
+        c.stepNoteLen[i] = 0.0f; c.stepRoll[i] = 1; c.stepRollDecay[i] = 0.0f;
+        c.stepCondLen[i] = 1;    c.stepCondMask[i] = 0; c.stepSlide[i] = false;
+        c.stepVel[i] = 1.0f;     c.stepPan[i] = 0.0f;
+    }
     const int R = DrumChannel::DRAW_RES;
     int prevPitch = -999; bool prevOn = false;
     for (int s = 0; s < n; ++s)
@@ -7540,7 +7577,6 @@ void DrumSequencerEditor::timerCallback()
         for (int c = 0; c < 2; ++c)
         {
             ballistic(dm[c], mMeterVal[c], mMeterPk[c], mMeterHold[c]);
-            masterMeter[c].setLevel(mMeterVal[c], mMeterPk[c]);
         }
         logoMeter.setLevels(mMeterVal[0], mMeterVal[1]);   // live stereo volume in the logo ramp (L | R)
     }
@@ -7952,7 +7988,6 @@ void DrumSequencerEditor::layoutContent()
     lblMidiIn.setBounds   (922, 8, 92, 24);
     comboMidi.setBounds(1018, 7, 72, 26);         // ends at 1090; "MIDI" is short, so this leaves an 8px gap
     btnAudition.setBounds (1104, 7, 76, 26);      // "Auto Test" (right-side group spread into the old Keys button's gap)
-    comboVisChannels.setBounds(0, 0, 0, 0); comboNumPat.setBounds(0, 0, 0, 0);   // replaced by the toggle buttons
     // Where the Channels/Patterns count boxes used to be: Tooltips toggle + the (global) Follow toggle.
     btnTooltips.setBounds(1188, 7, 74, 26);
     btnFollow.setBounds  (1270, 7, 74, 26);   // moved up from the pattern row (it's a GLOBAL setting)
@@ -7978,8 +8013,6 @@ void DrumSequencerEditor::layoutContent()
         }
     }
     patModeBtn.setBounds(664, PAT_Y + 8, 160, 26);   // nudged left; wide enough to show "Chain P2(4)>P3(2)"
-    lblLoopCount.setBounds(0, 0, 0, 0);              // loop-count meter REMOVED (loops are picked in the play-mode popup now)
-    sliderPatN.setBounds(0, 0, 0, 0);
     // Channel-count (8/16) + pattern-count (16/32) toggles, right next to the loop dropdown (Follow moved to the top bar).
     lblChannels.setJustificationType(juce::Justification::centredRight);
     lblNumPat.setJustificationType(juce::Justification::centredRight);
@@ -8047,9 +8080,8 @@ void DrumSequencerEditor::layoutContent()
     countdownOverlay.toFront(false);   // count-in sits above even the magnifier
 
     // ---- Bigger knob helpers (readable) -------------------------------------
-    const int kg = 4, gg = 18, boxH = 16, hdrH = 15;
+    const int kg = 4, boxH = 16, hdrH = 15;
     const int knobS = 56, comboW = 92;
-    const int rightEdge = W - 12;
     int x = 12, curHy = 0, curKy = 0;
 
     auto group = [&](juce::Label& hdr, int n) {
@@ -8066,15 +8098,6 @@ void DrumSequencerEditor::layoutContent()
         x += comboW + kg;
     };
     auto groupW = [&](int n) { return n * knobS + (n - 1) * kg; };
-    // Even-spread group start positions across [startX, endX].
-    auto spread = [&](int startX, int endX, const std::vector<int>& widths) {
-        int total = 0; for (int w : widths) total += w;
-        int n = (int) widths.size();
-        int gap = n > 1 ? juce::jmax(gg, (endX - startX - total) / (n - 1)) : 0;
-        std::vector<int> xs; int xx = startX;
-        for (int w : widths) { xs.push_back(xx); xx += w + gap; }
-        return xs;
-    };
 
     // =====================================================================
     // DETAIL PANEL
@@ -8095,18 +8118,6 @@ void DrumSequencerEditor::layoutContent()
     // relative to the (now much lower) detailY, so they land below the short collapsed window and get CLIPPED -
     // which truly hides them. (Early-returning left them at stale positions overlapping the expanded 12/16-row grid.)
 
-    const int KS = 46;                       // detail-row knob size
-    auto kAt = [&](LearnableKnob& k, juce::Label& l, int kx, int ky) {
-        k.setBounds(kx, ky, KS, KS + boxH);
-        l.setBounds(kx - 7, ky + KS + boxH, KS + 14, 13);
-    };
-    auto cAt = [&](juce::ComboBox& c, juce::Label& l, int kx, int ky) {
-        c.setBounds(kx, ky + (KS + boxH - 24) / 2, comboW, 24);
-        l.setBounds(kx, ky + KS + boxH, comboW, 13);
-    };
-    auto kw = [&](int n) { return n * KS + (n - 1) * kg; };
-    const int step = KS + kg;
-    auto cstart = [&](int gx, int gw, int m) { return gx + (gw - kw(m)) / 2; };
 
     // ---- ROW 1 : SOUNDS + five sound-source groups, justified edge-to-edge ----
     // Every source group uses two BALANCED knob rows (keeps each box narrow so
@@ -8133,12 +8144,6 @@ void DrumSequencerEditor::layoutContent()
     const int sbx[DrumChannel::NUM_SLOTS] = { cxSlots, cxSlots };
     const int sby[DrumChannel::NUM_SLOTS] = { colTop, colTop + slotH + slotVGap };
     {
-        const int KS1 = 35;
-        auto k1 = [&](LearnableKnob& k, juce::Label& l, int kx, int ky) {
-            k.setVisible(true); l.setVisible(true);
-            k.setBounds(kx, ky, KS1, KS1 + boxH);
-            l.setBounds(kx - 7, ky + KS1 + boxH, KS1 + 14, 12);
-        };
         const int KSB = 46;                            // bigger knobs for the (now full-height) MASTER box
         auto kB = [&](LearnableKnob& k, juce::Label& l, int kx, int ky) {
             k.setVisible(true); l.setVisible(true);
@@ -8150,17 +8155,14 @@ void DrumSequencerEditor::layoutContent()
         //       the SHARED reverb/delay flavour. Spread to fill the tall box (no empty space below). =====
         int sx = cxMaster;
         hdrSounds.setBounds(sx, colTop, masterW, hdrH);   // "MASTER" (text set in setup)
-        hdrBlend2.setBounds(0, 0, 0, 0);
         for (int i = 0; i < 5; ++i) { srcSwitch[i].setBounds(0, 0, 0, 0); lblSrc[i].setBounds(0, 0, 0, 0); }
         btnPadLayout.setBounds(0, 0, 0, 0); lblPadHint.setBounds(0, 0, 0, 0);
-        lblShapeSlot.setBounds(0, 0, 0, 0); lblPitchSlot.setBounds(0, 0, 0, 0);
         for (auto* k : { &knobBloom, &knobDrift, &knobSpread, &knobPunch, &knobGlue }) k->setVisible(false);
         for (auto* l : { &lblBloom, &lblDrift, &lblSpread, &lblPunch, &lblGlue })       l->setVisible(false);
         soundPad.setBounds(0, 0, 0, 0);
         hdrMasterOut.setBounds(0, 0, 0, 0); hdrMasterOut.setVisible(false);   // box header is "MASTER" now
         // Master OUT: Volume fader + tall meters, then Limit + Mono.
         knobMasterVol.setBounds(sx + 14, colTop + 30, masterW - 28, 20); lblMasterVol.setBounds(0, 0, 0, 0);
-        masterMeter[0].setBounds(0, 0, 0, 0); masterMeter[1].setBounds(0, 0, 0, 0);   // L/R live in the logo meter now
         // Master TONE + dynamics row, LEFT->RIGHT in signal order: Tilt -> Sat -> Glue -> Limiter,
         // then the Mono switch in the 5th column. SAME big knobs + column pitch as the REVERB row
         // below (user: the 4-knob row shouldn't be smaller than reverb's 5 knobs; the Limit read-out

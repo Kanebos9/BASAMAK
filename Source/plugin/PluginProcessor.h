@@ -196,6 +196,7 @@ public:
     struct KeysTake { juce::String name; int channel = 0; std::vector<KeyEvt> evts;
                       bool isDraw = false; int drawPat = 0; std::vector<int8_t> drawLane; };  // draw takes store the lane
     std::vector<KeysTake> keysTakes;
+    static constexpr int KEYS_TAKES_MAX = 1000;   // hard cap on total takes kept per preset (20 per pattern+channel)
     // DRAW-take handshake (audio thread snapshots a finished loop's lane -> editor drains into a take).
     std::atomic<bool> keysDrawTakeReady { false };
     std::atomic<int>  keysDrawTakeChan  { -1 };
