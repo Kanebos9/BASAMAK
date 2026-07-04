@@ -4,7 +4,7 @@
 
 **BASAMAK** is a free, open-source **drum & bass synth / step-sequencer / sampler** — VST3, AU (macOS), and Standalone — for macOS, Windows, and Linux. Its built-in sounds are **synthesized** (analog/FM, physical-modelling, modal, noise) rather than sampled, so a channel can be a kick, a hi-hat, a plucked bell, *or* a full-blown bassline — every channel is playable as a pitched instrument with per-step pitch, glide and note-length. It also has a per-slot **sampler**, and ships with a CC0 sample library you can drop into any slot.
 
-Think of it as one box that covers the rhythm section: program a beat on some channels, write a **bass line** (or a lead) on others with per-step notes + 303-style slide, and finish it on the master bus. Two synth slots per channel let you stack, say, a saw + a sub-oscillator for a fat bass.
+Think of it as a **sketchpad for a whole track**: program a beat on some channels, write a **bass line** (or a lead) on others with per-step notes + 303-style slide, and finish it on the master bus. But you don't have to program everything — **play any pitched sound live from a MIDI keyboard** (or the on-screen keys) and **record** your performance straight into the pattern, either quantized to steps or as a **free, unquantized piano-draw lane**. Two synth slots per channel let you stack, say, a saw + a sub-oscillator for a fat bass, and any voice can be turned into a **chord**.
 
 <img width="1440" height="786" alt="Screenshot 2026-06-28 at 20 12 15" src="https://github.com/user-attachments/assets/e6a438b9-ca91-445c-99ef-6864f092997e" />
 
@@ -15,14 +15,16 @@ Built with [JUCE](https://juce.com). Licensed under the **GNU AGPL v3** (see [`L
 ---
 
 ## Features
-- **16 channels × up to 32 patterns**, 16/32 steps, swing (MPC 50–75%), and **pattern chaining** to arrange a whole song (each pattern plays N loops, then jumps).
+- **16 channels × up to 32 patterns**, selectable step counts (up to 32) **or a free unquantized Draw lane**, swing (MPC 50–75%), and **pattern chaining** to arrange a whole song (each pattern plays N loops, then jumps).
+- **Play & record like an instrument** — perform any pitched channel from a MIDI keyboard or the on-screen keys, and record it into the pattern. Recordings are captured as **takes** (one per loop) — quantized to steps *or* drawn free-hand in the **Draw lane** — kept per channel and saved with your project. **Tie steps into sustained notes** with step-merge (shift-click).
 - **Two synth slots per channel**, each any engine with its own params, envelopes, EQ, filter, FX and LFO — blend them (e.g. saw + sub for bass).
 - Synth engines: **Analog + FM** (14 band-limited waveshapes + wavefold + unison), **Physical** (Karplus–Strong), **Modal** (struck resonators), **Noise**, plus a per-slot **Sampler** (trim / slice / time-stretch / pitch-shift via SoundTouch).
 - **Bass/melodic ready:** per-step **pitch**, **303-style slide/portamento** (glide into the next note), per-step **note length** (decay-rescale, from tight gates to long ring-outs), and a **Hz ↔ note** read-out (click a frequency to dial in real notes). Any channel can be played as a bass or lead. Includes a dedicated **bass sound bank** (Station/Ladder/Rubber/Neuro/Hoover/Reese and more).
 - **Per-slot resonant filter with envelope + velocity accent** (drawn right on the EQ display) and a **per-slot LFO** with three independent destinations (filter / pitch / volume) for wobbles, sirens and tremolo.
-- Drawable amp/pitch envelopes, a Strike/Ring envelope for the struck engines, and a Unison/Detune/Vibrato visual.
+- **Unison & chords** — thicken any oscillator / physical / modal sound with unison + detune, or switch a voice into a **chord** (5th, Maj, Min, Sus4, Maj7, Min7…) so a single step, a held key, or a drawn line plays the whole chord.
+- A full **A-H-D-S-R amp envelope** (sustain + release for held / gated notes; one-shots stay a tight AHD), a 4-point **pitch envelope**, a Strike/Ring envelope for the struck engines, and a Unison/Detune/Vibrato visual — all drawable.
 - Per-sound drawable EQ, drive, reverb/delay sends; a master **FDN reverb**, **delay**, one-knob **Tilt** tone, tube **Saturation**, **Glue** bus-compressor, and a look-ahead **limiter**.
-- Every control (and every step) is **MIDI-learnable**; **MIDI-out** mode turns any channel into a note generator; per-channel multi-output routing and Novation **Launchpad Mini MK3** grid support.
+- Every control (and every step) is **MIDI-learnable** — works with any MIDI controller sending CC (knobs, faders, or a pad grid such as a Novation Launchpad configured in Components, or **TouchOSC**); **MIDI-out** mode turns any channel into a note generator; per-channel multi-output routing.
 - A ready-made **TouchOSC** control surface is bundled (in the download's `TouchOSC/` folder): an 8×8 step grid plus per-channel Mute/Solo/Overlap and Play/Stop. Load the **"Ch1 8x8 + M/S/OV + Play"** map from the MIDI dropdown and it pairs with the template out of the box (see `TouchOSC/TouchOSC-README.txt` for the one-time MIDI-bridge setup).
 - Faithful **drag-out MIDI export** of the current pattern (velocity, pitch, rolls, note length, swing, tempo).
 - A bundled **CC0 sample library** (see [`ATTRIBUTIONS.md`](ATTRIBUTIONS.md)).
