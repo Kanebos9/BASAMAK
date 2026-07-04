@@ -3321,13 +3321,7 @@ void KeysPanel::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xff7799cc));
     g.setFont(juce::Font(11.0f, juce::Font::bold));
     g.drawText("KEYS", 12, 2, 60, 14, juce::Justification::centredLeft, false);
-    if (countdown > 0)   // count-in overlay: big 3-2-1 over the piano
-    {
-        const int n = (countdown + 23) / 24;
-        g.setColour(juce::Colour(0xccff5544));
-        g.setFont(juce::Font(64.0f, juce::Font::bold));
-        g.drawText(juce::String(n), getLocalBounds(), juce::Justification::centred, false);
-    }
+    // (The count-in "3-2-1-GO!" is drawn full-canvas by CountdownOverlay, not here.)
 }
 
 void KeysPanel::handleNoteOn(juce::MidiKeyboardState*, int, int note, float vel)
@@ -4856,10 +4850,10 @@ void DrumSequencerEditor::setupComponents()
     // Clickable version next to the logo -> opens the GitHub Releases page (check for updates).
     content.addAndMakeVisible(verLink);
     verLink.setButtonText("v" BASAMAK_VERSION);
-    verLink.setURL(juce::URL("https://github.com/Kanebos9/BASAMAK/releases/latest"));
+    verLink.setURL(juce::URL("https://github.com/Kanebos9/BASAMAK/releases"));   // ALL releases (latest + history), not /latest
     verLink.setFont(juce::Font(11.5f, juce::Font::bold), false, juce::Justification::centredLeft);
     verLink.setColour(juce::HyperlinkButton::textColourId, juce::Colour(0xffe8bf4d));   // brand gold - inviting
-    verLink.setTooltip("BASAMAK v" BASAMAK_VERSION " - click to check GitHub for the latest version & updates.\n\n"
+    verLink.setTooltip("BASAMAK v" BASAMAK_VERSION " - click to open GitHub Releases (the latest version plus every previous release).\n\n"
                        "Installed a newer version but this still shows the old number? Rescan your plugins "
                        "in your DAW/host and reopen the project - the DAW may have cached the old build.");
 
@@ -5042,16 +5036,22 @@ void DrumSequencerEditor::setupComponents()
     content.addAndMakeVisible(btnClearPat);
     btnClearPat.setLookAndFeel(&tinyBtnLNF);
     btnClearPat.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff3a2030));
-    btnClearPat.setTooltip("Clear this pattern: disable every step and reset all per-step values (velocity, pan, "
-                           "pitch, loop, roll) back to default - across all channels. Undoable.");
+    btnClearPat.setTooltip("Clear the SELECTED channel (in this pattern): disable its steps and reset all its "
+                           "per-step values (velocity, pan, pitch, loop, roll) back to default. In Draw mode it "
+                           "also wipes the whole drawn lane (pitch + length) and resets the channel's draw vol/pan. "
+                           "Other channels are untouched. Undoable.");
     btnClearPat.onClick = [this] {
-        auto& pat = proc.sequencer.patterns[currentPattern()];
-        for (auto& ch : pat.channels)
-            for (int s = 0; s < DrumChannel::MAX_STEPS; ++s) {
-                ch.steps[s] = false; ch.stepVel[s] = 1.0f; ch.stepPitch[s] = 0.0f; ch.stepProb[s] = 1.0f;
-                ch.stepRoll[s] = 1; ch.stepRollDecay[s] = 0.0f; ch.stepNoteLen[s] = 0.0f; ch.stepPan[s] = 0.0f;
-                ch.stepSlide[s] = false; ch.stepMerge[s] = false; ch.stepCondLen[s] = 1; ch.stepCondMask[s] = 0;
-            }
+        // Clear the SELECTED channel only (not the whole pattern's other channels).
+        auto& ch = proc.sequencer.patterns[currentPattern()].channels[selectedChannel];
+        for (int s = 0; s < DrumChannel::MAX_STEPS; ++s) {
+            ch.steps[s] = false; ch.stepVel[s] = 1.0f; ch.stepPitch[s] = 0.0f; ch.stepProb[s] = 1.0f;
+            ch.stepRoll[s] = 1; ch.stepRollDecay[s] = 0.0f; ch.stepNoteLen[s] = 0.0f; ch.stepPan[s] = 0.0f;
+            ch.stepSlide[s] = false; ch.stepMerge[s] = false; ch.stepCondLen[s] = 1; ch.stepCondMask[s] = 0;
+        }
+        // Draw-mode content too: wipe the whole drawn lane (pitch + length) and reset the
+        // whole-channel draw vol/pan back to default. (drawMode itself is left as-is.)
+        for (int i = 0; i < DrumChannel::DRAW_RES; ++i) ch.drawSemi[i] = DrumChannel::DRAW_GAP;
+        ch.drawVel = 1.0f; ch.drawPan = 0.0f;
         stepGrid.update(proc.sequencer, proc.anySolo);
         refreshPatternButtons();
         content.repaint();
@@ -5272,6 +5272,7 @@ void DrumSequencerEditor::setupComponents()
     // Magnifier overlay: added AFTER the grid + all top-bar/strip controls exist so it sits on
     // TOP of them (toFront in layout keeps it there); mouse-transparent, so it never steals input.
     content.addAndMakeVisible(stepMagOverlay);
+    content.addAndMakeVisible(countdownOverlay);   // big 3-2-1-GO! count-in, over everything
     stepMagOverlay.grid = &stepGrid;
     stepGrid.magOverlay = &stepMagOverlay;
     stepGrid.midiLearn = &proc.midiLearn;
@@ -6558,6 +6559,7 @@ void DrumSequencerEditor::keysStartRecord()
     keysEvtCursor = 0; keysPendingEvts.clear();
     proc.keysArmedPattern.store(currentPattern());
     keysLoadedTakeIdx = -1;   // a fresh recording is not an edit of a loaded take
+    keysRecStartTakeCount = (int) proc.keysTakes.size();   // to auto-load the last NEW take when we stop
     proc.keysRecMode.store(keysPanel.comboRecMode.getSelectedId() - 1);
     proc.keysLoopSeen.store(-1); proc.keysLastStampStep.store(-1); proc.keysLastPlayPat.store(-1);
     keysRecWasPlaying = false;
@@ -6575,7 +6577,7 @@ void DrumSequencerEditor::keysStartRecord()
         stepGrid.update(proc.sequencer, proc.anySolo);
     }
     const int m = proc.keysRecMode.load();
-    if (m == 1 || m == 3) keysCountdownTicks = 72;         // 3 s count-in at the 24 Hz UI timer
+    if (m == 1 || m == 3) keysCountdownTicks = 180;        // 3 s count-in @ the 60 Hz UI timer
     else                  proc.keysRecording.store(true);  // live now; 1st key starts the transport
     refreshKeysPanel();
 }
@@ -6609,7 +6611,8 @@ void DrumSequencerEditor::keysStopRecord(bool finalize)
     proc.keysDrawLastCol.store(-1);
     const bool wasPlaying = proc.sequencer.isCurrentlyPlaying;
     proc.keysRecording.store(false);
-    keysCountdownTicks = 0; keysPanel.countdown = 0;
+    keysCountdownTicks = 0; keysGoTicks = 0; keysPanel.countdown = 0;
+    if (countdownOverlay.label.isNotEmpty()) { countdownOverlay.label.clear(); countdownOverlay.repaint(); }
     parseKeysEvents();
     drainDrawTake();   // grab any loop-boundary draw take waiting in the handshake
     auto& drawCh = proc.sequencer.channel(selectedChannel);
@@ -6638,6 +6641,10 @@ void DrumSequencerEditor::keysStopRecord(bool finalize)
     keysPendingEvts.clear();
     proc.keysEvtCount.store(0); keysEvtCursor = 0;
     if (finalize && wasPlaying && ! proc.sequencer.dawSync) proc.standaloneStop();   // stopping REC stops the sequencer too
+    // Load the LAST take recorded THIS session onto the channel, so stopping REC leaves the
+    // recording visible/playable (not the cleaned live pass, which read as empty).
+    if (finalize && (int) proc.keysTakes.size() > keysRecStartTakeCount)
+        keysLoadTake((int) proc.keysTakes.size() - 1);
     refreshKeysPanel();
     stepGrid.update(proc.sequencer, proc.anySolo);   // show the recording immediately
 }
@@ -7424,15 +7431,22 @@ void DrumSequencerEditor::timerCallback()
     {
         if (keysCountdownTicks > 0)
         {
-            keysPanel.countdown = keysCountdownTicks;
             if (--keysCountdownTicks == 0)
             {
-                keysPanel.countdown = 0;
+                keysGoTicks = 42;                 // ~0.7 s "GO!" flash once the count-in ends
                 proc.keysRecording.store(true);
                 if (! proc.sequencer.isCurrentlyPlaying && ! proc.sequencer.dawSync)
                     proc.standalonePlay();
             }
-            keysPanel.repaint();
+        }
+        else if (keysGoTicks > 0)
+            --keysGoTicks;
+        // Big half-transparent 3-2-1-GO! count-in overlay (change-only repaint).
+        {
+            juce::String cd;
+            if (keysCountdownTicks > 0) cd = juce::String((keysCountdownTicks + 59) / 60);  // 3,2,1
+            else if (keysGoTicks > 0)   cd = "GO!";
+            if (countdownOverlay.label != cd) { countdownOverlay.label = cd; countdownOverlay.repaint(); }
         }
         if (proc.keysRecording.load())
         {
@@ -8029,6 +8043,8 @@ void DrumSequencerEditor::layoutContent()
     // spill over the top bar + channel strips) and stays front-most + mouse-transparent.
     stepMagOverlay.setBounds(content.getLocalBounds());
     stepMagOverlay.toFront(false);
+    countdownOverlay.setBounds(content.getLocalBounds());
+    countdownOverlay.toFront(false);   // count-in sits above even the magnifier
 
     // ---- Bigger knob helpers (readable) -------------------------------------
     const int kg = 4, gg = 18, boxH = 16, hdrH = 15;
@@ -8364,6 +8380,7 @@ void DrumSequencerEditor::layoutContent()
         if (keysPanel.isVisible()) keysPanel.toFront(false);
     }
     stepMagOverlay.toFront(false);   // the held-step magnifier stays top-most
+    countdownOverlay.toFront(false); // the count-in overlay stays above everything
 
     juce::ignoreUnused(group, knob, combo, groupW, curHy, curKy, x);
 }

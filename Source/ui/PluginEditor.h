@@ -174,6 +174,28 @@ public:
 };
 
 //==============================================================================
+// Full-canvas recording count-in: a big, HALF-TRANSPARENT "3 / 2 / 1 / GO!" drawn over the whole
+// editor while a 3 s count-in runs. Mouse-transparent + kept top-most (toFront in layout).
+class CountdownOverlay : public juce::Component
+{
+public:
+    juce::String label;   // "3" / "2" / "1" / "GO!"  (empty = nothing drawn)
+    CountdownOverlay() { setInterceptsMouseClicks(false, false); }
+    void paint(juce::Graphics& g) override
+    {
+        if (label.isEmpty()) return;
+        auto b = getLocalBounds();
+        g.fillAll(juce::Colour(0x22000000));   // faint scrim so the digit reads over any UI, still see-through
+        const bool go = (label == "GO!");
+        const float h = (float) juce::jmin(b.getWidth(), b.getHeight()) * (go ? 0.34f : 0.55f);
+        g.setFont(juce::Font(h, juce::Font::bold));
+        g.setColour(go ? juce::Colour(0x8853e08a)      // green ~53% alpha
+                       : juce::Colour(0x88ffffff));     // white ~53% alpha = "half transparent"
+        g.drawText(label, b, juce::Justification::centred, false);
+    }
+};
+
+//==============================================================================
 // A draggable "Drag MIDI" source — drag starts on mouseDrag, not onClick
 class DragMidiSource : public juce::Component, public juce::SettableTooltipClient
 {
@@ -1216,6 +1238,7 @@ private:
     //-- Step grid
     StepGridComponent stepGrid;
     StepMagnifierOverlay stepMagOverlay;   // top-most: redraws the magnified step above the top bar/strips
+    CountdownOverlay countdownOverlay;     // top-most: big 3-2-1-GO! recording count-in over the whole canvas
 
     //-- Top toolbar
     LearnableButton btnDawSync { "DAW Sync", "global_dawsync", proc.midiLearn };
@@ -1330,7 +1353,9 @@ private:
     // timer while recording + once more on stop).
     int  keysEvtCursor = 0;                    // how far into proc.keysEvts we've parsed
     std::vector<DrumSequencerProcessor::KeyEvt> keysPendingEvts;   // the take being played right now
-    int  keysCountdownTicks = 0;               // 3 s count-in (timer runs at 24 Hz)
+    int  keysCountdownTicks = 0;               // 3 s count-in (180 ticks @ the 60 Hz UI timer)
+    int  keysGoTicks = 0;                      // brief "GO!" flash after the count-in ends
+    int  keysRecStartTakeCount = 0;            // #takes when REC was pushed -> load the last NEW one on stop
     int  keysUiHash = -999;                    // change detector for the cheap panel refresh
     bool keysRecWasPlaying = false;            // transport ran during this take -> stop = finalize
     void applyKeysView();

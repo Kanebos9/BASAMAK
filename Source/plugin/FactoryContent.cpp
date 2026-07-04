@@ -836,6 +836,111 @@ static void kStringKeys(DC& c) {    // bowed/ebow string: a HELD key keeps the s
     s.atk = 0.01f; s.dec = 1.2f; s.sustain = 0.7f; s.release = 1.2f;   // long ring-out on key-up
     c.reverbSend = 0.15f; c.volume = 0.8f;
 }
+// ---- KEYS bank additions (v1.2.1): 12 more, chosen to be clearly DISTINCT from each other.
+//      All base at C3 (261.63 Hz) so KEYS auto-tune + step pitch line up, and carry real
+//      sustain/release so they hold + release faithfully on the on-screen keyboard. ----
+static void kGrandPiano(DC& c) {    // acoustic-ish piano: FM tine strike + triangle body, percussive, DECAYS while held
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSine; s.oscFreq = 261.63f;
+    s.fmDepth = 0.28f; s.fmPitch = 0.65f; s.fmEnvFollow = true;      // hammered-string overtones, bright attack -> mellow
+    s.atk = 0.002f; s.dec = 1.7f; s.sustain = 0.16f; s.release = 0.3f;   // low sustain = keeps falling like a real piano
+    auto& b = mkSlot2(c, DC::SrcOsc, 0.58f);
+    b.oscShape = b.oscShapeB = DC::WvTri; b.oscFreq = 261.63f;       // warm body under the tine
+    b.atk = 0.002f; b.dec = 1.5f; b.sustain = 0.18f; b.release = 0.3f;
+    b.filterType = DC::LowPass; b.filterCutoff = 3200.0f; b.filterReso = 0.7f;
+    c.reverbSend = 0.14f; c.volume = 0.8f;
+}
+static void kWurli(DC& c) {         // Wurlitzer EP: barky FM reed + gentle tremolo (distinct from the cleaner E-Piano)
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSine; s.oscFreq = 261.63f;
+    s.fmDepth = 0.5f; s.fmPitch = 0.2f; s.fmFeedback = 0.15f; s.fmEnvFollow = true;   // reedy bark
+    s.atk = 0.002f; s.dec = 1.1f; s.sustain = 0.4f; s.release = 0.25f;
+    s.lfoRate[2] = 5.5f; s.lfoAmt[2] = 0.35f;                        // VOL tremolo = the Wurli wobble
+    c.reverbSend = 0.14f; c.volume = 0.8f;
+}
+static void kClav(DC& c) {          // funky clavinet: bright pulse + snappy filter, percussive/plucky
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvPulse; s.oscFreq = 261.63f;
+    s.atk = 0.001f; s.dec = 0.5f; s.sustain = 0.22f; s.release = 0.08f;
+    s.filterType = DC::LowPass; s.filterCutoff = 1600.0f; s.filterReso = 2.2f; s.filterEnvAmt = 0.6f;
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.14f;
+    c.volume = 0.76f;
+}
+static void kSynthBrass(DC& c) {    // analog synth-brass ensemble: filter-swept detuned saws, swells + sustains
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
+    s.oscUnison = 3; s.oscDetune = 0.16f; s.oscUniCenter = true;
+    s.atk = 0.06f; s.dec = 0.7f; s.sustain = 0.75f; s.release = 0.2f; // slow-ish brass swell
+    s.filterType = DC::LowPass; s.filterCutoff = 900.0f; s.filterReso = 1.4f; s.filterEnvAmt = 0.55f;
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.1f;
+    c.reverbSend = 0.12f; c.volume = 0.7f;
+}
+static void kChoir(DC& c) {         // vocal "aah" pad: formant vowel shape, slow swell, lush + a touch of vibrato
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = 6;                                    // Vowel A (additive formant)
+    s.oscFreq = 261.63f;
+    s.oscUnison = 3; s.oscDetune = 0.2f; s.oscUniCenter = true;
+    s.atk = 0.25f; s.dec = 1.5f; s.sustain = 0.85f; s.release = 0.8f;
+    s.lfoRate[1] = 5.0f; s.lfoAmt[1] = 0.015f;                       // subtle pitch vibrato = choir life
+    c.reverbSend = 0.32f; c.volume = 0.64f;
+}
+static void kWarmPad(DC& c) {       // dark warm pad: mellow reed, very slow + very long release (vs Soft Pad's bright saws)
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = 12;                                   // Reed (hollow odd harmonics)
+    s.oscFreq = 261.63f;
+    s.oscUnison = 3; s.oscDetune = 0.22f; s.oscUniCenter = true;
+    s.atk = 0.3f; s.dec = 2.0f; s.sustain = 0.85f; s.release = 1.3f;
+    s.filterType = DC::LowPass; s.filterCutoff = 850.0f; s.filterReso = 0.8f;
+    c.reverbSend = 0.34f; c.volume = 0.62f;
+}
+static void kGlassBells(DC& c) {    // shimmering bell keys: bright inharmonic partials, long sparkly release
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = 10; s.oscFreq = 261.63f;             // Bell shape (bright from the inharmonic partials)
+    s.fmDepth = 0.2f; s.fmPitch = 0.8f; s.fmEnvFollow = true;
+    s.atk = 0.002f; s.dec = 2.2f; s.sustain = 0.14f; s.release = 1.0f;
+    auto& b = mkSlot2(c, DC::SrcOsc, 0.65f);
+    b.oscShape = b.oscShapeB = DC::WvSine; b.oscFreq = 261.63f;      // pure sine body so it's tonal, not only clang
+    b.atk = 0.002f; b.dec = 1.8f; b.sustain = 0.18f; b.release = 1.0f;
+    c.reverbSend = 0.35f; c.volume = 0.68f;
+}
+static void kVibes(DC& c) {         // vibraphone: tuned metal bars with the classic tremolo, rings while held (Modal)
+    auto& s = mkModal(c);
+    s.modalMaterial = 1;                                            // Tubular Bell = tuned metallic ring
+    s.oscFreq = 261.63f; s.modalDecay = 0.7f; s.modalTone = 0.65f; s.modalStruct = 0.44f;
+    s.atk = 0.002f; s.dec = 1.4f; s.sustain = 0.45f; s.release = 0.7f;
+    s.lfoRate[2] = 5.0f; s.lfoAmt[2] = 0.4f;                        // the vibraphone tremolo (VOL)
+    c.reverbSend = 0.28f; c.volume = 0.7f;
+}
+static void kMarimbaKeys(DC& c) {   // warm wooden marimba mallet, soft, dark, gentle hold (Modal)
+    auto& s = mkModal(c);
+    s.modalMaterial = 0;                                            // Marimba bars
+    s.oscFreq = 261.63f; s.modalDecay = 0.42f; s.modalTone = 0.38f; s.modalStruct = 0.5f;
+    s.atk = 0.002f; s.dec = 0.9f; s.sustain = 0.22f; s.release = 0.4f;
+    c.reverbSend = 0.16f; c.volume = 0.82f;
+}
+static void kSawLead(DC& c) {       // bright cutting saw lead for solos, holds while pressed (vs the hollow Square Lead)
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
+    s.oscUnison = 2; s.oscDetune = 0.1f;
+    s.atk = 0.004f; s.dec = 0.5f; s.sustain = 0.8f; s.release = 0.12f;
+    s.filterType = DC::LowPass; s.filterCutoff = 2600.0f; s.filterReso = 1.5f; s.filterEnvAmt = 0.3f;
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.12f;
+    c.volume = 0.72f;
+}
+static void kSubBass(DC& c) {       // clean pure-sine sub bass, holds while a key is down (vs the fuller Keys Bass)
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSine; s.oscFreq = 55.0f;
+    s.atk = 0.004f; s.dec = 0.6f; s.sustain = 0.85f; s.release = 0.1f;
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.1f;                      // a little warmth so it reads on small speakers
+    c.volume = 0.85f;
+}
+static void kSynthPluck(DC& c) {    // bright synth pluck: fast resonant filter decay, snappy + melodic (plucks out even if held)
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
+    s.atk = 0.001f; s.dec = 0.35f; s.sustain = 0.0f; s.release = 0.15f;
+    s.filterType = DC::LowPass; s.filterCutoff = 2200.0f; s.filterReso = 3.0f; s.filterEnvAmt = 0.8f;
+    c.reverbSend = 0.16f; c.volume = 0.75f;
+}
 
 // -- New plucked strings + mallets (Physical / Karplus-Strong; material 0=Nylon 1=Steel 2=Wood 3=Glass 4=Metal 5=Skin;
 //    physPosition low = plucked near the bridge = brighter/twangier). These are one-shot/decaying = a natural fit. --
@@ -918,6 +1023,13 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Keys Bass",    kKeysBass,    "Keys" },           { "E-Piano",      kEPiano,     "Keys" },
     { "Soft Pad",     kSoftPad,     "Keys" },           { "Organ",        kOrgan,      "Keys" },
     { "Square Lead",  kSquareLead,  "Keys" },           { "String Keys",  kStringKeys, "Keys" },
+    // ---- KEYS bank additions (v1.2.1): 12 more, all distinct ----
+    { "Grand Piano",  kGrandPiano,  "Keys" },           { "Wurli",        kWurli,      "Keys" },
+    { "Clavinet",     kClav,        "Keys" },           { "Synth Brass",  kSynthBrass, "Keys" },
+    { "Choir Aah",    kChoir,       "Keys" },           { "Warm Pad",     kWarmPad,    "Keys" },
+    { "Glass Bells",  kGlassBells,  "Keys" },           { "Vibraphone",   kVibes,      "Keys" },
+    { "Marimba Keys", kMarimbaKeys, "Keys" },           { "Saw Lead",     kSawLead,    "Keys" },
+    { "Sub Bass",     kSubBass,     "Keys" },           { "Synth Pluck",  kSynthPluck, "Keys" },
     // ---- MODAL engine (struck resonant bodies). Names carry no "(Modal)" - the tag adds it. ----
     { "Mod Marimba",   moMarimba,    "Modal" }, { "Mod Tubular Bell", moTubular,   "Modal" },
     { "Mod Glass",     moGlass,      "Modal" }, { "Mod Tom",          moTomDrum,   "Modal" },
@@ -989,7 +1101,11 @@ void applyMix(DC& ch, int index)
     // converted from the per-engine fields. Only rebuild when nothing was authored.
     bool authored = false;
     for (auto& s : ch.slots) if (s.engine >= 0) { authored = true; break; }
-    if (! authored) ch.buildSlotsFromLegacy();
+    if (! authored) ch.buildSlotsFromLegacy();   // (this path already allocates KS lines)
+    // AUTHORED KS sounds (e.g. String Keys / Square Lead = Physical) never hit buildSlotsFromLegacy,
+    // so allocate the lazy KS delay lines here too - else the audio thread gates them to SILENCE
+    // (ksReady == false) until a later prepareToPlay happens to allocate them. Message thread only.
+    ch.ensureKsBuffers();
 }
 
 //==============================================================================
