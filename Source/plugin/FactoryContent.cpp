@@ -41,6 +41,8 @@ static void clearSound(DC& c)
     c.driveType = DC::DriveOff; c.driveAmount = 0.0f;
     c.reverbSend = 0.0f; c.delaySend = 0.0f;
     c.allowOverlap = false;
+    c.keysSlot2Down = 0;   // slot-2 pitch is TIED TO THE SOUND now: each sound sets its own (default 0),
+                           // so picking a new sound refreshes it instead of leaking the previous value.
     c.markDspDirty();
 }
 
@@ -941,6 +943,69 @@ static void kSynthPluck(DC& c) {    // bright synth pluck: fast resonant filter 
     s.filterType = DC::LowPass; s.filterCutoff = 2200.0f; s.filterReso = 3.0f; s.filterEnvAmt = 0.8f;
     c.reverbSend = 0.16f; c.volume = 0.75f;
 }
+// -- CHORD / SCALE keyboard sounds (v1.2.3): both slots active, one slot voiced as a chord or diatonic
+//    scale so one finger plays a full harmony. "Power Keys" + "Octave Bells" also use the SLOT-2 PITCH
+//    transpose (keysSlot2Down) to stack the second slot an octave below / above the key. --
+static void kPowerKeys(DC& c) {     // power-chord synth: root+5th saw lead over a clean sub an OCTAVE DOWN (slot-2 pitch)
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
+    s.chordMode = 2; s.chordUnison = 2; s.oscDetune = 0.08f;         // 5th = root + fifth (power chord)
+    s.atk = 0.004f; s.dec = 0.6f; s.sustain = 0.82f; s.release = 0.14f;
+    s.filterType = DC::LowPass; s.filterCutoff = 2400.0f; s.filterReso = 1.4f; s.filterEnvAmt = 0.3f;
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.12f;
+    auto& b = mkSlot2(c, DC::SrcOsc, 0.62f);
+    b.oscShape = b.oscShapeB = DC::WvSine; b.oscFreq = 261.63f;      // pure sub, dropped an octave by the slot-2 pitch
+    b.atk = 0.004f; b.dec = 0.6f; b.sustain = 0.85f; b.release = 0.12f;
+    c.keysSlot2Down = 12;                                            // SLOT-2 PITCH: sub an octave below the key
+    c.volume = 0.72f;
+}
+static void kOctaveBells(DC& c) {   // major-triad bells with an OCTAVE-UP glass sparkle layer (slot-2 pitch)
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = 10; s.oscFreq = 261.63f;             // Bell (inharmonic partials)
+    s.fmDepth = 0.2f; s.fmPitch = 0.8f; s.fmEnvFollow = true;
+    s.chordMode = 3; s.chordUnison = 3;                             // Major triad
+    s.atk = 0.002f; s.dec = 2.0f; s.sustain = 0.16f; s.release = 0.9f;
+    auto& b = mkSlot2(c, DC::SrcOsc, 0.7f);
+    b.oscShape = b.oscShapeB = 11; b.oscFreq = 261.63f;            // Glass shimmer, an octave up (slot-2 pitch)
+    b.atk = 0.002f; b.dec = 1.4f; b.sustain = 0.12f; b.release = 0.8f;
+    c.keysSlot2Down = -12;                                          // SLOT-2 PITCH: sparkle an octave ABOVE the key
+    c.reverbSend = 0.34f; c.volume = 0.64f;
+}
+static void kDorianPad(DC& c) {     // scale-locked pad (Dorian): every key voices a diatonic chord, always in key
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
+    s.scaleOn = true; s.scaleType = 3; s.scaleUnison = 3; s.scaleKey = 0;   // Dorian triads in C
+    s.atk = 0.2f; s.dec = 1.6f; s.sustain = 0.85f; s.release = 0.9f;
+    s.filterType = DC::LowPass; s.filterCutoff = 1100.0f; s.filterReso = 0.9f; s.filterEnvAmt = 0.3f;
+    auto& b = mkSlot2(c, DC::SrcOsc, 0.55f);
+    b.oscShape = b.oscShapeB = DC::WvTri; b.oscFreq = 261.63f;      // warm detuned body under the harmonized saws
+    b.oscUnison = 2; b.oscDetune = 0.18f;
+    b.atk = 0.25f; b.dec = 1.8f; b.sustain = 0.85f; b.release = 1.0f;
+    c.reverbSend = 0.3f; c.volume = 0.6f;
+}
+static void kMajorChoir(DC& c) {    // vocal "aah" that harmonizes into the MAJOR scale (diatonic choir) + a reed body
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = 6; s.oscFreq = 261.63f;             // Vowel A
+    s.scaleOn = true; s.scaleType = 0; s.scaleUnison = 3; s.scaleKey = 0;   // Major triads
+    s.atk = 0.22f; s.dec = 1.5f; s.sustain = 0.85f; s.release = 0.8f;
+    s.lfoRate[1] = 5.0f; s.lfoAmt[1] = 0.015f;                      // subtle vibrato = choir life
+    auto& b = mkSlot2(c, DC::SrcOsc, 0.6f);
+    b.oscShape = b.oscShapeB = 12; b.oscFreq = 261.63f;            // Reed warmth under the vowels
+    b.atk = 0.3f; b.dec = 1.6f; b.sustain = 0.8f; b.release = 0.9f;
+    c.reverbSend = 0.34f; c.volume = 0.58f;
+}
+static void kMinorRhodes(DC& c) {   // moody Rhodes-style EP voiced as a MIN7 chord (jazzy, one-finger) + soft body
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSine; s.oscFreq = 261.63f;
+    s.fmDepth = 0.32f; s.fmPitch = 0.5f; s.fmEnvFollow = true;      // tine bark
+    s.chordMode = 7; s.chordUnison = 4;                            // Min7 = 4-note chord
+    s.atk = 0.003f; s.dec = 1.4f; s.sustain = 0.45f; s.release = 0.35f;
+    auto& b = mkSlot2(c, DC::SrcOsc, 0.6f);
+    b.oscShape = b.oscShapeB = DC::WvTri; b.oscFreq = 261.63f;      // soft body under the tines
+    b.atk = 0.003f; b.dec = 1.3f; b.sustain = 0.4f; b.release = 0.3f;
+    b.filterType = DC::LowPass; b.filterCutoff = 3000.0f; b.filterReso = 0.6f;
+    c.reverbSend = 0.2f; c.volume = 0.62f;
+}
 
 // -- New plucked strings + mallets (Physical / Karplus-Strong; material 0=Nylon 1=Steel 2=Wood 3=Glass 4=Metal 5=Skin;
 //    physPosition low = plucked near the bridge = brighter/twangier). These are one-shot/decaying = a natural fit. --
@@ -1030,6 +1095,10 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Glass Bells",  kGlassBells,  "Keys" },           { "Vibraphone",   kVibes,      "Keys" },
     { "Marimba Keys", kMarimbaKeys, "Keys" },           { "Saw Lead",     kSawLead,    "Keys" },
     { "Sub Bass",     kSubBass,     "Keys" },           { "Synth Pluck",  kSynthPluck, "Keys" },
+    // ---- KEYS chord/scale sounds (v1.2.3): both slots, a slot in chord/scale; Power/Octave use slot-2 pitch ----
+    { "Power Keys",   kPowerKeys,   "Keys" },           { "Octave Bells", kOctaveBells, "Keys" },
+    { "Dorian Pad",   kDorianPad,   "Keys" },           { "Major Choir",  kMajorChoir,  "Keys" },
+    { "Minor Rhodes", kMinorRhodes, "Keys" },
     // ---- MODAL engine (struck resonant bodies). Names carry no "(Modal)" - the tag adds it. ----
     { "Mod Marimba",   moMarimba,    "Modal" }, { "Mod Tubular Bell", moTubular,   "Modal" },
     { "Mod Glass",     moGlass,      "Modal" }, { "Mod Tom",          moTomDrum,   "Modal" },
@@ -1222,6 +1291,7 @@ static void resetAll(Sequencer& s)
             ch.mute = false; ch.solo = false;
             ch.chokeGroup = 0; ch.outputBus = 0; ch.midiOut = false; ch.midiOutChannel = 1;   // routing/choke are preset-level -> reset them
             ch.keysSlot2Down = 0;   // KEYS slot-2 transpose (channel-wide) is preset-level too
+            ch.humanizeAmt = 0.0f; ch.strumAmt = 0.0f;   // HUMANIZE / STRUM reset on preset/Init
             ch.mixName = {}; ch.mixModified = false;
             setSteps(ch, 8, {});
         }

@@ -552,6 +552,8 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("oEA", s.oscPEnvAmt, nullptr); st.setProperty("oET", s.oscPEnvTime, nullptr); st.setProperty("oOf", s.oscPOffset, nullptr);
         st.setProperty("oUn", s.oscUnison, nullptr); st.setProperty("oDt", s.oscDetune, nullptr);
         st.setProperty("chd", s.chordMode, nullptr); st.setProperty("chdU", s.chordUnison, nullptr);
+        st.setProperty("scOn", s.scaleOn, nullptr); st.setProperty("scTy", s.scaleType, nullptr);
+        st.setProperty("scUn", s.scaleUnison, nullptr); st.setProperty("scKy", s.scaleKey, nullptr);   // SCALE mode
         st.setProperty("oUC", s.oscUniCenter, nullptr); st.setProperty("oDM", s.oscDetuneMode, nullptr);
         st.setProperty("fxDt", s.fxDriveType, nullptr); st.setProperty("fxDr", s.fxDrive, nullptr);
         st.setProperty("fxRv", s.fxReverbSend, nullptr); st.setProperty("fxDl", s.fxDelaySend, nullptr);
@@ -628,6 +630,8 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         s.oscPEnvAmt = (float)st.getProperty("oEA", d.oscPEnvAmt); s.oscPEnvTime = (float)st.getProperty("oET", d.oscPEnvTime); s.oscPOffset = (float)st.getProperty("oOf", d.oscPOffset);
         s.oscUnison = (int)st.getProperty("oUn", d.oscUnison); s.oscDetune = (float)st.getProperty("oDt", d.oscDetune);
         s.chordMode = (int) st.getProperty("chd", d.chordMode); s.chordUnison = (int) st.getProperty("chdU", d.chordUnison);
+        s.scaleOn = (bool) st.getProperty("scOn", d.scaleOn); s.scaleType = (int) st.getProperty("scTy", d.scaleType);
+        s.scaleUnison = (int) st.getProperty("scUn", d.scaleUnison); s.scaleKey = (int) st.getProperty("scKy", d.scaleKey);
         s.oscUniCenter = (bool)st.getProperty("oUC", d.oscUniCenter);
         s.oscDetuneMode = (int)st.getProperty("oDM", d.oscDetuneMode);
         s.fxDriveType = (int)st.getProperty("fxDt", d.fxDriveType); s.fxDrive = (float)st.getProperty("fxDr", d.fxDrive);
@@ -976,6 +980,52 @@ static const int8_t kChordTab[7][6] = {
 static inline int chordSemis(int chordMode, int k)
 { return (chordMode >= 1 && chordMode <= 7) ? (int) kChordTab[chordMode - 1][juce::jlimit(0, 5, k)] : 0; }
 
+// SCALE mode (a diatonic HARMONIZER). Each scale = ascending semitone offsets from its root; kScaleLen
+// = how many notes it has (5/6/7). Unlike chords these intervals are NOTE-DEPENDENT (they change with the
+// played note's scale degree), so scaleSemis() is called PER NOTE and the result stored in
+// SlotVoice::uniSemis (not baked into the shared per-block config).
+static const int8_t kScaleTab[10][7] = {
+    { 0,2,4,5,7,9,11 },   // 0 Major
+    { 0,2,3,5,7,8,10 },   // 1 Natural Minor
+    { 0,2,3,5,7,8,11 },   // 2 Harmonic Minor
+    { 0,2,3,5,7,9,10 },   // 3 Dorian
+    { 0,1,3,5,7,8,10 },   // 4 Phrygian
+    { 0,2,4,6,7,9,11 },   // 5 Lydian
+    { 0,2,4,5,7,9,10 },   // 6 Mixolydian
+    { 0,2,4,7,9,0,0 },    // 7 Major Pentatonic (5)
+    { 0,3,5,7,10,0,0 },   // 8 Minor Pentatonic (5)
+    { 0,3,5,6,7,10,0 },   // 9 Blues (6)
+};
+static const int kScaleLen[10] = { 7,7,7,7,7,7,7,5,5,6 };
+
+// Voice k's offset (semitones, relative to the PLAYED note) for the diatonic chord of the note's scale
+// degree. Off-scale/between notes SNAP to the nearest scale member (tie -> lower); voice 0 = the snapped
+// root (offset 0 on-scale), higher voices stack diatonic thirds within the scale (deg += 2 per voice,
+// octave-wrapped). key = 0..11 root pitch class (C = 0), playedMidi = the note in MIDI numbers.
+static inline int scaleSemis(int scaleType, int key, int playedMidi, int k)
+{
+    scaleType = juce::jlimit(0, 9, scaleType);
+    const int8_t* S = kScaleTab[scaleType];
+    const int     N = kScaleLen[scaleType];
+    const int pc = ((playedMidi - key) % 12 + 12) % 12;              // pitch class relative to the key root
+    int deg = 0, bestC = (int) S[0], bestD = 100;
+    for (int i = 0; i < N; ++i)                                      // nearest member (with octave wraps), tie -> lower
+        for (int wrap = -12; wrap <= 12; wrap += 12) {
+            const int c = (int) S[i] + wrap, d = std::abs(c - pc);
+            if (d < bestD || (d == bestD && c < bestC)) { bestD = d; bestC = c; deg = i; }
+        }
+    const int snapDelta = bestC - pc;                               // 0 when the note is on-scale
+    const int td  = deg + 2 * k;
+    const int oct = (int) std::floor((double) td / (double) N);
+    const int idx = td - oct * N;
+    return snapDelta + ((int) S[idx] + 12 * oct - (int) S[deg]);    // root's stack interval + the snap
+}
+
+// Public wrappers so the editor's keyboard-highlight can use the exact DSP voicing (single source).
+int DrumChannel::scaleNoteOffset(int scaleType, int key, int playedMidi, int voiceIdx)
+{ return scaleSemis(scaleType, key, playedMidi, voiceIdx); }
+int DrumChannel::chordNoteOffset(int chordMode, int k) { return chordSemis(chordMode, k); }
+
 int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long gateSamples,
                          float glideToSemis, long glideSamples, bool forceOverlap)
 {
@@ -1022,6 +1072,15 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
                             v.glideStep = (glideToSemis - pitchSemis) / (float) glideSamples; }
     else                  { v.glideRemain = 0; v.glideStep = 0.0f; }
 
+    // HUMANIZE (between-slot loosening): give slot 2 a small RANDOM onset delay + both slots a
+    // per-hit velocity jitter, so two layered sounds don't hit machine-perfectly. All derived from
+    // one per-channel RNG advanced each trigger. 0 = no delay, velScale 1 = bit-identical.
+    auto humRand = [this]() { humRng ^= humRng << 13; humRng ^= humRng >> 17; humRng ^= humRng << 5;
+                              return (float) (humRng & 0xffffff) / (float) 0x1000000; };   // 0..1
+    const int   humMaxDelay = (int) (0.030f * (float) sr);   // up to 30 ms between the two slots
+    const bool  twoSlots    = (slots[0].weight > 0.001f && slots[1].weight > 0.001f
+                               && slots[0].engine >= 0 && slots[1].engine >= 0);
+
     for (int s = 0; s < NUM_SLOTS; ++s)
     {
         SlotVoice& sv = v.sv[s];
@@ -1044,6 +1103,41 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         for (auto& row : sv.modalY2) for (auto& v2 : row) v2 = 0.0f;
         sv.noiseState = 0x1234567u + (uint32_t)(vi * NUM_SLOTS + s) * 2654435761u; // distinct per voice+slot
         for (int u = 0; u <= UNI_MAX; ++u) sv.uniPhase[u] = (2.0 * kPi) * (double) u / (double) UNI_MAX;
+
+        // SCALE mode (diatonic harmonizer): the chord depends on the played NOTE, so compute this voice's
+        // per-note diatonic offsets now (keySemis is 0 for step/draw hits; keyDown recomputes for held keys).
+        for (int u = 0; u < UNI_MAX; ++u) sv.uniSemis[u] = 0.0f;
+        if (sl.scaleOn && (sl.engine == SrcOsc || sl.engine == SrcModal || sl.engine == SrcPhys))
+        {
+            const double baseF = (sl.engine == SrcPhys) ? (double) sl.physFreq : (double) sl.oscFreq;
+            const int playedMidi = (int) std::lround(69.0 + 12.0 * std::log2(juce::jmax(1.0, baseF) / 440.0) + (double) pitchSemis);
+            const int nv = juce::jlimit(1, UNI_MAX, sl.scaleUnison);
+            for (int u = 0; u < nv; ++u) sv.uniSemis[u] = (float) scaleSemis(sl.scaleType, sl.scaleKey, playedMidi, u);
+        }
+
+        // HUMANIZE: only slot 2 gets a random onset delay (slot 1 is the on-time anchor); both slots
+        // get an independent downward velocity jitter (never boosts past the authored level).
+        sv.startDelay = 0; sv.velScale = 1.0f;
+        for (auto& d : sv.uniDelay) d = 0;
+        if (humanizeAmt > 0.001f && twoSlots)
+        {
+            if (s == 1) sv.startDelay = (int) std::lround((double) humanizeAmt * (double) humRand() * (double) humMaxDelay);
+            sv.velScale = 1.0f - humanizeAmt * 0.12f * humRand();
+        }
+        // STRUM: spread this slot's chord/scale notes low->high in time (deterministic; a strum on
+        // every hit). Only when the slot voices distinct pitches (CHORD or SCALE), else notes are
+        // identical and a "strum" would just comb-filter. uniDelay[0] stays 0 (the root leads).
+        if (strumAmt > 0.001f && (sl.scaleOn || sl.chordMode > 0)
+            && (sl.engine == SrcOsc || sl.engine == SrcModal || sl.engine == SrcPhys))
+        {
+            const int nStr = juce::jlimit(1, UNI_MAX, sl.scaleOn ? sl.scaleUnison
+                                                    : sl.chordMode > 0 ? sl.chordUnison : sl.oscUnison);
+            if (nStr > 1)
+            {
+                const double perVoice = strumAmt * 0.090 * (double) sr / (double)(nStr - 1);   // up to ~90 ms spread
+                for (int u = 0; u < nStr; ++u) sv.uniDelay[u] = (int) std::lround(perVoice * (double) u);
+            }
+        }
 
         // Sample slot: this hit plays the NEXT slice of THIS slot's own sample, from its slice start
         // (= region start when slicing is off). Each Sample slot has independent slices/region/buffer.
@@ -1103,7 +1197,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
             const float pos = juce::jlimit(0.0f, 1.0f, sl.physPosition);
             // Physical unison/chord: excite one real string per note, each tuned to its own pitch
             // (chord interval + detune). Single-voice sounds excite string 0 only = bit-identical.
-            const int nStr = (sl.engine == SrcPhys) ? juce::jlimit(1, KS_UNI, sl.oscUnison) : 1;
+            const int nStr = (sl.engine == SrcPhys) ? juce::jlimit(1, KS_UNI, sl.scaleOn ? sl.scaleUnison : sl.oscUnison) : 1;
 
             auto exciteString = [&](int strIdx, float freqK)
             {
@@ -1140,7 +1234,8 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
                 if (sl.engine == SrcPhys && nStr > 1)
                 {
                     const double sp = 2.0 * (double) k / (double) (nStr - 1) - 1.0;
-                    uniMul = std::pow(2.0, (double) chordSemis(sl.chordMode, k) / 12.0
+                    const double interval = sl.scaleOn ? (double) sv.uniSemis[k] : (double) chordSemis(sl.chordMode, k);
+                    uniMul = std::pow(2.0, interval / 12.0
                                           + sp * (double) (sl.oscDetune * 100.0f) / 1200.0);
                 }
                 exciteString(k, ksFreq0 * (float) uniMul);
@@ -1167,7 +1262,9 @@ int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down)
     for (int s = 0; s < NUM_SLOTS; ++s)
     {
         Slot& sl = slots[s];
-        const double base = kC3 * ((s == 1 && slot2Down > 0) ? std::pow(2.0, -(double) slot2Down / 12.0) : 1.0);
+        // slot2Down is a SIGNED transpose for slot 2: positive = semitones DOWN (classic sub-osc),
+        // negative = UP. 0 / non-slot-2 = the pressed pitch. (Old projects stored 0..24 = down.)
+        const double base = kC3 * ((s == 1 && slot2Down != 0) ? std::pow(2.0, -(double) slot2Down / 12.0) : 1.0);
         switch (sl.engine)
         {
             case SrcOsc: case SrcModal: sl.oscFreq  = (float) base; break;
@@ -1192,8 +1289,17 @@ int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down)
             default: sv.keyMute = true; continue;       // Sample / Noise / legacy: not playable by keys
         }
         double hz = targetHz;
-        if (s == 1 && slot2Down > 0) hz *= std::pow(2.0, -(double) slot2Down / 12.0);
+        if (s == 1 && slot2Down != 0) hz *= std::pow(2.0, -(double) slot2Down / 12.0);
         sv.keySemis = (float)(12.0 * std::log2(hz / juce::jmax(1.0, base)));
+        // SCALE: trigger() computed uniSemis off the C3-rebased Freq; RE-compute from the pressed note
+        // (slot 2 uses its transposed note) so the harmonizer voices the diatonic chord of what you played.
+        if (sl.scaleOn)
+        {
+            const int effNote = midiNote - (s == 1 ? slot2Down : 0);
+            for (int u = 0; u < UNI_MAX; ++u) sv.uniSemis[u] = 0.0f;
+            const int nv = juce::jlimit(1, UNI_MAX, sl.scaleUnison);
+            for (int u = 0; u < nv; ++u) sv.uniSemis[u] = (float) scaleSemis(sl.scaleType, sl.scaleKey, effNote, u);
+        }
     }
     return vi;
 }
@@ -1252,6 +1358,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         int    engine = -1; float weight = 0, atk = 0, hold = 0, dec = 0, sustain = 0, release = 0.06f;
         int    oscShape = 0, oscShapeB = 0; double oscFreq = 0; float oscPEnvAmt = 0, oscPEnvTime = 0.04f, oscPOffset = 0;
         int    uniVoices = 1; float uniCents = 0, uniGain = 1, oscVibFac = 1; bool uniCenter = false; int uniMode = 0; int chord = 0;
+        bool   scaleOn = false;   // SCALE (diatonic harmonizer): read per-voice sv.uniSemis[] instead of the fixed chord table
         double uniMul[KS_UNI] = { 1.0, 1.0, 1.0 };   // per-string pitch multipliers (Physical unison/chord)
         int    noiseType = 0; bool noiseBP = false; double noiseFc = 1000, nQ = 0.7; float noiseDrive = 0, noiseCrackle = 0;
         float  greyB0 = 1, greyB1 = 0, greyB2 = 0, greyA1 = 0, greyA2 = 0;   // grey = white through a mid-scoop peaking biquad
@@ -1319,11 +1426,12 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             case SrcOsc:
                 c.oscShape = sl.oscShape; c.oscShapeB = sl.oscShapeB; c.oscFreq = sl.oscFreq;
                 c.oscPEnvAmt = sl.oscPEnvAmt; c.oscPEnvTime = sl.oscPEnvTime; c.oscPOffset = sl.oscPOffset;
-                c.uniVoices = juce::jlimit(1, UNI_MAX, sl.chordMode > 0 ? sl.chordUnison : sl.oscUnison);
+                c.scaleOn   = sl.scaleOn;
+                c.uniVoices = juce::jlimit(1, UNI_MAX, sl.scaleOn ? sl.scaleUnison : sl.chordMode > 0 ? sl.chordUnison : sl.oscUnison);
                 c.uniCents  = juce::jlimit(0.0f, 1.0f, sl.oscDetune) * 100.0f;   // up to +/-100 cents (1 semitone) spread
                 c.uniCenter = sl.oscUniCenter; c.uniMode = sl.oscDetuneMode;
                 c.uniGain   = 1.0f / std::sqrt((float) (c.uniVoices + (c.uniCenter ? 1 : 0)));
-                c.chord     = juce::jlimit(0, 7, sl.chordMode);
+                c.chord     = sl.scaleOn ? 0 : juce::jlimit(0, 7, sl.chordMode);   // SCALE forces chord off; render reads sv.uniSemis
                 c.oscVibFac = 1.0f + juce::jlimit(0.0f, 1.0f, sl.vibrato) * 0.09f * vibLfo;
                 // Merged FM section (Depth 0 = pure analog). Modulator = sine at carrier*ratio.
                 c.oscWarp    = sl.oscWarp;
@@ -1366,7 +1474,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 c.ksFb  = std::exp(-3.0f / juce::jmax(0.02f, sl.dec * c.pm->decScale) / (float) sr);
                 // (Release is the user's own value now - see the note in the amp-env bake above.)
                 // UNISON/CHORD: pre-compute each string's pitch multiplier (chord interval + detune spread).
-                c.uniVoices = juce::jlimit(1, KS_UNI, sl.chordMode > 0 ? sl.chordUnison : sl.oscUnison);
+                c.scaleOn   = sl.scaleOn;   // SCALE reads sv.uniSemis per-string in the render (c.uniMul ignored)
+                c.uniVoices = juce::jlimit(1, KS_UNI, sl.scaleOn ? sl.scaleUnison : sl.chordMode > 0 ? sl.chordUnison : sl.oscUnison);
                 c.chord     = juce::jlimit(0, 7, sl.chordMode);
                 c.uniCents  = juce::jlimit(0.0f, 1.0f, sl.oscDetune) * 100.0f;
                 for (int k = 0; k < KS_UNI; ++k)
@@ -1409,46 +1518,9 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 c.smpEnv  = sl.smpEnvOn;   // opt-in amp envelope (off = legacy full-length playback)
                 c.oscVibFac = 1.0f + juce::jlimit(0.0f, 1.0f, sl.vibrato) * 0.09f * vibLfo;  // vibrato = varispeed wobble
                 break; }
-            case SrcSynth: {
-                // Unified voice: oscillator(+FM+fold) and noise sections, optionally fed
-                // into a Karplus-Strong resonator. Coefficients mirror the dedicated
-                // engines exactly so a synth in "osc only" / "noise only" / etc. is
-                // bit-identical to Analog / Noise / FM / Physical.
-                c.oscLevel   = juce::jlimit(0.0f, 1.0f, sl.oscLevel);
-                c.noiseLevel = juce::jlimit(0.0f, 1.0f, sl.noiseLevel);
-                c.oscFold    = juce::jlimit(0.0f, 1.0f, sl.oscFold);
-                // --- oscillator + FM (carrier = osc freq) ---
-                c.oscShape  = sl.oscShape; c.oscFreq = juce::jlimit(8.0, sr * 0.45, (double) sl.oscFreq);
-                c.oscPEnvAmt = sl.oscPEnvAmt; c.oscPEnvTime = sl.oscPEnvTime; c.oscPOffset = sl.oscPOffset;
-                c.uniVoices = juce::jlimit(1, UNI_MAX, sl.chordMode > 0 ? sl.chordUnison : sl.oscUnison);
-                c.uniCents  = juce::jlimit(0.0f, 1.0f, sl.oscDetune) * 100.0f;   // up to +/-100 cents (1 semitone) spread
-                c.uniCenter = sl.oscUniCenter; c.uniMode = sl.oscDetuneMode;
-                c.uniGain   = 1.0f / std::sqrt((float) (c.uniVoices + (c.uniCenter ? 1 : 0)));
-                c.oscVibFac = 1.0f + juce::jlimit(0.0f, 1.0f, sl.vibrato) * 0.09f * vibLfo;
-                c.fmModF    = c.oscFreq * (1.0 + (double) sl.fmSpread * 5.0);
-                c.fmIndex   = sl.fmDepth * 12.0f; c.fmFeedback = sl.fmFeedback;
-                // --- noise section ---
-                c.noiseType = sl.noiseType;
-                c.noiseBP   = (sl.noiseWidth > 0.02f);
-                c.nQ        = 0.5 + (double)(sl.noiseWidth * sl.noiseWidth) * 15.0;
-                c.noiseFc   = juce::jlimit(40.0, sr * 0.45, (double) sl.noiseCenter);
-                // --- resonator (KS) ---
-                c.reson = (sl.resonAmt > 0.001f);
-                if (c.reson) {
-                    c.pm    = &kPhysModels[juce::jlimit(0, kNumPhysModels - 1, (int) std::lround(sl.physMaterial))];
-                    const float rd = juce::jlimit(0.02f, 1.0f, sl.resonAmt) * 4.0f;   // resonAmt -> ring time
-                    c.ksFb  = std::exp(-3.0f / juce::jmax(0.02f, rd * c.pm->decScale) / (float) sr);
-                    c.ksLpC = juce::jlimit(0.02f, 1.0f, (0.05f + 0.95f * sl.physTone) * c.pm->briScale);
-                    c.ksApC = c.pm->apC; c.ksApN = c.pm->apStages;
-                    c.physBaseF = c.oscFreq;
-                }
-                break; }
-            case SrcWave:
-                c.oscFreq   = juce::jlimit(8.0, sr * 0.45, (double) sl.oscFreq);
-                c.waveTable = sl.waveTable;
-                c.wavePos   = juce::jlimit(0.0f, 1.0f, sl.wavePos);
-                c.oscVibFac = 1.0f + juce::jlimit(0.0f, 1.0f, sl.vibrato) * 0.09f * vibLfo;
-                break;
+            // SrcSynth / SrcWave: legacy slot engines REMOVED (v1.2.x). No factory sound uses them; the
+            // enum values stay reserved so saved projects don't renumber, but they no longer bake/render
+            // (a very old project's Synth/Wave slot is silent - accepted compat break).
             case SrcModal: {
                 // Build the resonator bank from the Material + base pitch + Decay/Tone/Structure.
                 // MORPH crossfades this material's mode table toward the NEXT material in the list
@@ -1500,9 +1572,10 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 c.oscFreq = baseF;
                 c.modalDecaySec = decaySec;
                 c.oscVibFac = 1.0f + juce::jlimit(0.0f, 1.0f, sl.vibrato) * 0.07f * vibLfo;   // block-rate pole-angle wobble
-                c.uniVoices = juce::jlimit(1, MODAL_NOTES, sl.chordMode > 0 ? sl.chordUnison : sl.oscUnison);   // one FULL bank per chord note (cap MODAL_NOTES)
+                c.scaleOn   = sl.scaleOn;   // SCALE reads sv.uniSemis per bank-note in the render
+                c.uniVoices = juce::jlimit(1, MODAL_NOTES, sl.scaleOn ? sl.scaleUnison : sl.chordMode > 0 ? sl.chordUnison : sl.oscUnison);   // one FULL bank per note (cap MODAL_NOTES)
                 c.uniCents  = juce::jlimit(0.0f, 1.0f, sl.oscDetune) * 100.0f;
-                c.chord     = juce::jlimit(0, 7, sl.chordMode);
+                c.chord     = sl.scaleOn ? 0 : juce::jlimit(0, 7, sl.chordMode);
                 // Pitch-envelope time base = the audible Strike + Ring (matches the editor's axis).
                 c.voiceLenSamp = juce::jmax(1.0, (double)((sl.atk + decaySec) * (float) sr));
                 break; }
@@ -1701,11 +1774,21 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         for (int s = 0; s < NUM_SLOTS; ++s)
             ksFbGate[s] = (sc[s].engine == SrcPhys && v.sv[s].gateDec > 0.0f)
                 ? std::exp(-3.0f / juce::jmax(0.02f, v.sv[s].gateDec * sc[s].pm->decScale) / (float) sr) : -1.0f;
+        // HUMANIZE/STRUM push a slot's (and its chord notes') onset later, so keep the voice alive
+        // long enough for the most-delayed one to finish (else its tail is cut).
+        long maxDelay = 0;
+        for (int s = 0; s < NUM_SLOTS; ++s)
+        {
+            long d = v.sv[s].startDelay;
+            for (int u = 0; u < UNI_MAX; ++u) d = juce::jmax(d, (long) v.sv[s].startDelay + v.sv[s].uniDelay[u]);
+            maxDelay = juce::jmax(maxDelay, d);
+        }
+        if (! v.isKey) veEnd += maxDelay;   // key voices already run open-ended while held
         bool finished = false;
 
         for (int i = 0; i < numSamples; ++i)
         {
-            const long t = v.voiceSamples;
+            const long tv = v.voiceSamples;   // voice age (shared); each slot shadows it below by its own onset delay
             const float kg = v.killing ? v.killGain : 1.0f;
             if (v.glideRemain > 0)   // 303 slide: per-sample pitch glide toward this step's pitch
             {
@@ -1714,7 +1797,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 vPitchMul = vStepMul * chanMul;
             }
             float vEnv = 0.0f, mixL = 0.0f, mixR = 0.0f;
-            const float be = bloomAmt > 0.0001f ? (1.0f - std::exp(-(float) t * bloomRise)) : 1.0f;
+            const float be = bloomAmt > 0.0001f ? (1.0f - std::exp(-(float) tv * bloomRise)) : 1.0f;
             const float bGate = (1.0f - bloomAmt) + bloomAmt * be;
 
             for (int s = 0; s < NUM_SLOTS; ++s)
@@ -1722,6 +1805,11 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 const SC& c = sc[s];
                 if (c.engine < 0) continue;
                 SlotVoice& sv = v.sv[s];
+                // HUMANIZE: this slot's whole onset is pushed back by startDelay (0 = on time). Skip it
+                // (frozen, silent) until then; afterwards run against a slot-LOCAL age `t` (shadows tv) so
+                // its envelope + phases start from zero at the delayed onset. startDelay 0 = bit-identical.
+                if (tv < sv.startDelay) continue;
+                const long t = tv - sv.startDelay;
                 float sig = 0.0f, sL = 0.0f, sR = 0.0f, env = 0.0f;
                 bool  stereo = false;
 
@@ -1755,6 +1843,11 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             env = ahdsEnv(t, c.atk, c.hold, sv.gateDec > 0.0f ? sv.gateDec : c.dec, c.sustain, c.release);
                         double sSemis = (c.oscPEnvAmt != 0.0f) ? (double) c.oscPEnvAmt * pitchEnvShape(t, c.oscPEnvTime, c.oscPOffset) : 0.0;
                         double freq = c.oscFreq * std::pow(2.0, sSemis / 12.0) * vPitchMul * c.oscVibFac * pe3Mul;
+                        // SCALE snaps the played note into the key. The FM modulator + sub-osc are SHARED across the
+                        // unison/chord voices, so tune them to the SNAPPED ROOT (voice 0's offset) - else an off-scale
+                        // note (C#) keeps its FM/sub at C# while the carriers snap to C-E-G, so C and C# sound DIFFERENT
+                        // even though both voice a C chord. (In CHORD the root offset is 0 = no change = old behaviour.)
+                        const double fmRootMul = c.scaleOn ? std::pow(2.0, (double) sv.uniSemis[0] / 12.0) : 1.0;
                         // Single "Wave" selector (the From/To over-the-note morph was retired - it sounded harsh).
                         const float pos = (float) c.oscShape;
                         // Merged FM: a sine modulator bends the carrier phase. Depth (fmIndex) 0 => no
@@ -1767,14 +1860,18 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             // Env-follow: the FM index rides the amp envelope (classic FM drum -
                             // bright modulated attack that mellows to the plain carrier as it decays).
                             fmAdd = (c.fmEnvF ? c.fmIndex * env : c.fmIndex) * modOut;
-                            sv.fmMod += 2.0 * kPi * freq * (double) c.fmRatio / sr;
+                            sv.fmMod += 2.0 * kPi * freq * fmRootMul * (double) c.fmRatio / sr;
                             if (sv.fmMod > 2.0 * kPi) sv.fmMod -= 2.0 * kPi;
                         }
                         const bool fmActive = c.fmIndex > 0.0001f;
                         float wsum = 0.0f;
                         const int totalV = c.uniVoices + (c.uniCenter ? 1 : 0);   // +1 dry/centre voice
+                        const float strumFade = juce::jmax(1.0f, 0.002f * (float) sr);   // 2 ms click-free fade-in per strummed note
                         for (int u = 0; u < totalV; ++u) {
                             const bool centreVoice = (c.uniCenter && u == c.uniVoices);   // the extra undetuned voice
+                            // STRUM: chord voice u fades in from its own onset (uniDelay). uniDelay 0 => gate 1 => identical.
+                            const float gU = (centreVoice || u >= UNI_MAX || sv.uniDelay[u] <= 0) ? 1.0f
+                                            : juce::jlimit(0.0f, 1.0f, (float)(t - sv.uniDelay[u]) / strumFade);
                             float sp = 0.0f;   // mode: 0=symmetric (+/-), 1=up (all sharp), 2=down (all flat)
                             if (! centreVoice && c.uniVoices > 1) {
                                 const float frac = (float) u / (float)(c.uniVoices - 1);   // 0..1
@@ -1783,14 +1880,16 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             double det = std::pow(2.0, (double)(sp * c.uniCents) / 1200.0);
                             // CHORD mode: each unison voice becomes a chord note (root/third/fifth/..);
                             // detune still micro-spreads each note. The centre voice stays on the root.
-                            if (c.chord > 0 && ! centreVoice)
+                            if (c.scaleOn && ! centreVoice)                        // SCALE: per-note diatonic offset
+                                det *= std::pow(2.0, (double) sv.uniSemis[u] / 12.0);
+                            else if (c.chord > 0 && ! centreVoice)
                                 det *= std::pow(2.0, (double) chordSemis(c.chord, u) / 12.0);
                             const float dt = (float)(freq * det / sr);   // cycles/sample for PolyBLEP
                             // FM active -> plain morphWave (matches the old FM engine exactly, no BLEP under
                             // phase modulation); FM off -> band-limited morphWaveBL (the clean analog path).
                             const double wph = sv.uniPhase[u];   // (Warp is now an output wavefold, applied below)
-                            wsum += fmActive ? morphWave(wph + fmAdd, pos)
-                                             : morphWaveBL(wph, pos, dt);
+                            wsum += gU * (fmActive ? morphWave(wph + fmAdd, pos)
+                                                   : morphWaveBL(wph, pos, dt));
                             sv.uniPhase[u] += 2.0 * kPi * freq * det / sr;
                             if (sv.uniPhase[u] > 2.0 * kPi) sv.uniPhase[u] -= 2.0 * kPi;
                         }
@@ -1801,7 +1900,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         }
                         if (c.fmSub > 0.001f) {                         // sub-oscillator an octave down
                             oo = oo * (1.0f - 0.4f * c.fmSub) + (float) std::sin(sv.fmSubPhase) * c.fmSub;
-                            sv.fmSubPhase += 2.0 * kPi * freq * 0.5 / sr;
+                            sv.fmSubPhase += 2.0 * kPi * freq * fmRootMul * 0.5 / sr;
                             if (sv.fmSubPhase > 2.0 * kPi) sv.fmSubPhase -= 2.0 * kPi;
                         }
                         sig = oo * env;   // Analog + FM only (the resonator was removed from this engine -> use Physical)
@@ -1894,8 +1993,14 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         float acc = 0.0f;
                         for (int k = 0; k < nStr; ++k)
                         {
+                            // STRUM: hold string k silent until its onset. Its excitation stays pristine in
+                            // the KS line, so it starts as a FRESH pluck, not a decayed one. uniDelay 0 = identical.
+                            if (k < UNI_MAX && t < sv.uniDelay[k]) continue;
                             const int base = k * KS_MAX;
-                            const double f = fBase * c.uniMul[k];
+                            const double f = fBase * (c.scaleOn                     // SCALE: per-string diatonic offset + detune spread
+                                ? std::pow(2.0, (double) sv.uniSemis[k] / 12.0
+                                           + (nStr > 1 ? (2.0 * (double) k / (double)(nStr - 1) - 1.0) : 0.0) * (double) c.uniCents / 1200.0)
+                                : c.uniMul[k]);
                             double L = juce::jlimit(2.0, (double)(KS_MAX - 2), sr / juce::jmax(20.0, f) - (double) c.ksApComp);
                             double rp = sv.ksWrite[k] - L; while (rp < 0.0) rp += (double) KS_MAX;
                             const int ri = (int) rp; const float fr = (float)(rp - ri);
@@ -1950,110 +2055,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         sv.smpHead += c.speed * std::pow(2.0, smpSemis / 12.0) * vStepMul * c.oscVibFac * pe3Mul / (double) engineOS;
                         stereo = true;
                         break; }
-                    case SrcSynth: {
-                        // ---- Unified voice: (osc+FM+fold) + noise -> optional resonator ----
-                        env = ahdsEnv(t, c.atk, c.hold, sv.gateDec > 0.0f ? sv.gateDec : c.dec, c.sustain, c.release);
-                        const double pMul = (c.oscPEnvAmt != 0.0f)
-                            ? std::pow(2.0, (double) c.oscPEnvAmt * pitchEnvShape(t, c.oscPEnvTime, c.oscPOffset) / 12.0) : 1.0;
-
-                        float ex = 0.0f;
-
-                        // -- oscillator + FM + fold (only when the osc section is up) --
-                        if (c.oscLevel > 0.0001f)
-                        {
-                            const double freq = c.oscFreq * pMul * vPitchMul * c.oscVibFac * pe3Mul;
-                            // FM modulator (one operator, with feedback), shared by unison voices.
-                            float modOut = (float) std::sin(sv.fmMod + c.fmFeedback * 6.0f * sv.fmFbState);
-                            sv.fmFbState = 0.5f * (sv.fmFbState + modOut);
-                            const float phaseMod = c.fmIndex * modOut;
-                            sv.fmMod += 2.0 * kPi * c.fmModF * pMul * vPitchMul * pe3Mul / sr;
-                            if (sv.fmMod > 2.0 * kPi) sv.fmMod -= 2.0 * kPi;
-                            auto shape = [&](double phase) -> float {
-                                const float ph = (float)(phase / (2.0 * kPi) - std::floor(phase / (2.0 * kPi)));
-                                switch (c.oscShape) {
-                                    case OscTriangle: return 1.0f - 4.0f * std::abs(ph - 0.5f);
-                                    case OscSquare:   return (ph < 0.5f) ? 1.0f : -1.0f;
-                                    case OscSaw:      return 2.0f * ph - 1.0f;
-                                    default:          return (float) std::sin(phase);
-                                }
-                            };
-                            float wsum = 0.0f;
-                            const int totalV = c.uniVoices + (c.uniCenter ? 1 : 0);   // +1 dry/centre voice
-                            for (int u = 0; u < totalV; ++u) {
-                                const bool centreVoice = (c.uniCenter && u == c.uniVoices);
-                                float sp = 0.0f;   // mode: 0=symmetric, 1=up, 2=down
-                                if (! centreVoice && c.uniVoices > 1) {
-                                    const float frac = (float) u / (float)(c.uniVoices - 1);
-                                    sp = (c.uniMode == 1) ? frac : (c.uniMode == 2) ? -frac : (2.0f * frac - 1.0f);
-                                }
-                                const double det = std::pow(2.0, (double)(sp * c.uniCents) / 1200.0);
-                                float w = shape(sv.uniPhase[u] + phaseMod);
-                                if (c.oscFold > 0.0001f) {                 // wavefold (fold=0 stays identity)
-                                    const float folded = std::sin(w * (1.0f + c.oscFold * 5.0f) * 1.5707963f);
-                                    w += c.oscFold * (folded - w);
-                                }
-                                wsum += w;
-                                sv.uniPhase[u] += 2.0 * kPi * freq * det / sr;
-                                if (sv.uniPhase[u] > 2.0 * kPi) sv.uniPhase[u] -= 2.0 * kPi;
-                            }
-                            ex += c.oscLevel * wsum * c.uniGain;
-                            sv.sinePhase = sv.uniPhase[0];
-                        }
-
-                        // -- noise section --
-                        if (c.noiseLevel > 0.0001f)
-                        {
-                            float wN = whiteNoise(sv.noiseState), col;
-                            switch (c.noiseType) {
-                                case 1:
-                                    sv.pinkB[0] = 0.99765f * sv.pinkB[0] + wN * 0.0990460f;
-                                    sv.pinkB[1] = 0.96300f * sv.pinkB[1] + wN * 0.2965164f;
-                                    sv.pinkB[2] = 0.57000f * sv.pinkB[2] + wN * 1.0526913f;
-                                    col = (sv.pinkB[0] + sv.pinkB[1] + sv.pinkB[2] + wN * 0.1848f) * 0.35f; break;
-                                case 2:
-                                    sv.brownState = juce::jlimit(-1.0f, 1.0f, sv.brownState + 0.02f * wN);
-                                    col = sv.brownState * 3.5f; break;
-                                case 3: {   // GREY = mid-scoop biquad (same as the Noise engine)
-                                    const float y = c.greyB0 * wN + sv.greyZ1;
-                                    sv.greyZ1 = c.greyB1 * wN - c.greyA1 * y + sv.greyZ2;
-                                    sv.greyZ2 = c.greyB2 * wN - c.greyA2 * y;
-                                    col = y * 1.4f; break; }
-                                case 4: { float hi = wN - sv.prevWhite; sv.prevWhite = wN; col = hi * 0.7f; break; }
-                                default: col = wN; break;
-                            }
-                            float nOut = c.noiseBP ? sv.noiseBP.process(col, 0) * 3.0f : col;
-                            ex += c.noiseLevel * nOut;
-                        }
-
-                        // -- optional Karplus-Strong resonator (ex injected; pure pluck when ex==0) --
-                        if (c.reson && ksOk)
-                        {
-                            const double f = c.physBaseF * pMul * vPitchMul * c.oscVibFac * pe3Mul;
-                            const double L = juce::jlimit(2.0, (double)(KS_MAX - 2), sr / juce::jmax(20.0, f));
-                            double rp = sv.ksWrite[0] - L; while (rp < 0.0) rp += (double) KS_MAX;   // legacy Synth resonator: string 0 only
-                            const int ri = (int) rp; const float fr = (float)(rp - ri);
-                            const float k0 = sv.ksBuf[ri], k1 = sv.ksBuf[(ri + 1) % KS_MAX];
-                            float y = k0 + fr * (k1 - k0);
-                            sv.ksLp[0] += c.ksLpC * (y - sv.ksLp[0]);
-                            float ss = sv.ksLp[0];
-                            for (int st = 0; st < c.ksApN; ++st) { float yy = c.ksApC * ss + sv.ksApSt[0][st]; sv.ksApSt[0][st] = ss - c.ksApC * yy; ss = yy; }
-                            const int wi = (int) sv.ksWrite[0] % KS_MAX;
-                            // Cap the feedback line: a resonator driven continuously by `ex` (Drive) with
-                            // feedback ~1 would build up without bound -> a huge spike -> "gunshot" that
-                            // echoes via the FX sends. Real resonators saturate; so do we (bounded, no explosion).
-                            sv.ksBuf[wi] = juce::jlimit(-2.5f, 2.5f, ss * c.ksFb + ex * 0.5f); sv.ksWrite[0] = wi + 1;
-                            sig = (ss * 1.4f) * env;
-                        }
-                        else
-                            sig = ex * env;
-                        break; }
-                    case SrcWave: {
-                        env = ahdsEnv(t, c.atk, c.hold, sv.gateDec > 0.0f ? sv.gateDec : c.dec, c.sustain, c.release);
-                        const double freq = c.oscFreq * vPitchMul * c.oscVibFac * pe3Mul;
-                        sv.wtPhase += freq / sr;                          // 0..1 per cycle
-                        if (sv.wtPhase >= 1.0) sv.wtPhase -= std::floor(sv.wtPhase);
-                        sig = wavetableSample(c.waveTable, c.wavePos, (float) sv.wtPhase) * env;
-                        break; }
+                    // SrcSynth / SrcWave render REMOVED (v1.2.x) - engines retired, no factory usage.
                     case SrcModal: {
                         // Strike: feed ONE impulse into the resonator bank (a bank of 2-pole resonators =
                         // decaying sines). Each mode rings + decays on its own from there.
@@ -2080,7 +2082,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             double uniMul[MODAL_NOTES];
                             for (int j = 0; j < nNotes; ++j) {
                                 const double sp = nNotes > 1 ? 2.0 * (double) j / (double)(nNotes - 1) - 1.0 : 0.0;
-                                uniMul[j] = std::pow(2.0, (double) chordSemis(c.chord, j) / 12.0 + sp * (double) c.uniCents / 1200.0);
+                                const double iv = c.scaleOn ? (double) sv.uniSemis[j] : (double) chordSemis(c.chord, j);   // SCALE per-note offset
+                                uniMul[j] = std::pow(2.0, iv / 12.0 + sp * (double) c.uniCents / 1200.0);
                             }
                             for (int j = 0; j < nNotes; ++j) {
                                 const double pm = pmBase * uniMul[j];
@@ -2111,13 +2114,17 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             }
                         }
                         float out = 0.0f;
-                        for (int j = 0; j < nNotes; ++j)
+                        for (int j = 0; j < nNotes; ++j) {
+                            // STRUM: strike chord note j at its own onset (uniDelay). Its bank stays zero (silent)
+                            // until then, so it rings up fresh. uniDelay 0 => strike at t=0 == the old behaviour.
+                            const long strikeAt = (j < UNI_MAX) ? (long) sv.uniDelay[j] : 0;
                             for (int m = 0; m < sv.modalNV; ++m) {
-                                const float x = strike ? sv.modalGain[j][m] : 0.0f;   // impulse only on the first sample
+                                const float x = (t == strikeAt) ? sv.modalGain[j][m] : 0.0f;   // per-note impulse
                                 const float y = sv.modalA1[j][m] * sv.modalY1[j][m] - sv.modalA2[j][m] * sv.modalY2[j][m] + x;
                                 sv.modalY2[j][m] = sv.modalY1[j][m]; sv.modalY1[j][m] = y;
                                 out += y;
                             }
+                        }
                         out *= 1.0f / std::sqrt((float) nNotes);   // RMS make-up across chord notes
                         sv.modalInit = true;
                         // With SUSTAIN: the held bank doesn't decay, so the gated ADSR shapes the note
@@ -2194,7 +2201,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 }
 
                 vEnv = juce::jmax(vEnv, env);
-                const float wEff = c.weight * driftMod[s] * (s == domSlot ? 1.0f : bGate);
+                // HUMANIZE velocity jitter: sv.velScale (~1) loosens this slot's level per hit (1 = identical).
+                const float wEff = c.weight * driftMod[s] * (s == domSlot ? 1.0f : bGate) * sv.velScale;
                 const float cL = (stereo ? sL : sig) * wEff * c.gL;
                 const float cR = (stereo ? sR : sig) * wEff * c.gR;
                 mixL += cL; mixR += cR;

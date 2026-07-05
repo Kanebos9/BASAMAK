@@ -318,6 +318,14 @@ public:
     //   slot.engine: -1 = none, else a Source value (SrcSample..SrcPhys).
     //======================================================================
     static constexpr int NUM_SLOTS = 2;
+    static constexpr int UNI_MAX   = 7;      // max unison/chord/scale voices (public: the editor's key-highlight uses it)
+
+    // SCALE diatonic harmonizer: the semitone offset (from the played note) of chord voice `voiceIdx`
+    // in `scaleType`/`key` for a note `playedMidi` - off-scale notes snap to the nearest member. Public
+    // so the editor can light up the played keys. (Wraps the DSP's own scaleSemis - single source.)
+    static int scaleNoteOffset(int scaleType, int key, int playedMidi, int voiceIdx);
+    // CHORD interval (note-independent) for voice k of chord type `chordMode`. Same table the DSP uses.
+    static int chordNoteOffset(int chordMode, int k);
 
     //-- EQ band model (used by BOTH the channel EQ and the per-slot EQ). HP + 3 bells + LP.
     static constexpr int NUM_EQ_BANDS = 5;
@@ -352,6 +360,14 @@ public:
         int   oscDetuneMode = 0;         // detune direction: 0 = symmetric (both ways), 1 = up only (sharp), 2 = down only (flat)
         int   chordMode = 0;             // 0 = STD (detuned copies); 1-7 = chord types (Oct/5th/Maj/Min/Sus4/Maj7/Min7) - Osc/Modal/Physical
         int   chordUnison = 3;           // unison count used in CHORD mode (SEPARATE from oscUnison so STD + CHORD don't share)
+        // -- SCALE mode (a per-slot diatonic HARMONIZER; precedence scaleOn ? SCALE : chordMode>0 ? CHORD : STD).
+        //    Each played note is voiced with the diatonic chord for its scale degree in scaleKey/scaleType;
+        //    off-scale/between notes SNAP to the nearest scale note at play time. Unlike CHORD the intervals
+        //    depend on the note, so they're computed per-note into SlotVoice::uniSemis (not baked in SC). --
+        bool  scaleOn = false;
+        int   scaleType = 0;             // 0..9: Major, Nat/Har Minor, Dorian, Phrygian, Lydian, Mixolydian, Maj/Min Pentatonic, Blues
+        int   scaleUnison = 3;           // voice/chord-size count in SCALE mode (SEPARATE, like chordUnison)
+        int   scaleKey = 0;              // 0..11 root pitch class (C = 0)
         // -- Wavetable (SrcWave) -- which table + scan position (0..1); pitch reuses oscFreq.
         int   waveTable = 0; float wavePos = 0.0f;
         // -- Modal (SrcModal) -- struck resonant body. Base pitch reuses oscFreq.
@@ -525,6 +541,15 @@ public:
     int   midiOutChannel = 1;   // MIDI channel (1-16) the midiOut notes are sent on (channel-wide)
     int   keysSlot2Down = 0;    // KEYS: extra transpose DOWN (0-24 st) applied to slot 2 only, PER pattern/channel
 
+    //-- HUMANIZE (per-channel feel, all patterns). Two independent axes, both bit-identical at 0:
+    //   humanizeAmt = per-hit RANDOM timing offset between slot 1 & slot 2 (+ small velocity jitter),
+    //     so two layered sounds don't stack machine-perfectly (only meaningful with 2 audible slots).
+    //   strumAmt    = deterministic low->high TIME SPREAD across a slot's chord/scale notes (a strum;
+    //     only meaningful when that slot is in CHORD or SCALE mode).
+    float humanizeAmt = 0.0f;   // 0..1
+    float strumAmt    = 0.0f;   // 0..1
+    uint32_t humRng   = 0x9e3779b9u;   // per-channel RNG advanced each trigger (per-hit humanize variation)
+
     //-- Polyphony: when true, a new trigger does not cut the previous sound
     //   (voices overlap and ring out); when false the channel is monophonic.
     bool allowOverlap = false;
@@ -618,7 +643,6 @@ private:
     // One playing note. The channel holds a small pool so overlapping triggers
     // can ring out together (polyphony); in mono mode only voice 0 is used.
     static constexpr int POLY      = 8;
-    static constexpr int UNI_MAX   = 7;      // max unison voices for the oscillator
     static constexpr int KS_MAX    = 4096;   // Karplus-Strong delay buffer (min ~11 Hz @ 44.1k)
     static constexpr int KS_UNI    = 3;      // Physical unison/chord: up to this many real strings per voice
     // Per-slot synthesis state: each of the 2 slots runs its own engine, so it
@@ -630,6 +654,7 @@ private:
     {
         double   sinePhase = 0.0;
         double   uniPhase[UNI_MAX + 1] = { 0,0,0,0,0,0,0,0 };   // +1 for the optional dry/centre voice
+        float    uniSemis[UNI_MAX] = {};   // SCALE: per-note diatonic offset (semitones) for each unison/string/bank voice; only read in SCALE mode
         double   fmCarrier = 0.0, fmMod = 0.0, fmSubPhase = 0.0;
         double   wtPhase = 0.0;           // wavetable (SrcWave) phase, 0..1
         float    modalY1[MODAL_NOTES][MODAL_MODES] = {}, modalY2[MODAL_NOTES][MODAL_MODES] = {};   // resonator state, one FULL bank per chord note
@@ -671,6 +696,12 @@ private:
         // Noise/legacy) -> silent for this key voice only.
         float    keySemis = 0.0f;
         bool     keyMute  = false;
+        // HUMANIZE / STRUM (all 0 = bit-identical). startDelay = samples this whole slot's onset is
+        // pushed back (between-slot humanize); velScale = this slot's per-hit velocity jitter (~1).
+        // uniDelay[u] = extra samples chord/scale voice u waits before it sounds (strum, low->high).
+        int      startDelay = 0;
+        float    velScale   = 1.0f;
+        int      uniDelay[UNI_MAX] = {};
     };
     struct Voice
     {

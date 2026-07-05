@@ -437,6 +437,23 @@ private:
 // top: REC (+ mode), Takes, Quantize (= the channel's step count), Slot-2 transpose, and
 // Sustain/Release for the selected slot (live for KEY voices only - see DrumChannel::keyAdsr).
 // The EDITOR wires + refreshes everything; this class just owns the widgets/layout/painting.
+// A piano that can TINT individual keys (chord/scale/slot notes light up while you play). Slot 1
+// yellow, slot 2 pink, both = a blend. Fills are near-solid so a tinted BLACK key still reads clearly.
+class TintKeyboard : public juce::MidiKeyboardComponent
+{
+public:
+    TintKeyboard(juce::MidiKeyboardState& s, Orientation o) : juce::MidiKeyboardComponent(s, o) {}
+    juce::Colour tint[128] = {};                          // transparent (alpha 0) = no highlight
+    bool anyTint = false;
+    void clearTints() { if (! anyTint) return; for (auto& c : tint) c = juce::Colour(0u); anyTint = false; repaint(); }
+    void setTint(int midi, juce::Colour c) { if (midi >= 0 && midi < 128) { tint[midi] = c; anyTint = true; } }
+protected:
+    void drawWhiteNote(int n, juce::Graphics& g, juce::Rectangle<float> area,
+                       bool isDown, bool isOver, juce::Colour line, juce::Colour text) override;
+    void drawBlackNote(int n, juce::Graphics& g, juce::Rectangle<float> area,
+                       bool isDown, bool isOver, juce::Colour fill) override;
+};
+
 class KeysPanel : public juce::Component, private juce::MidiKeyboardState::Listener
 {
 public:
@@ -446,16 +463,23 @@ public:
     std::function<void(int)> onKeyUp;   // which note was released (slide-safe mono pairing)
 
     juce::TextButton btnRec   { "REC" };
-    juce::ComboBox   comboRecMode, comboSlot2;
+    juce::ComboBox   comboRecMode;
+    juce::TextButton btnSlot2 { "0 st" };                 // slot-2 transpose (3-column popup, -24..+24)
     juce::TextButton btnTakes { "Takes (0)" };
-    juce::Label      lblRecMode, lblSlot2, lblHint;
+    juce::Slider     humanKnob, strumKnob;                // per-channel HUMANIZE / STRUM (feel)
+    juce::Label      lblRecMode, lblSlot2, lblHint, lblHuman, lblStrum;
     int countdown = 0;                                    // count-in ticks left (drawn as a big 3-2-1)
+
+    // Keyboard highlight (driven by the editor timer from the currently held key + selected channel):
+    void clearKeyTints()               { kb.clearTints(); }
+    void setKeyTint(int midi, juce::Colour c) { kb.setTint(midi, c); }
+    void applyKeyTints()               { kb.repaint(); }
 
     void paint(juce::Graphics&) override;
     void resized() override;
 private:
     juce::MidiKeyboardState     kbState;
-    juce::MidiKeyboardComponent kb { kbState, juce::MidiKeyboardComponent::horizontalKeyboard };
+    TintKeyboard                kb { kbState, juce::MidiKeyboardComponent::horizontalKeyboard };
     juce::Array<int> held;                                // mono note stack (message thread only)
     float lastVel = 0.8f;
     void handleNoteOn (juce::MidiKeyboardState*, int, int note, float vel) override;
@@ -729,10 +753,10 @@ class VoiceModDisplay : public juce::Component, public juce::SettableTooltipClie
 {
 public:
     static constexpr int kMaxUni = 7;
-    void setValues(int unison, int chordUnison, float detune, float vibrato, bool centre, int detuneMode, int chordMode);
+    void setValues(int unison, int chordUnison, int scaleUnison, float detune, float vibrato, bool centre, int detuneMode, int chordMode, bool scaleOn, int scaleType, int scaleKey);
     void setSupport(bool uniSupported, bool vibSupported, juce::String naReason);
-    void setMaxUni(int m) { const int c = juce::jlimit(1, kMaxUni, m); if (c == maxUni) return; maxUni = c; if (uni > maxUni) uni = maxUni; if (uniChord > maxUni) uniChord = maxUni; repaint(); }  // per-engine unison cap
-    std::function<void(int unison, float detune, float vibrato, bool centre, int detuneMode, int chordMode)> onChange;
+    void setMaxUni(int m) { const int c = juce::jlimit(1, kMaxUni, m); if (c == maxUni) return; maxUni = c; if (uni > maxUni) uni = maxUni; if (uniChord > maxUni) uniChord = maxUni; if (uniScale > maxUni) uniScale = maxUni; repaint(); }  // per-engine unison cap
+    std::function<void(int unison, float detune, float vibrato, bool centre, int detuneMode, int chordMode, bool scaleOn, int scaleType, int scaleKey)> onChange;
     std::function<void()> onDragEnd;                              // released after editing (for auto-audition)
     void paint(juce::Graphics& g) override;
     void mouseDown(const juce::MouseEvent& e) override;
@@ -745,21 +769,26 @@ public:
 private:
     int   uni = 1;         // STD-mode voice count
     int   uniChord = 3;   // CHORD-mode voice count (SEPARATE from STD - switching modes shows each one's own)
-    int   curUni() const { return chord > 0 ? uniChord : uni; }   // the ACTIVE mode's count
+    int   uniScale = 3;   // SCALE-mode voice count (chord size for the diatonic harmonizer)
+    int   curUni() const { return scaleOn ? uniScale : chord > 0 ? uniChord : uni; }   // the ACTIVE mode's count
     float det = 0.0f, vib = 0.0f;
     bool  centre = false;          // also play the original/undetuned pitch (toggled by double-click on Detune)
     int   mode = 0;                // detune direction: 0 = symmetric (drag right), 1 = up (drag up), 2 = down (drag down)
     bool  uniOn = true, vibOn = true;
     int   maxUni = 7;              // per-engine unison cap (Osc 7 / Modal 4 / Physical 3)
     int   chord = 0;               // 0 = STD (detuned copies); 1-7 = chord types (in CHORD mode the detune dot picks the type)
-    juce::Rectangle<float> chip[3];   // [0]=STD [1]=CHORD toggle chips ([2] unused now - the type is the detune dot)
+    bool  scaleOn = false;         // SCALE (diatonic harmonizer) mode; the detune dot picks the scale type
+    int   scaleType = 0;           // 0-9 which scale (Major, Minor, ...)
+    int   scaleKey = 0;            // 0-11 key root pitch class (C = 0)
+    juce::Rectangle<float> chip[4];   // [0]=STD [1]=CHORD [2]=SCALE toggle chips, [3]=KEY (shown only in SCALE mode)
     juce::String reason;
     int   drag = -1, hover = -1;   // 0 = Unison, 1 = Detune, 2 = Vibrato
+    int   chipHover = -1;          // which mode chip the mouse is over (0=UNISON 1=CHORD 2=SCALE 3=KEY) for per-chip tooltips
     struct Geo { float left, right, top, bottom, cy, hh, uX, dX, vX;
-                 float rangeX, rangeY, dPtX, dPtY; };   // detune handle: range + its mode-aware position
+                 float rangeX, rangeY, dPtX, dPtY, rootY, upRange; };   // rootY = the root/original line; upRange = room above it
     Geo  geom() const;
     int  nearestHandle(juce::Point<float> p) const;
-    void emit() { if (onChange) onChange(curUni(), det, vib, centre, mode, chord); }
+    void emit() { if (onChange) onChange(curUni(), det, vib, centre, mode, chord, scaleOn, scaleType, scaleKey); }
 };
 
 //==============================================================================
@@ -1142,8 +1171,8 @@ struct ZoomCatcher : juce::Component
 {
     std::function<void()> onClick;
     ZoomCatcher() { setInterceptsMouseClicks(true, false); }
-    // Dim everything behind the zoom panel so the other boxes (and their dropdowns) don't show through.
-    void paint(juce::Graphics& g) override { g.fillAll(juce::Colour(0xdc0c0c16)); }
+    // Dim everything behind the zoom panel so the other boxes (and the KEYS keyboard) don't show through.
+    void paint(juce::Graphics& g) override { g.fillAll(juce::Colour(0xf60c0c16)); }
     void mouseDown(const juce::MouseEvent&) override { if (onClick) onClick(); }
 };
 
@@ -1371,6 +1400,8 @@ private:
     int    takesForPatChan(int pat, int ch) const;   // count of takes for one pattern+channel (20 cap each)                // write a take's notes onto its channel (view/play it)
     void parseKeysEvents();                    // drain the audio event log into takes (live)
     void refreshKeysPanel();
+    void updateKeyboardHighlight();   // light up the keys the held note voices (slot 1 yellow / slot 2 pink)
+    int  keysHighlightNote = -2;      // last note we tinted for (-2 = force first update)
     // Host-frozen detector: if processHeartbeat stops moving (~1 s), the host isn't sending us
     // audio - the Play tooltip flips to a "Not playing?" explanation (see timerCallback).
     uint32_t lastHeartbeat = 0; int heartbeatStaleTicks = 0; bool hostFrozen = false;

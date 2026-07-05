@@ -2577,15 +2577,36 @@ static const char* kUiChordName[8] = { "STD", "Oct", "5th", "Maj", "Min", "Sus4"
 static inline int uiChordSemis(int chord, int k)
 { return (chord >= 1 && chord <= 7) ? (int) kUiChordTab[chord - 1][juce::jlimit(0, 5, k)] : 0; }
 
-void VoiceModDisplay::setValues(int unison, int chordUnison, float detune, float vibrato, bool centreOn, int detuneMode, int chordMode)
+// SCALE mode (diatonic harmonizer) display mirror of the DSP kScaleTab. kNumScales must match.
+static const int8_t kUiScaleTab[10][7] = {
+    { 0,2,4,5,7,9,11 },{ 0,2,3,5,7,8,10 },{ 0,2,3,5,7,8,11 },{ 0,2,3,5,7,9,10 },{ 0,1,3,5,7,8,10 },
+    { 0,2,4,6,7,9,11 },{ 0,2,4,5,7,9,10 },{ 0,2,4,7,9,0,0 },{ 0,3,5,7,10,0,0 },{ 0,3,5,6,7,10,0 } };
+static const int   kUiScaleLen[10]   = { 7,7,7,7,7,7,7,5,5,6 };
+static const char* kUiScaleName[10]  = { "Major","Minor","Har Min","Dorian","Phrygian","Lydian","Mixolyd","Maj Pent","Min Pent","Blues" };
+static const char* kUiNoteName[12]   = { "C","C#","D","D#","E","F","F#","G","G#","A","A#","B" };
+static constexpr int kNumScales = 10;
+// The TONIC diatonic chord's k-th tone (semitones from the tonic) - a REPRESENTATIVE voicing for the
+// display cluster + read-out (the real per-note voicing is note-dependent - see DrumChannel scaleSemis).
+static inline int uiScaleSemis(int scaleType, int k) {
+    scaleType = juce::jlimit(0, 9, scaleType);
+    const int8_t* S = kUiScaleTab[scaleType]; const int N = kUiScaleLen[scaleType];
+    const int td = 2 * k, oct = td / N, idx = td - oct * N;
+    return (int) S[idx] + 12 * oct;
+}
+
+void VoiceModDisplay::setValues(int unison, int chordUnison, int scaleUnison, float detune, float vibrato, bool centreOn, int detuneMode, int chordMode, bool scaleOnIn, int scaleTypeIn, int scaleKeyIn)
 {
     uni = juce::jlimit(1, maxUni, unison);
     uniChord = juce::jlimit(1, maxUni, chordUnison);
+    uniScale = juce::jlimit(1, maxUni, scaleUnison);
     det = juce::jlimit(0.0f, 1.0f, detune);
     vib = juce::jlimit(0.0f, 1.0f, vibrato);
     centre = centreOn;
     mode = juce::jlimit(0, 2, detuneMode);
     chord = juce::jlimit(0, 7, chordMode);
+    scaleOn = scaleOnIn;
+    scaleType = juce::jlimit(0, kNumScales - 1, scaleTypeIn);
+    scaleKey = ((scaleKeyIn % 12) + 12) % 12;
     repaint();
 }
 void VoiceModDisplay::setSupport(bool uniSupported, bool vibSupported, juce::String naReason)
@@ -2605,11 +2626,15 @@ VoiceModDisplay::Geo VoiceModDisplay::geom() const
     q.vX = q.left + w * 0.86f;   // Vibrato handle (right)
     q.rangeX = (q.vX - q.dX) * 0.7f;
     q.rangeY = q.hh * 0.85f;
-    // Detune dot: in STD mode its height = the cents spread; in CHORD mode its height PICKS the
-    // chord TYPE (1-7), so you drag the same dot to choose Maj/Min/Sus4/... (no separate button).
+    // In CHORD/SCALE the root line drops LOW so the value dots (chord/scale type) + the vibrato dot start
+    // there and get dragged UP - more travel = easier picking. In STD the root line is centred (old feel).
+    const bool stacked = (scaleOn || chord > 0);
+    q.rootY   = stacked ? q.cy + q.hh * 0.6f : q.cy;
+    q.upRange = juce::jmax(10.0f, q.rootY - q.top - 6.0f);
     q.dPtX = q.dX;
-    q.dPtY = (chord > 0) ? q.cy - ((float)(chord - 1) / 6.0f) * q.rangeY
-                         : q.cy - det * q.rangeY;
+    q.dPtY = scaleOn ? q.rootY - ((float) scaleType / (float)(kNumScales - 1)) * q.upRange   // SCALE: dot height = scale type
+           : (chord > 0) ? q.rootY - ((float)(chord - 1) / 6.0f) * q.upRange                 // CHORD: dot height = chord type
+                         : q.rootY - det * q.upRange;                                          // STD: dot height = cents
     return q;
 }
 int VoiceModDisplay::nearestHandle(juce::Point<float> p) const
@@ -2618,7 +2643,7 @@ int VoiceModDisplay::nearestHandle(juce::Point<float> p) const
     juce::Point<float> pts[3] = {
         { q.uX, q.bottom - (float)(curUni() - 1) / (float)(juce::jmax(1, maxUni - 1)) * (q.bottom - q.top) },  // 0 Unison
         { q.dPtX, q.dPtY },                                                                 // 1 Detune (mode-aware)
-        { q.vX, q.cy - vib * q.hh * 0.85f } };                                              // 2 Vibrato
+        { q.vX, q.rootY - vib * q.upRange } };                                              // 2 Vibrato
     int best = -1; float bd = 22.0f * 22.0f;
     for (int i = 0; i < 3; ++i) {
         if ((i <= 1 && !uniOn) || (i == 2 && !vibOn)) continue;
@@ -2630,23 +2655,44 @@ int VoiceModDisplay::nearestHandle(juce::Point<float> p) const
 juce::String VoiceModDisplay::getTooltip()
 {
     if (!uniOn && !vibOn) return "Voice: " + reason;
-    // Per-handle tooltip (depends on which dot the mouse is over).
+    // Per-CHIP tooltips (the three mode buttons + the Key chip each explain themselves).
+    if (chipHover == 0)
+        return "UNISON mode: stack detuned copies of the note for a thicker / wider sound. The count (drag the "
+               "cyan dot) = how many voices; Detune spreads them apart. No chord - just the one note, fattened.";
+    if (chipHover == 1)
+        return "CHORD mode: the stacked voices play a FIXED chord shape on EVERY note. Drag the detune dot to pick "
+               "the TYPE (Oct / 5th / Maj / Min / Sus4 / Maj7 / Min7); the unison count = how many chord notes "
+               "(3 = triad, 4 = 7th). Note: it's the SAME chord quality on every note you play.";
+    if (chipHover == 2)
+        return "SCALE mode (diatonic HARMONIZER): set a Key + a scale, and each note is voiced with the chord of "
+               "ITS scale degree - so a melody auto-harmonises in key (in C major: C -> major, D -> minor, "
+               "E -> minor, ...). Off-key notes snap into the scale. Count = chord size (3 triads / 4 sevenths). "
+               "Drag the dot to pick the scale:\n"
+               "- Major / Minor: the everyday happy / sad scales.\n"
+               "- Har Min: minor with a raised 7th (classical / exotic, Middle-Eastern flavour).\n"
+               "- Dorian: minor but brighter (jazzy, folky, Santana-ish).\n"
+               "- Phrygian: dark, Spanish / flamenco / metal.\n"
+               "- Lydian: major but dreamy / floaty (film-score).\n"
+               "- Mixolyd(ian): major but bluesy (rock / funk).\n"
+               "- Maj / Min Pent: 5-note scales that (almost) never clash - safe + simple.\n"
+               "- Blues: the 6-note bluesy scale.";
+    if (chipHover == 3)
+        return "KEY: the root note of the scale (the 'home' note - e.g. C for C major). Notes you play snap into "
+               "this key. Click to change it.";
+    // Per-handle tooltips.
     if (hover == 0 && uniOn)
-        return "UNISON (cyan): drag up/down for how many voices are stacked (1-7). More = thicker/wider. In "
-               "CHORD mode the voices become CHORD NOTES (2 = root + one interval, 3 = full triad, 4+ = 7ths / "
-               "octave doublings). Detune still spreads/thickens them.";
+        return "Count (cyan dot): drag up/down for how many voices are stacked (up to 7 / 3). More = thicker/wider. "
+               "In CHORD/SCALE mode this = how many chord notes.";
     if (hover == 1 && uniOn)
-        return "DETUNE (amber): drag up to spread the unison voices apart (symmetrically, both sharp and flat). "
-               "The cents value is how far the OUTERMOST voice sits from the original pitch, each way "
-               "(100c = 1 semitone). DOUBLE-CLICK to also play the original (undetuned) pitch alongside the "
-               "detuned copies" + juce::String(centre ? " (currently ON)." : " (currently OFF).");
+        return scaleOn ? "Scale (green dot): drag up/down to choose the scale (Major ... Blues). See the SCALE chip "
+                         "tooltip for what each one sounds like."
+             : (chord > 0) ? "Chord type (violet dot): drag up/down to choose the chord (Oct/5th/Maj/Min/Sus4/Maj7/Min7)."
+             : "Detune (amber dot): drag up to spread the unison voices apart (both sharp + flat). The cents value "
+               "is how far the outermost voice sits from the original, each way (100c = 1 semitone).";
     if (hover == 2 && vibOn)
-        return "VIBRATO (pink): drag up for more pitch wobble at ~5.5 Hz. Shown in semitones (up to ~1.5 st).";
-    juce::String s = "Voice controls for the selected slot. ";
-    if (uniOn) s += "Unison = stacked voices; Detune = spread (double-click Detune to also play the dry pitch). "
-                    "STD chip = detuned copies. CHORD chip = the voices play a chord; the third chip cycles the "
-                    "TYPE (Oct/5th/Maj/Min/Sus4/Maj7/Min7) and shows the stacked intervals for your voice count "
-                    "e.g. Maj (+4,+3). Unison count decides how many chord notes you hear. ";
+        return "Vibrato (pink dot): drag up for more pitch wobble at ~5.5 Hz. Shown in semitones (up to ~1.5 st).";
+    juce::String s = "Voice controls for the selected slot. Hover the UNISON / CHORD / SCALE chips for what each mode "
+                     "does. ";
     if (vibOn) s += "Vibrato = ~5.5 Hz pitch wobble (works on every engine here).";
     return s;
 }
@@ -2662,7 +2708,11 @@ void VoiceModDisplay::paint(juce::Graphics& g)
         return;
     }
     const Geo q = geom();
-    g.setColour(juce::Colour(0x14ffffff)); g.drawHorizontalLine((int) q.cy, q.left, q.right);  // centre pitch line
+    // In CHORD/SCALE the voices only go UP from the root, so drop the root/original line LOW to give the
+    // chord notes room to spread above it. In STD (unison) the spread is symmetric, so it stays centred.
+    const bool  stacked = (scaleOn || chord > 0);
+    const float rootY   = q.rootY;
+    g.setColour(juce::Colour(0x14ffffff)); g.drawHorizontalLine((int) rootY, q.left, q.right);  // root/original pitch line
 
     // The voice cluster: `uni` lines spread symmetrically by detune, each wobbling by vibrato.
     const int n = uniOn ? curUni() : 1;
@@ -2674,16 +2724,22 @@ void VoiceModDisplay::paint(juce::Graphics& g)
         for (int xi = 0; xi <= W; xi += 2) {
             const float x = q.left + (float) xi;
             const float ph = (float) xi / (float) W * juce::MathConstants<float>::twoPi * 3.0f;
-            const float y = q.cy + off + std::sin(ph) * vibAmp;
+            const float y = rootY + off + std::sin(ph) * vibAmp;
             if (xi == 0) path.startNewSubPath(x, y); else path.lineTo(x, y);
         }
         g.setColour(col); g.strokePath(path, juce::PathStrokeType(thick));
     };
+    // Stacked (chord/scale): scale the notes so the TOP voice reaches near the top of the box and the
+    // root sits on the low line - so the intervals fill the space and read clearly whatever the chord.
+    int maxSemi = 1;
+    if (stacked) for (int k = 0; k < n; ++k) maxSemi = juce::jmax(maxSemi, scaleOn ? uiScaleSemis(scaleType, k) : uiChordSemis(chord, k));
+    const float availUp = q.upRange;
     for (int k = 0; k < n; ++k) {
         float off = (n > 1) ? (-spread + 2.0f * spread * (float) k / (float)(n - 1)) : 0.0f;
-        if (chord > 0)            // chord mode: the lines sit at their chord notes (root at bottom)
-            off = -(float) uiChordSemis(chord, k) / 24.0f * q.hh * 0.9f + off * 0.15f;
-        const bool isRoot = chord > 0 ? (uiChordSemis(chord, k) % 12 == 0) : (n % 2 == 1 && k == n / 2);
+        const int voiceSemi = scaleOn ? uiScaleSemis(scaleType, k) : (chord > 0 ? uiChordSemis(chord, k) : 0);
+        if (stacked)   // chord/scale: the lines sit at their chord notes (root on the low line, going up)
+            off = -(float) voiceSemi / (float) maxSemi * availUp + off * 0.15f;
+        const bool isRoot = stacked ? (voiceSemi % 12 == 0) : (n % 2 == 1 && k == n / 2);
         drawVoice(off, juce::Colour(isRoot ? 0xff35c0ff : 0x9935c0ff).withMultipliedAlpha(isRoot ? 1.0f : 0.55f),
                   isRoot ? 1.6f : 1.0f);
     }
@@ -2696,11 +2752,16 @@ void VoiceModDisplay::paint(juce::Graphics& g)
             g.setColour(on ? juce::Colours::black : juce::Colour(0xff9a9ac0));
             g.setFont(juce::Font(8.5f, juce::Font::bold)); g.drawText(t, r, juce::Justification::centred, false);
         };
-        chip[0] = juce::Rectangle<float>(b.getX() + 5.0f,  b.getY() + 3.0f, 34.0f, 13.0f);
-        chip[1] = juce::Rectangle<float>(b.getX() + 41.0f, b.getY() + 3.0f, 46.0f, 13.0f);
-        drawChip(chip[0], "STD",   chord == 0, juce::Colour(0xff35c0ff));
-        drawChip(chip[1], "CHORD", chord >  0, juce::Colour(0xffb98cff));
-        chip[2] = {};   // the chord TYPE is picked by dragging the detune dot (label drawn above it)
+        chip[0] = juce::Rectangle<float>(b.getX() + 5.0f,  b.getY() + 3.0f, 46.0f, 13.0f);
+        chip[1] = juce::Rectangle<float>(b.getX() + 53.0f, b.getY() + 3.0f, 42.0f, 13.0f);
+        chip[2] = juce::Rectangle<float>(b.getX() + 97.0f, b.getY() + 3.0f, 42.0f, 13.0f);
+        drawChip(chip[0], "UNISON", ! scaleOn && chord == 0, juce::Colour(0xff35c0ff));
+        drawChip(chip[1], "CHORD",  ! scaleOn && chord >  0, juce::Colour(0xffb98cff));
+        drawChip(chip[2], "SCALE",  scaleOn,                 juce::Colour(0xff5ad17a));
+        // In SCALE mode a KEY chip on the right picks the root (the chord TYPE / scale is the detune dot).
+        if (scaleOn) { chip[3] = juce::Rectangle<float>(b.getRight() - 52.0f, b.getY() + 3.0f, 48.0f, 13.0f);
+                       drawChip(chip[3], juce::String("Key ") + kUiNoteName[scaleKey], true, juce::Colour(0xffffc23a)); }
+        else chip[3] = {};
     }
     if (uniOn && centre)   // the extra DRY/original voice (double-click Detune) - drawn white so it stands out
         drawVoice(0.0f, juce::Colour(0xffffffff).withMultipliedAlpha(0.95f), 1.8f);
@@ -2715,7 +2776,15 @@ void VoiceModDisplay::paint(juce::Graphics& g)
     if (uniOn) {
         const float uy = q.bottom - (float)(curUni() - 1) / (float)(juce::jmax(1, maxUni - 1)) * (q.bottom - q.top);
         handle(q.uX, uy, juce::Colour(0xff35c0ff), 0, juce::String(curUni()) + "x");
-        if (chord > 0) {
+        if (scaleOn) {
+            // SCALE: the detune dot picks the SCALE TYPE. Show just the scale name + key - NOT fixed
+            // intervals (a scale voices a DIFFERENT chord per note, so one interval list would mislead).
+            handle(q.dPtX, q.dPtY, juce::Colour(0xff5ad17a), 1, juce::String());
+            g.setColour(juce::Colour(0xffb6e8c6)); g.setFont(juce::Font(10.0f, juce::Font::bold));
+            g.drawText(juce::String(kUiScaleName[scaleType]) + juce::String::fromUTF8("  \xC2\xB7  ") + kUiNoteName[scaleKey],
+                       juce::Rectangle<float>(q.dPtX - 80.0f, juce::jmax(q.top - 2.0f, q.dPtY - 20.0f), 160.0f, 11.0f),
+                       juce::Justification::centred, false);
+        } else if (chord > 0) {
             // DETUNE dot = the chord-TYPE selector: its height picks the type. The name + the
             // stacked intervals for the current voice count are drawn just ABOVE the dot.
             handle(q.dPtX, q.dPtY, juce::Colour(0xffb98cff), 1, juce::String());
@@ -2735,23 +2804,35 @@ void VoiceModDisplay::paint(juce::Graphics& g)
     if (vibOn) {
         // VIBRATO shown as the real peak pitch deviation in semitones (~1.5 st at full).
         const float vibSt = 12.0f * std::log2(1.0f + 0.09f * vib);
-        handle(q.vX, q.cy - vib * q.hh * 0.85f, juce::Colour(0xffff7ab0), 2, juce::String(vibSt, 2) + "st");
+        handle(q.vX, q.rootY - vib * q.upRange, juce::Colour(0xffff7ab0), 2, juce::String(vibSt, 2) + "st");
     }
 
     // tiny per-handle captions (which dot is which), since the box title names all three
     g.setColour(juce::Colour(0x559a9ac0)); g.setFont(juce::Font(8.0f, juce::Font::plain));
     if (uniOn) {
         g.drawText("uni",    juce::Rectangle<float>(q.uX - 18, q.bottom - 1, 36, 9), juce::Justification::centred, false);
-        g.drawText(chord > 0 ? "chord" : "detune", juce::Rectangle<float>(q.dX - 24, q.bottom - 1, 48, 9), juce::Justification::centred, false);
+        g.drawText(scaleOn ? "scale" : chord > 0 ? "chord" : "detune", juce::Rectangle<float>(q.dX - 24, q.bottom - 1, 48, 9), juce::Justification::centred, false);
     }
     if (vibOn) g.drawText("vib", juce::Rectangle<float>(q.vX - 18, q.bottom - 1, 36, 9), juce::Justification::centred, false);
 }
-void VoiceModDisplay::mouseMove(const juce::MouseEvent& e) { int h = nearestHandle(e.position); if (h != hover) { hover = h; repaint(); } }
+void VoiceModDisplay::mouseMove(const juce::MouseEvent& e) {
+    int h = nearestHandle(e.position);
+    int ch = -1; if (uniOn) for (int i = 0; i < 4; ++i) if (chip[i].contains(e.position)) { ch = i; break; }
+    if (h != hover || ch != chipHover) { hover = h; chipHover = ch; repaint(); }
+}
 void VoiceModDisplay::mouseDown(const juce::MouseEvent& e)
 {
     if (uniOn) {
-        if (chip[0].contains(e.position)) { if (chord != 0) { chord = 0; emit(); repaint(); if (onDragEnd) onDragEnd(); } return; }
-        if (chip[1].contains(e.position)) { if (chord == 0) { chord = 3; emit(); repaint(); if (onDragEnd) onDragEnd(); } return; }  // enter CHORD (Maj); pick type by dragging the detune dot
+        if (chip[0].contains(e.position)) { const bool ch = scaleOn || chord != 0; scaleOn = false; chord = 0; if (ch) { emit(); repaint(); if (onDragEnd) onDragEnd(); } return; }
+        if (chip[1].contains(e.position)) { const bool ch = scaleOn || chord == 0; scaleOn = false; if (chord == 0) chord = 3; if (ch) { emit(); repaint(); if (onDragEnd) onDragEnd(); } return; }  // CHORD (Maj); type via the detune dot
+        if (chip[2].contains(e.position)) { if (! scaleOn) { scaleOn = true; emit(); repaint(); if (onDragEnd) onDragEnd(); } return; }   // SCALE (diatonic harmonizer)
+        if (scaleOn && chip[3].contains(e.position)) {   // KEY picker (root note)
+            juce::PopupMenu m;
+            for (int nk = 0; nk < 12; ++nk) m.addItem(nk + 1, kUiNoteName[nk], true, nk == scaleKey);
+            m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this),
+                [this](int r){ if (r >= 1) { scaleKey = r - 1; emit(); repaint(); if (onDragEnd) onDragEnd(); } });
+            return;
+        }
     }
     drag = nearestHandle(e.position); if (drag >= 0) mouseDrag(e);
 }
@@ -2759,20 +2840,21 @@ void VoiceModDisplay::mouseDrag(const juce::MouseEvent& e)
 {
     if (drag < 0) return;
     const Geo q = geom();
-    if (drag == 0) { int& tgt = (chord > 0) ? uniChord : uni; tgt = juce::jlimit(1, maxUni, 1 + juce::roundToInt((q.bottom - e.position.y) / juce::jmax(1.0f, q.bottom - q.top) * (float)(maxUni - 1))); }
+    if (drag == 0) { int& tgt = scaleOn ? uniScale : (chord > 0) ? uniChord : uni; tgt = juce::jlimit(1, maxUni, 1 + juce::roundToInt((q.bottom - e.position.y) / juce::jmax(1.0f, q.bottom - q.top) * (float)(maxUni - 1))); }
     else if (drag == 1) {
-        if (chord > 0)   // CHORD mode: the detune dot's height selects the chord TYPE (1-7)
-            chord = juce::jlimit(1, 7, 1 + juce::roundToInt(juce::jlimit(0.0f, 1.0f, (q.cy - e.position.y) / juce::jmax(1.0f, q.rangeY)) * 6.0f));
-        else { mode = 0; det = juce::jlimit(0.0f, 1.0f, (q.cy - e.position.y) / juce::jmax(1.0f, q.rangeY)); }
+        const float t = juce::jlimit(0.0f, 1.0f, (q.rootY - e.position.y) / juce::jmax(1.0f, q.upRange));   // 0 at the root line -> 1 near the top
+        if (scaleOn)          scaleType = juce::jlimit(0, kNumScales - 1, juce::roundToInt(t * (float)(kNumScales - 1)));   // SCALE type
+        else if (chord > 0)   chord     = juce::jlimit(1, 7, 1 + juce::roundToInt(t * 6.0f));                              // CHORD type
+        else { mode = 0;      det       = t; }                                                                            // STD cents
     }
-    else if (drag == 2) vib = juce::jlimit(0.0f, 1.0f, (q.cy - e.position.y) / juce::jmax(1.0f, q.hh * 0.85f));
+    else if (drag == 2) vib = juce::jlimit(0.0f, 1.0f, (q.rootY - e.position.y) / juce::jmax(1.0f, q.upRange));
     emit();
     repaint();
 }
-void VoiceModDisplay::mouseDoubleClick(const juce::MouseEvent& e)
+void VoiceModDisplay::mouseDoubleClick(const juce::MouseEvent&)
 {
-    // Double-click the DETUNE dot -> also play the original (undetuned) pitch alongside the detuned copies.
-    if (uniOn && nearestHandle(e.position) == 1) { centre = ! centre; emit(); repaint(); if (onDragEnd) onDragEnd(); }
+    // (Removed: double-clicking Detune used to toggle an extra "original/dry" voice - the user found it
+    // confusing. No double-click action now. Factory sounds that authored a centre voice still play it.)
 }
 
 //==============================================================================
@@ -3250,6 +3332,29 @@ juce::String LfoDisplay::getTooltip()
 //==============================================================================
 // KeysPanel (the on-screen piano)
 //==============================================================================
+// TintKeyboard: draw the note normally, then overlay the slot tint if this key is highlighted.
+void TintKeyboard::drawWhiteNote(int n, juce::Graphics& g, juce::Rectangle<float> area,
+                                 bool isDown, bool isOver, juce::Colour line, juce::Colour text)
+{
+    juce::MidiKeyboardComponent::drawWhiteNote(n, g, area, isDown, isOver, line, text);
+    const auto c = tint[n];
+    if (c.getAlpha() != 0) {                             // near-solid wash reads clearly on the white key
+        g.setColour(c.withMultipliedAlpha(0.62f));
+        g.fillRect(area.reduced(0.5f));
+        g.setColour(c.darker(0.4f)); g.drawRect(area, 1.0f);
+    }
+}
+void TintKeyboard::drawBlackNote(int n, juce::Graphics& g, juce::Rectangle<float> area,
+                                 bool isDown, bool isOver, juce::Colour fill)
+{
+    const auto c = tint[n];
+    // A translucent wash vanishes on black - fill the black key OPAQUE with a brightened tint instead,
+    // keep a dark border so it still reads as a raised black key.
+    juce::MidiKeyboardComponent::drawBlackNote(n, g, area, isDown, isOver,
+                                               c.getAlpha() != 0 ? c.darker(0.15f) : fill);
+    if (c.getAlpha() != 0) { g.setColour(juce::Colour(0xff101018)); g.drawRect(area, 1.0f); }
+}
+
 KeysPanel::KeysPanel()
 {
     kbState.addListener(this);
@@ -3260,7 +3365,17 @@ KeysPanel::KeysPanel()
     kb.setColour(juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, juce::Colour(0x44e8bf4d));
 
     auto combo = [this](juce::ComboBox& c) { addAndMakeVisible(c); };
-    combo(comboRecMode); combo(comboSlot2);
+    combo(comboRecMode);
+    addAndMakeVisible(btnSlot2);
+    btnSlot2.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
+    auto knob = [this](juce::Slider& s) {
+        addAndMakeVisible(s);
+        s.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+        s.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+        s.setRange(0.0, 1.0, 0.01); s.setDoubleClickReturnValue(true, 0.0);
+        s.setColour(juce::Slider::rotarySliderFillColourId, juce::Colour(0xffe8bf4d));
+    };
+    knob(humanKnob); knob(strumKnob);
     addAndMakeVisible(btnRec);
     btnRec.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
     addAndMakeVisible(btnTakes);
@@ -3272,6 +3387,7 @@ KeysPanel::KeysPanel()
         l.setColour(juce::Label::textColourId, juce::Colour(0xff8090b0));
     };
     lab(lblRecMode, "Record mode"); lab(lblSlot2, "Slot 2 pitch");
+    lab(lblHuman, "Humanize"); lab(lblStrum, "Strum");
     lab(lblHint, "");
     lblHint.setFont(juce::Font(13.5f));                    // readable (was tiny)
     lblHint.setColour(juce::Label::textColourId, juce::Colour(0xffb8c4dc));
@@ -3296,11 +3412,22 @@ void KeysPanel::resized()
     strip.removeFromLeft(6);
     place(btnTakes,     nullptr,     132);
     strip.removeFromLeft(6);
-    place(comboSlot2,   &lblSlot2,   104);
+    place(btnSlot2,     &lblSlot2,   104);
     strip.removeFromLeft(10);
-    lblHint.setBounds(strip);   // two-line hint uses the whole remaining strip height
+    // HUMANIZE / STRUM: BIGGER knobs than the combo row - their cell borrows ~16 px below the strip
+    // (the keyboard is pushed down to match), so the dials read clearly instead of tiny.
+    auto placeKnob = [](juce::Slider& s, juce::Label& l, juce::Rectangle<int> cell) {
+        l.setBounds(cell.removeFromTop(14));
+        s.setBounds(cell.reduced(3, 0));
+    };
+    auto knobArea = strip.removeFromLeft(2 * 62);
+    knobArea.setBottom(knobArea.getBottom() + 16);          // taller cell -> bigger dials (~52 px)
+    placeKnob(humanKnob, lblHuman, knobArea.removeFromLeft(62));
+    placeKnob(strumKnob, lblStrum, knobArea);
+    strip.removeFromLeft(10);
+    lblHint.setBounds(strip);   // hint uses the remaining strip (may wrap to 3 lines)
 
-    r.removeFromTop(6);
+    r.removeFromTop(6 + 16);    // push the keyboard down so the taller knob cell clears it
     kb.setBounds(r);
     // white-key width so the full C1..C7 range fits the panel (43 white keys in 6 octaves)
     kb.setKeyWidth(juce::jmax(8.0f, (float) r.getWidth() / 43.0f));
@@ -3739,6 +3866,7 @@ DrumSequencerEditor::~DrumSequencerEditor()
                              (juce::Button*)&btnTooltips,
                              (juce::Button*)&btnCh8, (juce::Button*)&btnCh16, (juce::Button*)&btnPat16,
                              (juce::Button*)&btnPat32 }) b->setLookAndFeel(nullptr);
+    keysPanel.btnSlot2.setLookAndFeel(nullptr);   // dropBtnLNF
     keysPanel.btnTakes.setLookAndFeel(nullptr);   // dropBtnLNF
     for (auto& s : strips)
     {
@@ -4030,6 +4158,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
     auto mix = [](juce::int64 h, juce::int64 v) { return h * 1000003LL ^ v; };
     auto f   = [](float x) { juce::int64 b = 0; std::memcpy(&b, &x, sizeof(float)); return b; };
     juce::int64 h = 146959810934665603LL;
+    h = mix(h, c.keysSlot2Down);   // slot-2 pitch is part of the SOUND now (rides + refreshes with mixes)
     for (int i = 0; i < DrumChannel::NUM_SOURCES; ++i) { h = mix(h, c.srcOn[i] ? 1 : 0); h = mix(h, f(c.srcWeight[i])); }
     h = mix(h, f(c.padX)); h = mix(h, f(c.padY)); h = mix(h, c.padLayoutB ? 1 : 0);
     // Slots are the runtime source of truth (incl. duplicate engines) - hash them too.
@@ -4039,6 +4168,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         h = mix(h, f(sl.atk)); h = mix(h, f(sl.hold)); h = mix(h, f(sl.dec)); h = mix(h, f(sl.sustain)); h = mix(h, f(sl.release)); h = mix(h, f(sl.vibrato));
         h = mix(h, sl.oscShape); h = mix(h, sl.oscShapeB); h = mix(h, f(sl.oscFreq)); h = mix(h, f(sl.oscPEnvAmt)); h = mix(h, f(sl.oscPEnvTime)); h = mix(h, f(sl.oscPOffset));
         h = mix(h, sl.oscUnison); h = mix(h, f(sl.oscDetune)); h = mix(h, sl.oscUniCenter ? 1 : 0); h = mix(h, sl.oscDetuneMode); h = mix(h, sl.chordMode); h = mix(h, sl.chordUnison);
+        h = mix(h, sl.scaleOn ? 1 : 0); h = mix(h, sl.scaleType); h = mix(h, sl.scaleUnison); h = mix(h, sl.scaleKey);   // SCALE mode
         h = mix(h, sl.fxDriveType); h = mix(h, f(sl.fxDrive)); h = mix(h, f(sl.fxReverbSend)); h = mix(h, f(sl.fxDelaySend));
         h = mix(h, sl.noiseType); h = mix(h, f(sl.noiseCenter)); h = mix(h, f(sl.noiseWidth)); h = mix(h, f(sl.noiseRes)); h = mix(h, f(sl.noiseDrive)); h = mix(h, f(sl.noiseCrackle));
         h = mix(h, f(sl.fmPitch)); h = mix(h, f(sl.fmSpread)); h = mix(h, f(sl.fmDepth)); h = mix(h, f(sl.fmPEnvAmt)); h = mix(h, f(sl.fmPEnvTime)); h = mix(h, f(sl.fmPOffset)); h = mix(h, f(sl.fmFeedback)); h = mix(h, f(sl.fmSub));
@@ -4101,6 +4231,7 @@ juce::int64 DrumSequencerEditor::stateHash() const
             auto& ch = P.channels[c];
             h = mix(h, channelSoundHash(ch));
             h = mix(h, ch.numSteps);
+            h = mix(h, f(ch.humanizeAmt)); h = mix(h, f(ch.strumAmt));   // HUMANIZE / STRUM (per pattern/channel, undoable)
             juce::int64 st = 0; for (int i = 0; i < DrumChannel::MAX_STEPS; ++i) st = (st << 1) | (ch.steps[i] ? 1 : 0);
             h = mix(h, st); h = mix(h, ch.mute ? 1 : 0); h = mix(h, ch.solo ? 2 : 0);
             for (int i = 0; i < ch.numSteps; ++i) { h = mix(h, f(ch.stepVel[i])); h = mix(h, f(ch.stepPitch[i])); h = mix(h, f(ch.stepProb[i])); h = mix(h, f(ch.stepNoteLen[i])); h = mix(h, ch.stepSlide[i] ? 1 : 0); h = mix(h, ch.stepMerge[i] ? 1 : 0); h = mix(h, ch.stepRoll[i]); h = mix(h, f(ch.stepRollDecay[i])); h = mix(h, f(ch.stepPan[i])); h = mix(h, ch.stepCondLen[i]); h = mix(h, ch.stepCondMask[i]); }
@@ -4159,6 +4290,7 @@ void DrumSequencerEditor::resetChannelToDefault(DrumChannel& c, int ch)
     c.srcOn[DrumChannel::SrcPhys] = false; c.srcWeight[DrumChannel::SrcPhys] = 0.0f;
     c.drawMode = false; c.drawVel = 1.0f; c.drawPan = 0.0f;   // fresh channel = step mode
     c.keysSlot2Down = 0;                                      // KEYS slot-2 transpose (channel-wide) resets too
+    c.humanizeAmt = 0.0f; c.strumAmt = 0.0f;                  // HUMANIZE / STRUM default off
     for (int i = 0; i < DrumChannel::DRAW_RES; ++i) c.drawSemi[i] = DrumChannel::DRAW_GAP;
     c.padX = c.padY = 0.5f; c.padLayoutB = false;
     c.layerOscShape = 0; c.layerSineFreq = 60.0f; c.layerSinePEnvAmt = 0.0f; c.layerSinePEnvTime = 0.04f; c.layerSinePOffset = 0.0f;
@@ -4205,6 +4337,7 @@ void DrumSequencerEditor::initChannelMix(int ch)
 void DrumSequencerEditor::writeChannelMix(juce::ValueTree& t, const DrumChannel& ch) const
 {
     t.setProperty("sound",    (int) ch.soundType,    nullptr);
+    t.setProperty("keys2Dn",  ch.keysSlot2Down,      nullptr);   // slot-2 pitch rides with the sound mix
     t.setProperty("userSample", ch.usingUserSample ? ch.userSampleFile.getFullPathName() : juce::String(), nullptr);
     for (int i = 0; i < DrumChannel::NUM_SOURCES; ++i) { t.setProperty("srcOn" + juce::String(i), ch.srcOn[i], nullptr);
                                   t.setProperty("srcW"  + juce::String(i), ch.srcWeight[i], nullptr); }
@@ -4278,6 +4411,7 @@ void DrumSequencerEditor::writeChannelMix(juce::ValueTree& t, const DrumChannel&
 
 void DrumSequencerEditor::readChannelMix(const juce::ValueTree& t, DrumChannel& ch, juce::String& missingSample) const
 {
+    ch.keysSlot2Down = juce::jlimit(-24, 24, (int) t.getProperty("keys2Dn", 0));   // slot-2 pitch (0 for old mix files)
     for (int i = 0; i < DrumChannel::NUM_SOURCES; ++i) { ch.srcOn[i]     = (bool)  t.getProperty("srcOn" + juce::String(i), i == 0);
                                   ch.srcWeight[i] = (float) t.getProperty("srcW"  + juce::String(i), i == 0 ? 1.0f : 0.0f); }
     ch.padX = (float) t.getProperty("padX", 0.5f);
@@ -5145,17 +5279,46 @@ void DrumSequencerEditor::setupComponents()
                                       "- Follow chain, record each: record into EVERY pattern the chain visits - each "
                                       "pattern+channel keeps its own separate takes.\n"
                                       "'key' = recording starts on your first key press; '3s' = a 3-second count-in.");
-    for (int stn = 0; stn <= 24; ++stn)
-        keysPanel.comboSlot2.addItem(stn == 0 ? juce::String("0 st") : ("-" + juce::String(stn) + " st"), stn + 1);
-    keysPanel.comboSlot2.setSelectedId(proc.sequencer.channel(selectedChannel).keysSlot2Down + 1, juce::dontSendNotification);
-    keysPanel.comboSlot2.setTooltip("Slot 2 transpose: how many semitones LOWER slot 2 plays on the keys (slot 1 is "
-                                    "always the pressed pitch). -12 = a classic sub-oscillator an octave down.");
-    keysPanel.comboSlot2.onChange = [this] {
-        if (ignoreKnobCallbacks) return;
-        const int v = keysPanel.comboSlot2.getSelectedId() - 1;
-        proc.sequencer.channel(selectedChannel).keysSlot2Down = v;   // PER pattern/channel now
-        proc.keysSlot2Down.store(v);                                 // global mirror (persist default / old projects)
+    // Slot-2 pitch: a 3-COLUMN popup (no scrolling) covering the full -24..+24 st transpose. + = UP,
+    // - = DOWN. Stored as keysSlot2Down (positive = DOWN, preserving old projects), so trans = -down.
+    keysPanel.btnSlot2.setTooltip("Slot 2 pitch: transpose slot 2 relative to the key you press (-24..+24 "
+                                  "semitones; slot 1 always plays the pressed pitch). -12 = a classic sub-oscillator "
+                                  "an octave down, +12 = an octave up. 0 = both slots at the pressed note.");
+    keysPanel.btnSlot2.onClick = [this] {
+        juce::PopupMenu m;
+        const int cur = -proc.sequencer.channel(selectedChannel).keysSlot2Down;   // musical transpose (+ up)
+        for (int t = 24; t >= -24; --t) {
+            const juce::String lab = t == 0 ? "0 st" : (t > 0 ? "+" + juce::String(t) + " st"
+                                                              : juce::String(t) + " st");
+            m.addItem(t + 100, lab, true, t == cur);   // id = transpose + 100 (never 0)
+        }
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&keysPanel.btnSlot2).withMinimumNumColumns(3),
+            [this](int r) {
+                if (r == 0) return;
+                const int down = -(r - 100);   // stored value is "down" (positive = down)
+                proc.sequencer.channel(selectedChannel).keysSlot2Down = down;
+                proc.keysSlot2Down.store(down);
+                refreshKeysPanel();            // update the button label + the key highlight
+            });
     };
+    // HUMANIZE / STRUM knobs (per pattern/channel feel). Both greyed + untouchable when they'd do
+    // nothing (Humanize needs 2 audible slots; Strum needs a slot in Chord or Scale mode).
+    keysPanel.humanKnob.setTooltip("HUMANIZE (needs 2 sound slots): loosens the two slots so they don't hit "
+        "machine-perfectly - each hit gives slot 2 a tiny random timing offset and both slots a small random "
+        "level change. Like a real player layering two sounds. 0 = locked/off. Faded when only one slot is used.");
+    keysPanel.strumKnob.setTooltip("STRUM (needs Chord or Scale on): spreads a chord's notes in time, low to high, "
+        "like strumming - every hit (keys, steps or drawn) fans the chord out instead of a block. 0 = all notes "
+        "together. Faded when neither slot is in Chord or Scale mode. Works on Oscillator, Modal and Physical.");
+    keysPanel.strumKnob.setColour(juce::Slider::rotarySliderFillColourId, juce::Colour(0xffb46bff));   // violet (chord/scale hue)
+    keysPanel.humanKnob.onValueChange = [this] {
+        if (ignoreKnobCallbacks) return;
+        proc.sequencer.channel(selectedChannel).humanizeAmt = (float) keysPanel.humanKnob.getValue();
+    };
+    keysPanel.strumKnob.onValueChange = [this] {
+        if (ignoreKnobCallbacks) return;
+        proc.sequencer.channel(selectedChannel).strumAmt = (float) keysPanel.strumKnob.getValue();
+    };
+    keysPanel.btnSlot2.setLookAndFeel(&dropBtnLNF);   // dropdown look (triangle) - it's a popup button now
     keysPanel.btnTakes.setLookAndFeel(&dropBtnLNF);   // proper dropdown look (like the sound bank)
     keysPanel.btnTakes.setTooltip("Recorded takes for the CURRENT pattern + selected channel (each pattern loop while "
                                   "recording = one take, up to 20 per pattern+channel; saved with the preset). Click a "
@@ -5895,7 +6058,7 @@ void DrumSequencerEditor::setupComponents()
     content.addAndMakeVisible(slotSelVoice); slotSelVoice.onSelect = pickSlot;   // under UNISON/DETUNE/VIBRATO
     content.addAndMakeVisible(slotSelFx);    slotSelFx.onSelect    = pickSlot;
     setupGroupHeader(hdrPitch, "PITCH ENVELOPE");
-    setupGroupHeader(hdrVoice, "UNISON / DETUNE / VIBRATO");   // sub-title above the voice visual
+    setupGroupHeader(hdrVoice, "UNISON / CHORD / SCALE");   // sub-title above the voice visual (mode chips + detune/vibrato)
     setupGroupHeader(hdrAmpEnv, "AMP ENVELOPE");
     setupGroupHeader(hdrEqBox,  "EQ");
     // === PER-SLOT EQ (begin) - target picker (All / 1 / 2 / 3) ===
@@ -5907,12 +6070,13 @@ void DrumSequencerEditor::setupComponents()
     // Unison / Detune / Vibrato as an interactive VISUAL (like the amp/pitch env editors), editing the
     // selected slot. The 1/2/3 selector (slotSelPitch) above it chooses which slot.
     content.addAndMakeVisible(voiceMod);
-    voiceMod.onChange = [this](int u, float d, float v, bool centre, int detuneMode, int chordMode) {
+    voiceMod.onChange = [this](int u, float d, float v, bool centre, int detuneMode, int chordMode, bool scaleOn, int scaleType, int scaleKey) {
         if (ignoreKnobCallbacks) return;
         auto& sl = proc.sequencer.channel(selectedChannel).slots[envTargetSlot()];
-        if (chordMode > 0) sl.chordUnison = u; else sl.oscUnison = u;   // STD + CHORD keep SEPARATE unison counts
+        if (scaleOn) sl.scaleUnison = u; else if (chordMode > 0) sl.chordUnison = u; else sl.oscUnison = u;   // STD/CHORD/SCALE keep SEPARATE counts
         sl.oscDetune = d; sl.vibrato = v; sl.oscUniCenter = centre; sl.oscDetuneMode = detuneMode;
         sl.chordMode = chordMode;
+        sl.scaleOn = scaleOn; sl.scaleType = scaleType; sl.scaleKey = scaleKey;   // SCALE (diatonic harmonizer)
         proc.sequencer.channel(selectedChannel).markDspDirty();
     };
 
@@ -6785,6 +6949,7 @@ bool DrumSequencerEditor::keysTakeDirty(int idx) const
 
 void DrumSequencerEditor::refreshKeysPanel()
 {
+    keysHighlightNote = -2;   // channel/slot settings may have changed -> recompute the key highlight next tick
     const bool recLive = proc.keysRecording.load() || keysCountdownTicks > 0;
     keysPanel.btnRec.setButtonText(recLive ? juce::String::charToString(0x25A0) + " STOP"    // filled square
                                            : juce::String::charToString(0x25CF) + " REC");   // filled circle
@@ -6799,19 +6964,71 @@ void DrumSequencerEditor::refreshKeysPanel()
                                      + (patTakes >= 20 ? "/20 FULL)" : (presetFull ? " - preset full)" : ")")));
     const bool prevIgnore = ignoreKnobCallbacks;
     ignoreKnobCallbacks = true;
-    keysPanel.comboSlot2.setSelectedId(proc.sequencer.channel(selectedChannel).keysSlot2Down + 1, juce::dontSendNotification);
+    auto& kch = proc.sequencer.channel(selectedChannel);
+    { const int t = -kch.keysSlot2Down;   // musical transpose (+ up / - down)
+      keysPanel.btnSlot2.setButtonText(t == 0 ? "0 st" : (t > 0 ? "+" + juce::String(t) + " st"
+                                                                : juce::String(t) + " st")); }
+    keysPanel.humanKnob.setValue(kch.humanizeAmt, juce::dontSendNotification);
+    keysPanel.strumKnob.setValue(kch.strumAmt,    juce::dontSendNotification);
     ignoreKnobCallbacks = prevIgnore;
+    // HUMANIZE enabled only with 2 audible slots; STRUM only when a slot is in Chord or Scale mode.
+    auto slotAudible = [&](int s){ return kch.slots[s].engine >= 0 && kch.slots[s].weight > 0.001f; };
+    const bool humOk   = slotAudible(0) && slotAudible(1);
+    const bool strumOk = (kch.slots[0].scaleOn || kch.slots[0].chordMode > 0
+                          || kch.slots[1].scaleOn || kch.slots[1].chordMode > 0);
+    keysPanel.humanKnob.setEnabled(humOk); keysPanel.humanKnob.setAlpha(humOk ? 1.0f : 0.4f);
+    keysPanel.lblHuman.setAlpha(humOk ? 1.0f : 0.4f);
+    keysPanel.strumKnob.setEnabled(strumOk); keysPanel.strumKnob.setAlpha(strumOk ? 1.0f : 0.4f);
+    keysPanel.lblStrum.setAlpha(strumOk ? 1.0f : 0.4f);
     // eligibility hint: which slots the keyboard will actually play on this channel
     auto elig = [](int eng) { return eng == DrumChannel::SrcOsc || eng == DrumChannel::SrcPhys || eng == DrumChannel::SrcModal; };
     const auto& c = proc.sequencer.channel(selectedChannel);
     const bool e0 = c.slots[0].engine >= 0 && c.slots[0].weight > 0.0f && elig(c.slots[0].engine);
     const bool e1 = c.slots[1].engine >= 0 && c.slots[1].weight > 0.0f && elig(c.slots[1].engine);
     keysPanel.lblHint.setText(
-        (!e0 && !e1) ? "No keys-playable slot on this channel:\nuse an Analog+FM, Physical or Modal engine."
-                     : juce::String("Playing ") + (e0 ? "slot 1" : "") + (e0 && e1 ? " + " : "") + (e1 ? "slot 2" : "")
-                       + " (mono; a key touch re-tunes Freq to C3)\n"
-                         "Sustain/Release live on the AMP ENVELOPE graph.",
+        (!e0 && !e1) ? "No keys-playable slot here:\nuse Analog+FM, Physical\nor Modal."
+                     : juce::String("Playing ") + (e0 ? "slot 1" : "") + (e0 && e1 ? "+" : "") + (e1 ? "slot 2" : "")
+                       + " (mono; key = C3)\n"
+                         "Sustain/Release: amp-env\n"
+                         "Lit keys = chord/scale notes",
         juce::dontSendNotification);
+}
+
+// Light up the piano keys that the currently-held note actually voices: for each slot, the chord/
+// scale notes (from its own settings + slot-2 transpose) - slot 1 keys yellow, slot 2 keys pink,
+// keys used by BOTH a yellow-pink blend. Cleared when no key is held. Driven by the editor timer so
+// it works for the on-screen keyboard AND external MIDI (both set proc.keysHeldNote).
+void DrumSequencerEditor::updateKeyboardHighlight()
+{
+    const int held = (keysView && detailShown) ? proc.keysHeldNote.load(std::memory_order_relaxed) : -1;
+    if (held == keysHighlightNote) return;                 // nothing changed since last tick
+    keysHighlightNote = held;
+    keysPanel.clearKeyTints();
+    if (held >= 0)
+    {
+        const auto& c = proc.sequencer.channel(selectedChannel);
+        bool used[2][128] = {};
+        for (int s = 0; s < DrumChannel::NUM_SLOTS; ++s)
+        {
+            const auto& sl = c.slots[s];
+            const bool elig = (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal
+                               || sl.engine == DrumChannel::SrcPhys);
+            if (! elig || sl.weight <= 0.001f) continue;   // Sample/Noise/muted slots don't play keys
+            const int base = held - (s == 1 ? c.keysSlot2Down : 0);   // slot-2 transpose
+            auto add = [&](int off) { const int m = base + off; if (m >= 0 && m < 128) used[s][m] = true; };
+            if (sl.scaleOn) { const int nv = juce::jlimit(1, DrumChannel::UNI_MAX, sl.scaleUnison);
+                for (int u = 0; u < nv; ++u) add(DrumChannel::scaleNoteOffset(sl.scaleType, sl.scaleKey, base, u)); }
+            else if (sl.chordMode > 0) { const int nv = juce::jlimit(1, DrumChannel::UNI_MAX, sl.chordUnison);
+                for (int u = 0; u < nv; ++u) add(DrumChannel::chordNoteOffset(sl.chordMode, u)); }
+            else add(0);                                   // plain: just the (transposed) note
+        }
+        const juce::Colour y(0xffe8bf4d), p(0xffe86aa8);   // slot 1 yellow / slot 2 pink (match the sound editor)
+        for (int m = 0; m < 128; ++m)
+            if (used[0][m] && used[1][m]) keysPanel.setKeyTint(m, y.interpolatedWith(p, 0.5f));
+            else if (used[0][m])          keysPanel.setKeyTint(m, y);
+            else if (used[1][m])          keysPanel.setKeyTint(m, p);
+        keysPanel.applyKeyTints();
+    }
 }
 
 // Show the selected slot's amp envelope in the graph.
@@ -6884,7 +7101,7 @@ void DrumSequencerEditor::loadPitchAndVoice()
     // real strings, Modal = 4 banks, Oscillator = 7. (User: "up to 3 for physical but I can select
     // more" - now the handle stops at the real max.)
     voiceMod.setMaxUni((e == DrumChannel::SrcPhys || e == DrumChannel::SrcModal) ? 3 : 7);
-    voiceMod.setValues((int) sl.oscUnison, sl.chordUnison, sl.oscDetune, sl.vibrato, sl.oscUniCenter, sl.oscDetuneMode, sl.chordMode);
+    voiceMod.setValues((int) sl.oscUnison, sl.chordUnison, sl.scaleUnison, sl.oscDetune, sl.vibrato, sl.oscUniCenter, sl.oscDetuneMode, sl.chordMode, sl.scaleOn, sl.scaleType, sl.scaleKey);
     voiceMod.setSupport(uniOn, vibOn, naReason);
 }
 
@@ -7485,6 +7702,7 @@ void DrumSequencerEditor::timerCallback()
             else if (keysGoTicks > 0)   cd = "GO!";
             if (countdownOverlay.label != cd) { countdownOverlay.label = cd; countdownOverlay.repaint(); }
         }
+        updateKeyboardHighlight();   // light up the chord/scale/slot notes of the held key (cheap: change-gated)
         if (proc.keysRecording.load())
         {
             parseKeysEvents();   // live: each finished loop becomes a take while you keep playing
@@ -7779,6 +7997,7 @@ void DrumSequencerEditor::zoomToGroup(juce::Rectangle<int> designRect)
     }
 
     zoomed = true;
+    keysPanel.setVisible(false);   // the KEYS keyboard must not show behind/through the zoom (unzoom's layoutContent restores it)
     zoomCatcher.setVisible(true);
     zoomPanel.setVisible(true);
     zoomCloseBtn.setVisible(true);

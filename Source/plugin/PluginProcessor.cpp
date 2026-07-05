@@ -1177,6 +1177,8 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
     chState.setProperty("midiOut",  ch.midiOut,        nullptr);   // route to MIDI out instead of sound
     chState.setProperty("midiCh",   ch.midiOutChannel, nullptr);   // MIDI out channel (1-16)
     chState.setProperty("keys2Dn",  ch.keysSlot2Down,  nullptr);   // KEYS slot-2 transpose (per pattern/channel)
+    chState.setProperty("humanize", ch.humanizeAmt,    nullptr);   // HUMANIZE: between-slot timing/velocity jitter
+    chState.setProperty("strum",    ch.strumAmt,       nullptr);   // STRUM: chord/scale note time-spread
     chState.setProperty("chokeGrp", ch.chokeGroup,     nullptr);   // choke group (channel-wide)
     chState.setProperty("numSteps", ch.numSteps,       nullptr);
     chState.setProperty("sound",    (int)ch.soundType, nullptr);
@@ -1320,7 +1322,9 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
     ch.outputBus   = (int)  child.getProperty("outBus",  0);
     ch.midiOut     = (bool) child.getProperty("midiOut", false);
     ch.midiOutChannel = juce::jlimit(1, 16, (int) child.getProperty("midiCh", 1));
-    ch.keysSlot2Down  = juce::jlimit(0, 24, (int) child.getProperty("keys2Dn", 0));   // KEYS slot-2 transpose (per channel)
+    ch.keysSlot2Down  = juce::jlimit(-24, 24, (int) child.getProperty("keys2Dn", 0));   // KEYS slot-2 transpose (per channel; +down/-up)
+    ch.humanizeAmt = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("humanize", 0.0f));   // HUMANIZE
+    ch.strumAmt    = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("strum",    0.0f));   // STRUM
     ch.chokeGroup  = (int)  child.getProperty("chokeGrp", 0);
     ch.numSteps    = (int)child.getProperty("numSteps",   8);
     ch.soundType   = (DrumSoundGenerator::Type)(int)child.getProperty("sound", 0);
@@ -1588,7 +1592,7 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
     visibleChannels = (int) state.getProperty("visChans", 8);
     visiblePatterns = juce::jlimit(16, Sequencer::NUM_PATTERNS, (int) state.getProperty("visPats", 16));
     auditionOnEdit.store((bool) state.getProperty("audEdit", true));   // default ON (matches a fresh instance)
-    keysSlot2Down.store(juce::jlimit(0, 24, (int) state.getProperty("keys2Down", 0)));
+    keysSlot2Down.store(juce::jlimit(-24, 24, (int) state.getProperty("keys2Down", 0)));
     keysTakes.clear();
     if (auto kt = state.getChildWithName("KeysTakes"); kt.isValid())
         for (int i = 0; i < kt.getNumChildren(); ++i)
