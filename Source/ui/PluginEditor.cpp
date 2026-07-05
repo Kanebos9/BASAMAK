@@ -6345,9 +6345,11 @@ void DrumSequencerEditor::setupComponents()
         swSmpPreserve[b].onClick = [this, b] { if (!ignoreKnobCallbacks) {
             proc.sequencer.channel(selectedChannel).slots[b].smpPreservePitch = swSmpPreserve[b].getToggleState();
             proc.sequencer.channel(selectedChannel).markDspDirty(); } };
-        swSmpPreserve[b].setTooltip("Preserve pitch (ON by default): the sample plays at its OWN pitch and IGNORES "
-            "step/draw pitch, the pitch envelope and the keyboard - so recording (which writes step pitch) won't "
-            "detune it. Turn OFF to use it as a pitched sampler (keys + step pitch varispeed it).");
+        swSmpPreserve[b].setTooltip("Keep pitch (ON by default): the NOTE you play - the keyboard AND per-step / "
+            "draw pitch - won't transpose this sample, so recording a melody can't detune it. It's applied AFTER "
+            "the pitch ENVELOPE, so the pitch envelope, vibrato and pitch LFO still shape the sound normally. "
+            "Turn OFF to play it as a pitched sampler; when off, a note below C3 simply plays slower and now "
+            "always finishes the whole sample.");
     }
     // PITCH (semitones) = transpose the WHOLE channel - works for every engine (synth freq + sample
     // varispeed), applied via vPitchMul in the render. Same unit as the pitch envelope. Per-channel.
@@ -8645,19 +8647,19 @@ void DrumSequencerEditor::layoutContent()
             if (boxEngine[b] == DrumChannel::SrcSample)
             {
                 waveform[b].setVisible(true);
-                waveform[b].setBounds(sbx[b] + 6, sby[b] + 20, slotW - 12, 52);   // TALLER waveform (toggles moved out)
+                waveform[b].setBounds(sbx[b] + 6, sby[b] + 20, slotW - 12, 46);   // slightly shorter -> room for 3 toggles
                 lblSampleLen[b].setVisible(false);                               // length is a watermark in the waveform now
-                knobTop = sby[b] + 78;
-                // Trim + Reverse + Keep-pitch toggles in a small column LEFT of the knobs (stacked, tight).
+                knobTop = sby[b] + 70;                                            // knobs a bit higher (user)
+                // Trim + Reverse + Keep-pitch toggles stacked LEFT of the knobs - spaced so all 3 fit the box.
                 const int tcW = 52;
-                const int tcx = sbx[b] + 6, ty = knobTop + 4;
+                const int tcx = sbx[b] + 6, ty = knobTop + 2;
                 auto placeTog = [&](juce::Label& l, ToggleSwitch& sw, int yy) {
                     l.setVisible(true); sw.setVisible(true); l.setJustificationType(juce::Justification::centred);
-                    l.setBounds(tcx, yy, tcW, 12); sw.setBounds(tcx + (tcW - 28) / 2, yy + 12, 28, 15);
+                    l.setBounds(tcx, yy, tcW, 11); sw.setBounds(tcx + (tcW - 28) / 2, yy + 12, 28, 14);
                 };
                 placeTog(lblUseRegion[b],     swUseRegion[b],     ty);
-                placeTog(lblSampleReverse[b], swSampleReverse[b], ty + 29);
-                placeTog(lblSmpPreserve[b],   swSmpPreserve[b],   ty + 58);
+                placeTog(lblSampleReverse[b], swSampleReverse[b], ty + 28);
+                placeTog(lblSmpPreserve[b],   swSmpPreserve[b],   ty + 56);   // bottom ~= sby+140, clears the 166px box
                 knobX = sbx[b] + tcW + 6; knobW = slotW - tcW - 6;   // knobs occupy the rest, right of the toggles
             }
             slotEd[b].place(knobX, knobTop, knobW, slotH - (knobTop - sby[b]) - 4);

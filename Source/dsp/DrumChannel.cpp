@@ -1778,6 +1778,18 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 veEnd = juce::jmax(veEnd, v.keyOff + (long)(3.2f * relMax * (float) sr) + 8);
             }
         }
+        // SAMPLE plays to its TRUE end: a varispeed sample (Keep pitch off) pitched DOWN reads SLOWER than
+        // its natural-speed length, and a one-shot sample shouldn't be cut by a key release either. Keep the
+        // voice alive long enough for the head to reach the region end (Keep pitch on = natural length).
+        for (int s = 0; s < NUM_SLOTS; ++s)
+            if (sc[s].engine == SrcSample)
+            {
+                const double keyMul  = std::pow(2.0, (double) v.sv[s].keySemis / 12.0);
+                const double noteMul = sc[s].smpPreserve ? 1.0 : juce::jmax(0.02, vStepMul * keyMul);
+                const long   nat = (long)((double)(sc[s].regHi - sc[s].regLo) * (double) engineOS
+                                          / juce::jmax(0.05, sc[s].speed) / (double) sc[s].slices);
+                veEnd = juce::jmax(veEnd, (long)((double) nat / juce::jmax(0.02, noteMul)) + 8);
+            }
         // KS + Length: the string's own feedback decay is rescaled too (same rule as the env),
         // else a held pluck's loop would die at its authored rate under a slower envelope.
         float ksFbGate[NUM_SLOTS];
@@ -2032,10 +2044,14 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         // A per-step LENGTH gate applies the gated env even when the opt-in sample env is off,
                         // so Length can shorten a sample too (holds full, then releases at the gate).
                         env = (c.smpEnv || sv.gateDec > 0.0f) ? ahdsEnv(t, c.atk, c.hold, sv.gateDec > 0.0f ? sv.gateDec : c.dec, c.sustain, c.release) : 1.0f;
-                        const long fin = (long) (0.003 * sr), fout = (long) (0.010 * sr), endN = (long) c.voiceLenSamp;
-                        if (fin  > 0 && t < fin)          env *= (float) t / (float) fin;
-                        if (fout > 0 && t > endN - fout)  env *= juce::jmax(0.0f, (float)(endN - t) / (float) fout);
                         const double head = sv.smpHead;
+                        const long fin = (long) (0.003 * sr);
+                        if (fin > 0 && t < fin) env *= (float) t / (float) fin;
+                        // Fade the last ~10 ms by POSITION (source frames left before the end), so a pitched-DOWN /
+                        // varispeed sample reads ALL the way to its end instead of being cut at the natural-speed length.
+                        const double foutSrc = juce::jmax(1.0, 0.010 * sr * juce::jmax(0.05, c.speed));
+                        const double toEnd   = (double) c.regHi - head;
+                        if (toEnd < foutSrc) env *= juce::jmax(0.0f, (float)(toEnd / foutSrc));
                         const int idx = (int) head;
                         // Read from THIS slot's own buffer + trim region (per-slot samples).
                         const juce::AudioBuffer<float>* sbuf = c.buf;
@@ -2057,18 +2073,17 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             if (phaseInvert) { sL = -sL; sR = -sR; }
                         }
                         sL *= env * c.smpGain; sR *= env * c.smpGain;   // sample output boost
-                        // Static pitch (channel + slot) is baked into the buffer (SoundTouch) so it doesn't
-                        // change length; here only the TIME-VARYING pitches remain (legacy env + per-step),
-                        // which are varispeed by nature. The 4-dot pitch ENVELOPE (pe3Mul) is varispeed too.
-                        // PRESERVE PITCH: play at the sample's OWN pitch - ignore step/draw pitch (vStepMul),
-                        // the pitch env (smpSemis), vibrato and keySemis (pe3Mul). Off = the old varispeed sampler.
-                        if (c.smpPreserve)
-                            sv.smpHead += c.speed / (double) engineOS;
-                        else {
-                            double smpSemis = 0.0;
-                            if (c.smpPEnvAmt != 0.0f) smpSemis += (double) c.smpPEnvAmt * pitchEnvShape(t, c.smpPEnvTime, c.smpPOffset);
-                            sv.smpHead += c.speed * std::pow(2.0, smpSemis / 12.0) * vStepMul * c.oscVibFac * pe3Mul / (double) engineOS;
-                        }
+                        // Static pitch (channel + slot) is baked into the buffer (SoundTouch). The pitch
+                        // ENVELOPE (sample smpPEnv + the 4-dot pe3Mul), pitch LFO and vibrato ALWAYS apply.
+                        // KEEP PITCH only blocks the NOTE pitch (keys + per-step/draw) - applied AFTER the
+                        // pitch envelope - so recording/step pitch can't detune the sample. Off = full varispeed.
+                        double smpSemis = 0.0;
+                        if (c.smpPEnvAmt != 0.0f) smpSemis += (double) c.smpPEnvAmt * pitchEnvShape(t, c.smpPEnvTime, c.smpPOffset);
+                        const double keyMul  = (sv.keySemis != 0.0f) ? std::pow(2.0, (double) sv.keySemis / 12.0) : 1.0;
+                        const double envPart = std::pow(2.0, smpSemis / 12.0) * (double) c.oscVibFac * (pe3Mul / keyMul);   // env + vib + LFO (no note pitch)
+                        const double advance = c.smpPreserve ? (c.speed * envPart)                        // note pitch blocked
+                                                             : (c.speed * envPart * keyMul * vStepMul);   // + keys + step/draw
+                        sv.smpHead += advance / (double) engineOS;
                         stereo = true;
                         break; }
                     // SrcSynth / SrcWave render REMOVED (v1.2.x) - engines retired, no factory usage.
