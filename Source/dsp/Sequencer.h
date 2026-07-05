@@ -78,8 +78,9 @@ public:
                           long gate = 0;      // gate > 0 = cut the hit after this many samples (per-step Length)
                           long slideLen = 0;      // slide glide time in samples (0 = step has no slide)
                           float slideTo = 0.0f;   // slide TARGET pitch (the NEXT active step's pitch, semitones)
-                          bool  isDraw = false;   // DRAW mode note: use drawPitch + channel drawVel/drawPan
-                          float drawPitch = 0.0f; };
+                          bool  isDraw = false;   // DRAW mode note: use drawPitch + per-column drawVel + channel drawPan
+                          float drawPitch = 0.0f;
+                          float drawVel = 1.0f; };   // per-column velocity (0..1) for this draw note
 
     // [start, end) of step `s` (bar fraction 0..1) with this pattern's swing applied. The
     // MIDI exporter reuses it so exported clips carry the same groove the engine plays.

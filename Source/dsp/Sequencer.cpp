@@ -43,7 +43,7 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
     {
         auto& c = patterns[playPattern].channels[e.channel];   // steps fire from the PLAYING pattern
         if (c.midiOut) return;   // MIDI-out channels make no internal sound (they emit notes in the processor)
-        if (e.isDraw) { c.trigger(c.drawVel, e.drawPitch, c.drawPan, e.gate); return; }   // DRAW mode mono note
+        if (e.isDraw) { c.trigger(e.drawVel, e.drawPitch, c.drawPan, e.gate); return; }   // DRAW mode mono note (per-column vel)
         // Choke groups: a hit FADES OUT (~3 ms) the ringing tails of other channels in the same
         // group (e.g. a closed hi-hat silencing an open one). A hard cut clicked whenever the
         // choking hit was quieter than the tail it cut.
@@ -308,6 +308,7 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
                                                 (colPos - oldPos) / span * (double) spanSamples);
                 TriggerEvent e; e.channel = ch; e.step = 0; e.offset = off; e.gate = gate;
                 e.isDraw = true; e.drawPitch = (float) semi;
+                e.drawVel = (float) c.drawVelC[cc] / 255.0f;   // per-column velocity
                 events.add(e);
             }
             continue;

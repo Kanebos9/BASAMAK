@@ -1110,7 +1110,7 @@ void StepGridComponent::update(const Sequencer& seq, bool hasSolo)
         drawMode[ch] = c.drawMode;
         dVel[ch] = c.drawVel; dPan[ch] = c.drawPan;
         if (c.drawMode)
-            for (int i = 0; i < DrumChannel::DRAW_RES; ++i) drawSemi[ch][i] = c.drawSemi[i];
+            for (int i = 0; i < DrumChannel::DRAW_RES; ++i) { drawSemi[ch][i] = c.drawSemi[i]; drawVelC[ch][i] = c.drawVelC[i]; }
         else if (drawMagCh == ch || drawDragCh == ch)   // channel left draw mode -> tidy overlay/stroke state
         { if (drawMagCh == ch) drawMagCh = -1; if (drawDragCh == ch) drawDragCh = -1; drawReadSemi = -128; }
     }
@@ -1389,23 +1389,87 @@ void StepGridComponent::setDrawVelPan(int ch, int x)
     repaint();
 }
 
+// DRAW ModeVel: set the velocity of the note under the cursor (its whole contiguous segment, so the
+// segment's ONSET - which is what plays - is always updated). Y = level. Only on existing notes.
+void StepGridComponent::setDrawColVel(int ch, juce::Point<int> pos)
+{
+    const bool inOverlay = (drawMagCh == ch);
+    const auto rect = (inOverlay ? drawOverlayRect() : drawRowRect(ch)).withTrimmedTop(inOverlay ? 15 : 0);
+    const int col = drawColAt(pos.x);
+    if (drawSemi[ch][col] == DrumChannel::DRAW_GAP) return;      // no free drawing - only adjust existing notes
+    const float t = juce::jlimit(0.0f, 1.0f, ((float) rect.getBottom() - 4.0f - (float) pos.y)
+                                             / juce::jmax(1.0f, (float) rect.getHeight() - 8.0f));
+    const int v255 = juce::jlimit(0, 255, (int) std::lround(t * 255.0f));
+    const int semi = drawSemi[ch][col];
+    int lo = col; while (lo > 0 && drawSemi[ch][lo - 1] == semi) --lo;
+    int hi = col; while (hi < DrumChannel::DRAW_RES - 1 && drawSemi[ch][hi + 1] == semi) ++hi;
+    for (int c = lo; c <= hi; ++c) drawVelC[ch][c] = (uint8_t) v255;
+    if (onDrawVelWrite) onDrawVelWrite(ch, lo, hi, v255);
+    drawReadVel = v255;
+    repaint();
+}
+
 void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle<int> rect, bool overlay)
 {
-    if (! overlay && (editMode == ModeVel || editMode == ModePan))
-    {   // DRAW mode: Vel/Pan are ONE value for the whole channel (no per-note drawing).
+    if (editMode == ModeVel)
+    {   // DRAW VELOCITY (row OR magnify overlay): per-note bars, height = velocity. Drag a note up/down;
+        // you can't draw new notes here. LENS opens a 4x-tall overlay (like Pitch) for precise edits.
+        const int headH = overlay ? 15 : 0;
+        g.setColour(juce::Colour(overlay ? 0xff1c1c34 : 0xff141426)); g.fillRect(rect);
+        juce::Rectangle<int> lane = rect.withTrimmedTop(headH);
+        const int R = DrumChannel::DRAW_RES;
+        const float cw = (float) lane.getWidth() / (float) R;
+        const bool dim = muted[ch] || (anySolo && ! soloed[ch]);
+        g.setColour(juce::Colour(0x18ffffff)); g.drawHorizontalLine(lane.getY() + 4, (float) lane.getX(), (float) lane.getRight());
+        for (int c = 0; c < R; ) {
+            if (drawSemi[ch][c] == DrumChannel::DRAW_GAP) { ++c; continue; }
+            const int semi = drawSemi[ch][c]; int e = c; while (e < R && drawSemi[ch][e] == semi) ++e;
+            const float v = (float) drawVelC[ch][c] / 255.0f;
+            const float x0 = (float) lane.getX() + (float) c * cw, x1 = (float) lane.getX() + (float) e * cw;
+            const float h = juce::jmax(2.0f, v * ((float) lane.getHeight() - 8.0f));
+            g.setColour(dim ? juce::Colour(0xff5f6a78) : juce::Colour(0xff2f9e57));
+            g.fillRect(juce::Rectangle<float>(x0 + 0.5f, (float) lane.getBottom() - 4.0f - h, juce::jmax(1.5f, x1 - x0 - 1.0f), h));
+            c = e;
+        }
+        if (playBarFrac > 0.0f) { const float px = (float) lane.getX() + playBarFrac * (float) lane.getWidth();
+            g.setColour(juce::Colour(0x88ffcc33)); g.fillRect(juce::Rectangle<float>(px - 0.5f, (float) lane.getY(), 1.0f, (float) lane.getHeight())); }
+        if (drawReadVel >= 0) {
+            const float fs = overlay ? 34.0f : juce::jmin(30.0f, (float) rect.getHeight() * 0.7f);
+            g.setColour(juce::Colours::white.withAlpha(0.16f)); g.setFont(juce::Font(fs, juce::Font::bold));
+            g.drawText(juce::String((int) std::lround((float) drawReadVel / 255.0f * 100.0f)) + "%",
+                       rect.getRight() - 150, rect.getY() + headH, 146, rect.getHeight() - headH, juce::Justification::centredRight, false);
+        }
+        if (! overlay) {   // LENS button + hint
+            juce::Rectangle<float> lb((float) rect.getX() + 2.0f, (float) rect.getY() + 2.0f, 18.0f, 15.0f);
+            g.setColour(juce::Colour(0x33ffffff)); g.fillRoundedRectangle(lb, 3.0f);
+            g.setColour(juce::Colour(0xcce8e8f4));
+            g.drawEllipse(lb.getX() + 3.0f, lb.getY() + 3.0f, 7.0f, 7.0f, 1.4f);
+            g.drawLine(lb.getX() + 9.5f, lb.getY() + 9.5f, lb.getX() + 13.5f, lb.getY() + 12.5f, 1.6f);
+            g.setColour(juce::Colour(0x99ffffff)); g.setFont(juce::Font(9.5f, juce::Font::bold));
+            g.drawText("VEL: drag notes up/down", rect.getX() + 24, rect.getY() + 2, 220, 11, juce::Justification::topLeft, false);
+        } else {           // overlay header: title + close X
+            g.setColour(juce::Colour(0xff262646)); g.fillRect(rect.getX(), rect.getY(), rect.getWidth(), headH);
+            g.setColour(juce::Colour(0xffb8b8d0)); g.setFont(juce::Font(9.5f, juce::Font::bold));
+            g.drawText("VELOCITY - drag notes up/down", rect.getX() + 6, rect.getY() + 1, 260, headH - 2, juce::Justification::centredLeft, false);
+            juce::Rectangle<int> cl(rect.getRight() - 18, rect.getY() + 1, 15, headH - 2);
+            g.setColour(juce::Colour(0xff5a2a2a)); g.fillRoundedRectangle(cl.toFloat(), 3.0f);
+            g.setColour(juce::Colours::white); g.setFont(juce::Font(11.0f, juce::Font::bold)); g.drawText("x", cl, juce::Justification::centred, false);
+            g.setColour(juce::Colours::white.withAlpha(0.85f)); g.drawRect(rect, 2);
+        }
+        if (ch == selectedRow && ! overlay) { g.setColour(juce::Colour(0xffff3b30)); g.drawRect(rect.reduced(1), 2); }
+        return;
+    }
+    if (! overlay && editMode == ModePan)
+    {   // DRAW mode PAN: still ONE value for the whole drawn line.
         g.setColour(juce::Colour(0xff141426)); g.fillRect(rect);
-        const bool isPan = (editMode == ModePan);
-        const float v = isPan ? (dPan[ch] * 0.5f + 0.5f) : dVel[ch];
+        const float v = dPan[ch] * 0.5f + 0.5f;
         auto bar = rect.reduced(6, 8).toFloat();
         g.setColour(juce::Colour(0xff26263c)); g.fillRoundedRectangle(bar, 3.0f);
-        g.setColour(isPan ? juce::Colour(0xff8a6bff) : juce::Colour(0xff2f9e57));
-        if (isPan) { const float cx = bar.getCentreX(), x = bar.getX() + v * bar.getWidth();
-                     g.fillRect(juce::Rectangle<float>(juce::jmin(cx, x), bar.getY(), std::abs(x - cx), bar.getHeight())); }
-        else       { g.fillRoundedRectangle(bar.withWidth(juce::jmax(2.0f, v * bar.getWidth())), 3.0f); }
+        g.setColour(juce::Colour(0xff8a6bff));
+        const float cx = bar.getCentreX(), x = bar.getX() + v * bar.getWidth();
+        g.fillRect(juce::Rectangle<float>(juce::jmin(cx, x), bar.getY(), std::abs(x - cx), bar.getHeight()));
         g.setColour(juce::Colours::white.withAlpha(0.85f)); g.setFont(juce::Font(11.0f, juce::Font::bold));
-        g.drawText(isPan ? ("Pan " + juce::String((int) std::lround(dPan[ch] * 100.0f)))
-                         : ("Vel " + juce::String((int) std::lround(dVel[ch] * 100.0f)) + "%"),
-                   rect, juce::Justification::centred, false);
+        g.drawText("Pan " + juce::String((int) std::lround(dPan[ch] * 100.0f)), rect, juce::Justification::centred, false);
         if (ch == selectedRow) { g.setColour(juce::Colour(0xffff3b30)); g.drawRect(rect.reduced(1), 2); }
         return;
     }
@@ -1715,23 +1779,19 @@ void StepGridComponent::mouseDoubleClick(const juce::MouseEvent& e)
 
 void StepGridComponent::mouseMove(const juce::MouseEvent& e)
 {
-    // DRAW hover read-out: show the semitone of the note under the cursor (overlay or row).
+    // DRAW hover read-out: the note under the cursor - its semitone (Pitch) or velocity% (Vel).
     const auto p = e.getPosition();
-    int prev = drawReadSemi; drawReadSemi = -128;
-    if (drawMagCh >= 0 && drawOverlayRect().withTrimmedTop(15).contains(p))
-    {
-        const int semi = drawSemi[drawMagCh][drawColAt(p.x)];
-        if (semi != DrumChannel::DRAW_GAP) drawReadSemi = semi;
+    const int prevSemi = drawReadSemi, prevVel = drawReadVel;
+    drawReadSemi = -128; drawReadVel = -1;
+    int hch = -1;
+    if (drawMagCh >= 0 && drawOverlayRect().withTrimmedTop(15).contains(p)) hch = drawMagCh;
+    else { const int dch = firstRow + (p.y >= 0 ? p.y / juce::jmax(1, rowH) : -1);
+           if (dch >= 0 && dch < NCH && drawMode[dch]) hch = dch; }
+    if (hch >= 0) {
+        const int col = drawColAt(p.x), semi = drawSemi[hch][col];
+        if (semi != DrumChannel::DRAW_GAP) { if (editMode == ModeVel) drawReadVel = drawVelC[hch][col]; else drawReadSemi = semi; }
     }
-    else
-    {
-        const int dch = firstRow + (p.y >= 0 ? p.y / juce::jmax(1, rowH) : -1);
-        if (dch >= 0 && dch < NCH && drawMode[dch]) {
-            const int semi = drawSemi[dch][drawColAt(p.x)];
-            if (semi != DrumChannel::DRAW_GAP) drawReadSemi = semi;
-        }
-    }
-    if (drawReadSemi != prev) repaint();
+    if (drawReadSemi != prevSemi || drawReadVel != prevVel) repaint();
 }
 
 void StepGridComponent::mouseDown(const juce::MouseEvent& e)
@@ -1746,7 +1806,9 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
         if (ov.contains(p))
         {
             const int hy = ov.getY();
-            if (juce::Rectangle<int>(ov.getRight() - 18, hy + 1, 15, 13).contains(p)) { drawMagCh = -1; drawReadSemi = -128; repaint(); return; }  // close
+            if (juce::Rectangle<int>(ov.getRight() - 18, hy + 1, 15, 13).contains(p)) { drawMagCh = -1; drawReadSemi = -128; drawReadVel = -1; repaint(); return; }  // close (both modes)
+            if (editMode == ModeVel)   // VELOCITY overlay: no range radios; drag a note up/down
+            { if (p.y > hy + 15) { drawDragCh = drawMagCh; setDrawColVel(drawMagCh, p); } return; }
             static const int ranges[4] = { 6, 12, 24, 36 };
             for (int i = 0; i < 4; ++i)
                 if (juce::Rectangle<int>(ov.getX() + 4 + i * 38, hy + 1, 34, 13).contains(p)) { drawRange = ranges[i]; repaint(); return; }   // range radio
@@ -1754,7 +1816,7 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
             { drawDragCh = drawMagCh; drawErase = e.mods.isRightButtonDown(); drawLastCol = -1; drawStrokeTo(drawMagCh, p); }
             return;
         }
-        drawMagCh = -1; drawReadSemi = -128; repaint();   // click outside the overlay closes it
+        drawMagCh = -1; drawReadSemi = -128; drawReadVel = -1; repaint();   // click outside the overlay closes it
         return;
     }
     {
@@ -1762,9 +1824,14 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
         if (dch >= 0 && dch < NCH && drawMode[dch])
         {
             if (onChannelSelected) onChannelSelected(dch);
-            if (editMode == ModeVel || editMode == ModePan) { drawDragCh = dch; setDrawVelPan(dch, p.x); return; }  // whole-channel Vel/Pan
             const auto row = drawRowRect(dch);
-            if (juce::Rectangle<int>(row.getX() + 2, row.getY() + 2, 18, 16).contains(p)) { drawMagCh = dch; drawRange = 36; repaint(); return; }  // lens -> open overlay
+            const bool onLens = juce::Rectangle<int>(row.getX() + 2, row.getY() + 2, 18, 16).contains(p);
+            if (editMode == ModeVel)  {
+                if (onLens) { drawMagCh = dch; repaint(); return; }                 // lens -> velocity overlay
+                drawDragCh = dch; setDrawColVel(dch, p); return;                     // per-note velocity (drag existing)
+            }
+            if (editMode == ModePan)  { drawDragCh = dch; setDrawVelPan(dch, p.x); return; } // whole-channel Pan
+            if (onLens) { drawMagCh = dch; drawRange = 36; repaint(); return; }  // lens -> pitch overlay
             drawDragCh = dch; drawErase = e.mods.isRightButtonDown(); drawLastCol = -1;
             drawStrokeTo(dch, p);
             return;
@@ -1849,7 +1916,9 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
 
 void StepGridComponent::mouseDrag(const juce::MouseEvent& e)
 {
-    if (drawDragCh >= 0) { if (editMode == ModeVel || editMode == ModePan) setDrawVelPan(drawDragCh, e.getPosition().x); else drawStrokeTo(drawDragCh, e.getPosition()); return; }
+    if (drawDragCh >= 0) { if (editMode == ModeVel) setDrawColVel(drawDragCh, e.getPosition());
+                           else if (editMode == ModePan) setDrawVelPan(drawDragCh, e.getPosition().x);
+                           else drawStrokeTo(drawDragCh, e.getPosition()); return; }
     if (e.mods.isRightButtonDown() || e.mods.isPopupMenu()) return;
     if (editMode == ModeSteps) { handleClick(e.getPosition(), false); return; }
     if (editMode == ModeProb)
@@ -1873,7 +1942,7 @@ void StepGridComponent::mouseDrag(const juce::MouseEvent& e)
 
 void StepGridComponent::mouseUp(const juce::MouseEvent&)
 {
-    if (drawDragCh >= 0) { drawDragCh = -1; drawLastCol = -1; drawReadSemi = -128; repaint(); return; }   // draw stroke ended
+    if (drawDragCh >= 0) { drawDragCh = -1; drawLastCol = -1; drawReadSemi = -128; drawReadVel = -1; repaint(); return; }   // draw stroke ended
     // Loop-condition: a plain CLICK (no drag) toggles the bar under the cursor.
     if (editMode == ModeProb && condDragCh >= 0)
     {
@@ -2618,7 +2687,10 @@ VoiceModDisplay::Geo VoiceModDisplay::geom() const
 {
     auto b = getLocalBounds().toFloat().reduced(8.0f, 6.0f);
     Geo q;
-    q.left = b.getX(); q.right = b.getRight(); q.top = b.getY() + 10.0f; q.bottom = b.getBottom() - 2.0f;
+    // q.top sits BELOW the mode chips (chip band = b.top+3 .. b.top+16) so a dot dragged all the way up
+    // (and its label ~20 px above it) can't overlap the UNISON/CHORD/SCALE chips.
+    q.left = b.getX(); q.right = b.getRight(); q.top = b.getY() + 22.0f; q.bottom = b.getBottom() - 2.0f;
+    q.uniTop = q.top + 8.0f;   // the unison dot (left) tops out a bit LOWER so it clears the chips too
     q.cy = (q.top + q.bottom) * 0.5f; q.hh = (q.bottom - q.top) * 0.5f - 2.0f;
     const float w = q.right - q.left;
     q.uX = q.left + w * 0.16f;   // Unison handle (left)
@@ -2641,7 +2713,7 @@ int VoiceModDisplay::nearestHandle(juce::Point<float> p) const
 {
     const Geo q = geom();
     juce::Point<float> pts[3] = {
-        { q.uX, q.bottom - (float)(curUni() - 1) / (float)(juce::jmax(1, maxUni - 1)) * (q.bottom - q.top) },  // 0 Unison
+        { q.uX, q.bottom - (float)(curUni() - 1) / (float)(juce::jmax(1, maxUni - 1)) * (q.bottom - q.uniTop) },  // 0 Unison
         { q.dPtX, q.dPtY },                                                                 // 1 Detune (mode-aware)
         { q.vX, q.rootY - vib * q.upRange } };                                              // 2 Vibrato
     int best = -1; float bd = 22.0f * 22.0f;
@@ -2774,7 +2846,7 @@ void VoiceModDisplay::paint(juce::Graphics& g)
         g.drawText(lbl, juce::Rectangle<float>(x - 24, y - 18, 48, 12), juce::Justification::centred, false);
     };
     if (uniOn) {
-        const float uy = q.bottom - (float)(curUni() - 1) / (float)(juce::jmax(1, maxUni - 1)) * (q.bottom - q.top);
+        const float uy = q.bottom - (float)(curUni() - 1) / (float)(juce::jmax(1, maxUni - 1)) * (q.bottom - q.uniTop);
         handle(q.uX, uy, juce::Colour(0xff35c0ff), 0, juce::String(curUni()) + "x");
         if (scaleOn) {
             // SCALE: the detune dot picks the SCALE TYPE. Show just the scale name + key - NOT fixed
@@ -2840,7 +2912,7 @@ void VoiceModDisplay::mouseDrag(const juce::MouseEvent& e)
 {
     if (drag < 0) return;
     const Geo q = geom();
-    if (drag == 0) { int& tgt = scaleOn ? uniScale : (chord > 0) ? uniChord : uni; tgt = juce::jlimit(1, maxUni, 1 + juce::roundToInt((q.bottom - e.position.y) / juce::jmax(1.0f, q.bottom - q.top) * (float)(maxUni - 1))); }
+    if (drag == 0) { int& tgt = scaleOn ? uniScale : (chord > 0) ? uniChord : uni; tgt = juce::jlimit(1, maxUni, 1 + juce::roundToInt((q.bottom - e.position.y) / juce::jmax(1.0f, q.bottom - q.uniTop) * (float)(maxUni - 1))); }
     else if (drag == 1) {
         const float t = juce::jlimit(0.0f, 1.0f, (q.rootY - e.position.y) / juce::jmax(1.0f, q.upRange));   // 0 at the root line -> 1 near the top
         if (scaleOn)          scaleType = juce::jlimit(0, kNumScales - 1, juce::roundToInt(t * (float)(kNumScales - 1)));   // SCALE type
@@ -3371,11 +3443,17 @@ KeysPanel::KeysPanel()
     auto knob = [this](juce::Slider& s) {
         addAndMakeVisible(s);
         s.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-        s.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+        s.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 46, 12);   // LIVE % read-out under the dial
         s.setRange(0.0, 1.0, 0.01); s.setDoubleClickReturnValue(true, 0.0);
+        s.textFromValueFunction = [](double v) { return juce::String(juce::roundToInt(v * 100.0)) + "%"; };
+        s.valueFromTextFunction = [](const juce::String& t) { return t.getDoubleValue() / 100.0; };
         s.setColour(juce::Slider::rotarySliderFillColourId, juce::Colour(0xffe8bf4d));
+        s.setColour(juce::Slider::textBoxTextColourId,    juce::Colour(0xffc8d0e0));
+        s.setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+        s.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
     };
-    knob(humanKnob); knob(strumKnob);
+    knob(humanKnob); knob(strumKnob); knob(minVelKnob); knob(maxVelKnob);
+    maxVelKnob.setValue(1.0);   // default full
     addAndMakeVisible(btnRec);
     btnRec.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
     addAndMakeVisible(btnTakes);
@@ -3387,11 +3465,12 @@ KeysPanel::KeysPanel()
         l.setColour(juce::Label::textColourId, juce::Colour(0xff8090b0));
     };
     lab(lblRecMode, "Record mode"); lab(lblSlot2, "Slot 2 pitch");
-    lab(lblHuman, "Humanize"); lab(lblStrum, "Strum");
+    lab(lblHuman, "Humanize"); lab(lblStrum, "Strum"); lab(lblMinVel, "Min vel"); lab(lblMaxVel, "Max vel");
     lab(lblHint, "");
-    lblHint.setFont(juce::Font(13.5f));                    // readable (was tiny)
+    lblHint.setFont(juce::Font(12.0f));
     lblHint.setColour(juce::Label::textColourId, juce::Colour(0xffb8c4dc));
-    lblHint.setJustificationType(juce::Justification::topRight);
+    lblHint.setJustificationType(juce::Justification::centredLeft);
+    lblHint.setMinimumHorizontalScale(0.85f);
 }
 
 void KeysPanel::resized()
@@ -3410,24 +3489,26 @@ void KeysPanel::resized()
     strip.removeFromLeft(6);
     place(comboRecMode, &lblRecMode, 224);
     strip.removeFromLeft(6);
-    place(btnTakes,     nullptr,     132);
+    place(btnTakes,     nullptr,      96);   // smaller (user: shrink Takes/Slot2 to fit the knobs, not the knobs)
     strip.removeFromLeft(6);
-    place(btnSlot2,     &lblSlot2,   104);
+    place(btnSlot2,     &lblSlot2,    74);   // smaller ("+12 st" still fits)
     strip.removeFromLeft(10);
-    // HUMANIZE / STRUM: BIGGER knobs than the combo row - their cell borrows ~16 px below the strip
-    // (the keyboard is pushed down to match), so the dials read clearly instead of tiny.
+    // HUMANIZE / STRUM / MIN / MAX VEL: full-size dials (their cell borrows ~16 px below the strip; the
+    // keyboard is pushed down to match) - kept big on purpose; the Takes/Slot2 dropdowns shrank instead.
     auto placeKnob = [](juce::Slider& s, juce::Label& l, juce::Rectangle<int> cell) {
         l.setBounds(cell.removeFromTop(14));
         s.setBounds(cell.reduced(3, 0));
     };
-    auto knobArea = strip.removeFromLeft(2 * 62);
-    knobArea.setBottom(knobArea.getBottom() + 16);          // taller cell -> bigger dials (~52 px)
-    placeKnob(humanKnob, lblHuman, knobArea.removeFromLeft(62));
-    placeKnob(strumKnob, lblStrum, knobArea);
+    auto knobArea = strip.removeFromLeft(4 * 62);
+    knobArea.setBottom(knobArea.getBottom() + 28);          // taller cell: big dial (~50 px) + the % read-out under it
+    placeKnob(humanKnob,  lblHuman,  knobArea.removeFromLeft(62));
+    placeKnob(strumKnob,  lblStrum,  knobArea.removeFromLeft(62));
+    placeKnob(minVelKnob, lblMinVel, knobArea.removeFromLeft(62));
+    placeKnob(maxVelKnob, lblMaxVel, knobArea);
     strip.removeFromLeft(10);
-    lblHint.setBounds(strip);   // hint uses the remaining strip (may wrap to 3 lines)
+    lblHint.setBounds(strip);   // hint uses the remaining strip (left-aligned, may wrap)
 
-    r.removeFromTop(6 + 16);    // push the keyboard down so the taller knob cell clears it
+    r.removeFromTop(6 + 28);    // push the keyboard down so the taller knob cell (dial + read-out) clears it
     kb.setBounds(r);
     // white-key width so the full C1..C7 range fits the panel (43 white keys in 6 octaves)
     kb.setKeyWidth(juce::jmax(8.0f, (float) r.getWidth() / 43.0f));
@@ -4175,7 +4256,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         h = mix(h, f(sl.physFreq)); h = mix(h, f(sl.physTone)); h = mix(h, f(sl.physMaterial)); h = mix(h, f(sl.physPosition)); h = mix(h, f(sl.physPEnvAmt)); h = mix(h, f(sl.physPEnvTime)); h = mix(h, f(sl.physPOffset)); h = mix(h, f(sl.physStiff)); h = mix(h, sl.physExcite);
         h = mix(h, f(sl.smpSpeed)); h = mix(h, f(sl.smpCrush)); h = mix(h, f(sl.smpPitch)); h = mix(h, f(sl.smpPEnvAmt)); h = mix(h, f(sl.smpPEnvTime)); h = mix(h, f(sl.smpPOffset)); h = mix(h, sl.smpReverse ? 1 : 0); h = mix(h, sl.smpUseRegion ? 1 : 0);
         h = mix(h, f(sl.smpStart)); h = mix(h, f(sl.smpEnd)); h = mix(h, sl.smpSlices); h = mix(h, f(sl.smpStretch)); h = mix(h, f(sl.smpGain));
-        h = mix(h, sl.smpEnvOn ? 1 : 0); h = mix(h, sl.fmEnvFollow ? 1 : 0); h = mix(h, f(sl.modalMorph));
+        h = mix(h, sl.smpEnvOn ? 1 : 0); h = mix(h, sl.smpPreservePitch ? 1 : 0); h = mix(h, sl.fmEnvFollow ? 1 : 0); h = mix(h, f(sl.modalMorph));
         h = mix(h, sl.smpRegN); for (int r = 0; r < DrumChannel::Slot::MAXREG; ++r) { h = mix(h, f(sl.smpRegLo[r])); h = mix(h, f(sl.smpRegHi[r])); }
         h = mix(h, (juce::int64) c.slotSample[b].file.getFullPathName().hashCode64());   // this slot's sample
         h = mix(h, f(sl.oscFold)); h = mix(h, f(sl.oscLevel)); h = mix(h, f(sl.noiseLevel)); h = mix(h, f(sl.resonAmt)); h = mix(h, f(sl.resonDrive));
@@ -4231,13 +4312,13 @@ juce::int64 DrumSequencerEditor::stateHash() const
             auto& ch = P.channels[c];
             h = mix(h, channelSoundHash(ch));
             h = mix(h, ch.numSteps);
-            h = mix(h, f(ch.humanizeAmt)); h = mix(h, f(ch.strumAmt));   // HUMANIZE / STRUM (per pattern/channel, undoable)
+            h = mix(h, f(ch.humanizeAmt)); h = mix(h, f(ch.strumAmt)); h = mix(h, f(ch.keysMinVel)); h = mix(h, f(ch.keysMaxVel));   // HUMANIZE / STRUM / min+max-vel (undoable)
             juce::int64 st = 0; for (int i = 0; i < DrumChannel::MAX_STEPS; ++i) st = (st << 1) | (ch.steps[i] ? 1 : 0);
             h = mix(h, st); h = mix(h, ch.mute ? 1 : 0); h = mix(h, ch.solo ? 2 : 0);
             for (int i = 0; i < ch.numSteps; ++i) { h = mix(h, f(ch.stepVel[i])); h = mix(h, f(ch.stepPitch[i])); h = mix(h, f(ch.stepProb[i])); h = mix(h, f(ch.stepNoteLen[i])); h = mix(h, ch.stepSlide[i] ? 1 : 0); h = mix(h, ch.stepMerge[i] ? 1 : 0); h = mix(h, ch.stepRoll[i]); h = mix(h, f(ch.stepRollDecay[i])); h = mix(h, f(ch.stepPan[i])); h = mix(h, ch.stepCondLen[i]); h = mix(h, ch.stepCondMask[i]); }
             h = mix(h, ch.drawMode ? 1 : 0);
             if (ch.drawMode) { h = mix(h, f(ch.drawVel)); h = mix(h, f(ch.drawPan));
-                for (int i = 0; i < DrumChannel::DRAW_RES; ++i) h = mix(h, (int) ch.drawSemi[i] + 128); }
+                for (int i = 0; i < DrumChannel::DRAW_RES; ++i) { h = mix(h, (int) ch.drawSemi[i] + 128); h = mix(h, (int) ch.drawVelC[i]); } }
         }
     }
     h = mix(h, f(s.standaloneBpm)); h = mix(h, s.timeSigNum); h = mix(h, s.timeSigDen);
@@ -4290,8 +4371,8 @@ void DrumSequencerEditor::resetChannelToDefault(DrumChannel& c, int ch)
     c.srcOn[DrumChannel::SrcPhys] = false; c.srcWeight[DrumChannel::SrcPhys] = 0.0f;
     c.drawMode = false; c.drawVel = 1.0f; c.drawPan = 0.0f;   // fresh channel = step mode
     c.keysSlot2Down = 0;                                      // KEYS slot-2 transpose (channel-wide) resets too
-    c.humanizeAmt = 0.0f; c.strumAmt = 0.0f;                  // HUMANIZE / STRUM default off
-    for (int i = 0; i < DrumChannel::DRAW_RES; ++i) c.drawSemi[i] = DrumChannel::DRAW_GAP;
+    c.humanizeAmt = 0.0f; c.strumAmt = 0.0f; c.keysMinVel = 0.0f; c.keysMaxVel = 1.0f;   // HUMANIZE / STRUM / vel range default
+    for (int i = 0; i < DrumChannel::DRAW_RES; ++i) { c.drawSemi[i] = DrumChannel::DRAW_GAP; c.drawVelC[i] = 255; }
     c.padX = c.padY = 0.5f; c.padLayoutB = false;
     c.layerOscShape = 0; c.layerSineFreq = 60.0f; c.layerSinePEnvAmt = 0.0f; c.layerSinePEnvTime = 0.04f; c.layerSinePOffset = 0.0f;
     c.oscUnison = 1; c.oscDetune = 0.0f; c.oscSustain = 0.0f; c.fmSustain = 0.0f; c.physSustain = 0.0f;
@@ -4980,14 +5061,31 @@ void DrumSequencerEditor::setupComponents()
                          "which toggle steps rather than being MIDI-learnable)");
 
     // Clickable version next to the logo -> opens the GitHub Releases page (check for updates).
+    // ONE tall click-area (empty HyperlinkButton) covers the version + the "Check/Updates" caption; two
+    // Labels on top (non-intercepting) draw the text at FIXED rows so they never overlap (a topLeft-
+    // justified HyperlinkButton still vertically-centred its text -> it collided with the caption).
     content.addAndMakeVisible(verLink);
-    verLink.setButtonText("v" BASAMAK_VERSION);
+    verLink.setButtonText({});
     verLink.setURL(juce::URL("https://github.com/Kanebos9/BASAMAK/releases"));   // ALL releases (latest + history), not /latest
-    verLink.setFont(juce::Font(11.5f, juce::Font::bold), false, juce::Justification::centredLeft);
-    verLink.setColour(juce::HyperlinkButton::textColourId, juce::Colour(0xffe8bf4d));   // brand gold - inviting
-    verLink.setTooltip("BASAMAK v" BASAMAK_VERSION " - click to open GitHub Releases (the latest version plus every previous release).\n\n"
+    verLink.setTooltip("BASAMAK v" BASAMAK_VERSION " - click to check for updates: opens GitHub Releases (the latest "
+                       "version plus every previous release).\n\n"
                        "Installed a newer version but this still shows the old number? Rescan your plugins "
                        "in your DAW/host and reopen the project - the DAW may have cached the old build.");
+    content.addAndMakeVisible(lblVersion);
+    lblVersion.setText("v" BASAMAK_VERSION, juce::dontSendNotification);
+    lblVersion.setFont(juce::Font(11.5f, juce::Font::bold));
+    lblVersion.setJustificationType(juce::Justification::centred);   // share the caption's centre axis (tidy stack)
+    lblVersion.setColour(juce::Label::textColourId, juce::Colour(0xffe8bf4d));   // brand gold
+    lblVersion.setInterceptsMouseClicks(false, false);
+    lblVersion.setBorderSize(juce::BorderSize<int>(0));
+    content.addAndMakeVisible(lblCheckUpd);
+    lblCheckUpd.setText("Check\nUpdates", juce::dontSendNotification);
+    lblCheckUpd.setFont(juce::Font(8.5f, juce::Font::bold));
+    lblCheckUpd.setJustificationType(juce::Justification::centredTop);
+    lblCheckUpd.setColour(juce::Label::textColourId, juce::Colour(0xffb98a2e));   // dimmer gold (reads as part of the link)
+    lblCheckUpd.setMinimumHorizontalScale(0.8f);
+    lblCheckUpd.setInterceptsMouseClicks(false, false);
+    lblCheckUpd.setBorderSize(juce::BorderSize<int>(0));
 
     // MIDI menu (dropdown): Save / load the current pattern's note grid + clear MIDI-learn.
     content.addAndMakeVisible(comboMidi);
@@ -5115,7 +5213,12 @@ void DrumSequencerEditor::setupComponents()
     content.addAndMakeVisible(dragMidi);
     dragMidi.getMidiFile = [this] { return proc.exportMidiFile(selectedChannel); };
     dragMidi.setTooltip("Dragging pitch values works for selected channel, not for the whole pattern. It is useful "
-                        "when steps have different pitch values.");
+                        "when steps have different pitch values. Pitched slots (Oscillator/Modal/Physical) export "
+                        "from their own Freq knob; a slot in CHORD or SCALE mode exports its FULL voicing (every "
+                        "chord note), and both slots export together. A channel with only Sample/Noise exports its "
+                        "step/draw pitch on the channel's own note (no fixed anchor). If your MIDI lands transposed, "
+                        "check the Freq knobs on the sound slots: they set the 0-point of the pitch (playing the keys "
+                        "re-bases them to C3 automatically).");
 
 
     // Preset menu
@@ -5318,38 +5421,67 @@ void DrumSequencerEditor::setupComponents()
         if (ignoreKnobCallbacks) return;
         proc.sequencer.channel(selectedChannel).strumAmt = (float) keysPanel.strumKnob.getValue();
     };
+    keysPanel.minVelKnob.setTooltip("MIN VELOCITY: the softest a played key can sound. Your key velocity is remapped "
+        "so the quietest press = this level and the hardest = full. Turn up if soft playing (or a light "
+        "controller) gets too quiet or drops out. 0 = off (raw velocity).");
+    keysPanel.minVelKnob.setColour(juce::Slider::rotarySliderFillColourId, juce::Colour(0xff5ad17a));
+    keysPanel.minVelKnob.onValueChange = [this] {
+        if (ignoreKnobCallbacks) return;
+        auto& ch = proc.sequencer.channel(selectedChannel);
+        ch.keysMinVel = (float) keysPanel.minVelKnob.getValue();
+        if (ch.keysMaxVel < ch.keysMinVel) {   // Min pushes Max up (they can't cross)
+            ch.keysMaxVel = ch.keysMinVel;
+            keysPanel.maxVelKnob.setValue(ch.keysMaxVel, juce::dontSendNotification);
+        }
+    };
+    keysPanel.maxVelKnob.setTooltip("MAX VELOCITY: the loudest a played key can sound. Your key velocity is remapped "
+        "so the hardest press = this level. Turn down to tame a heavy hand or an aggressive controller. "
+        "1 = off (full). Min/Max together map [soft..hard] -> [min..max].");
+    keysPanel.maxVelKnob.setColour(juce::Slider::rotarySliderFillColourId, juce::Colour(0xff5ad17a));
+    keysPanel.maxVelKnob.onValueChange = [this] {
+        if (ignoreKnobCallbacks) return;
+        auto& ch = proc.sequencer.channel(selectedChannel);
+        ch.keysMaxVel = (float) keysPanel.maxVelKnob.getValue();
+        if (ch.keysMinVel > ch.keysMaxVel) {   // Max pushes Min down (they can't cross)
+            ch.keysMinVel = ch.keysMaxVel;
+            keysPanel.minVelKnob.setValue(ch.keysMinVel, juce::dontSendNotification);
+        }
+    };
     keysPanel.btnSlot2.setLookAndFeel(&dropBtnLNF);   // dropdown look (triangle) - it's a popup button now
     keysPanel.btnTakes.setLookAndFeel(&dropBtnLNF);   // proper dropdown look (like the sound bank)
     keysPanel.btnTakes.setTooltip("Recorded takes for the CURRENT pattern + selected channel (each pattern loop while "
-                                  "recording = one take, up to 20 per pattern+channel; saved with the preset). Click a "
-                                  "take to LOAD it (see its pitches + play it); each has Save/Delete, plus 'Delete all' "
-                                  "for this pattern+channel. Recording pauses when full (max 1000 takes per preset).");
+                                  "recording = one take, up to 20 per pattern+channel; saved with the preset). CLICK a "
+                                  "take to LOAD it (see its pitches + play it). Deletes live in the 'Delete a take' submenu. "
+                                  "Recording pauses when full (max 1000 takes per preset).");
     keysPanel.btnTakes.onClick = [this] {
-        juce::PopupMenu m;
+        juce::PopupMenu m, delSub;
         int shown = 0;
+        // Save options for the loaded take, only when it's been hand-edited (dirty).
+        const bool haveDirty = keysLoadedTakeIdx >= 0 && keysLoadedTakeIdx < (int) proc.keysTakes.size()
+                               && keysTakeDirty(keysLoadedTakeIdx);
+        if (haveDirty) { m.addItem(600, "Save edits to the loaded take");
+                         m.addItem(601, "Save edits as a NEW take"); m.addSeparator(); }
         for (int i = 0; i < (int) proc.keysTakes.size(); ++i)
         {
             const auto& t = proc.keysTakes[(size_t) i];
             if (t.channel != selectedChannel || takePatternOf(t) != currentPattern()) continue;   // per PATTERN + channel
             ++shown;
-            juce::PopupMenu sub;
-            sub.addItem(1000 + i * 4,     "Load onto channel " + juce::String(t.channel + 1));
-            const bool dirty = keysTakeDirty(i);
-            if (dirty)   // this take is loaded AND its channel has been hand-edited
-            {
-                sub.addItem(1000 + i * 4 + 2, "Save changes to this take");
-                sub.addItem(1000 + i * 4 + 3, "Save changes as a NEW take");
-            }
-            sub.addItem(1000 + i * 4 + 1, "Delete this take");
             const juce::String kind = t.isDraw ? "draw" : (juce::String((int) t.evts.size()) + " notes");
-            m.addSubMenu(t.name + "  (" + kind + (dirty ? ", edited*" : "") + ")", sub);
+            const bool loaded = (i == keysLoadedTakeIdx);
+            // CLICKING the take LOADS it (no more Load/Delete sub-dropdown). A tick marks the loaded one.
+            m.addItem(1000 + i, (loaded ? juce::String::fromUTF8("\xE2\x97\x8F ") : "") + t.name + "  (" + kind
+                                + (loaded && keysTakeDirty(i) ? ", edited*" : "") + ")", true, false);
+            delSub.addItem(2000 + i, t.name + "  (" + kind + ")");
         }
         const juce::String where = "Pattern " + juce::String(currentPattern() + 1)
                                    + " Channel " + juce::String(selectedChannel + 1);
         if (shown == 0) m.addItem(-1, "(no takes in " + where + " yet)", false);
-        else { m.addSeparator(); m.addItem(500, "Delete all takes in " + where); }
+        else { m.addSeparator();
+               delSub.addSeparator(); delSub.addItem(500, "Delete ALL in " + where);
+               m.addSubMenu("Delete a take", delSub); }
         m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&keysPanel.btnTakes),
                         [this](int r) {
+                            if (r <= 0) return;
                             if (r == 500)   // delete every take in this pattern+channel
                             {
                                 auto& v = proc.keysTakes;
@@ -5361,20 +5493,17 @@ void DrumSequencerEditor::setupComponents()
                                 refreshKeysPanel();
                                 return;
                             }
-                            if (r < 1000) return;
-                            const int idx = (r - 1000) / 4, act = (r - 1000) % 4;
-                            if (act == 0) keysLoadTake(idx);
-                            else if (act == 1) keysDeleteTake(idx);
-                            else if (idx < (int) proc.keysTakes.size())
+                            if (r == 600 || r == 601)   // save edits of the LOADED take (overwrite / as new)
                             {
+                                const int idx = keysLoadedTakeIdx;
+                                if (idx < 0 || idx >= (int) proc.keysTakes.size()) return;
                                 const auto& ot = proc.keysTakes[(size_t) idx];
                                 const int pat = ot.isDraw ? ot.drawPat : currentPattern();
                                 auto nt = captureTakeFromChannel(ot.channel, pat);
-                                if (act == 2) {   // overwrite the loaded take (keep its name)
-                                    nt.name = ot.name; proc.keysTakes[(size_t) idx] = std::move(nt);
-                                    keysLoadedTakeHash = takeDataHash(proc.keysTakes[(size_t) idx]);
-                                } else if (takesForPatChan(takePatternOf(ot), ot.channel) < 20
-                                           && (int) proc.keysTakes.size() < DrumSequencerProcessor::KEYS_TAKES_MAX) {   // save as a new take
+                                if (r == 600) { nt.name = ot.name; proc.keysTakes[(size_t) idx] = std::move(nt);
+                                                keysLoadedTakeHash = takeDataHash(proc.keysTakes[(size_t) idx]); }
+                                else if (takesForPatChan(takePatternOf(ot), ot.channel) < 20
+                                         && (int) proc.keysTakes.size() < DrumSequencerProcessor::KEYS_TAKES_MAX) {
                                     nt.name = juce::Time::getCurrentTime().toString(true, true, true, true)
                                               + "  #" + juce::String((int) proc.keysTakes.size() + 1);
                                     proc.keysTakes.push_back(std::move(nt));
@@ -5382,7 +5511,10 @@ void DrumSequencerEditor::setupComponents()
                                     keysLoadedTakeHash = takeDataHash(proc.keysTakes.back());
                                 }
                                 refreshKeysPanel();
+                                return;
                             }
+                            if (r >= 2000) { keysDeleteTake(r - 2000); return; }   // Delete-a-take submenu
+                            if (r >= 1000) { keysLoadTake(r - 1000); return; }     // CLICK a take = LOAD it
                         });
     };
 
@@ -5467,11 +5599,19 @@ void DrumSequencerEditor::setupComponents()
     };
     stepGrid.onDrawWrite = [this](int ch, int colA, int colB, int semi) {   // DRAW mode: write a column run
         auto& c = proc.sequencer.channel(ch);
-        for (int col = juce::jmax(0, colA); col <= colB && col < DrumChannel::DRAW_RES; ++col)
+        const uint8_t defVel = (uint8_t) juce::jlimit(0, 255, (int) std::lround(c.drawVel * 255.0f));   // new notes = default vel
+        for (int col = juce::jmax(0, colA); col <= colB && col < DrumChannel::DRAW_RES; ++col) {
             c.drawSemi[col] = (int8_t) semi;
+            if (semi != DrumChannel::DRAW_GAP) c.drawVelC[col] = defVel;
+        }
     };
-    stepGrid.onDrawVelPan = [this](int ch, float vel, float pan) {           // DRAW mode: whole-channel Vel/Pan
+    stepGrid.onDrawVelPan = [this](int ch, float vel, float pan) {           // DRAW mode: whole-channel Pan (+ default vel)
         auto& c = proc.sequencer.channel(ch); c.drawVel = vel; c.drawPan = pan;
+    };
+    stepGrid.onDrawVelWrite = [this](int ch, int colA, int colB, int v255) { // DRAW mode: per-column velocity edit
+        auto& c = proc.sequencer.channel(ch);
+        for (int col = juce::jmax(0, colA); col <= colB && col < DrumChannel::DRAW_RES; ++col)
+            c.drawVelC[col] = (uint8_t) juce::jlimit(0, 255, v255);
     };
     stepGrid.onStepCondChanged = [this](int ch, int step, int len, int mask) {
         if (step < 0 || step >= DrumChannel::MAX_STEPS) return;
@@ -6197,6 +6337,17 @@ void DrumSequencerEditor::setupComponents()
             proc.sequencer.channel(selectedChannel).slots[b].smpReverse = on;
             waveform[b].setReversed(on); } };
         swSampleReverse[b].setTooltip("Play this slot's sample (or the selected part) backwards.");
+        content.addAndMakeVisible(lblSmpPreserve[b]);
+        lblSmpPreserve[b].setText("Keep pitch", juce::dontSendNotification);
+        lblSmpPreserve[b].setFont(juce::Font(11.0f)); lblSmpPreserve[b].setJustificationType(juce::Justification::centred);
+        lblSmpPreserve[b].setColour(juce::Label::textColourId, juce::Colours::lightgrey);
+        content.addAndMakeVisible(swSmpPreserve[b]);
+        swSmpPreserve[b].onClick = [this, b] { if (!ignoreKnobCallbacks) {
+            proc.sequencer.channel(selectedChannel).slots[b].smpPreservePitch = swSmpPreserve[b].getToggleState();
+            proc.sequencer.channel(selectedChannel).markDspDirty(); } };
+        swSmpPreserve[b].setTooltip("Preserve pitch (ON by default): the sample plays at its OWN pitch and IGNORES "
+            "step/draw pitch, the pitch envelope and the keyboard - so recording (which writes step pitch) won't "
+            "detune it. Turn OFF to use it as a pitched sampler (keys + step pitch varispeed it).");
     }
     // PITCH (semitones) = transpose the WHOLE channel - works for every engine (synth freq + sample
     // varispeed), applied via vPitchMul in the render. Same unit as the pitch envelope. Per-channel.
@@ -6399,7 +6550,12 @@ void DrumSequencerEditor::setupComponents()
     btnStop.setTooltip("Stop playback (used when DAW Sync is off).");
     comboPreset.setTooltip("Save or load a whole-kit preset: all channels, patterns and settings at once.");
     dragMidi.setTooltip("Dragging pitch values works for selected channel, not for the whole pattern. It is useful "
-                        "when steps have different pitch values.");
+                        "when steps have different pitch values. Pitched slots (Oscillator/Modal/Physical) export "
+                        "from their own Freq knob; a slot in CHORD or SCALE mode exports its FULL voicing (every "
+                        "chord note), and both slots export together. A channel with only Sample/Noise exports its "
+                        "step/draw pitch on the channel's own note (no fixed anchor). If your MIDI lands transposed, "
+                        "check the Freq knobs on the sound slots: they set the 0-point of the pitch (playing the keys "
+                        "re-bases them to C3 automatically).");
     patModeBtn.setTooltip("What happens after this pattern finishes: loop forever, stop after N loops, or jump to another pattern.");
 
     freqDisplay.setTooltip("Live spectrum (the frequencies of what's playing) + the EQ/filter curve. The spectrum "
@@ -6802,6 +6958,7 @@ void DrumSequencerEditor::keysStopRecord(bool finalize)
             DrumSequencerProcessor::KeysTake t;
             t.isDraw = true; t.channel = selectedChannel; t.drawPat = currentPattern();
             t.drawLane.assign(drawCh.drawSemi, drawCh.drawSemi + DrumChannel::DRAW_RES);
+            t.drawVel.assign(drawCh.drawVelC, drawCh.drawVelC + DrumChannel::DRAW_RES);
             t.name = juce::Time::getCurrentTime().toString(true, true, true, true) + "  #" + juce::String((int) proc.keysTakes.size() + 1);
             proc.keysTakes.push_back(std::move(t));
         }
@@ -6841,6 +6998,7 @@ void DrumSequencerEditor::drainDrawTake()
         t.channel = dChan;
         t.drawPat = dPat;
         t.drawLane.assign(proc.keysDrawTakeBuf, proc.keysDrawTakeBuf + DrumChannel::DRAW_RES);
+        t.drawVel.assign(proc.keysDrawTakeVelBuf, proc.keysDrawTakeVelBuf + DrumChannel::DRAW_RES);
         t.name = juce::Time::getCurrentTime().toString(true, true, true, true) + "  #" + juce::String((int) proc.keysTakes.size() + 1);
         proc.keysTakes.push_back(std::move(t));
     }
@@ -6862,8 +7020,10 @@ void DrumSequencerEditor::keysLoadTake(int idx)
     {
         auto& c = proc.sequencer.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, t.drawPat)].channels[t.channel];
         c.drawMode = true;
-        for (int i = 0; i < DrumChannel::DRAW_RES; ++i)
+        for (int i = 0; i < DrumChannel::DRAW_RES; ++i) {
             c.drawSemi[i] = (i < (int) t.drawLane.size()) ? t.drawLane[(size_t) i] : DrumChannel::DRAW_GAP;
+            c.drawVelC[i] = (i < (int) t.drawVel.size())  ? t.drawVel[(size_t) i]  : 255;
+        }
         selectChannel(t.channel);
         strips[t.channel].comboSteps.setSelectedId(StepGridComponent::DRAW_ITEM_ID, juce::dontSendNotification);
         refreshDrawModeButtons();
@@ -6907,7 +7067,7 @@ juce::int64 DrumSequencerEditor::takeDataHash(const DrumSequencerProcessor::Keys
     juce::int64 h = 5381;
     auto mix = [&](juce::int64 v) { h = h * 33 ^ v; };
     mix(t.channel); mix(t.isDraw ? 1 : 0);
-    if (t.isDraw) { mix(t.drawPat); for (auto v : t.drawLane) mix((int) v + 128); }
+    if (t.isDraw) { mix(t.drawPat); for (auto v : t.drawLane) mix((int) v + 128); for (auto v : t.drawVel) mix((int) v); }
     else for (auto& e : t.evts) { mix(e.pattern); mix(e.step); mix((int) e.semis + 128); mix(e.flags); }
     return h;
 }
@@ -6921,6 +7081,7 @@ DrumSequencerProcessor::KeysTake DrumSequencerEditor::captureTakeFromChannel(int
     {
         t.isDraw = true; t.drawPat = pat;
         t.drawLane.assign(c.drawSemi, c.drawSemi + DrumChannel::DRAW_RES);
+        t.drawVel.assign(c.drawVelC, c.drawVelC + DrumChannel::DRAW_RES);
     }
     else for (int s = 0; s < c.numSteps; ++s) if (c.steps[s])
     {
@@ -6970,6 +7131,8 @@ void DrumSequencerEditor::refreshKeysPanel()
                                                                 : juce::String(t) + " st")); }
     keysPanel.humanKnob.setValue(kch.humanizeAmt, juce::dontSendNotification);
     keysPanel.strumKnob.setValue(kch.strumAmt,    juce::dontSendNotification);
+    keysPanel.minVelKnob.setValue(kch.keysMinVel, juce::dontSendNotification);
+    keysPanel.maxVelKnob.setValue(kch.keysMaxVel, juce::dontSendNotification);
     ignoreKnobCallbacks = prevIgnore;
     // HUMANIZE enabled only with 2 audible slots; STRUM only when a slot is in Chord or Scale mode.
     auto slotAudible = [&](int s){ return kch.slots[s].engine >= 0 && kch.slots[s].weight > 0.001f; };
@@ -6980,17 +7143,10 @@ void DrumSequencerEditor::refreshKeysPanel()
     keysPanel.lblHuman.setAlpha(humOk ? 1.0f : 0.4f);
     keysPanel.strumKnob.setEnabled(strumOk); keysPanel.strumKnob.setAlpha(strumOk ? 1.0f : 0.4f);
     keysPanel.lblStrum.setAlpha(strumOk ? 1.0f : 0.4f);
-    // eligibility hint: which slots the keyboard will actually play on this channel
-    auto elig = [](int eng) { return eng == DrumChannel::SrcOsc || eng == DrumChannel::SrcPhys || eng == DrumChannel::SrcModal; };
-    const auto& c = proc.sequencer.channel(selectedChannel);
-    const bool e0 = c.slots[0].engine >= 0 && c.slots[0].weight > 0.0f && elig(c.slots[0].engine);
-    const bool e1 = c.slots[1].engine >= 0 && c.slots[1].weight > 0.0f && elig(c.slots[1].engine);
     keysPanel.lblHint.setText(
-        (!e0 && !e1) ? "No keys-playable slot here:\nuse Analog+FM, Physical\nor Modal."
-                     : juce::String("Playing ") + (e0 ? "slot 1" : "") + (e0 && e1 ? "+" : "") + (e1 ? "slot 2" : "")
-                       + " (mono; key = C3)\n"
-                         "Sustain/Release: amp-env\n"
-                         "Lit keys = chord/scale notes",
+        "Plays MONO (one note at a time).\n"
+        "Set each slot's Chord/Scale in the Sound Editor.\n"
+        "Lit keys: yellow = slot 1, pink = slot 2, orange = both.",
         juce::dontSendNotification);
 }
 
@@ -7011,16 +7167,19 @@ void DrumSequencerEditor::updateKeyboardHighlight()
         for (int s = 0; s < DrumChannel::NUM_SLOTS; ++s)
         {
             const auto& sl = c.slots[s];
-            const bool elig = (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal
-                               || sl.engine == DrumChannel::SrcPhys);
-            if (! elig || sl.weight <= 0.001f) continue;   // Sample/Noise/muted slots don't play keys
-            const int base = held - (s == 1 ? c.keysSlot2Down : 0);   // slot-2 transpose
+            if (sl.engine < 0 || sl.weight <= 0.001f) continue;   // empty/muted slot
+            const bool pitched = (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal
+                                  || sl.engine == DrumChannel::SrcPhys);
+            // Sample/Noise light the played key only (no chord/scale); Sample honours its slot-2 transpose
+            // unless Preserve pitch is on (then it plays regardless of the key -> show the pressed key).
+            const bool transposes = pitched || (sl.engine == DrumChannel::SrcSample && ! sl.smpPreservePitch);
+            const int base = held - (s == 1 && transposes ? c.keysSlot2Down : 0);
             auto add = [&](int off) { const int m = base + off; if (m >= 0 && m < 128) used[s][m] = true; };
-            if (sl.scaleOn) { const int nv = juce::jlimit(1, DrumChannel::UNI_MAX, sl.scaleUnison);
+            if (pitched && sl.scaleOn) { const int nv = juce::jlimit(1, DrumChannel::UNI_MAX, sl.scaleUnison);
                 for (int u = 0; u < nv; ++u) add(DrumChannel::scaleNoteOffset(sl.scaleType, sl.scaleKey, base, u)); }
-            else if (sl.chordMode > 0) { const int nv = juce::jlimit(1, DrumChannel::UNI_MAX, sl.chordUnison);
+            else if (pitched && sl.chordMode > 0) { const int nv = juce::jlimit(1, DrumChannel::UNI_MAX, sl.chordUnison);
                 for (int u = 0; u < nv; ++u) add(DrumChannel::chordNoteOffset(sl.chordMode, u)); }
-            else add(0);                                   // plain: just the (transposed) note
+            else add(0);                                   // plain note (Osc/Modal/Phys single, or Sample/Noise)
         }
         const juce::Colour y(0xffe8bf4d), p(0xffe86aa8);   // slot 1 yellow / slot 2 pink (match the sound editor)
         for (int m = 0; m < 128; ++m)
@@ -7519,6 +7678,7 @@ void DrumSequencerEditor::refreshDetailPanel()
     {
         const auto& sl = ch.slots[b];
         swSampleReverse[b].setToggleState(sl.smpReverse, juce::dontSendNotification);
+        swSmpPreserve[b].setToggleState(sl.smpPreservePitch, juce::dontSendNotification);
         swUseRegion[b].setToggleState(sl.smpUseRegion, juce::dontSendNotification);
         waveform[b].setSelectionEnabled(sl.smpUseRegion);
         waveform[b].setRegions(sl.smpRegN, sl.smpRegLo, sl.smpRegHi);
@@ -8187,7 +8347,9 @@ void DrumSequencerEditor::layoutContent()
 
     // Top toolbar (logo + version are painted in paintContent; leave room for them)
     titleLabel.setBounds  (0, 0, 0, 0); // logo painted directly, not a label
-    verLink.setBounds     (166, 11, 48, 18);   // clickable version, just right of the logo wordmark
+    verLink.setBounds     (150, 2, 56, 40);    // TALL click area covering the whole stack (one link)
+    lblVersion.setBounds  (150, 3, 56, 14);    // v1.3.0  - centred
+    lblCheckUpd.setBounds (150, 18, 56, 22);   // Check / Updates - centred on the SAME axis (tidy stack)
     btnDawSync.setBounds  (210, 7, 72,  26);
     btnPlay.setBounds     (288, 7, 30,  26);   // ▶ icon
     btnStop.setBounds     (320, 7, 30,  26);   // ■ icon
@@ -8455,6 +8617,7 @@ void DrumSequencerEditor::layoutContent()
             waveform[b].setVisible(false); lblSampleLen[b].setVisible(false);
             lblUseRegion[b].setVisible(false); swUseRegion[b].setVisible(false);
             lblSampleReverse[b].setVisible(false); swSampleReverse[b].setVisible(false);
+            lblSmpPreserve[b].setVisible(false); swSmpPreserve[b].setVisible(false);
         }
 
         // Use NUM_SLOTS engine headers purely as box OUTLINES (empty text; the dropdown is the visible header).
@@ -8485,15 +8648,16 @@ void DrumSequencerEditor::layoutContent()
                 waveform[b].setBounds(sbx[b] + 6, sby[b] + 20, slotW - 12, 52);   // TALLER waveform (toggles moved out)
                 lblSampleLen[b].setVisible(false);                               // length is a watermark in the waveform now
                 knobTop = sby[b] + 78;
-                // Trim + Reverse toggles in a small column to the LEFT of the knobs (stacked, centred together).
-                const int tcW = 50;
-                const int tcx = sbx[b] + 6, ty = knobTop + 6;
-                lblUseRegion[b].setVisible(true); swUseRegion[b].setVisible(true);
-                lblUseRegion[b].setJustificationType(juce::Justification::centred);
-                lblUseRegion[b].setBounds(tcx, ty, tcW, 12);   swUseRegion[b].setBounds(tcx + (tcW - 28) / 2, ty + 13, 28, 16);
-                lblSampleReverse[b].setVisible(true); swSampleReverse[b].setVisible(true);
-                lblSampleReverse[b].setJustificationType(juce::Justification::centred);
-                lblSampleReverse[b].setBounds(tcx, ty + 34, tcW, 12); swSampleReverse[b].setBounds(tcx + (tcW - 28) / 2, ty + 47, 28, 16);
+                // Trim + Reverse + Keep-pitch toggles in a small column LEFT of the knobs (stacked, tight).
+                const int tcW = 52;
+                const int tcx = sbx[b] + 6, ty = knobTop + 4;
+                auto placeTog = [&](juce::Label& l, ToggleSwitch& sw, int yy) {
+                    l.setVisible(true); sw.setVisible(true); l.setJustificationType(juce::Justification::centred);
+                    l.setBounds(tcx, yy, tcW, 12); sw.setBounds(tcx + (tcW - 28) / 2, yy + 12, 28, 15);
+                };
+                placeTog(lblUseRegion[b],     swUseRegion[b],     ty);
+                placeTog(lblSampleReverse[b], swSampleReverse[b], ty + 29);
+                placeTog(lblSmpPreserve[b],   swSmpPreserve[b],   ty + 58);
                 knobX = sbx[b] + tcW + 6; knobW = slotW - tcW - 6;   // knobs occupy the rest, right of the toggles
             }
             slotEd[b].place(knobX, knobTop, knobW, slotH - (knobTop - sby[b]) - 4);

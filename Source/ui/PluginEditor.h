@@ -27,7 +27,8 @@ public:
     std::function<void(int ch, int step, bool on)> onStepMergeChanged;
     // DRAW mode: write a run of columns [colA..colB] to a semitone (or DrumChannel::DRAW_GAP to erase).
     std::function<void(int ch, int colA, int colB, int semi)> onDrawWrite;
-    std::function<void(int ch, float vel, float pan)> onDrawVelPan;   // whole-channel Vel/Pan in draw mode
+    std::function<void(int ch, float vel, float pan)> onDrawVelPan;   // whole-channel Pan (+ default Vel) in draw mode
+    std::function<void(int ch, int colA, int colB, int vel255)> onDrawVelWrite;   // per-column velocity edit (draw ModeVel)
     std::function<void(int ch)> onDrawModeMaybeChanged;               // ch's draw-vs-step may have changed (fade buttons)
     static constexpr int DRAW_ITEM_ID = 100;   // the "Draw" item id in the step-count dropdown
     // Influence: copy one source step's vel/pitch/prob/roll onto every step in the channel.
@@ -75,15 +76,18 @@ private:
     bool  midiOutCh[NCH] = {};                         // is this channel routed to MIDI Out? (enables 2D Vel/Len)
     // DRAW mode mirror + gesture state (a free mono pitch lane replaces the step cells for this row).
     bool   drawMode[NCH] = {};
-    int8_t drawSemi[NCH][DrumChannel::DRAW_RES] = {};
+    int8_t  drawSemi[NCH][DrumChannel::DRAW_RES] = {};
+    uint8_t drawVelC[NCH][DrumChannel::DRAW_RES] = {};   // per-column velocity mirror (draw ModeVel edits it)
     int    drawDragCh = -1, drawLastCol = -1;          // channel being drawn + last column written (interp)
+    int    drawReadVel = -1;                            // ModeVel watermark: last velocity dragged (0-255, -1 = none)
     bool   drawErase = false;                          // right-drag erases (writes DRAW_GAP)
     float  playBarFrac = 0.0f;                         // current bar position 0..1 (draw-lane playhead)
     int    drawMagCh = -1;                             // channel whose 4x-tall magnify OVERLAY is open (-1 = none)
     int    drawRange = 36;                             // magnify view visible +/- range (36 / 24 / 12 semitones)
     int    drawReadSemi = -128;                        // live read-out semitone (-128 = none) shown top-right
     float  dVel[NCH] = {}, dPan[NCH] = {};             // draw-mode whole-channel Vel/Pan mirror
-    void   setDrawVelPan(int ch, int x);               // Vel/Pan modes: drag sets the one channel value
+    void   setDrawVelPan(int ch, int x);               // Pan mode: drag sets the one channel value
+    void   setDrawColVel(int ch, juce::Point<int> pos); // Vel mode: drag an EXISTING note's per-column velocity (Y = level)
     void   paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle<int> rect, bool overlay);
     juce::Rectangle<int> drawRowRect(int ch) const;                  // the normal (1x) row rect
     juce::Rectangle<int> drawOverlayRect() const;                    // the 4x magnify panel around drawMagCh
@@ -466,8 +470,8 @@ public:
     juce::ComboBox   comboRecMode;
     juce::TextButton btnSlot2 { "0 st" };                 // slot-2 transpose (3-column popup, -24..+24)
     juce::TextButton btnTakes { "Takes (0)" };
-    juce::Slider     humanKnob, strumKnob;                // per-channel HUMANIZE / STRUM (feel)
-    juce::Label      lblRecMode, lblSlot2, lblHint, lblHuman, lblStrum;
+    juce::Slider     humanKnob, strumKnob, minVelKnob, maxVelKnob;   // HUMANIZE / STRUM / min+max keyboard velocity
+    juce::Label      lblRecMode, lblSlot2, lblHint, lblHuman, lblStrum, lblMinVel, lblMaxVel;
     int countdown = 0;                                    // count-in ticks left (drawn as a big 3-2-1)
 
     // Keyboard highlight (driven by the editor timer from the currently held key + selected channel):
@@ -785,7 +789,7 @@ private:
     int   drag = -1, hover = -1;   // 0 = Unison, 1 = Detune, 2 = Vibrato
     int   chipHover = -1;          // which mode chip the mouse is over (0=UNISON 1=CHORD 2=SCALE 3=KEY) for per-chip tooltips
     struct Geo { float left, right, top, bottom, cy, hh, uX, dX, vX;
-                 float rangeX, rangeY, dPtX, dPtY, rootY, upRange; };   // rootY = the root/original line; upRange = room above it
+                 float rangeX, rangeY, dPtX, dPtY, rootY, upRange, uniTop; };   // rootY = root line; upRange = room above it; uniTop = unison-dot ceiling (below the chips)
     Geo  geom() const;
     int  nearestHandle(juce::Point<float> p) const;
     void emit() { if (onChange) onChange(curUni(), det, vib, centre, mode, chord, scaleOn, scaleType, scaleKey); }
@@ -1570,6 +1574,8 @@ private:
     juce::Label      lblUseRegion[DrumChannel::NUM_SLOTS], lblSampleLen[DrumChannel::NUM_SLOTS];
     ToggleSwitch     swSampleReverse[DrumChannel::NUM_SLOTS];
     juce::Label      lblSampleReverse[DrumChannel::NUM_SLOTS];
+    ToggleSwitch     swSmpPreserve[DrumChannel::NUM_SLOTS];    // Sample: ignore step/draw/key pitch (default on)
+    juce::Label      lblSmpPreserve[DrumChannel::NUM_SLOTS];
     LearnableKnob    knobSpeed { "p0_ch0_speed", proc.midiLearn };
     juce::Label      lblSpeed;
     // Sample source: pitch offset + reverse (pitch/env/time reuse knobPitch/PEnvAmt/PEnvTime)
@@ -1665,7 +1671,9 @@ private:
     WideMenuLNF wideMenuLNF;               // 3-column popup for the sound-mix menu
     BigComboLNF bigComboLNF;               // larger font for the sample chooser
     LogoStepMeter logoMeter;              // live master-volume meter built into the logo step ramp
-    juce::HyperlinkButton verLink;        // clickable version next to the logo -> opens the Releases page
+    juce::HyperlinkButton verLink;        // EMPTY tall click-area next to the logo -> opens the Releases page
+    juce::Label      lblVersion;          // "v1.3.0" drawn at the TOP of verLink's click area
+    juce::Label      lblCheckUpd;         // "Check / Updates" under the version (both share verLink's click area)
     DropButtonLNF dropBtnLNF;             // down-triangle for the play-mode + routing "dropdown" buttons
     IconButtonLNF iconBtnLNF;             // play / stop / undo / redo glyphs
     std::vector<LearnableKnob*> allKnobs;  // for clean LNF teardown

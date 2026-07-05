@@ -1291,7 +1291,7 @@ static void resetAll(Sequencer& s)
             ch.mute = false; ch.solo = false;
             ch.chokeGroup = 0; ch.outputBus = 0; ch.midiOut = false; ch.midiOutChannel = 1;   // routing/choke are preset-level -> reset them
             ch.keysSlot2Down = 0;   // KEYS slot-2 transpose (channel-wide) is preset-level too
-            ch.humanizeAmt = 0.0f; ch.strumAmt = 0.0f;   // HUMANIZE / STRUM reset on preset/Init
+            ch.humanizeAmt = 0.0f; ch.strumAmt = 0.0f; ch.keysMinVel = 0.0f; ch.keysMaxVel = 1.0f;   // HUMANIZE / STRUM / vel range reset
             ch.mixName = {}; ch.mixModified = false;
             setSteps(ch, 8, {});
         }

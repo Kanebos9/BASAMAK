@@ -186,6 +186,7 @@ public:
     std::atomic<int> keysEvtCount { 0 };
     uint32_t keysDownSeen = 0, keysUpSeen = 0;     // audio-thread only: last processed event gens
     std::atomic<int> keysHeldNote { -1 };          // audio-thread writes; the held key (for auto-merge)
+    std::atomic<float> keysHeldVel { 1.0f };       // velocity of the held key (for DRAW recording of per-column velocity)
     std::atomic<int> keysLastStampStep { -1 };     // last step stamped for the held key (auto-merge chain)
     std::atomic<int> keysDrawLastCol   { -1 };     // DRAW recording: last column written (unquantized lane capture)
     std::atomic<int> keysLoopSeen { -1 };          // loopCount at the last take boundary (-1 = reset)
@@ -194,14 +195,16 @@ public:
     // A take = the events of one loop pass (or one whole chain-mode session). Loading = clear the
     // channel in every pattern the take touches, then replay its events.
     struct KeysTake { juce::String name; int channel = 0; std::vector<KeyEvt> evts;
-                      bool isDraw = false; int drawPat = 0; std::vector<int8_t> drawLane; };  // draw takes store the lane
+                      bool isDraw = false; int drawPat = 0; std::vector<int8_t> drawLane;
+                      std::vector<uint8_t> drawVel; };  // draw takes store the lane + per-column velocity
     std::vector<KeysTake> keysTakes;
     static constexpr int KEYS_TAKES_MAX = 1000;   // hard cap on total takes kept per preset (20 per pattern+channel)
     // DRAW-take handshake (audio thread snapshots a finished loop's lane -> editor drains into a take).
     std::atomic<bool> keysDrawTakeReady { false };
     std::atomic<int>  keysDrawTakeChan  { -1 };
     std::atomic<int>  keysDrawTakePat   { -1 };
-    int8_t keysDrawTakeBuf[DrumChannel::DRAW_RES] = {};
+    int8_t  keysDrawTakeBuf[DrumChannel::DRAW_RES] = {};
+    uint8_t keysDrawTakeVelBuf[DrumChannel::DRAW_RES] = {};
 
     // Audio-callback heartbeat: bumped at the top of every processBlock. The editor watches it -
     // if it stops moving, the HOST isn't sending us audio (device off/missing, FX offline), which

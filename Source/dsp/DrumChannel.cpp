@@ -576,6 +576,7 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("sSl", s.smpSlices, nullptr); st.setProperty("sStr", s.smpStretch, nullptr);
         st.setProperty("sGn", s.smpGain, nullptr);
         st.setProperty("sEnv", s.smpEnvOn, nullptr);   // opt-in sample amp envelope
+        st.setProperty("sPP", s.smpPreservePitch, nullptr);   // preserve pitch (ignore step/draw/key pitch)
         st.setProperty("sFile", slotSample[b].file.getFullPathName(), nullptr);   // per-slot sample (reloaded)
         st.setProperty("yFo", s.oscFold, nullptr); st.setProperty("yOL", s.oscLevel, nullptr);
         st.setProperty("yNL", s.noiseLevel, nullptr); st.setProperty("yRs", s.resonAmt, nullptr);
@@ -661,6 +662,7 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         s.smpSlices = (int)st.getProperty("sSl", d.smpSlices); s.smpStretch = (float)st.getProperty("sStr", d.smpStretch);
         s.smpGain = (float)st.getProperty("sGn", d.smpGain);
         s.smpEnvOn = (bool)st.getProperty("sEnv", d.smpEnvOn);
+        s.smpPreservePitch = (bool)st.getProperty("sPP", d.smpPreservePitch);   // default true (old projects preserve pitch)
         s.oscFold = (float)st.getProperty("yFo", d.oscFold); s.oscLevel = (float)st.getProperty("yOL", d.oscLevel);
         s.noiseLevel = (float)st.getProperty("yNL", d.noiseLevel); s.resonAmt = (float)st.getProperty("yRs", d.resonAmt);
         s.resonDrive = (float)st.getProperty("yRD", d.resonDrive);
@@ -1286,7 +1288,13 @@ int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down)
             case SrcOsc:   base = sl.oscFreq;  break;   // Analog+FM
             case SrcModal: base = sl.oscFreq;  break;   // Modal's Freq lives on oscFreq too
             case SrcPhys:  base = sl.physFreq; break;
-            default: sv.keyMute = true; continue;       // Sample / Noise / legacy: not playable by keys
+            case SrcSample:   // Sample plays on keys: Preserve pitch = its own pitch (keySemis 0);
+                              // else varispeed relative to C3 (MIDI 60), slot 2 transposed.
+                sv.keySemis = sl.smpPreservePitch ? 0.0f
+                            : (float)(midiNote - 60 - (s == 1 ? slot2Down : 0));
+                continue;
+            case SrcNoise:    sv.keySemis = 0.0f; continue;   // noise is unpitched - just play it
+            default: sv.keyMute = true; continue;             // legacy engines: not playable by keys
         }
         double hz = targetHz;
         if (s == 1 && slot2Down != 0) hz *= std::pow(2.0, -(double) slot2Down / 12.0);
@@ -1370,6 +1378,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         double physBaseF = 110; float physPEnvAmt = 0, physPEnvTime = 0.05f, physPOffset = 0, physVibFac = 1;
         float  crushStep = 0; double speed = 1; float smpPitch = 0, smpPEnvAmt = 0, smpPEnvTime = 0.04f, smpPOffset = 0; bool reverse = false;
         bool   smpEnv = false;   // opt-in amp envelope on the sample (off = legacy full-length playback)
+        bool   smpPreserve = true;   // Sample: ignore step/draw/key/env pitch (play at the sample's own pitch)
         const juce::AudioBuffer<float>* buf = nullptr; int srcLen = 0, regLo = 0, regHi = 0, slices = 1;  // per-slot sample
         float  smpGain = 1.0f;   // sample output boost
         // -- Synth (unified) extras: section levels + fold + resonator on --
@@ -1516,6 +1525,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 c.slices = 1;   // manual regions replace auto-slicing
                 c.smpGain = juce::jlimit(0.0f, 4.0f, sl.smpGain);
                 c.smpEnv  = sl.smpEnvOn;   // opt-in amp envelope (off = legacy full-length playback)
+                c.smpPreserve = sl.smpPreservePitch;   // ignore step/draw/key/env pitch when on
                 c.oscVibFac = 1.0f + juce::jlimit(0.0f, 1.0f, sl.vibrato) * 0.09f * vibLfo;  // vibrato = varispeed wobble
                 break; }
             // SrcSynth / SrcWave: legacy slot engines REMOVED (v1.2.x). No factory sound uses them; the
@@ -2050,9 +2060,15 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         // Static pitch (channel + slot) is baked into the buffer (SoundTouch) so it doesn't
                         // change length; here only the TIME-VARYING pitches remain (legacy env + per-step),
                         // which are varispeed by nature. The 4-dot pitch ENVELOPE (pe3Mul) is varispeed too.
-                        double smpSemis = 0.0;
-                        if (c.smpPEnvAmt != 0.0f) smpSemis += (double) c.smpPEnvAmt * pitchEnvShape(t, c.smpPEnvTime, c.smpPOffset);
-                        sv.smpHead += c.speed * std::pow(2.0, smpSemis / 12.0) * vStepMul * c.oscVibFac * pe3Mul / (double) engineOS;
+                        // PRESERVE PITCH: play at the sample's OWN pitch - ignore step/draw pitch (vStepMul),
+                        // the pitch env (smpSemis), vibrato and keySemis (pe3Mul). Off = the old varispeed sampler.
+                        if (c.smpPreserve)
+                            sv.smpHead += c.speed / (double) engineOS;
+                        else {
+                            double smpSemis = 0.0;
+                            if (c.smpPEnvAmt != 0.0f) smpSemis += (double) c.smpPEnvAmt * pitchEnvShape(t, c.smpPEnvTime, c.smpPOffset);
+                            sv.smpHead += c.speed * std::pow(2.0, smpSemis / 12.0) * vStepMul * c.oscVibFac * pe3Mul / (double) engineOS;
+                        }
                         stereo = true;
                         break; }
                     // SrcSynth / SrcWave render REMOVED (v1.2.x) - engines retired, no factory usage.

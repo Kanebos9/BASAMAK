@@ -118,7 +118,7 @@ public:
     static constexpr int NUM_VALID_STEP_COUNTS = 20;
 
     DrumChannel() { for (int i = 0; i < MAX_STEPS; ++i) { stepVel[i] = 1.0f; stepPitch[i] = 0.0f; stepProb[i] = 1.0f; stepRoll[i] = 1; stepRollDecay[i] = 0.0f; stepNoteLen[i] = 0.0f; stepPan[i] = 0.0f; stepSlide[i] = false; stepMerge[i] = false; stepCondLen[i] = 1; stepCondMask[i] = 0; }
-                    for (int i = 0; i < DRAW_RES; ++i) drawSemi[i] = DRAW_GAP; }
+                    for (int i = 0; i < DRAW_RES; ++i) { drawSemi[i] = DRAW_GAP; drawVelC[i] = 255; } }
 
     // ===== DRAW MODE (free piano-draw, an alternative to steps for one channel) =====
     // A monophonic pitch LANE across the whole bar at fine time resolution: each column holds a
@@ -130,7 +130,8 @@ public:
     static constexpr int8_t DRAW_GAP = -128;   // a column with no note
     bool   drawMode = false;
     int8_t drawSemi[DRAW_RES];
-    float  drawVel = 1.0f, drawPan = 0.0f;     // whole-channel in draw mode (no per-note vel/pan)
+    float  drawVel = 1.0f, drawPan = 0.0f;     // drawVel = the DEFAULT velocity for freshly drawn notes; drawPan whole-channel
+    uint8_t drawVelC[DRAW_RES];                // PER-COLUMN velocity (0-255 -> 0..1), so recorded/edited draw notes carry dynamics
 
     //-- Sequencer state (per step)
     bool   steps[MAX_STEPS] = {};
@@ -402,6 +403,7 @@ public:
         int   smpSlices = 1;                    // 1 = whole; N = chop region into N slices, advance per hit
         float smpGain = 1.0f;                   // sample output boost (samples are quieter than the synth engines)
         bool  smpEnvOn = false;                 // OPT-IN amp envelope on the sample (off = play full length, legacy-identical)
+        bool  smpPreservePitch = true;          // Sample: IGNORE step/draw/key/env pitch (play at the sample's own pitch). Default ON.
         // -- Per-slot FX (per sound). Drive = an insert on this slot's signal; Reverb/Delay = this slot's
         //    SEND amount into the shared reverb/delay engines (character set in the FX box). --
         int   fxDriveType = 0;                  // DrumChannel::DriveType
@@ -549,6 +551,11 @@ public:
     float humanizeAmt = 0.0f;   // 0..1
     float strumAmt    = 0.0f;   // 0..1
     uint32_t humRng   = 0x9e3779b9u;   // per-channel RNG advanced each trigger (per-hit humanize variation)
+    //   keysMinVel / keysMaxVel = the FLOOR + CEILING for keyboard velocity: a played key's velocity is
+    //     remapped [0..1] -> [keysMinVel..keysMaxVel], so soft playing still sounds and loud is tamed.
+    //     Per pattern/channel, keys only. Defaults 0/1 = raw velocity.
+    float keysMinVel  = 0.0f;   // 0..1
+    float keysMaxVel  = 1.0f;   // 0..1
 
     //-- Polyphony: when true, a new trigger does not cut the previous sound
     //   (voices overlap and ring out); when false the channel is monophonic.

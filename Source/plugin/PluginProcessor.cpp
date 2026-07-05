@@ -251,7 +251,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             if (! pc.drawMode)
             {
                 pc.drawMode = true;
-                for (int i = 0; i < DrumChannel::DRAW_RES; ++i) pc.drawSemi[i] = DrumChannel::DRAW_GAP;
+                for (int i = 0; i < DrumChannel::DRAW_RES; ++i) { pc.drawSemi[i] = DrumChannel::DRAW_GAP; pc.drawVelC[i] = 255; }
                 keysDrawLastCol.store(-1, std::memory_order_relaxed);
             }
         }
@@ -297,13 +297,13 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                         if (! keysDrawTakeReady.load(std::memory_order_acquire))
                         {
                             bool any = false;
-                            for (int i = 0; i < R; ++i) { keysDrawTakeBuf[i] = rch.drawSemi[i]; if (rch.drawSemi[i] != DrumChannel::DRAW_GAP) any = true; }
+                            for (int i = 0; i < R; ++i) { keysDrawTakeBuf[i] = rch.drawSemi[i]; keysDrawTakeVelBuf[i] = rch.drawVelC[i]; if (rch.drawSemi[i] != DrumChannel::DRAW_GAP) any = true; }
                             if (any) { keysDrawTakeChan.store(chIdx, std::memory_order_relaxed);
                                        keysDrawTakePat.store(pRec, std::memory_order_relaxed);
                                        keysDrawTakeReady.store(true, std::memory_order_release); }
                         }
                         auto& cch = sequencer.patterns[pClear].channels[chIdx];
-                        for (int i = 0; i < R; ++i) cch.drawSemi[i] = DrumChannel::DRAW_GAP;
+                        for (int i = 0; i < R; ++i) { cch.drawSemi[i] = DrumChannel::DRAW_GAP; cch.drawVelC[i] = 255; }
                         keysDrawLastCol.store(-1, std::memory_order_relaxed);
                     }
                     else
@@ -350,8 +350,13 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                 }
             }
             auto& kc = sequencer.patterns[keyPat].channels[chIdx];
-            kc.keyDown(note, juce::jlimit(0.05f, 1.0f, vel), kc.keysSlot2Down);   // slot-2 transpose = THIS pattern's channel setting
+            // MIN/MAX VELOCITY: remap [0..1] -> [keysMinVel..keysMaxVel] (soft still sounds, loud is tamed).
+            const float mv = juce::jlimit(0.0f, 1.0f, kc.keysMinVel);
+            const float xv = juce::jmax(mv, juce::jlimit(0.0f, 1.0f, kc.keysMaxVel));
+            const float kvel = juce::jlimit(0.05f, 1.0f, mv + vel * (xv - mv));
+            kc.keyDown(note, kvel, kc.keysSlot2Down);   // slot-2 transpose = THIS pattern's channel setting
             keysHeldNote.store(note, std::memory_order_relaxed);
+            keysHeldVel.store(kvel, std::memory_order_relaxed);
         }
         const uint32_t u = keysUpEvt.load(std::memory_order_acquire);
         const bool upIsNew = u != keysUpSeen;
@@ -414,10 +419,12 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             const int R = DrumChannel::DRAW_RES;
             const int cur  = juce::jlimit(0, R - 1, (int) (sequencer.barPos() * R));
             const int8_t sm = (held >= 0) ? (int8_t) juce::jlimit(-36, 36, held - 60) : DrumChannel::DRAW_GAP;
+            const uint8_t vv = (uint8_t) juce::jlimit(0, 255, (int) std::lround(keysHeldVel.load(std::memory_order_relaxed) * 255.0f));
+            auto stamp = [&](int c) { pch.drawSemi[c] = sm; if (sm != DrumChannel::DRAW_GAP) pch.drawVelC[c] = vv; };
             int lastC = keysDrawLastCol.load(std::memory_order_relaxed);
             if (lastC < 0) lastC = cur;
-            if (cur >= lastC) for (int c = lastC; c <= cur; ++c) pch.drawSemi[c] = sm;
-            else { for (int c = lastC; c < R; ++c) pch.drawSemi[c] = sm; for (int c = 0; c <= cur; ++c) pch.drawSemi[c] = sm; }
+            if (cur >= lastC) for (int c = lastC; c <= cur; ++c) stamp(c);
+            else { for (int c = lastC; c < R; ++c) stamp(c); for (int c = 0; c <= cur; ++c) stamp(c); }
             keysDrawLastCol.store(cur, std::memory_order_relaxed);
         }
     }
@@ -1007,16 +1014,51 @@ juce::File DrumSequencerProcessor::exportMidiFile(int channel)
         const int midiCh = chn.midiOut ? juce::jlimit(1, 16, chn.midiOutChannel) : 1;
         const double stepTicks = barTicks / (double) juce::jmax(1, n);
 
-        // Base note: slot 1's Freq -> nearest MIDI note (sound channels); midiNote (MIDI-out).
-        int baseNote = chn.midiNote;
+        // PER-SLOT VOICED export (v1.3.0): each PITCHED slot (Osc/Modal/Phys, audible) exports its
+        // OWN notes from its OWN Freq-knob base (rounded to the nearest MIDI note - the 0-point);
+        // a slot in CHORD/SCALE mode exports its FULL voicing (every chord note), so slot 1 in a
+        // 3-note chord + slot 2 in a 5-note scale = up to 8 notes stacked per hit (duplicates
+        // de-duped). Sample/Noise slots have NO Freq base, so they don't add per-slot notes; but a
+        // channel with NO pitched slot (pure Sample/Noise) still exports its step/draw PITCH contour
+        // on the channel's own note (`midiNote` + pitch) - NO fixed C3 anchor.
+        struct PSlot { int base; bool scaleOn; int scaleType, scaleKey, scaleUni, chordMode, chordUni; };
+        juce::Array<PSlot> pslots;
         if (! chn.midiOut)
-        {
-            double hz = 261.6255653;   // fallback: C3 (the keys reference)
             for (const auto& sl : chn.slots)
-                if (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal) { hz = sl.oscFreq;  break; }
-                else if (sl.engine == DrumChannel::SrcPhys)                                 { hz = sl.physFreq; break; }
-            baseNote = juce::jlimit(0, 127, (int) std::lround(69.0 + 12.0 * std::log2(juce::jmax(20.0, hz) / 440.0)));
-        }
+            {
+                if (sl.weight <= 0.001f) continue;
+                double hz = 0.0;
+                if      (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal) hz = sl.oscFreq;
+                else if (sl.engine == DrumChannel::SrcPhys)                                      hz = sl.physFreq;
+                else continue;   // Sample / Noise: unpitched -> contributes no notes
+                PSlot p;
+                p.base = juce::jlimit(0, 127, (int) std::lround(69.0 + 12.0 * std::log2(juce::jmax(20.0, hz) / 440.0)));
+                p.scaleOn = sl.scaleOn; p.scaleType = sl.scaleType; p.scaleKey = sl.scaleKey;
+                p.scaleUni = sl.scaleUnison; p.chordMode = sl.chordMode; p.chordUni = sl.chordUnison;
+                pslots.add(p);
+            }
+        // Emit one hit: every slot's voiced notes (or the MIDI-out / drum fallback), de-duped per hit.
+        auto emitNotes = [&](int semis, juce::uint8 vel, double tOn, double tOff)
+        {
+            bool used[128] = {};
+            auto add = [&](int note) {
+                if (note < 0 || note > 127 || used[note]) return;
+                used[note] = true;
+                seq.addEvent(juce::MidiMessage::noteOn (midiCh, note, vel), tOn);
+                seq.addEvent(juce::MidiMessage::noteOff(midiCh, note),      tOff);
+            };
+            if (chn.midiOut)        { add(juce::jlimit(0, 127, chn.midiNote + semis)); return; }   // unchanged behaviour
+            if (pslots.isEmpty())   { add(juce::jlimit(0, 127, chn.midiNote + semis)); return; }   // Sample/Noise: the channel's own note + step/draw pitch (no C3 anchor)
+            for (const auto& p : pslots)
+            {
+                const int played = p.base + semis;
+                if (p.scaleOn)          { const int nv = juce::jlimit(1, DrumChannel::UNI_MAX, p.scaleUni);
+                    for (int k = 0; k < nv; ++k) add(played + DrumChannel::scaleNoteOffset(p.scaleType, p.scaleKey, played, k)); }
+                else if (p.chordMode > 0) { const int nv = juce::jlimit(1, DrumChannel::UNI_MAX, p.chordUni);
+                    for (int k = 0; k < nv; ++k) add(played + DrumChannel::chordNoteOffset(p.chordMode, k)); }
+                else add(played);
+            }
+        };
 
         // DRAW mode: the melody is the drawn lane (per-column semitone), not the steps. Each
         // contiguous run of the SAME semitone = one note; DRAW_GAP = a rest. Freely exported at
@@ -1025,8 +1067,6 @@ juce::File DrumSequencerProcessor::exportMidiFile(int channel)
         {
             const int    R        = DrumChannel::DRAW_RES;
             const double colTicks = barTicks / (double) R;
-            const auto   vel      = (juce::uint8) juce::jlimit(1, 127,
-                                        juce::roundToInt(juce::jlimit(0.0f, 1.0f, chn.drawVel) * 127.0f));
             int c = 0;
             while (c < R)
             {
@@ -1034,9 +1074,8 @@ juce::File DrumSequencerProcessor::exportMidiFile(int channel)
                 if (s == (int) DrumChannel::DRAW_GAP) { ++c; continue; }
                 int e = c + 1;
                 while (e < R && (int) chn.drawSemi[e] == s) ++e;   // extend the run of the same note
-                const int note = juce::jlimit(0, 127, baseNote + s);
-                seq.addEvent(juce::MidiMessage::noteOn (midiCh, note, vel), (double) c * colTicks);
-                seq.addEvent(juce::MidiMessage::noteOff(midiCh, note),      (double) e * colTicks);
+                const auto vel = (juce::uint8) juce::jlimit(1, 127, (int) chn.drawVelC[c] >> 1);   // per-column velocity
+                emitNotes(s, vel, (double) c * colTicks, (double) e * colTicks);   // per-slot voiced (chord/scale aware)
                 c = e;
             }
         }
@@ -1055,7 +1094,7 @@ juce::File DrumSequencerProcessor::exportMidiFile(int channel)
             // Rolls play on merged chains too (matches the engine): the sub-hits ratchet inside
             // the head step and the LAST one holds through the rest of the chain.
             const int roll = juce::jlimit(1, 6, chn.stepRoll[step]);
-            const int note = juce::jlimit(0, 127, baseNote + juce::roundToInt(chn.stepPitch[step]));
+            const int semis = juce::roundToInt(chn.stepPitch[step]);
             const float  gl = juce::jlimit(0.0f, 1.0f, chn.stepNoteLen[step]);
             const double lenSteps = gl > 0.001f ? (double) gl : (chn.midiOut ? 1.0 : 0.8 / (double) roll);
             // Length = fraction of the WHOLE chain, measured from the chain start.
@@ -1078,8 +1117,7 @@ juce::File DrumSequencerProcessor::exportMidiFile(int channel)
                 double endTick = startTick + juce::jmax(4.0, lenSteps * stepTicks);
                 if (mergedChain && j == roll - 1)   // the last sub-hit rings through the merged chain
                     endTick = juce::jmax(startTick + 4.0, chainGateEnd * barTicks);
-                seq.addEvent(juce::MidiMessage::noteOn (midiCh, note, vel), startTick);
-                seq.addEvent(juce::MidiMessage::noteOff(midiCh, note),      endTick);
+                emitNotes(semis, vel, startTick, endTick);   // per-slot voiced (chord/scale aware)
             }
         }
     }
@@ -1179,6 +1217,8 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
     chState.setProperty("keys2Dn",  ch.keysSlot2Down,  nullptr);   // KEYS slot-2 transpose (per pattern/channel)
     chState.setProperty("humanize", ch.humanizeAmt,    nullptr);   // HUMANIZE: between-slot timing/velocity jitter
     chState.setProperty("strum",    ch.strumAmt,       nullptr);   // STRUM: chord/scale note time-spread
+    chState.setProperty("keysMinVel", ch.keysMinVel,   nullptr);   // KEYS: minimum played velocity floor
+    chState.setProperty("keysMaxVel", ch.keysMaxVel,   nullptr);   // KEYS: maximum played velocity ceiling
     chState.setProperty("chokeGrp", ch.chokeGroup,     nullptr);   // choke group (channel-wide)
     chState.setProperty("numSteps", ch.numSteps,       nullptr);
     chState.setProperty("sound",    (int)ch.soundType, nullptr);
@@ -1229,9 +1269,13 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
     if (ch.drawMode)
     {
         juce::String ds; ds.preallocateBytes((size_t) DrumChannel::DRAW_RES);
-        for (int i = 0; i < DrumChannel::DRAW_RES; ++i)
+        juce::String vs; vs.preallocateBytes((size_t) DrumChannel::DRAW_RES);
+        for (int i = 0; i < DrumChannel::DRAW_RES; ++i) {
             ds += (juce::juce_wchar) (ch.drawSemi[i] == DrumChannel::DRAW_GAP ? 33 : (ch.drawSemi[i] + 70));
+            vs += (juce::juce_wchar) (35 + (ch.drawVelC[i] >> 1));   // per-column velocity, printable
+        }
         chState.setProperty("drawSemi", ds, nullptr);
+        chState.setProperty("drawVelC", vs, nullptr);
         chState.setProperty("drawVel", ch.drawVel, nullptr);
         chState.setProperty("drawPan", ch.drawPan, nullptr);
     }
@@ -1325,6 +1369,8 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
     ch.keysSlot2Down  = juce::jlimit(-24, 24, (int) child.getProperty("keys2Dn", 0));   // KEYS slot-2 transpose (per channel; +down/-up)
     ch.humanizeAmt = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("humanize", 0.0f));   // HUMANIZE
     ch.strumAmt    = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("strum",    0.0f));   // STRUM
+    ch.keysMinVel  = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("keysMinVel", 0.0f)); // KEYS min velocity
+    ch.keysMaxVel  = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("keysMaxVel", 1.0f)); // KEYS max velocity
     ch.chokeGroup  = (int)  child.getProperty("chokeGrp", 0);
     ch.numSteps    = (int)child.getProperty("numSteps",   8);
     ch.soundType   = (DrumSoundGenerator::Type)(int)child.getProperty("sound", 0);
@@ -1385,9 +1431,12 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
             ch.drawVel  = (float) child.getProperty("drawVel", 1.0f);
             ch.drawPan  = (float) child.getProperty("drawPan", 0.0f);
             juce::String ds = child.getProperty("drawSemi", "").toString();
+            juce::String vs = child.getProperty("drawVelC", "").toString();
             for (int i = 0; i < DrumChannel::DRAW_RES; ++i) {
                 const int cch = (i < ds.length()) ? (int) ds[i] : 33;
                 ch.drawSemi[i] = (cch == 33) ? DrumChannel::DRAW_GAP : (int8_t) juce::jlimit(-36, 36, cch - 70);
+                const int vc = (i < vs.length()) ? juce::jlimit(0, 127, (int) vs[i] - 35) : 127;
+                ch.drawVelC[i] = (uint8_t) juce::jlimit(0, 255, vc << 1);   // old projects (no drawVelC) -> full
             }
         }
         {
@@ -1494,11 +1543,15 @@ juce::ValueTree DrumSequencerProcessor::captureStateTree()
                 tt.setProperty("draw", true, nullptr);
                 tt.setProperty("drawPat", t.drawPat, nullptr);
                 juce::String ds; ds.preallocateBytes((size_t) DrumChannel::DRAW_RES);
+                juce::String vs; vs.preallocateBytes((size_t) DrumChannel::DRAW_RES);
                 for (int i = 0; i < DrumChannel::DRAW_RES; ++i) {
                     const int v = (i < (int) t.drawLane.size()) ? t.drawLane[(size_t) i] : DrumChannel::DRAW_GAP;
                     ds += (juce::juce_wchar) (v == DrumChannel::DRAW_GAP ? 33 : (v + 70));
+                    const int vv = (i < (int) t.drawVel.size()) ? t.drawVel[(size_t) i] : 255;
+                    vs += (juce::juce_wchar) (35 + (vv >> 1));   // 0..127 range into printable ASCII (35..162)
                 }
                 tt.setProperty("lane", ds, nullptr);
+                tt.setProperty("laneVel", vs, nullptr);
             }
             else
             {
@@ -1607,10 +1660,14 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
                 t.isDraw = true;
                 t.drawPat = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, (int) tt.getProperty("drawPat", 0));
                 juce::String ds = tt.getProperty("lane", "").toString();
+                juce::String vs = tt.getProperty("laneVel", "").toString();
                 t.drawLane.resize((size_t) DrumChannel::DRAW_RES);
+                t.drawVel.resize((size_t) DrumChannel::DRAW_RES);
                 for (int i = 0; i < DrumChannel::DRAW_RES; ++i) {
                     const int cch = (i < ds.length()) ? (int) ds[i] : 33;
                     t.drawLane[(size_t) i] = (cch == 33) ? DrumChannel::DRAW_GAP : (int8_t) juce::jlimit(-36, 36, cch - 70);
+                    const int vc = (i < vs.length()) ? juce::jlimit(0, 127, (int) vs[i] - 35) : 127;
+                    t.drawVel[(size_t) i] = (uint8_t) juce::jlimit(0, 255, vc << 1);   // old takes (no laneVel) -> full
                 }
                 if (keysTakes.size() < KEYS_TAKES_MAX) keysTakes.push_back(std::move(t));
                 continue;
