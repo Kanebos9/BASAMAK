@@ -37,6 +37,7 @@ public:
     MidiLearnManager* midiLearn = nullptr;
 
     int rowH = 44;            // set by parent layout
+    double barMs = 2000.0;    // one bar in ms at the current tempo (set by the editor; Nudge ms read-out)
     int selectedRow = -1;     // the editor's selected channel - its row gets a soft highlight wash
     juce::Colour selectedRowColour { 0xffe8bf4d };   // that channel's colour (wash + left accent bar)
     int visibleRows = 8;      // how many channel rows to draw at once (the viewport height in rows)
@@ -1801,6 +1802,7 @@ private:
     void initPreset();             // clean default kit (120 BPM, 4/4, 8 steps, no steps)
     void syncAfterStateChange();   // push BPM/time-sig to the UI + full refresh
     void refreshPatternOptions();
+    void refreshSwingLabel();
     void askLoopCount(const juce::String& title, int defVal, std::function<void(int)> onResult);  // typed loop-count dialog
     void fullRefresh();
 

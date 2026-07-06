@@ -1318,8 +1318,13 @@ void StepGridComponent::paintValueCell(juce::Graphics& g, int ch, int step, juce
                     g.fillRect(bar.reduced(0.0f, 1.0f));
                     g.setColour(juce::Colour(0x66ffffff));
                     g.drawVerticalLine((int) midX, r.getY(), r.getBottom());   // grid line
+                    // Read-out in MILLISECONDS at the current tempo (max shift = half this step's span).
+                    int stepsInBar = juce::jmax(1, numSteps[ch]);
+                    if (grpBars > 1) { int b = 0; while (b + 1 < grpBars && step >= barStep0[ch][b + 1]) ++b;
+                                       stepsInBar = juce::jmax(1, barStep0[ch][b + 1] - barStep0[ch][b]); }
+                    const double ms = nd * 0.5 * (barMs / (double) stepsInBar);
                     txt = nd == 0.0f ? juce::String("0")
-                                     : (nd > 0 ? "+" : "-") + juce::String(juce::roundToInt(std::abs(nd) * 50.0f)) + "%";
+                                     : (ms > 0 ? "+" : "") + juce::String(juce::roundToInt(ms)) + "ms";
                 }
                 else if (editMode == ModeProb)
                 {
@@ -5398,7 +5403,9 @@ void DrumSequencerEditor::initPreset()
 
 void DrumSequencerEditor::refreshPatternOptions()
 {
-    auto& p = proc.sequencer.patterns[currentPattern()];
+    // MERGED GROUP: the play-mode/chain settings live on (and are edited on) the LAST bar - the
+    // bar the playback LEAVES from (user rule). Single pattern: groupEnd == itself.
+    auto& p = proc.sequencer.patterns[proc.sequencer.groupEnd(currentPattern())];
     juce::String inf   = juce::String(juce::CharPointer_UTF8("\xE2\x88\x9E"));
     juce::String arrow = juce::String(juce::CharPointer_UTF8("\xE2\x86\x92"));
 
@@ -5414,6 +5421,16 @@ void DrumSequencerEditor::refreshPatternOptions()
     else t = "Go to P" + juce::String(p.gotoPattern + 1) + " after " + juce::String(p.repeatTarget);   // legacy NextAfterN
 
     patModeBtn.setButtonText(t);   // the down-triangle is drawn by DropButtonLNF (cleaner than a unicode glyph)
+}
+
+// The swing KNOB caption shows the live value (Swing 66% / Swing Off) - the knob has no textbox
+// (the old label+fader+readout trio ate a third of the pattern row).
+void DrumSequencerEditor::refreshSwingLabel()
+{
+    const double v = sliderSwing.getValue();
+    lblSwing.setText("Swing " + (sliderSwing.textFromValueFunction ? sliderSwing.textFromValueFunction(v)
+                                                                   : juce::String(v, 2)),
+                     juce::dontSendNotification);
 }
 
 // Small modal dialog to TYPE a loop count (so the user can enter any number, e.g. 128, not pick from a list).
@@ -5615,6 +5632,9 @@ void DrumSequencerEditor::setupComponents()
 
     content.addAndMakeVisible(lblSwing);
     lblSwing.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
+    lblSwing.setFont(juce::Font(10.0f));
+    lblSwing.setJustificationType(juce::Justification::centred);
+    lblSwing.setMinimumHorizontalScale(0.8f);
     content.addAndMakeVisible(sliderSwing);
     // Full classic (MPC-style) swing range: internal 0..1 -> the off-step of each pair lands at
     // 50%..75% of the pair (stepSpan: boundary = 0.5 + swing*0.25). Read-out uses the standard
@@ -5622,11 +5642,12 @@ void DrumSequencerEditor::setupComponents()
     // 0..0.7 and play EXACTLY as before - the boundary math is unchanged, only the cap/label moved.
     sliderSwing.setRange(0.0, 1.0, 0.01);
     sliderSwing.setValue(proc.sequencer.current().swing, juce::dontSendNotification);
-    sliderSwing.setSliderStyle(juce::Slider::LinearHorizontal);
-    sliderSwing.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 42, 20);
+    sliderSwing.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);   // knob = 1/3 the width of the old fader row
+    sliderSwing.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
     sliderSwing.textFromValueFunction = [](double v){ return v < 0.005 ? juce::String("Off")
                                                              : juce::String(juce::roundToInt(50.0 + v * 25.0)) + "%"; };
-    sliderSwing.onValueChange = [this] { proc.sequencer.current().swing = (float)sliderSwing.getValue(); };
+    sliderSwing.onValueChange = [this] { proc.sequencer.current().swing = (float)sliderSwing.getValue();
+                                         refreshSwingLabel(); };
 
     // Step-grid edit-mode radio buttons.
     content.addAndMakeVisible(lblEditMode);
@@ -5682,11 +5703,13 @@ void DrumSequencerEditor::setupComponents()
     btnModePan.setTooltip("Pan edit mode: each step becomes a bipolar bar - drag LEFT/RIGHT to place that hit in the "
                           "stereo field (centre = middle). Per-step pan rides on top of the channel Pan. For built-in "
                           "sounds only (a MIDI-Out channel sends notes, not audio). Click again to leave.");
-    btnModeNudge.setTooltip("Nudge edit mode (micro-timing): drag a step LEFT to make its hit fire EARLY, RIGHT for LATE - "
-                            "up to half a step each way. Unlike Swing (one groove knob shifting every off-beat), Nudge "
-                            "moves ONE chosen hit: drag a snare a touch late for laid-back feel, rush a hat, humanize a "
-                            "fill by hand. Snaps back to exactly on-the-grid near the centre; double-click resets. "
-                            "Rolls and MIDI-out notes shift with it; Drag-MIDI exports the same timing. Click again to leave.");
+    btnModeNudge.setTooltip("Nudge edit mode (micro-timing): drag a step LEFT and its hit fires EARLY - i.e. BEFORE the "
+                            "sequencer reaches that grid line (negative ms) - or RIGHT for LATE (positive ms), up to half a "
+                            "step each way. The read-out is real milliseconds at the current tempo. Unlike Swing (one groove "
+                            "knob shifting every off-beat), Nudge moves ONE chosen hit: drag a snare a touch late for "
+                            "laid-back feel, rush a hat, humanize a fill by hand. Snaps back to exactly on-the-grid near "
+                            "the centre; double-click resets. Rolls and MIDI-out notes shift with it; Drag-MIDI exports "
+                            "the same timing. Click again to leave.");
 
     // Time signature + bar-length calculator. X/Y editable.
     auto styleStatic = [this](juce::Label& l, const juce::String& t, float fs) {
@@ -5801,8 +5824,9 @@ void DrumSequencerEditor::setupComponents()
         pb.setTooltip("Pattern " + juce::String(p + 1) + ". Click to view + edit it. DRAG it onto another pattern "
                       "to COPY this pattern's steps, swing, play-mode + FX into that slot (the sounds are shared, so "
                       "only the sequencing copies). SHIFT+CLICK to MERGE it with the pattern before it: merged "
-                      "patterns play back to back as one longer piece (the FIRST one's play mode + sounds apply to "
-                      "all of them; steps stay per pattern). Shift+click again to un-merge. Right-click to MIDI-learn.");
+                      "patterns play back to back as one longer piece (SOUNDS + step counts mirror the FIRST one; "
+                      "the play mode / chain comes from the LAST one - the bar playback leaves from; steps stay per "
+                      "pattern). Shift+click again to un-merge. Right-click to MIDI-learn.");
         content.addAndMakeVisible(pb);
     }
     content.addAndMakeVisible(btnFollow);
@@ -6108,7 +6132,8 @@ void DrumSequencerEditor::setupComponents()
     patModeBtn.setLookAndFeel(&dropBtnLNF);   // draws a clean down-triangle on the right
     patModeBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
     patModeBtn.onClick = [this] {
-        auto& p = proc.sequencer.patterns[currentPattern()];
+        // Merged group: edit the LAST bar's settings (the bar playback leaves from).
+        auto& p = proc.sequencer.patterns[proc.sequencer.groupEnd(currentPattern())];
         juce::String inf = juce::String(juce::CharPointer_UTF8("\xE2\x88\x9E"));
         juce::PopupMenu m;
         m.addItem(1, "Loop " + inf, true, p.playMode == Sequencer::LoopForever);
@@ -6131,17 +6156,17 @@ void DrumSequencerEditor::setupComponents()
         m.showMenuAsync(juce::PopupMenu::Options{}.withTargetComponent(&patModeBtn),
             [this](int r) {
                 if (r <= 0) return;
-                auto& pp = proc.sequencer.patterns[currentPattern()];
+                auto& pp = proc.sequencer.patterns[proc.sequencer.groupEnd(currentPattern())];
                 if      (r == 1)        { pp.playMode = Sequencer::LoopForever; refreshPatternOptions(); }
                 else if (r == 2)        askLoopCount("Stop after", pp.repeatTarget, [this](int n) {
-                                            auto& q = proc.sequencer.patterns[currentPattern()];
+                                            auto& q = proc.sequencer.patterns[proc.sequencer.groupEnd(currentPattern())];
                                             q.playMode = Sequencer::StopAfterN; q.repeatTarget = n; refreshPatternOptions(); });
                 else if (r == 3)        { if (pp.chainLen > 0) --pp.chainLen;          // delete the LAST chain entry
                                           if (pp.chainLen == 0) pp.playMode = Sequencer::LoopForever; refreshPatternOptions(); }
                 else if (r >= 220000)   { const int pat = r - 220000;
                                           askLoopCount("Play Pattern " + juce::String(pat + 1) + " after how many loops", 2,
                                             [this, pat](int n) {
-                                                auto& q = proc.sequencer.patterns[currentPattern()];
+                                                auto& q = proc.sequencer.patterns[proc.sequencer.groupEnd(currentPattern())];
                                                 if (q.chainLen < Sequencer::CHAIN_MAX) {
                                                     q.chainSeq[q.chainLen] = pat; q.chainLoops[q.chainLen] = n;
                                                     ++q.chainLen; q.playMode = Sequencer::Chain; }
@@ -8512,6 +8537,7 @@ void DrumSequencerEditor::refreshChannelStrips()
     refreshRouting();   // recolour strips by MIDI/aux routing
     btnDawSync.setToggleState(proc.sequencer.dawSync,       juce::dontSendNotification);
     sliderSwing.setValue     (proc.sequencer.current().swing, juce::dontSendNotification);
+    refreshSwingLabel();
 
     // DAW Sync ON -> BPM + time signature are locked and follow the host.
     const bool sync = proc.sequencer.dawSync;
@@ -8780,6 +8806,9 @@ void DrumSequencerEditor::timerCallback()
     }
 
     stepGrid.update(proc.sequencer, proc.anySolo);      // 60 Hz: smooth playhead
+    // One bar in ms at the current tempo - the Nudge cells read out real milliseconds.
+    stepGrid.barMs = 60000.0 / juce::jmax(1.0, proc.currentBpm)
+                   * (juce::jmax(1, proc.currentTimeSigNum) * 4.0 / juce::jmax(1, proc.currentTimeSigDen));
     if (timerCounter % 3 == 0) refreshChannelStrips();  // 20 Hz: strips/combo/labels (was hammering the UI at 60 Hz -> laggy dropdowns)
     updateVisuals();
 
@@ -8978,8 +9007,8 @@ void DrumSequencerEditor::paintStripOutline(juce::Graphics& g)
     const int selRow = selectedChannel - firstChannelRow;
     if (selRow < 0 || selRow >= viewRows()) return;
     g.setColour(juce::Colour(0xffff3b30));
-    g.drawRoundedRectangle(juce::Rectangle<float>(2.0f, (float) (GRID_TOP + selRow * ROW_H) + 1.5f,
-                                                  (float) STRIP_W - 5.0f, (float) ROW_H - 4.0f), 5.0f, 2.0f);
+    g.drawRoundedRectangle(juce::Rectangle<float>(2.0f, (float) (GRID_TOP + selRow * ROW_H) + 1.0f,
+                                                  (float) STRIP_W - 5.0f, (float) ROW_H - 1.5f), 5.0f, 2.0f);   // bottom edge BELOW the level meter
 }
 
 void DrumSequencerEditor::paintContent(juce::Graphics& g)
@@ -9223,19 +9252,19 @@ void DrumSequencerEditor::layoutContent()
     lblNumPat.setJustificationType(juce::Justification::centredRight);
     lblChannels.setBounds(858, PAT_Y + 8, 20, 24);   btnCh8.setBounds (880, PAT_Y + 10, 25, 21); btnCh16.setBounds(905, PAT_Y + 10, 25, 21);
     lblNumPat.setBounds  (930, PAT_Y + 8, 22, 24);   btnPat16.setBounds(954, PAT_Y + 10, 25, 21); btnPat32.setBounds(979, PAT_Y + 10, 25, 21);
-    lblSwing.setBounds   (1018, PAT_Y + 8, 46, 22);  // swing is per-pattern -> pattern row
-    sliderSwing.setBounds(1064, PAT_Y + 8, 56, 26);
+    sliderSwing.setBounds(1034, PAT_Y + 1, 26, 25);   // swing KNOB (was label+fader+readout = 3x the width)
+    lblSwing.setBounds   (1004, PAT_Y + 26, 86, 12);  // live caption under it, e.g. Swing 66%
     // Step edit-mode radio buttons at the right end of the pattern row.
     // Edit-mode group: evenly spaced (8px gaps) so it spans flush to the right edge - Clear ends ~1504 (no weird gap).
-    lblEditMode.setBounds (1122, PAT_Y + 8, 30, 24);   // "Edit:" (minimumHorizontalScale squeezes it)
-    btnModeVel.setBounds  (1154, PAT_Y + 8, 36, 24);   // (Slide has no button - it lives in Pitch mode's bottom band)
-    btnModeLen.setBounds  (1194, PAT_Y + 8, 36, 24);
-    btnModePitch.setBounds(1234, PAT_Y + 8, 42, 24);
-    btnModeProb.setBounds (1280, PAT_Y + 8, 38, 24);
-    btnModeRoll.setBounds (1322, PAT_Y + 8, 36, 24);
-    btnModePan.setBounds  (1362, PAT_Y + 8, 32, 24);
-    btnModeNudge.setBounds(1398, PAT_Y + 8, 42, 24);
-    btnClearPat.setBounds (1440, PAT_Y + 8, 64, 24);   // Clear - flush near the right edge
+    lblEditMode.setBounds (1096, PAT_Y + 8, 30, 24);   // "Edit:" (minimumHorizontalScale squeezes it)
+    btnModeVel.setBounds  (1130, PAT_Y + 8, 36, 24);   // (Slide has no button - it lives in Pitch mode's bottom band)
+    btnModeLen.setBounds  (1170, PAT_Y + 8, 36, 24);
+    btnModePitch.setBounds(1210, PAT_Y + 8, 42, 24);
+    btnModeProb.setBounds (1256, PAT_Y + 8, 38, 24);
+    btnModeRoll.setBounds (1298, PAT_Y + 8, 36, 24);
+    btnModePan.setBounds  (1338, PAT_Y + 8, 32, 24);
+    btnModeNudge.setBounds(1374, PAT_Y + 8, 56, 24);   // wide enough for the full word (42 showed Nud...)
+    btnClearPat.setBounds (1434, PAT_Y + 8, 70, 24);   // Clear - flush near the right edge
 
     // Channel strips:  [#] [sound ▸ sub-menu] [M] [S] [Ø] [steps]
     // Only the channels in the scroll window [firstChannelRow, +viewRows) are shown, mapped to on-screen

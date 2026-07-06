@@ -269,7 +269,8 @@ void Sequencer::onBarComplete()
         return;
     }
     ++patternRepeatCount;
-    auto& p = patterns[gHead];    // group: the HEAD's mode governs (single pattern: gHead == playPattern)
+    auto& p = patterns[gEnd];     // group: the LAST bar's mode/chain governs - the bar playback
+                                  // LEAVES from (user rule; single pattern: gEnd == playPattern)
     const int target = juce::jmax(1, p.repeatTarget);
     if (gEnd > gHead && p.playMode == LoopForever)
     {   // loop the whole group: last bar -> back to the head
