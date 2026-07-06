@@ -1,7 +1,7 @@
 # BASAMAK - a free, open-source drum & sample step-sequencer plugin (VST3 / AU / Standalone).
 # Copyright (C) 2026 Oguzhan Yazici. Licensed under the GNU AGPL v3 (see LICENSE).
 cmake_minimum_required(VERSION 3.22)
-project(DrumSequencer VERSION 1.3.0)
+project(DrumSequencer VERSION 1.3.1)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -66,6 +66,28 @@ juce_add_plugin(DrumSequencer
 )
 
 juce_generate_juce_header(DrumSequencer)
+
+# ---- Offline DSP regression tests (tests/run.sh builds + runs them all) ----
+# Console apps rendering the engine headlessly with Goertzel checks; OFF by default so normal
+# builds are untouched. Run tests/run.sh BEFORE EVERY RELEASE - each test exits non-zero on FAIL.
+option(BASAMAK_TESTS "Build the offline DSP regression tests" OFF)
+if(BASAMAK_TESTS)
+    foreach(T PolyTest PRollTest MergeTest)
+        juce_add_console_app(${T})
+        juce_generate_juce_header(${T})
+        target_sources(${T} PRIVATE
+            Source/dsp/DrumChannel.cpp
+            Source/dsp/Sequencer.cpp
+            tests/${T}.cpp)
+        target_include_directories(${T} PRIVATE Source/dsp Source/midi Source/ui Source/plugin)
+        target_compile_definitions(${T} PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 BASAMAK_VERSION="test")
+        target_link_libraries(${T} PRIVATE juce::juce_audio_utils juce::juce_dsp juce::juce_gui_extra
+            PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_lto_flags)
+    endforeach()
+endif()
+
+
+
 
 target_sources(DrumSequencer PRIVATE
     Source/plugin/PluginProcessor.cpp

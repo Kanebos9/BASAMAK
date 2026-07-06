@@ -818,6 +818,7 @@ void SlotEditor::pushValues()
     }
     morphView.repaint();          // reflect this slot's wave (+ warp + FM)
     physView.repaint(); modalView.repaint();   // reflect Position/Tone / Hit Pos/Damp + material looks
+    applyFreqLock();              // transpose lock follows the channel on every refresh
 }
 
 void SlotEditor::place(int boxX, int yTop, int boxW, int boxH)
@@ -851,6 +852,30 @@ void SlotEditor::hookFreqReadouts()
     for (int i = 0; i < params.size() && i < (int) knobs.size(); ++i)
         if (params[i].suffix == "nHz") hook(*knobs[i]);
     if (freqFader != nullptr) hook(*freqFader);
+    applyFreqLock();   // the lock state must survive every re-place/refresh
+}
+
+// TRANSPOSE LOCK: grey + disable every pitched Freq control and explain where to unlock; restore the
+// original tooltip (SlotParam::tooltip / the fader's authored text) when unlocked.
+void SlotEditor::applyFreqLock()
+{
+    static const juce::String lockMsg =
+        "Transpose is disabled for this sound (its pitch reference is locked, so keys / steps / MIDI export "
+        "stay anchored). To edit the Freq again, turn OFF 'Lock transpose' above the keyboard (KEYS view).";
+    static const juce::String freqFaderTip =
+        "Frequency: the oscillator's base pitch (Hz). CLICK the value read-out to switch to NOTE "
+        "mode (shows A1, C2...; dragging snaps to semitones, SHIFT = free). Click again for Hz.\n\n"
+        "KEYS: the moment you touch the on-screen piano this snaps to C3, so recorded step pitches "
+        "play back EXACTLY as performed (step pitch 0 = C3). Use this knob AFTERWARDS to transpose "
+        "the whole sound.";   // identical to the authored tooltip so unlock restores it verbatim
+    auto apply = [this](juce::Slider& sl, const juce::String& openTip) {
+        sl.setEnabled(! freqLock);
+        sl.setAlpha(freqLock ? 0.45f : 1.0f);
+        sl.setTooltip(freqLock ? lockMsg : openTip);
+    };
+    for (int i = 0; i < params.size() && i < (int) knobs.size(); ++i)
+        if (params[i].suffix == "nHz") apply(*knobs[i], params[i].tooltip);
+    if (freqFader != nullptr) apply(*freqFader, freqFaderTip);
 }
 
 // Knobs in up to TWO balanced rows that FILL the box height (so the knobs are as big as fit, no empty
@@ -1072,51 +1097,116 @@ juce::String StepGridComponent::stepParamId(int ch, int step) const
 
 juce::Rectangle<int> StepGridComponent::stepRect(int ch, int step) const
 {
+    const int y = (ch - firstRow) * rowH;    // map channel -> on-screen row (scroll offset)
+    // MERGED GROUP: give each BAR an equal-width slot (like the piano roll's per-bar columns), then
+    // split that slot by the bar's OWN step count. So bar boundaries LINE UP across channels even
+    // when they have different step counts (a 15-step bar and an 8-step bar occupy the same width).
+    if (grpBars > 1)
+    {
+        int b = 0;
+        while (b + 1 < grpBars && step >= barStep0[ch][b + 1]) ++b;   // the bar this concat step is in
+        const int barSteps = juce::jmax(1, barStep0[ch][b + 1] - barStep0[ch][b]);
+        const int local    = step - barStep0[ch][b];
+        const double barW = (double) getWidth() / (double) grpBars;
+        const double x0   = (double) b * barW;
+        const double cw   = barW / (double) barSteps;
+        const int x = (int) (x0 + (double) local * cw);
+        const int w = (int) (x0 + (double) (local + 1) * cw) - x;
+        return { x, y, w, rowH };
+    }
     int n = numSteps[ch];
     if (n <= 0) n = 1;
     float stepW = (float)getWidth() / (float)n;
     int x = (int)(step * stepW);
     int w = (int)((step + 1) * stepW) - x;
-    int y = (ch - firstRow) * rowH;          // map channel -> on-screen row (scroll offset)
     return { x, y, w, rowH };
 }
 
 void StepGridComponent::update(const Sequencer& seq, bool hasSolo)
 {
     currentPattern = seq.currentPattern;
+    // MERGED GROUP: show all the group's bars SIDE BY SIDE (steps concatenated per channel, roll
+    // spanning grpBars * DRAW_RES columns). The viewed pattern is always the group HEAD.
+    const int gHead = seq.groupHead(seq.currentPattern);
+    const int gEnd  = seq.groupEnd(seq.currentPattern);
+    grpBars = juce::jlimit(1, GRP_MAX, gEnd - gHead + 1);
+    const bool playingGroup = seq.isCurrentlyPlaying
+                              && seq.groupHead(seq.playPattern) == gHead
+                              && seq.playPattern - gHead < grpBars;
     for (int ch = 0; ch < Sequencer::NUM_CHANNELS; ++ch)
     {
-        numSteps[ch] = seq.channel(ch).numSteps;
-        muted[ch]    = seq.channel(ch).mute;
-        soloed[ch]   = seq.channel(ch).solo;
-        midiOutCh[ch]= seq.channel(ch).midiOut;
-        playStep[ch] = seq.getChannelStep(ch);
-        const auto& c = seq.channel(ch);
-        for (int s = 0; s < DrumChannel::MAX_STEPS; ++s)
+        const auto& hc = seq.patterns[gHead].channels[ch];
+        muted[ch]    = hc.mute;
+        soloed[ch]   = hc.solo;
+        midiOutCh[ch]= hc.midiOut;
+        drawMode[ch] = hc.drawMode;
+        dVel[ch] = hc.drawVel; dPan[ch] = hc.drawPan;
+        // Concatenate the group's STEPS for this channel (equal cell widths; bars that no longer fit
+        // in MAX_STEPS cells are not shown). barStep0 records where each bar begins.
+        int tot = 0, filled = 0;
+        for (int b = 0; b < grpBars; ++b)
         {
-            steps[ch][s] = c.steps[s];
-            vel[ch][s]   = c.stepVel[s];
-            pit[ch][s]   = c.stepPitch[s];
-            prob[ch][s]  = c.stepProb[s];
-            roll[ch][s]  = c.stepRoll[s];
-            rollDec[ch][s] = c.stepRollDecay[s];
-            noteLen[ch][s] = c.stepNoteLen[s];
-            slide[ch][s]   = c.stepSlide[s];
-            merge[ch][s]   = c.stepMerge[s];
-            pan[ch][s]     = c.stepPan[s];
-            condLen[ch][s]  = c.stepCondLen[s];
-            condMask[ch][s] = c.stepCondMask[s];
+            const auto& c = seq.patterns[gHead + b].channels[ch];
+            const int n = juce::jlimit(1, DrumChannel::MAX_STEPS, c.numSteps);
+            if (tot + n > DrumChannel::MAX_STEPS) break;   // bars past 64 concat cells aren't shown
+            barStep0[ch][b] = tot;
+            for (int s = 0; s < n; ++s)
+            {
+                const int d = tot + s;
+                steps[ch][d] = c.steps[s];
+                vel[ch][d]   = c.stepVel[s];
+                pit[ch][d]   = c.stepPitch[s];
+                roll[ch][d]  = c.stepRoll[s];
+                rollDec[ch][d] = c.stepRollDecay[s];
+                noteLen[ch][d] = c.stepNoteLen[s];
+                slide[ch][d]   = c.stepSlide[s];
+                merge[ch][d]   = c.stepMerge[s];
+                pan[ch][d]     = c.stepPan[s];
+                condLen[ch][d]  = c.stepCondLen[s];
+                condMask[ch][d] = c.stepCondMask[s];
+            }
+            tot += n; ++filled;
         }
-        drawMode[ch] = c.drawMode;
-        dVel[ch] = c.drawVel; dPan[ch] = c.drawPan;
-        if (c.drawMode)
-            for (int i = 0; i < DrumChannel::DRAW_RES; ++i) { drawSemi[ch][i] = c.drawSemi[i]; drawVelC[ch][i] = c.drawVelC[i]; }
-        else if (drawMagCh == ch || drawDragCh == ch)   // channel left draw mode -> tidy overlay/stroke state
+        for (int b = filled; b <= grpBars; ++b) barStep0[ch][b] = tot;   // unfitted bars pin to the end
+        numSteps[ch] = tot;
+        // Playhead in concat space: the playing BAR's local step + that bar's offset.
+        playStep[ch] = -1;
+        if (playingGroup)
+        {
+            const int pb = seq.playPattern - gHead;
+            const auto& pc = seq.patterns[seq.playPattern].channels[ch];
+            const int n = juce::jmax(1, pc.numSteps);
+            playStep[ch] = barStep0[ch][pb] + (((int) (seq.barPos() * n)) % n);
+        }
+        else if (grpBars == 1)
+            playStep[ch] = seq.getChannelStep(ch);
+        // Concatenate the group's ROLL NOTES (offset each bar by b * DRAW_RES).
+        if (hc.drawMode)
+        {
+            if (drawDragCh != ch && ! (drawMagCh == ch && prMode != 0))
+            {   // don't clobber the mirror mid-gesture
+                int nn = 0;
+                for (int b = 0; b < grpBars; ++b)
+                {
+                    const auto& c = seq.patterns[gHead + b].channels[ch];
+                    const int nc = juce::jlimit(0, DrumChannel::DRAW_MAX_NOTES, c.drawNoteCount);
+                    for (int i = 0; i < nc && nn < MIR_MAX; ++i)
+                    {
+                        drawNotes[ch][nn] = c.drawNotes[i];
+                        drawNotes[ch][nn].start = (int16_t) (drawNotes[ch][nn].start + b * DrumChannel::DRAW_RES);
+                        ++nn;
+                    }
+                }
+                drawNoteCount[ch] = nn;
+            }
+        }
+        else if (drawMagCh == ch || drawDragCh == ch)   // channel left piano-roll mode -> tidy overlay/stroke state
         { if (drawMagCh == ch) drawMagCh = -1; if (drawDragCh == ch) drawDragCh = -1; drawReadSemi = -128; }
     }
     anySolo = hasSolo;
     curLoop = seq.loopCount;   // for the Prob-mode current-loop indicator
-    playBarFrac = (seq.currentPattern == seq.playPattern && seq.isCurrentlyPlaying) ? (float) seq.barPos() : 0.0f;
+    playBarFrac = playingGroup ? ((float) (seq.playPattern - gHead) + (float) seq.barPos()) / (float) grpBars
+                : (seq.currentPattern == seq.playPattern && seq.isCurrentlyPlaying) ? (float) seq.barPos() : 0.0f;
     repaint();
 }
 
@@ -1343,41 +1433,102 @@ void StepGridComponent::paintMergeArrow(juce::Graphics& g, int ch, int step, juc
 juce::Rectangle<int> StepGridComponent::drawRowRect(int ch) const
 { return { 0, (ch - firstRow) * rowH, getWidth(), rowH }; }
 
-// The 4x-tall magnify OVERLAY panel around the open channel (clamped inside the grid). It is a
-// TOGGLE (a lens button on the row opens it, close/click-outside dismisses) - not a while-drag
-// zoom, so the cursor never jumps to a re-mapped pitch on click.
+// The BIG piano-roll EDITOR panel (user: "much bigger so users can actually see notes"). Nearly the
+// whole grid tall, full width, clamped inside the grid. It is a TOGGLE (the lens on the row opens
+// it, close/click-outside dismisses).
 juce::Rectangle<int> StepGridComponent::drawOverlayRect() const
 {
     if (drawMagCh < 0) return {};
-    const int y = (drawMagCh - firstRow) * rowH;
-    const int mh = rowH * 4;
-    int my = juce::jlimit(0, juce::jmax(0, getHeight() - mh), y + rowH / 2 - mh / 2);
-    return { 0, my, getWidth(), mh };
+    return { 0, 0, getWidth(), getHeight() };   // the editor covers the WHOLE sequencer area (user)
 }
 
 int StepGridComponent::drawColAt(int x) const
-{ return juce::jlimit(0, DrumChannel::DRAW_RES - 1, (int) ((float) x / (float) juce::jmax(1, getWidth()) * (float) DrumChannel::DRAW_RES)); }
+{ return juce::jlimit(0, totalCols() - 1, (int) ((float) x / (float) juce::jmax(1, getWidth()) * (float) totalCols())); }
 
-int StepGridComponent::yToDrawSemi(juce::Rectangle<int> rect, int y, int range) const
+int StepGridComponent::yToDrawSemi(juce::Rectangle<int> rect, int y, int range, int centre) const
 {
     const float half = juce::jmax(1.0f, rect.getHeight() * 0.5f - 4.0f);
     const float frac = ((float) rect.getCentreY() - (float) y) / half;   // +1 top .. -1 bottom
-    return juce::jlimit(-range, range, (int) std::lround(frac * (float) range));
+    return juce::jlimit(-36, 36, centre + juce::jlimit(-range, range, (int) std::lround(frac * (float) range)));
 }
 
+// Topmost note covering (col, semi) - semi tolerance +-1 so thin bars are grabbable. -1 = none.
+int StepGridComponent::prNoteAt(int ch, int col, int semi) const
+{
+    for (int i = drawNoteCount[ch] - 1; i >= 0; --i)   // last drawn wins (drawn on top)
+    {
+        const auto& n = drawNotes[ch][i];
+        if (col >= n.start && col < n.start + n.len && std::abs((int) n.semi - semi) <= 1) return i;
+    }
+    return -1;
+}
+
+// Remove / trim / split every note that crosses columns [lo..hi] (ANY pitch) - the line stroke and
+// the right-drag eraser both clear what they pass over, like the old column lane did.
+void StepGridComponent::eraseColRange(int ch, int lo, int hi)
+{
+    for (int i = drawNoteCount[ch] - 1; i >= 0; --i)
+    {
+        auto& n = drawNotes[ch][i];
+        if (strokeNoteIdx == i) continue;                       // never eat the note we're drawing
+        const int a = n.start, b = n.start + n.len - 1;         // inclusive span
+        if (b < lo || a > hi) continue;                         // no overlap
+        if (a >= lo && b <= hi)                                 // fully covered -> remove
+        {
+            for (int j = i; j < drawNoteCount[ch] - 1; ++j) drawNotes[ch][j] = drawNotes[ch][j + 1];
+            --drawNoteCount[ch];
+            if (strokeNoteIdx > i) --strokeNoteIdx;             // keep the stroke handle stable
+            continue;
+        }
+        if (a < lo && b > hi)                                    // covers the range -> split in two
+        {
+            const int rightStart = hi + 1, rightLen = b - hi;
+            n.len = (int16_t) (lo - a);
+            if (drawNoteCount[ch] < DrumChannel::DRAW_MAX_NOTES)
+                drawNotes[ch][drawNoteCount[ch]++] = { (int16_t) rightStart, (int16_t) rightLen, n.semi, n.vel };
+            continue;
+        }
+        if (a < lo)      n.len = (int16_t) (lo - a);            // overlaps from the left -> trim tail
+        else           { n.len = (int16_t) (b - hi); n.start = (int16_t) (hi + 1); }   // from the right -> trim head
+    }
+}
+
+// ROW line gesture (kept from the old draw feel): the stroke ERASES whatever it passes over and lays
+// a note that extends as you drag; changing pitch mid-stroke starts a new note (a wiggly line = a
+// run of notes). Right-drag = pure eraser.
 void StepGridComponent::drawStrokeTo(int ch, juce::Point<int> pos)
 {
-    const bool inOverlay = (drawMagCh == ch);
-    const auto rect = inOverlay ? drawOverlayRect() : drawRowRect(ch);
-    const int range = inOverlay ? drawRange : 36;
-    const int semi = drawErase ? (int) DrumChannel::DRAW_GAP : yToDrawSemi(rect, pos.y, range);
+    const auto rect = drawRowRect(ch);
+    const int semi = yToDrawSemi(rect, pos.y, 36);
     const int col = drawColAt(pos.x);
     const int lo = juce::jmin(col, drawLastCol < 0 ? col : drawLastCol);
     const int hi = juce::jmax(col, drawLastCol < 0 ? col : drawLastCol);
-    for (int c = lo; c <= hi; ++c) drawSemi[ch][c] = (int8_t) semi;
-    if (onDrawWrite) onDrawWrite(ch, lo, hi, semi);
+    if (drawErase)
+    {
+        strokeNoteIdx = -1;
+        eraseColRange(ch, lo, hi);
+        drawReadSemi = -128;
+    }
+    else
+    {
+        eraseColRange(ch, lo, hi);                              // clear under the stroke first
+        auto& cnt = drawNoteCount[ch];
+        if (strokeNoteIdx >= 0 && strokeNoteIdx < cnt && (int) drawNotes[ch][strokeNoteIdx].semi == semi)
+        {   // extend the current stroke note to cover [lo..hi] - it may cross bar lines (continuous note)
+            auto& n = drawNotes[ch][strokeNoteIdx];
+            const int a = juce::jmin((int) n.start, lo), b = juce::jmax((int) n.start + n.len - 1, hi);
+            n.start = (int16_t) a; n.len = (int16_t) juce::jmax(1, b - a + 1);
+        }
+        else if (cnt < MIR_MAX)                                 // new pitch (or first stroke) -> new note
+        {
+            drawNotes[ch][cnt] = { (int16_t) lo, (int16_t) juce::jmax(1, hi - lo + 1), (int8_t) semi,
+                                   (uint8_t) juce::jlimit(0, 255, (int) std::lround(dVel[ch] * 255.0f)) };
+            strokeNoteIdx = cnt; ++cnt;
+        }
+        drawReadSemi = semi;   // live read-out
+    }
+    pushNotes(ch);
     drawLastCol = col;
-    drawReadSemi = drawErase ? -128 : semi;   // live read-out
     repaint();
 }
 
@@ -1389,47 +1540,50 @@ void StepGridComponent::setDrawVelPan(int ch, int x)
     repaint();
 }
 
-// DRAW ModeVel: set the velocity of the note under the cursor (its whole contiguous segment, so the
-// segment's ONSET - which is what plays - is always updated). Y = level. Only on existing notes.
+// PIANO-ROLL ModeVel: set the velocity of every note under the cursor column (a chord edits
+// together). Y = level. Only adjusts existing notes - no drawing here.
 void StepGridComponent::setDrawColVel(int ch, juce::Point<int> pos)
 {
     const bool inOverlay = (drawMagCh == ch);
-    const auto rect = (inOverlay ? drawOverlayRect() : drawRowRect(ch)).withTrimmedTop(inOverlay ? 15 : 0);
-    const int col = drawColAt(pos.x);
-    if (drawSemi[ch][col] == DrumChannel::DRAW_GAP) return;      // no free drawing - only adjust existing notes
+    const auto rect = inOverlay ? prLane(drawOverlayRect()) : drawRowRect(ch);
+    const int col = inOverlay ? prColAt(rect, pos.x) : drawColAt(pos.x);
     const float t = juce::jlimit(0.0f, 1.0f, ((float) rect.getBottom() - 4.0f - (float) pos.y)
                                              / juce::jmax(1.0f, (float) rect.getHeight() - 8.0f));
     const int v255 = juce::jlimit(0, 255, (int) std::lround(t * 255.0f));
-    const int semi = drawSemi[ch][col];
-    int lo = col; while (lo > 0 && drawSemi[ch][lo - 1] == semi) --lo;
-    int hi = col; while (hi < DrumChannel::DRAW_RES - 1 && drawSemi[ch][hi + 1] == semi) ++hi;
-    for (int c = lo; c <= hi; ++c) drawVelC[ch][c] = (uint8_t) v255;
-    if (onDrawVelWrite) onDrawVelWrite(ch, lo, hi, v255);
+    bool any = false;
+    for (int i = 0; i < drawNoteCount[ch]; ++i)
+    {
+        auto& n = drawNotes[ch][i];
+        if (col >= n.start && col < n.start + n.len) { n.vel = (uint8_t) v255; any = true; }
+    }
+    if (! any) return;
+    pushNotes(ch);
     drawReadVel = v255;
     repaint();
 }
 
 void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle<int> rect, bool overlay)
 {
+    const int R = totalCols();   // merged group: the lane spans every bar side by side
+    const bool dim = muted[ch] || (anySolo && ! soloed[ch]);
     if (editMode == ModeVel)
-    {   // DRAW VELOCITY (row OR magnify overlay): per-note bars, height = velocity. Drag a note up/down;
-        // you can't draw new notes here. LENS opens a 4x-tall overlay (like Pitch) for precise edits.
-        const int headH = overlay ? 15 : 0;
+    {   // PIANO-ROLL VELOCITY (row OR overlay): per-NOTE bars, height = velocity. Drag up/down to set
+        // (a chord under the cursor edits together); no drawing here. The LENS opens the big editor.
+        const int headH = overlay ? PR_HEAD : 0;
         g.setColour(juce::Colour(overlay ? 0xff1c1c34 : 0xff141426)); g.fillRect(rect);
-        juce::Rectangle<int> lane = rect.withTrimmedTop(headH);
-        const int R = DrumChannel::DRAW_RES;
+        juce::Rectangle<int> lane = overlay ? prLane(rect) : rect;
+        juce::ignoreUnused(headH);
         const float cw = (float) lane.getWidth() / (float) R;
-        const bool dim = muted[ch] || (anySolo && ! soloed[ch]);
         g.setColour(juce::Colour(0x18ffffff)); g.drawHorizontalLine(lane.getY() + 4, (float) lane.getX(), (float) lane.getRight());
-        for (int c = 0; c < R; ) {
-            if (drawSemi[ch][c] == DrumChannel::DRAW_GAP) { ++c; continue; }
-            const int semi = drawSemi[ch][c]; int e = c; while (e < R && drawSemi[ch][e] == semi) ++e;
-            const float v = (float) drawVelC[ch][c] / 255.0f;
-            const float x0 = (float) lane.getX() + (float) c * cw, x1 = (float) lane.getX() + (float) e * cw;
+        for (int i = 0; i < drawNoteCount[ch]; ++i)
+        {
+            const auto& n = drawNotes[ch][i];
+            const float v = (float) n.vel / 255.0f;
+            const float x0 = (float) lane.getX() + (float) n.start * cw;
+            const float x1 = (float) lane.getX() + (float) (n.start + n.len) * cw;
             const float h = juce::jmax(2.0f, v * ((float) lane.getHeight() - 8.0f));
-            g.setColour(dim ? juce::Colour(0xff5f6a78) : juce::Colour(0xff2f9e57));
+            g.setColour((dim ? juce::Colour(0xff5f6a78) : juce::Colour(0xff2f9e57)).withAlpha(0.75f));
             g.fillRect(juce::Rectangle<float>(x0 + 0.5f, (float) lane.getBottom() - 4.0f - h, juce::jmax(1.5f, x1 - x0 - 1.0f), h));
-            c = e;
         }
         if (playBarFrac > 0.0f) { const float px = (float) lane.getX() + playBarFrac * (float) lane.getWidth();
             g.setColour(juce::Colour(0x88ffcc33)); g.fillRect(juce::Rectangle<float>(px - 0.5f, (float) lane.getY(), 1.0f, (float) lane.getHeight())); }
@@ -1437,7 +1591,7 @@ void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle
             const float fs = overlay ? 34.0f : juce::jmin(30.0f, (float) rect.getHeight() * 0.7f);
             g.setColour(juce::Colours::white.withAlpha(0.16f)); g.setFont(juce::Font(fs, juce::Font::bold));
             g.drawText(juce::String((int) std::lround((float) drawReadVel / 255.0f * 100.0f)) + "%",
-                       rect.getRight() - 150, rect.getY() + headH, 146, rect.getHeight() - headH, juce::Justification::centredRight, false);
+                       rect.getRight() - 150, lane.getY(), 146, lane.getHeight(), juce::Justification::centredRight, false);
         }
         if (! overlay) {   // LENS button + hint
             juce::Rectangle<float> lb((float) rect.getX() + 2.0f, (float) rect.getY() + 2.0f, 18.0f, 15.0f);
@@ -1448,10 +1602,10 @@ void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle
             g.setColour(juce::Colour(0x99ffffff)); g.setFont(juce::Font(9.5f, juce::Font::bold));
             g.drawText("VEL: drag notes up/down", rect.getX() + 24, rect.getY() + 2, 220, 11, juce::Justification::topLeft, false);
         } else {           // overlay header: title + close X
-            g.setColour(juce::Colour(0xff262646)); g.fillRect(rect.getX(), rect.getY(), rect.getWidth(), headH);
+            g.setColour(juce::Colour(0xff262646)); g.fillRect(rect.getX(), rect.getY(), rect.getWidth(), PR_HEAD);
             g.setColour(juce::Colour(0xffb8b8d0)); g.setFont(juce::Font(9.5f, juce::Font::bold));
-            g.drawText("VELOCITY - drag notes up/down", rect.getX() + 6, rect.getY() + 1, 260, headH - 2, juce::Justification::centredLeft, false);
-            juce::Rectangle<int> cl(rect.getRight() - 18, rect.getY() + 1, 15, headH - 2);
+            g.drawText("VELOCITY - drag notes up/down", rect.getX() + 6, rect.getY() + 1, 260, PR_HEAD - 2, juce::Justification::centredLeft, false);
+            juce::Rectangle<int> cl(rect.getRight() - 18, rect.getY() + 1, 15, PR_HEAD - 2);
             g.setColour(juce::Colour(0xff5a2a2a)); g.fillRoundedRectangle(cl.toFloat(), 3.0f);
             g.setColour(juce::Colours::white); g.setFont(juce::Font(11.0f, juce::Font::bold)); g.drawText("x", cl, juce::Justification::centred, false);
             g.setColour(juce::Colours::white.withAlpha(0.85f)); g.drawRect(rect, 2);
@@ -1460,7 +1614,7 @@ void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle
         return;
     }
     if (! overlay && editMode == ModePan)
-    {   // DRAW mode PAN: still ONE value for the whole drawn line.
+    {   // PIANO-ROLL PAN: still ONE value for the whole channel.
         g.setColour(juce::Colour(0xff141426)); g.fillRect(rect);
         const float v = dPan[ch] * 0.5f + 0.5f;
         auto bar = rect.reduced(6, 8).toFloat();
@@ -1473,41 +1627,127 @@ void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle
         if (ch == selectedRow) { g.setColour(juce::Colour(0xffff3b30)); g.drawRect(rect.reduced(1), 2); }
         return;
     }
-    const int R = DrumChannel::DRAW_RES;
     const int range = overlay ? drawRange : 36;
-    const int headH = overlay ? 15 : 0;                       // overlay reserves a header strip for controls
-    juce::Rectangle<int> lane = rect.withTrimmedTop(headH);
+    const int ctr   = overlay ? juce::jlimit(-prViewClamp(), prViewClamp(), drawViewCenter) : 0;
+    juce::Rectangle<int> lane = overlay ? prLane(rect) : rect;
     g.setColour(juce::Colour(overlay ? 0xff1c1c34 : 0xff141426)); g.fillRect(rect);
     const float cy = (float) lane.getCentreY();
     const float half = juce::jmax(1.0f, lane.getHeight() * 0.5f - 4.0f);
-    auto yFor = [&](int semi) { return cy - (float) semi / (float) range * half; };
-    // gridlines every 12 st (or every semitone when the range is tight) + the pitch-0 centre line
-    g.setColour(juce::Colour(0x18ffffff));
-    const int gstep = (range <= 12) ? 1 : 12;
-    for (int s = -range; s <= range; s += gstep) if (s != 0) g.drawHorizontalLine((int) yFor(s), (float) lane.getX(), (float) lane.getRight());
-    g.setColour(juce::Colour(0x66ffe9b0)); g.fillRect(juce::Rectangle<float>((float) lane.getX(), cy - 0.5f, (float) lane.getWidth(), 1.0f));
-    // note bars (runs of the same semitone). Out-of-range notes are CLAMPED to the edge (kept, just off-view).
-    const float colW = (float) lane.getWidth() / (float) R;
-    const bool dim = muted[ch] || (anySolo && ! soloed[ch]);
-    for (int c = 0; c < R; )
+    auto yFor = [&](int semi) { return cy - (float) (semi - ctr) / (float) range * half; };
+    const float rowH2 = half / (float) range;                 // pixel height of one semitone row
+    if (overlay)
     {
-        const int semi = drawSemi[ch][c];
-        if (semi == DrumChannel::DRAW_GAP) { ++c; continue; }
-        int c2 = c; while (c2 < R && drawSemi[ch][c2] == semi) ++c2;
-        const float x1 = (float) lane.getX() + (float) c * colW, x2 = (float) lane.getX() + (float) c2 * colW;
-        const bool outOfView = std::abs(semi) > range;
-        const float y = yFor(juce::jlimit(-range, range, semi));
-        g.setColour(dim ? juce::Colour(0xff5f6a78) : outOfView ? juce::Colour(0x8035c0ff) : juce::Colour(0xff35c0ff));
-        g.fillRect(juce::Rectangle<float>(x1, y - 2.0f, juce::jmax(2.0f, x2 - x1 - 1.0f), outOfView ? 2.0f : 4.0f));
-        c = c2;
+        // PIANO-ROLL background: black-key rows shaded + the LEFT note-name column (C3 = semi 0).
+        // The column is also a SCROLL handle (drag it up/down when the range is < +-36); with big
+        // rows EVERY note is named, with tight rows just the Cs. The hovered/drawn note's row is lit.
+        static const bool blackPc[12] = { false,true,false,true,false,false,true,false,true,false,true,false };
+        static const char* pcName[12] = { "C","C#","D","D#","E","F","F#","G","G#","A","A#","B" };
+        juce::Rectangle<int> keys(rect.getX(), lane.getY(), PR_KEYS, lane.getHeight());
+        g.setColour(juce::Colour(0xff20203a)); g.fillRect(keys);
+        const bool nameAll = rowH2 >= 9.0f;                   // enough height to label every semitone
+        for (int s = ctr - range; s <= ctr + range; ++s)
+        {
+            if (s < -36 || s > 36) continue;
+            const float y = yFor(s);
+            const int pc = ((s % 12) + 12) % 12;
+            if (blackPc[pc])
+            {
+                g.setColour(juce::Colour(0x16000000));
+                g.fillRect(juce::Rectangle<float>((float) lane.getX(), y - rowH2 * 0.5f, (float) lane.getWidth(), rowH2));
+                g.setColour(juce::Colour(0x66101018));
+                g.fillRect(juce::Rectangle<float>((float) keys.getX(), y - rowH2 * 0.5f, (float) keys.getWidth(), rowH2));
+            }
+            const bool isHover = (drawReadSemi != -128 ? s == drawReadSemi   // drawing/hovering a note
+                                                       : s == prHoverSemi);  // else: the row under the cursor
+            if (isHover)   // highlight the active key row
+            {
+                g.setColour(juce::Colour(0x8835c0ff));
+                g.fillRect(juce::Rectangle<float>((float) keys.getX(), y - rowH2 * 0.5f, (float) keys.getWidth(), juce::jmax(3.0f, rowH2)));
+            }
+            const int oct = 3 + (int) std::floor((double) s / 12.0);   // semi 0 = C3
+            if (nameAll || pc == 0 || isHover)
+            {
+                g.setColour(isHover ? juce::Colours::white : juce::Colour(pc == 0 ? 0xffb8c4dc : 0xff8090b0));
+                g.setFont(juce::Font(juce::jmin(10.0f, rowH2 + 3.0f), pc == 0 || isHover ? juce::Font::bold : juce::Font::plain));
+                g.drawText(juce::String(pcName[pc]) + juce::String(oct), keys.getX() + 2, (int) (y - 6.0f), PR_KEYS - 4, 12,
+                           juce::Justification::centredLeft, false);
+            }
+            if (pc == 0)
+            {
+                g.setColour(juce::Colour(0x2fffffff));
+                g.drawHorizontalLine((int) (y + rowH2 * 0.5f), (float) lane.getX(), (float) lane.getRight());
+            }
+        }
+        // SNAP-GRID verticals (the header's Grid selector; 0 = free = none) - the grid repeats PER
+        // BAR; bar boundaries draw as strong amber lines in a merged group.
+        if (drawGridDiv > 0)
+        {
+            const int nLines = drawGridDiv * grpBars;
+            for (int i = 0; i <= nLines; ++i)
+            {
+                const float x = (float) lane.getX() + (float) i / (float) nLines * (float) lane.getWidth();
+                g.setColour(juce::Colour(i % 4 == 0 ? 0x30ffffff : 0x14ffffff));
+                g.fillRect(juce::Rectangle<float>(x - 0.5f, (float) lane.getY(), 1.0f, (float) lane.getHeight()));
+            }
+        }
+        for (int b = 1; b < grpBars; ++b)   // BAR separators (independent of the snap grid)
+        {
+            const float x = (float) lane.getX() + (float) b / (float) grpBars * (float) lane.getWidth();
+            g.setColour(juce::Colour(0xaad9c46a));
+            g.fillRect(juce::Rectangle<float>(x - 1.0f, (float) lane.getY(), 2.0f, (float) lane.getHeight()));
+        }
     }
+    else
+    {
+        g.setColour(juce::Colour(0x18ffffff));
+        for (int s = -range; s <= range; s += 12) if (s != 0) g.drawHorizontalLine((int) yFor(s), (float) lane.getX(), (float) lane.getRight());
+    }
+    if (ctr - range <= 0 && 0 <= ctr + range)   // the C3 (pitch 0) reference line, only while in view
+    { g.setColour(juce::Colour(0x66ffe9b0)); g.fillRect(juce::Rectangle<float>((float) lane.getX(), yFor(0) - 0.5f, (float) lane.getWidth(), 1.0f)); }
+    // NOTE BARS - CLIPPED to the lane so nothing spills out of the box; notes outside the visible
+    // pitch window draw as thin edge indicators (kept, just off-view).
+    const float colW = (float) lane.getWidth() / (float) R;
+    g.saveState(); g.reduceClipRegion(lane);
+    for (int i = 0; i < drawNoteCount[ch]; ++i)
+    {
+        const auto& n = drawNotes[ch][i];
+        const float x1 = (float) lane.getX() + (float) n.start * colW;
+        const float x2 = (float) lane.getX() + (float) (n.start + n.len) * colW;
+        const bool outOfView = (int) n.semi < ctr - range || (int) n.semi > ctr + range;
+        const float y = yFor(juce::jlimit(ctr - range, ctr + range, (int) n.semi));
+        const float bh = outOfView ? 2.0f : (overlay ? juce::jmax(3.0f, rowH2 - 1.0f) : 4.0f);
+        auto col = dim ? juce::Colour(0xff5f6a78) : outOfView ? juce::Colour(0x8035c0ff) : juce::Colour(0xff35c0ff);
+        if (overlay && ! outOfView)
+        {
+            juce::Rectangle<float> bar(x1, y - bh * 0.5f, juce::jmax(2.0f, x2 - x1 - 1.0f), bh);
+            g.setColour(col.withAlpha(0.9f)); g.fillRoundedRectangle(bar, 2.0f);
+            g.setColour(juce::Colour(0xff101018)); g.drawRoundedRectangle(bar, 2.0f, 1.0f);
+            if (prSel[i])   // part of the multi-selection -> amber outline
+            { g.setColour(juce::Colour(0xffffc23a)); g.drawRoundedRectangle(bar.expanded(1.0f), 3.0f, 1.6f); }
+            if (bar.getWidth() > 14.0f)   // resize tab on the right edge
+            { g.setColour(juce::Colours::white.withAlpha(0.55f));
+              g.fillRect(juce::Rectangle<float>(bar.getRight() - 4.0f, bar.getY() + 1.0f, 3.0f, bar.getHeight() - 2.0f)); }
+        }
+        else
+        {
+            g.setColour(col);
+            g.fillRect(juce::Rectangle<float>(x1, y - bh * 0.5f, juce::jmax(2.0f, x2 - x1 - 1.0f), bh));
+        }
+    }
+    if (overlay && prMode == 5)   // MARQUEE rubber band (shift+drag)
+    {
+        const auto mr = juce::Rectangle<int>::leftTopRightBottom(juce::jmin(prMarqA.x, prMarqB.x), juce::jmin(prMarqA.y, prMarqB.y),
+                                                                 juce::jmax(prMarqA.x, prMarqB.x), juce::jmax(prMarqA.y, prMarqB.y));
+        g.setColour(juce::Colour(0x30ffc23a)); g.fillRect(mr);
+        g.setColour(juce::Colour(0xccffc23a)); g.drawRect(mr, 1);
+    }
+    g.restoreState();
     if (playBarFrac > 0.0f) { const float px = (float) lane.getX() + playBarFrac * (float) lane.getWidth();
         g.setColour(juce::Colour(0x88ffcc33)); g.fillRect(juce::Rectangle<float>(px - 0.5f, (float) lane.getY(), 1.0f, (float) lane.getHeight())); }
 
     if (! overlay)
     {
-        // the LENS button (top-left) that opens the magnify overlay - a drawn magnifier glyph
-        // (font emoji don't render in JUCE's default typeface). A subtle pill behind it for a target.
+        // the LENS button (top-left) that opens the piano-roll editor - a drawn magnifier glyph.
         juce::Rectangle<float> lb((float) rect.getX() + 2.0f, (float) rect.getY() + 2.0f, 18.0f, 15.0f);
         g.setColour(juce::Colour(0x33ffffff)); g.fillRoundedRectangle(lb, 3.0f);
         g.setColour(juce::Colour(0xcce8e8f4));
@@ -1516,30 +1756,37 @@ void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle
     }
     else
     {
-        // header: range radios (left) + close (right) + read-out
-        g.setColour(juce::Colour(0xff262646)); g.fillRect(rect.getX(), rect.getY(), rect.getWidth(), headH);
+        // header: range radios | snap-grid selector | title | close (right)
+        g.setColour(juce::Colour(0xff262646)); g.fillRect(rect.getX(), rect.getY(), rect.getWidth(), PR_HEAD);
         static const int ranges[4] = { 6, 12, 24, 36 };
         for (int i = 0; i < 4; ++i) {
-            juce::Rectangle<int> rr(rect.getX() + 4 + i * 38, rect.getY() + 1, 34, headH - 2);
+            juce::Rectangle<int> rr(rect.getX() + 4 + i * 38, rect.getY() + 1, 34, PR_HEAD - 2);
             const bool on = (drawRange == ranges[i]);
             g.setColour(on ? juce::Colour(0xff35c0ff) : juce::Colour(0xff33335a)); g.fillRoundedRectangle(rr.toFloat(), 3.0f);
             g.setColour(on ? juce::Colours::black : juce::Colour(0xffb8b8d0)); g.setFont(juce::Font(9.5f, juce::Font::bold));
             g.drawText(juce::String::fromUTF8("\xc2\xb1") + juce::String(ranges[i]), rr, juce::Justification::centred, false);
         }
-        juce::Rectangle<int> cl(rect.getRight() - 18, rect.getY() + 1, 15, headH - 2);
+        { // snap grid: cycles 4 / 8 / 16 / 32 / Free (click)
+            juce::Rectangle<int> gr(rect.getX() + 4 + 4 * 38 + 8, rect.getY() + 1, 64, PR_HEAD - 2);
+            g.setColour(juce::Colour(0xff33335a)); g.fillRoundedRectangle(gr.toFloat(), 3.0f);
+            g.setColour(juce::Colour(0xffd9c46a)); g.setFont(juce::Font(9.5f, juce::Font::bold));
+            g.drawText(drawGridDiv > 0 ? "Grid 1/" + juce::String(drawGridDiv) : "Grid off", gr, juce::Justification::centred, false);
+        }
+        g.setColour(juce::Colour(0xff9aa4c0)); g.setFont(juce::Font(9.5f, juce::Font::bold));
+        g.drawText("drag empty = new - drag note = move - right edge = length - dbl-click = delete - SHIFT+drag = select many",
+                   rect.getX() + 244, rect.getY() + 1, rect.getWidth() - 244 - 22, PR_HEAD - 2, juce::Justification::centredLeft, false);
+        juce::Rectangle<int> cl(rect.getRight() - 18, rect.getY() + 1, 15, PR_HEAD - 2);
         g.setColour(juce::Colour(0xff5a2a2a)); g.fillRoundedRectangle(cl.toFloat(), 3.0f);
         g.setColour(juce::Colours::white); g.setFont(juce::Font(11.0f, juce::Font::bold));
         g.drawText("x", cl, juce::Justification::centred, false);
     }
-    // read-out (semitones from 0): a big low-alpha WATERMARK in the top-right (unclickable, just
-    // easy to see while drawing / hovering).
+    // read-out (semitones from 0): a big low-alpha WATERMARK in the top-right.
     if (drawReadSemi != -128)
     {
         const juce::String t = (drawReadSemi > 0 ? "+" : "") + juce::String(drawReadSemi);
         const float fs = overlay ? 34.0f : juce::jmin(30.0f, (float) rect.getHeight() * 0.7f);
         g.setColour(juce::Colours::white.withAlpha(0.16f)); g.setFont(juce::Font(fs, juce::Font::bold));
-        g.drawText(t + " st", rect.getRight() - 150, rect.getY() + (overlay ? headH : 0), 146,
-                   overlay ? rect.getHeight() - headH : rect.getHeight(), juce::Justification::centredRight, false);
+        g.drawText(t + " st", rect.getRight() - 150, lane.getY(), 146, lane.getHeight(), juce::Justification::centredRight, false);
     }
     if (overlay) { g.setColour(juce::Colours::white.withAlpha(0.85f)); g.drawRect(rect, 2); }
     if (ch == selectedRow && ! overlay) { g.setColour(juce::Colour(0xffff3b30)); g.drawRect(rect.reduced(1), 2); }
@@ -1566,6 +1813,17 @@ void StepGridComponent::paint(juce::Graphics& g)
                                    (float)(r1.getRight() - r0.getX()) + 6.0f, (float) r0.getHeight() - 1.0f,
                                    5.0f, 1.6f);
         }
+
+        // MERGED GROUP: amber separators where each bar begins (the row = the bars side by side).
+        if (grpBars > 1 && n > 0)
+            for (int b = 1; b < grpBars; ++b)
+            {
+                const int s0 = barStep0[ch][b];
+                if (s0 <= 0 || s0 >= n) continue;
+                const auto rr = stepRect(ch, s0);
+                g.setColour(juce::Colour(0xaad9c46a));
+                g.fillRect(juce::Rectangle<float>((float) rr.getX() - 1.5f, (float) rr.getY() + 1.0f, 2.5f, (float) rr.getHeight() - 2.0f));
+            }
 
         for (int step = 0; step < n; ++step)
         {
@@ -1732,7 +1990,6 @@ void StepGridComponent::handleValueDrag(juce::Point<int> pos)
     }
     else if (editMode == ModeVel)
         vel[ch][step] = value;                           // Y = velocity
-    else if (editMode == ModeProb)  prob[ch][step] = value;
     else if (editMode == ModePitch) pit[ch][step]  = value;
     else if (editMode == ModePan)   pan[ch][step]  = value;
     else if (editMode == ModeRoll) {
@@ -1750,6 +2007,38 @@ void StepGridComponent::handleValueDrag(juce::Point<int> pos)
 
 void StepGridComponent::mouseDoubleClick(const juce::MouseEvent& e)
 {
+    const auto p = e.getPosition();
+    // PIANO ROLL: double-click a note = DELETE it (overlay or row).
+    if (drawMagCh >= 0)
+    {
+        const auto lane = prLane(drawOverlayRect());
+        if (lane.contains(p))
+        {
+            const int ch2 = drawMagCh;
+            const int idx = prNoteAt(ch2, prColAt(lane, p.x), yToDrawSemi(lane, p.y, drawRange, drawViewCenter));
+            if (idx >= 0 && prSel[idx])   // double-click a SELECTED note = delete the whole selection
+            {
+                for (int i = drawNoteCount[ch2] - 1; i >= 0; --i)
+                    if (prSel[i]) { for (int j = i; j < drawNoteCount[ch2] - 1; ++j) drawNotes[ch2][j] = drawNotes[ch2][j + 1];
+                                    --drawNoteCount[ch2]; }
+                prClearSel(); pushNotes(ch2); repaint();
+            }
+            else if (idx >= 0) { prClearSel();
+                            for (int j = idx; j < drawNoteCount[ch2] - 1; ++j) drawNotes[ch2][j] = drawNotes[ch2][j + 1];
+                            --drawNoteCount[ch2]; pushNotes(ch2); repaint(); }
+        }
+        return;
+    }
+    { const int dch = firstRow + (p.y >= 0 ? p.y / juce::jmax(1, rowH) : -1);
+      if (dch >= 0 && dch < NCH && drawMode[dch])
+      {
+          const int col = drawColAt(p.x);
+          for (int i = drawNoteCount[dch] - 1; i >= 0; --i)   // topmost note under the cursor column
+              if (col >= drawNotes[dch][i].start && col < drawNotes[dch][i].start + drawNotes[dch][i].len)
+              { for (int j = i; j < drawNoteCount[dch] - 1; ++j) drawNotes[dch][j] = drawNotes[dch][j + 1];
+                --drawNoteCount[dch]; pushNotes(dch); repaint(); break; }
+          return;
+      } }
     if (editMode == ModeSteps) return;   // on/off has no "value" to reset
     int ch, step;
     if (! findStepAt(e.getPosition(), ch, step)) return;
@@ -1779,44 +2068,126 @@ void StepGridComponent::mouseDoubleClick(const juce::MouseEvent& e)
 
 void StepGridComponent::mouseMove(const juce::MouseEvent& e)
 {
-    // DRAW hover read-out: the note under the cursor - its semitone (Pitch) or velocity% (Vel).
+    // PIANO-ROLL hover read-out: the note under the cursor - its semitone (Pitch) or velocity% (Vel).
     const auto p = e.getPosition();
-    const int prevSemi = drawReadSemi, prevVel = drawReadVel;
-    drawReadSemi = -128; drawReadVel = -1;
-    int hch = -1;
-    if (drawMagCh >= 0 && drawOverlayRect().withTrimmedTop(15).contains(p)) hch = drawMagCh;
-    else { const int dch = firstRow + (p.y >= 0 ? p.y / juce::jmax(1, rowH) : -1);
-           if (dch >= 0 && dch < NCH && drawMode[dch]) hch = dch; }
-    if (hch >= 0) {
-        const int col = drawColAt(p.x), semi = drawSemi[hch][col];
-        if (semi != DrumChannel::DRAW_GAP) { if (editMode == ModeVel) drawReadVel = drawVelC[hch][col]; else drawReadSemi = semi; }
+    const int prevSemi = drawReadSemi, prevVel = drawReadVel, prevHover = prHoverSemi;
+    drawReadSemi = -128; drawReadVel = -1; prHoverSemi = -999;
+    int hch = -1, col = 0, idx = -1;
+    if (drawMagCh >= 0 && prLane(drawOverlayRect()).contains(p))
+    {
+        hch = drawMagCh;
+        const auto lane = prLane(drawOverlayRect());
+        col = prColAt(lane, p.x);
+        prHoverSemi = yToDrawSemi(lane, p.y, drawRange, drawViewCenter);   // the row under the cursor (always lit)
+        idx = prNoteAt(hch, col, prHoverSemi);                             // pitch-proximity hit in the editor
     }
-    if (drawReadSemi != prevSemi || drawReadVel != prevVel) repaint();
+    else
+    {
+        const int dch = firstRow + (p.y >= 0 ? p.y / juce::jmax(1, rowH) : -1);
+        if (dch >= 0 && dch < NCH && drawMode[dch])
+        {
+            hch = dch; col = drawColAt(p.x);
+            for (int i = drawNoteCount[hch] - 1; i >= 0; --i)          // row: topmost note at the column
+                if (col >= drawNotes[hch][i].start && col < drawNotes[hch][i].start + drawNotes[hch][i].len) { idx = i; break; }
+        }
+    }
+    if (hch >= 0 && idx >= 0)
+    { if (editMode == ModeVel) drawReadVel = drawNotes[hch][idx].vel; else drawReadSemi = drawNotes[hch][idx].semi; }
+    if (drawReadSemi != prevSemi || drawReadVel != prevVel || prHoverSemi != prevHover) repaint();
 }
 
 void StepGridComponent::mouseDown(const juce::MouseEvent& e)
 {
     const auto p = e.getPosition();
-    // DRAW mode: a free mono pitch lane. Left-drag draws (semitone-snapped, no cursor jump - it's
-    // 1:1 in the row), right-drag erases. A LENS button opens a 4x-tall magnify OVERLAY for precise
-    // work (range radios +/-12/24/36 + close). The overlay is a toggle, not a while-drag zoom.
+    // PIANO ROLL: the ROW keeps the quick line-draw gesture (left-drag draws, right-drag erases);
+    // the LENS opens the BIG piano-roll EDITOR (pointer gestures: drag empty = create, drag note =
+    // move, drag its right edge = resize, double-click = delete; snap grid + range in the header).
     if (drawMagCh >= 0)
     {
         const auto ov = drawOverlayRect();
         if (ov.contains(p))
         {
             const int hy = ov.getY();
-            if (juce::Rectangle<int>(ov.getRight() - 18, hy + 1, 15, 13).contains(p)) { drawMagCh = -1; drawReadSemi = -128; drawReadVel = -1; repaint(); return; }  // close (both modes)
-            if (editMode == ModeVel)   // VELOCITY overlay: no range radios; drag a note up/down
-            { if (p.y > hy + 15) { drawDragCh = drawMagCh; setDrawColVel(drawMagCh, p); } return; }
+            if (juce::Rectangle<int>(ov.getRight() - 18, hy + 1, 15, 13).contains(p)) { drawMagCh = -1; drawReadSemi = -128; drawReadVel = -1; prMode = 0; repaint(); return; }  // close (both modes)
+            if (editMode == ModeVel)   // VELOCITY overlay: drag a note up/down
+            { if (p.y > hy + PR_HEAD) { drawDragCh = drawMagCh; setDrawColVel(drawMagCh, p); } return; }
             static const int ranges[4] = { 6, 12, 24, 36 };
             for (int i = 0; i < 4; ++i)
-                if (juce::Rectangle<int>(ov.getX() + 4 + i * 38, hy + 1, 34, 13).contains(p)) { drawRange = ranges[i]; repaint(); return; }   // range radio
-            if (p.y > hy + 15)   // in the lane -> draw
-            { drawDragCh = drawMagCh; drawErase = e.mods.isRightButtonDown(); drawLastCol = -1; drawStrokeTo(drawMagCh, p); }
+                if (juce::Rectangle<int>(ov.getX() + 4 + i * 38, hy + 1, 34, 13).contains(p))
+                { drawRange = ranges[i];
+                  drawViewCenter = juce::jlimit(-prViewClamp(), prViewClamp(), drawViewCenter);   // window stays inside +-36
+                  repaint(); return; }   // range radio
+            if (juce::Rectangle<int>(ov.getX() + 4 + 4 * 38 + 8, hy + 1, 64, 13).contains(p))   // snap grid cycler
+            { drawGridDiv = drawGridDiv == 4 ? 8 : drawGridDiv == 8 ? 16 : drawGridDiv == 16 ? 32 : drawGridDiv == 32 ? 0 : 4;
+              repaint(); return; }
+            const auto lane = prLane(ov);
+            if (! lane.contains(p))
+            {   // the LEFT note-name column = a SCROLL handle: drag it to shift the pitch window
+                if (p.y > hy + PR_HEAD && p.x < lane.getX() && prViewClamp() > 0)
+                { prMode = 4; prScrollGrabY = p.y; prScrollGrabC = drawViewCenter; }
+                return;
+            }
+            const int ch2 = drawMagCh;
+            const int col = prColAt(lane, p.x);
+            const int semi = yToDrawSemi(lane, p.y, drawRange, drawViewCenter);
+            const int idx = prNoteAt(ch2, col, semi);
+            auto deleteSelected = [&] {
+                for (int i = drawNoteCount[ch2] - 1; i >= 0; --i)
+                    if (prSel[i]) { for (int j = i; j < drawNoteCount[ch2] - 1; ++j) drawNotes[ch2][j] = drawNotes[ch2][j + 1];
+                                    --drawNoteCount[ch2]; }
+                prClearSel(); pushNotes(ch2); repaint();
+            };
+            if (e.mods.isShiftDown())
+            {   // SHIFT+drag = MARQUEE select (a fresh selection each time)
+                prClearSel();
+                prMode = 5; prMarqA = prMarqB = p;
+                repaint();
+                return;
+            }
+            if (e.mods.isRightButtonDown() || e.mods.isPopupMenu())
+            {   // right-click: a SELECTED note deletes the whole selection; else deletes that one note
+                if (idx >= 0 && prSel[idx]) { deleteSelected(); return; }
+                if (idx >= 0) { prClearSel();
+                                for (int j = idx; j < drawNoteCount[ch2] - 1; ++j) drawNotes[ch2][j] = drawNotes[ch2][j + 1];
+                                --drawNoteCount[ch2]; pushNotes(ch2); repaint(); }
+                return;
+            }
+            if (idx >= 0 && prSel[idx])
+            {   // drag any SELECTED note = move the WHOLE selection together
+                for (int i = 0; i < drawNoteCount[ch2]; ++i)
+                { prOrigStart[i] = drawNotes[ch2][i].start; prOrigSemi[i] = drawNotes[ch2][i].semi; }
+                prIdx = idx; prMode = 6; prGrabDCol = col; prGrabDSemi = semi;
+                drawReadSemi = drawNotes[ch2][idx].semi;
+            }
+            else if (idx >= 0)
+            {
+                prClearSel();
+                const auto& n = drawNotes[ch2][idx];
+                const float colW = (float) lane.getWidth() / (float) DrumChannel::DRAW_RES;
+                const float noteR = (float) lane.getX() + (float) (n.start + n.len) * colW;
+                prIdx = idx;
+                prMode = ((float) p.x > noteR - 6.0f) ? 2 : 1;   // near the right edge = RESIZE, else MOVE
+                prGrabDCol = col - n.start; prGrabDSemi = semi - n.semi;
+                drawReadSemi = n.semi;
+            }
+            else if (drawNoteCount[ch2] < MIR_MAX)
+            {   // empty space -> CREATE (snapped start, one grid cell long; drag right to lengthen).
+                // A note lives inside ONE bar (crossing the bar line would re-trigger anyway).
+                prClearSel();
+                const int start = prSnap(col);
+                const int cw = drawGridDiv > 0 ? DrumChannel::DRAW_RES / drawGridDiv : 12;
+                const int barEnd = (start / DrumChannel::DRAW_RES + 1) * DrumChannel::DRAW_RES;
+                drawNotes[ch2][drawNoteCount[ch2]] = { (int16_t) start, (int16_t) juce::jmax(1, juce::jmin(cw, barEnd - start)),
+                                                       (int8_t) juce::jlimit(-36, 36, semi),
+                                                       (uint8_t) juce::jlimit(0, 255, (int) std::lround(dVel[ch2] * 255.0f)) };
+                prIdx = drawNoteCount[ch2]++; prMode = 3; prGrabDCol = 0; prGrabDSemi = 0;
+                drawReadSemi = semi;
+                pushNotes(ch2);
+            }
+            repaint();
             return;
         }
-        drawMagCh = -1; drawReadSemi = -128; drawReadVel = -1; repaint();   // click outside the overlay closes it
+        drawMagCh = -1; drawReadSemi = -128; drawReadVel = -1; prMode = 0; repaint();   // click outside closes
         return;
     }
     {
@@ -1831,8 +2202,8 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
                 drawDragCh = dch; setDrawColVel(dch, p); return;                     // per-note velocity (drag existing)
             }
             if (editMode == ModePan)  { drawDragCh = dch; setDrawVelPan(dch, p.x); return; } // whole-channel Pan
-            if (onLens) { drawMagCh = dch; drawRange = 36; repaint(); return; }  // lens -> pitch overlay
-            drawDragCh = dch; drawErase = e.mods.isRightButtonDown(); drawLastCol = -1;
+            if (onLens) { drawMagCh = dch; repaint(); return; }                     // lens -> the piano-roll editor
+            drawDragCh = dch; drawErase = e.mods.isRightButtonDown(); drawLastCol = -1; strokeNoteIdx = -1;
             drawStrokeTo(dch, p);
             return;
         }
@@ -1916,6 +2287,67 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
 
 void StepGridComponent::mouseDrag(const juce::MouseEvent& e)
 {
+    // PIANO-ROLL editor: SCROLL the pitch view by dragging the note-name column.
+    if (drawMagCh >= 0 && prMode == 4)
+    {
+        const auto lane = prLane(drawOverlayRect());
+        const float rowH2 = juce::jmax(1.0f, (lane.getHeight() * 0.5f - 4.0f) / (float) drawRange);
+        drawViewCenter = juce::jlimit(-prViewClamp(), prViewClamp(),
+                                      prScrollGrabC + (int) std::lround((float) (e.getPosition().y - prScrollGrabY) / rowH2));
+        repaint();
+        return;
+    }
+    // MARQUEE select: stretch the rubber band (selection resolves on mouse-up).
+    if (drawMagCh >= 0 && prMode == 5) { prMarqB = e.getPosition(); repaint(); return; }
+    // GROUP MOVE: shift every selected note by the drag delta (columns snapped to the grid).
+    if (drawMagCh >= 0 && prMode == 6)
+    {
+        const int ch2 = drawMagCh;
+        const auto lane = prLane(drawOverlayRect());
+        int dCol = prColAt(lane, e.getPosition().x) - prGrabDCol;
+        if (drawGridDiv > 0) { const int cw = DrumChannel::DRAW_RES / drawGridDiv;
+                               dCol = (int) std::lround((double) dCol / cw) * cw; }
+        const int dSemi = yToDrawSemi(lane, e.getPosition().y, drawRange, drawViewCenter) - prGrabDSemi;
+        for (int i = 0; i < drawNoteCount[ch2]; ++i)
+            if (prSel[i])
+            {
+                auto& n = drawNotes[ch2][i];
+                n.start = (int16_t) juce::jlimit(0, totalCols() - 1, (int) prOrigStart[i] + dCol);
+                n.semi  = (int8_t)  juce::jlimit(-36, 36, (int) prOrigSemi[i] + dSemi);
+            }
+        if (prIdx >= 0 && prIdx < drawNoteCount[ch2]) drawReadSemi = drawNotes[ch2][prIdx].semi;
+        pushNotes(ch2);
+        repaint();
+        return;
+    }
+    // PIANO-ROLL editor gestures (MOVE / RESIZE / CREATE-stretch a note).
+    if (drawMagCh >= 0 && prMode != 0 && prIdx >= 0 && prIdx < drawNoteCount[drawMagCh])
+    {
+        const int ch2 = drawMagCh;
+        const auto lane = prLane(drawOverlayRect());
+        const int col = prColAt(lane, e.getPosition().x);
+        auto& n = drawNotes[ch2][prIdx];
+        const int RES = DrumChannel::DRAW_RES;
+        if (prMode == 1)   // MOVE: pitch + time (start snaps to the grid; length may cross bar lines)
+        {
+            n.start = (int16_t) juce::jlimit(0, totalCols() - 1, prSnap(juce::jmax(0, col - prGrabDCol)));
+            n.semi  = (int8_t) juce::jlimit(-36, 36, yToDrawSemi(lane, e.getPosition().y, drawRange, drawViewCenter) - prGrabDSemi);
+            drawReadSemi = n.semi;
+        }
+        else               // RESIZE / CREATE-stretch: the right edge follows the cursor (end snaps UP;
+        {                  // notes may SPAN bar lines - the note keeps sounding into the next bar)
+            int end = col + 1;
+            if (drawGridDiv > 0)
+            {
+                const int cw = RES / drawGridDiv;
+                end = ((col / cw) + 1) * cw;                 // snap the end to the NEXT grid line
+            }
+            n.len = (int16_t) juce::jlimit(1, totalCols() - (int) n.start, end - (int) n.start);
+        }
+        pushNotes(ch2);
+        repaint();
+        return;
+    }
     if (drawDragCh >= 0) { if (editMode == ModeVel) setDrawColVel(drawDragCh, e.getPosition());
                            else if (editMode == ModePan) setDrawVelPan(drawDragCh, e.getPosition().x);
                            else drawStrokeTo(drawDragCh, e.getPosition()); return; }
@@ -1942,7 +2374,26 @@ void StepGridComponent::mouseDrag(const juce::MouseEvent& e)
 
 void StepGridComponent::mouseUp(const juce::MouseEvent&)
 {
-    if (drawDragCh >= 0) { drawDragCh = -1; drawLastCol = -1; drawReadSemi = -128; drawReadVel = -1; repaint(); return; }   // draw stroke ended
+    if (prMode == 5 && drawMagCh >= 0)   // MARQUEE released: select every note inside the band
+    {
+        const int ch2 = drawMagCh;
+        const auto lane = prLane(drawOverlayRect());
+        const auto rect = juce::Rectangle<int>::leftTopRightBottom(juce::jmin(prMarqA.x, prMarqB.x), juce::jmin(prMarqA.y, prMarqB.y),
+                                                                   juce::jmax(prMarqA.x, prMarqB.x), juce::jmax(prMarqA.y, prMarqB.y));
+        const int c0 = prColAt(lane, rect.getX()), c1 = prColAt(lane, rect.getRight());
+        const int sHi = yToDrawSemi(lane, rect.getY(), drawRange, drawViewCenter);      // top = higher pitch
+        const int sLo = yToDrawSemi(lane, rect.getBottom(), drawRange, drawViewCenter);
+        prClearSel();
+        for (int i = 0; i < drawNoteCount[ch2]; ++i)
+        {
+            const auto& n = drawNotes[ch2][i];
+            if (n.start < c1 && n.start + n.len > c0 && (int) n.semi >= sLo && (int) n.semi <= sHi)
+            { prSel[i] = true; ++prSelCount; }
+        }
+        prMode = 0; repaint(); return;
+    }
+    if (prMode != 0) { prMode = 0; prIdx = -1; repaint(); return; }   // piano-roll gesture ended
+    if (drawDragCh >= 0) { drawDragCh = -1; drawLastCol = -1; strokeNoteIdx = -1; drawReadSemi = -128; drawReadVel = -1; repaint(); return; }   // line stroke ended
     // Loop-condition: a plain CLICK (no drag) toggles the bar under the cursor.
     if (editMode == ModeProb && condDragCh >= 0)
     {
@@ -2111,6 +2562,7 @@ void PatternButton::mouseDown(const juce::MouseEvent& e)
             showMidiLearnMenu(this, *midiLearn, paramId(), -1); // learn captures its own channel
         return;
     }
+    if (e.mods.isShiftDown()) { if (onShiftClick) onShiftClick(); return; }   // MERGE with the previous pattern
     if (onSelect) onSelect();
 }
 
@@ -2119,6 +2571,7 @@ void PatternButton::mouseDown(const juce::MouseEvent& e)
 //==============================================================================
 
 void ContentComponent::paint(juce::Graphics& g) { owner.paintContent(g); }
+void ContentComponent::paintOverChildren(juce::Graphics& g) { owner.paintStripOutline(g); }
 void ContentComponent::resized()                { owner.layoutContent(); }
 
 //==============================================================================
@@ -3466,11 +3919,8 @@ KeysPanel::KeysPanel()
     };
     lab(lblRecMode, "Record mode"); lab(lblSlot2, "Slot 2 pitch");
     lab(lblHuman, "Humanize"); lab(lblStrum, "Strum"); lab(lblMinVel, "Min vel"); lab(lblMaxVel, "Max vel");
-    lab(lblHint, "");
-    lblHint.setFont(juce::Font(12.0f));
-    lblHint.setColour(juce::Label::textColourId, juce::Colour(0xffb8c4dc));
-    lblHint.setJustificationType(juce::Justification::centredLeft);
-    lblHint.setMinimumHorizontalScale(0.85f);
+    lab(lblPoly, "Poly"); lab(lblLock, "Lock transpose");
+    addAndMakeVisible(polySwitch); addAndMakeVisible(lockSwitch);   // (hint text removed to make room)
 }
 
 void KeysPanel::resized()
@@ -3505,8 +3955,16 @@ void KeysPanel::resized()
     placeKnob(strumKnob,  lblStrum,  knobArea.removeFromLeft(62));
     placeKnob(minVelKnob, lblMinVel, knobArea.removeFromLeft(62));
     placeKnob(maxVelKnob, lblMaxVel, knobArea);
-    strip.removeFromLeft(10);
-    lblHint.setBounds(strip);   // hint uses the remaining strip (left-aligned, may wrap)
+    strip.removeFromLeft(12);
+    // POLY + TRANSPOSE-LOCK toggles (the hint text used to live here): label above, switch below.
+    auto placeTog = [&strip](ToggleSwitch& sw, juce::Label& l, int w) {
+        auto col = strip.removeFromLeft(w);
+        l.setBounds(col.removeFromTop(15));
+        sw.setBounds(col.getCentreX() - 16, col.getY() + 4, 32, 18);
+    };
+    placeTog(polySwitch, lblPoly, 52);
+    strip.removeFromLeft(6);
+    placeTog(lockSwitch, lblLock, 92);
 
     r.removeFromTop(6 + 28);    // push the keyboard down so the taller knob cell (dial + read-out) clears it
     kb.setBounds(r);
@@ -3537,6 +3995,11 @@ void KeysPanel::handleNoteOff(juce::MidiKeyboardState*, int, int note, float)
 {
     const bool wasTop = ! held.isEmpty() && held.getLast() == note;
     held.removeFirstMatchingValue(note);
+    if (polyMode)                                                  // POLY: every release is its own note-off
+    {
+        if (onKeyUp) onKeyUp(note);
+        return;
+    }
     if (wasTop)
     {
         if (held.isEmpty()) { if (onKeyUp) onKeyUp(note); }
@@ -4240,6 +4703,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
     auto f   = [](float x) { juce::int64 b = 0; std::memcpy(&b, &x, sizeof(float)); return b; };
     juce::int64 h = 146959810934665603LL;
     h = mix(h, c.keysSlot2Down);   // slot-2 pitch is part of the SOUND now (rides + refreshes with mixes)
+    h = mix(h, c.freqLocked ? 1 : 0);   // transpose lock is per-sound too
     for (int i = 0; i < DrumChannel::NUM_SOURCES; ++i) { h = mix(h, c.srcOn[i] ? 1 : 0); h = mix(h, f(c.srcWeight[i])); }
     h = mix(h, f(c.padX)); h = mix(h, f(c.padY)); h = mix(h, c.padLayoutB ? 1 : 0);
     // Slots are the runtime source of truth (incl. duplicate engines) - hash them too.
@@ -4301,6 +4765,7 @@ juce::int64 DrumSequencerEditor::stateHash() const
     {
         auto& P = s.patterns[p];
         h = mix(h, P.playMode); h = mix(h, P.repeatTarget); h = mix(h, P.gotoPattern); h = mix(h, f(P.swing));
+        h = mix(h, P.mergeWithPrev ? 1 : 0);   // merged-group glue (undoable)
         h = mix(h, P.chainLen); for (int k = 0; k < P.chainLen; ++k) { h = mix(h, P.chainSeq[k]); h = mix(h, P.chainLoops[k]); }
         const auto& m = P.master;        // per-pattern master FX + output
         h = mix(h, f(m.reverbRoom)); h = mix(h, f(m.reverbDamp)); h = mix(h, f(m.reverbWet));
@@ -4313,12 +4778,14 @@ juce::int64 DrumSequencerEditor::stateHash() const
             h = mix(h, channelSoundHash(ch));
             h = mix(h, ch.numSteps);
             h = mix(h, f(ch.humanizeAmt)); h = mix(h, f(ch.strumAmt)); h = mix(h, f(ch.keysMinVel)); h = mix(h, f(ch.keysMaxVel));   // HUMANIZE / STRUM / min+max-vel (undoable)
+            h = mix(h, ch.keysPolyMode ? 1 : 0);   // KEYS poly/mono toggle (undoable)
             juce::int64 st = 0; for (int i = 0; i < DrumChannel::MAX_STEPS; ++i) st = (st << 1) | (ch.steps[i] ? 1 : 0);
             h = mix(h, st); h = mix(h, ch.mute ? 1 : 0); h = mix(h, ch.solo ? 2 : 0);
-            for (int i = 0; i < ch.numSteps; ++i) { h = mix(h, f(ch.stepVel[i])); h = mix(h, f(ch.stepPitch[i])); h = mix(h, f(ch.stepProb[i])); h = mix(h, f(ch.stepNoteLen[i])); h = mix(h, ch.stepSlide[i] ? 1 : 0); h = mix(h, ch.stepMerge[i] ? 1 : 0); h = mix(h, ch.stepRoll[i]); h = mix(h, f(ch.stepRollDecay[i])); h = mix(h, f(ch.stepPan[i])); h = mix(h, ch.stepCondLen[i]); h = mix(h, ch.stepCondMask[i]); }
+            for (int i = 0; i < ch.numSteps; ++i) { h = mix(h, f(ch.stepVel[i])); h = mix(h, f(ch.stepPitch[i])); h = mix(h, f(ch.stepNoteLen[i])); h = mix(h, ch.stepSlide[i] ? 1 : 0); h = mix(h, ch.stepMerge[i] ? 1 : 0); h = mix(h, ch.stepRoll[i]); h = mix(h, f(ch.stepRollDecay[i])); h = mix(h, f(ch.stepPan[i])); h = mix(h, ch.stepCondLen[i]); h = mix(h, ch.stepCondMask[i]); }
             h = mix(h, ch.drawMode ? 1 : 0);
             if (ch.drawMode) { h = mix(h, f(ch.drawVel)); h = mix(h, f(ch.drawPan));
-                for (int i = 0; i < DrumChannel::DRAW_RES; ++i) { h = mix(h, (int) ch.drawSemi[i] + 128); h = mix(h, (int) ch.drawVelC[i]); } }
+                for (int i = 0; i < ch.drawNoteCount; ++i) { const auto& nt = ch.drawNotes[i];
+                    h = mix(h, nt.start); h = mix(h, nt.len); h = mix(h, (int) nt.semi + 128); h = mix(h, (int) nt.vel); } }
         }
     }
     h = mix(h, f(s.standaloneBpm)); h = mix(h, s.timeSigNum); h = mix(h, s.timeSigDen);
@@ -4372,7 +4839,8 @@ void DrumSequencerEditor::resetChannelToDefault(DrumChannel& c, int ch)
     c.drawMode = false; c.drawVel = 1.0f; c.drawPan = 0.0f;   // fresh channel = step mode
     c.keysSlot2Down = 0;                                      // KEYS slot-2 transpose (channel-wide) resets too
     c.humanizeAmt = 0.0f; c.strumAmt = 0.0f; c.keysMinVel = 0.0f; c.keysMaxVel = 1.0f;   // HUMANIZE / STRUM / vel range default
-    for (int i = 0; i < DrumChannel::DRAW_RES; ++i) { c.drawSemi[i] = DrumChannel::DRAW_GAP; c.drawVelC[i] = 255; }
+    c.keysPolyMode = false; c.freqLocked = false;             // keys mono + transpose unlocked on Init
+    c.clearDrawNotes();
     c.padX = c.padY = 0.5f; c.padLayoutB = false;
     c.layerOscShape = 0; c.layerSineFreq = 60.0f; c.layerSinePEnvAmt = 0.0f; c.layerSinePEnvTime = 0.04f; c.layerSinePOffset = 0.0f;
     c.oscUnison = 1; c.oscDetune = 0.0f; c.oscSustain = 0.0f; c.fmSustain = 0.0f; c.physSustain = 0.0f;
@@ -4419,6 +4887,7 @@ void DrumSequencerEditor::writeChannelMix(juce::ValueTree& t, const DrumChannel&
 {
     t.setProperty("sound",    (int) ch.soundType,    nullptr);
     t.setProperty("keys2Dn",  ch.keysSlot2Down,      nullptr);   // slot-2 pitch rides with the sound mix
+    t.setProperty("frqLk",    ch.freqLocked,         nullptr);   // transpose lock rides with the sound mix
     t.setProperty("userSample", ch.usingUserSample ? ch.userSampleFile.getFullPathName() : juce::String(), nullptr);
     for (int i = 0; i < DrumChannel::NUM_SOURCES; ++i) { t.setProperty("srcOn" + juce::String(i), ch.srcOn[i], nullptr);
                                   t.setProperty("srcW"  + juce::String(i), ch.srcWeight[i], nullptr); }
@@ -4493,6 +4962,7 @@ void DrumSequencerEditor::writeChannelMix(juce::ValueTree& t, const DrumChannel&
 void DrumSequencerEditor::readChannelMix(const juce::ValueTree& t, DrumChannel& ch, juce::String& missingSample) const
 {
     ch.keysSlot2Down = juce::jlimit(-24, 24, (int) t.getProperty("keys2Dn", 0));   // slot-2 pitch (0 for old mix files)
+    ch.freqLocked    = (bool) t.getProperty("frqLk", false);                       // transpose lock (off for old mix files)
     for (int i = 0; i < DrumChannel::NUM_SOURCES; ++i) { ch.srcOn[i]     = (bool)  t.getProperty("srcOn" + juce::String(i), i == 0);
                                   ch.srcWeight[i] = (float) t.getProperty("srcW"  + juce::String(i), i == 0 ? 1.0f : 0.0f); }
     ch.padX = (float) t.getProperty("padX", 0.5f);
@@ -4879,6 +5349,7 @@ void DrumSequencerEditor::initPreset()
         auto& P = s.patterns[p];
         P.swing = 0.0f; P.playMode = Sequencer::LoopForever; P.repeatTarget = 2; P.gotoPattern = 0;
         P.chainLen = 0; P.chainStep = 0;
+        P.mergeWithPrev = false;            // merged groups reset on Init too
         P.master = Sequencer::MasterFX();   // reset reverb/delay/tilt/sat/vol/limiter - was LEAKING from the old preset
         for (int c = 0; c < Sequencer::NUM_CHANNELS; ++c)
         {
@@ -4889,7 +5360,7 @@ void DrumSequencerEditor::initPreset()
             // Wipe EVERY per-step value too (not just on/off) so a fresh init really starts clean - matches the
             // Clear button. Without this, edited Vel/Len/Pan/Pitch/Roll/Loop values leaked into the new preset.
             for (int i = 0; i < DrumChannel::MAX_STEPS; ++i) {
-                ch.steps[i] = false; ch.stepVel[i] = 1.0f; ch.stepPitch[i] = 0.0f; ch.stepProb[i] = 1.0f;
+                ch.steps[i] = false; ch.stepVel[i] = 1.0f; ch.stepPitch[i] = 0.0f;
                 ch.stepRoll[i] = 1; ch.stepRollDecay[i] = 0.0f; ch.stepNoteLen[i] = 0.0f; ch.stepPan[i] = 0.0f;
                 ch.stepSlide[i] = false; ch.stepMerge[i] = false; ch.stepCondLen[i] = 1; ch.stepCondMask[i] = 0;
             }
@@ -5231,6 +5702,9 @@ void DrumSequencerEditor::setupComponents()
     content.addAndMakeVisible(lblPatterns);
     lblPatterns.setFont(juce::Font(11.0f, juce::Font::bold));
     lblPatterns.setColour(juce::Label::textColourId, juce::Colour(0xff7799cc));
+    content.addAndMakeVisible(lblPatternsBars);
+    lblPatternsBars.setFont(juce::Font(11.0f, juce::Font::bold));
+    lblPatternsBars.setColour(juce::Label::textColourId, juce::Colour(0xff7799cc));
     for (int p = 0; p < Sequencer::NUM_PATTERNS; ++p)
     {
         auto& pb = patternBtns[p];
@@ -5240,9 +5714,61 @@ void DrumSequencerEditor::setupComponents()
         // (and, while playing, it only changes the view; playback keeps going on its own).
         pb.onSelect = [this, p] { selectPattern(p); };   // Follow is a global toggle - clicking a pattern doesn't change it
         pb.onCopyFrom = [this, p] (int src) { copyPatternContent(src, p); selectPattern(p); };
+        // SHIFT+CLICK = MERGE this pattern onto the previous one (toggle). Merged patterns play as ONE
+        // multi-bar unit and mirror the HEAD's channel sounds (one sound editor, no clashing).
+        pb.onShiftClick = [this, p] {
+            if (p == 0) return;   // nothing before pattern 1 to merge with
+            auto& sq = proc.sequencer;
+            const bool turnOn = ! sq.patterns[p].mergeWithPrev;
+            if (turnOn)
+            {   // LIMITS so the merged view always FITS: max 8 bars, and - since a channel's step
+                // count is UNIFORM across the group (merging normalizes every bar to the HEAD's
+                // count, below) - the head's worst count x bars must fit the 64-cell row
+                // (15 steps x 5 bars = 75 -> refused; max 12 steps for 5 bars).
+                const int head = sq.groupHead(p - 1);
+                const int pEnd = sq.groupEnd(p);          // p may already head its own run
+                const int bars = pEnd - head + 1;
+                int worst = 1;
+                for (int c = 0; c < Sequencer::NUM_CHANNELS; ++c)
+                    worst = juce::jmax(worst, sq.patterns[head].channels[c].numSteps);
+                if (bars > StepGridComponent::GRP_MAX || worst * bars > DrumChannel::MAX_STEPS)
+                {
+                    juce::PopupMenu mm;
+                    mm.addSectionHeader(bars > StepGridComponent::GRP_MAX
+                        ? "Can't merge: at most " + juce::String(StepGridComponent::GRP_MAX) + " patterns can be merged."
+                        : "Can't merge: a channel has " + juce::String(worst) + " steps, and " + juce::String(bars)
+                          + " bars of that need " + juce::String(worst * bars) + " cells - the row shows at most "
+                          + juce::String(DrumChannel::MAX_STEPS) + ". Lower the step count first (max "
+                          + juce::String(DrumChannel::MAX_STEPS / bars) + " steps for " + juce::String(bars) + " bars).");
+                    mm.addItem(1, "OK");
+                    mm.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&patternBtns[p]), [](int){});
+                    return;
+                }
+            }
+            sq.patterns[p].mergeWithPrev = turnOn;
+            if (turnOn)
+            {   // the whole (possibly extended) group adopts the HEAD's sounds AND its step counts /
+                // roll mode (one uniform count per channel -> the numbering runs 1..15, 16..30, ...)
+                const int head = sq.groupHead(p), end = sq.groupEnd(p);
+                for (int m = head + 1; m <= end; ++m)
+                    for (int c = 0; c < Sequencer::NUM_CHANNELS; ++c)
+                    {
+                        copyChannelSound(head, m, c);
+                        sq.patterns[m].channels[c].numSteps = sq.patterns[head].channels[c].numSteps;
+                        sq.patterns[m].channels[c].drawMode = sq.patterns[head].channels[c].drawMode;
+                    }
+                selectPattern(head);   // view the whole group
+            }
+            else
+                selectPattern(p);      // un-merged: view the freed pattern
+            refreshDetailPanel();
+            repaint();   // group outline
+        };
         pb.setTooltip("Pattern " + juce::String(p + 1) + ". Click to view + edit it. DRAG it onto another pattern "
                       "to COPY this pattern's steps, swing, play-mode + FX into that slot (the sounds are shared, so "
-                      "only the sequencing copies). Right-click to MIDI-learn.");
+                      "only the sequencing copies). SHIFT+CLICK to MERGE it with the pattern before it: merged "
+                      "patterns play back to back as one longer piece (the FIRST one's play mode + sounds apply to "
+                      "all of them; steps stay per pattern). Shift+click again to un-merge. Right-click to MIDI-learn.");
         content.addAndMakeVisible(pb);
     }
     content.addAndMakeVisible(btnFollow);
@@ -5274,17 +5800,22 @@ void DrumSequencerEditor::setupComponents()
                            "also wipes the whole drawn lane (pitch + length) and resets the channel's draw vol/pan. "
                            "Other channels are untouched. Undoable.");
     btnClearPat.onClick = [this] {
-        // Clear the SELECTED channel only (not the whole pattern's other channels).
-        auto& ch = proc.sequencer.patterns[currentPattern()].channels[selectedChannel];
-        for (int s = 0; s < DrumChannel::MAX_STEPS; ++s) {
-            ch.steps[s] = false; ch.stepVel[s] = 1.0f; ch.stepPitch[s] = 0.0f; ch.stepProb[s] = 1.0f;
-            ch.stepRoll[s] = 1; ch.stepRollDecay[s] = 0.0f; ch.stepNoteLen[s] = 0.0f; ch.stepPan[s] = 0.0f;
-            ch.stepSlide[s] = false; ch.stepMerge[s] = false; ch.stepCondLen[s] = 1; ch.stepCondMask[s] = 0;
+        // Clear the SELECTED channel only - across EVERY bar of a merged group (the whole visible row).
+        auto& sq = proc.sequencer;
+        const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
+        for (int b = head; b <= end; ++b)
+        {
+            auto& ch = sq.patterns[b].channels[selectedChannel];
+            for (int s = 0; s < DrumChannel::MAX_STEPS; ++s) {
+                ch.steps[s] = false; ch.stepVel[s] = 1.0f; ch.stepPitch[s] = 0.0f;
+                ch.stepRoll[s] = 1; ch.stepRollDecay[s] = 0.0f; ch.stepNoteLen[s] = 0.0f; ch.stepPan[s] = 0.0f;
+                ch.stepSlide[s] = false; ch.stepMerge[s] = false; ch.stepCondLen[s] = 1; ch.stepCondMask[s] = 0;
+            }
+            // Piano-roll content too: wipe every note and reset the whole-channel default vel/pan.
+            // (drawMode itself is left as-is.)
+            ch.clearDrawNotes();
+            ch.drawVel = 1.0f; ch.drawPan = 0.0f;
         }
-        // Draw-mode content too: wipe the whole drawn lane (pitch + length) and reset the
-        // whole-channel draw vol/pan back to default. (drawMode itself is left as-is.)
-        for (int i = 0; i < DrumChannel::DRAW_RES; ++i) ch.drawSemi[i] = DrumChannel::DRAW_GAP;
-        ch.drawVel = 1.0f; ch.drawPan = 0.0f;
         stepGrid.update(proc.sequencer, proc.anySolo);
         refreshPatternButtons();
         content.repaint();
@@ -5447,6 +5978,26 @@ void DrumSequencerEditor::setupComponents()
             keysPanel.minVelKnob.setValue(ch.keysMinVel, juce::dontSendNotification);
         }
     };
+    // POLY toggle: held keys stack like a piano; off = mono (a new key cuts the previous one).
+    keysPanel.polySwitch.setTooltip("POLY keys: hold several keys and they all sound (chords by hand, up to 16 "
+        "notes with tails). OFF = MONO: pressing a new key cuts the one before it - the classic lead/bass feel, "
+        "best for slides and basslines. Keyboard only; the sequencer's per-channel Poly button is separate. "
+        "While you play, lit keys show what each slot voices: yellow = slot 1, pink = slot 2, orange = both.");
+    keysPanel.polySwitch.onClick = [this] {
+        if (ignoreKnobCallbacks) return;
+        proc.sequencer.channel(selectedChannel).keysPolyMode = keysPanel.polySwitch.getToggleState();
+        keysPanel.polyMode = keysPanel.polySwitch.getToggleState();   // routes the panel's note-offs
+    };
+    // TRANSPOSE LOCK: per-SOUND - disables both slots' Freq faders so nothing shifts the pitch reference.
+    keysPanel.lockSwitch.setTooltip("Lock transpose (saved with the SOUND): disables the Freq knobs on both sound "
+        "slots so nothing can sneakily transpose this sound's pitch reference - keys, step/draw pitch and MIDI "
+        "export stay anchored where the sound was designed. Keyboard sounds from the factory bank ship locked. "
+        "Turn OFF here to free the Freq knobs again.");
+    keysPanel.lockSwitch.onClick = [this] {
+        if (ignoreKnobCallbacks) return;
+        proc.sequencer.channel(selectedChannel).freqLocked = keysPanel.lockSwitch.getToggleState();
+        refreshDetailPanel();   // re-locks / unlocks the Freq faders + their tooltips
+    };
     keysPanel.btnSlot2.setLookAndFeel(&dropBtnLNF);   // dropdown look (triangle) - it's a popup button now
     keysPanel.btnTakes.setLookAndFeel(&dropBtnLNF);   // proper dropdown look (like the sound bank)
     keysPanel.btnTakes.setTooltip("Recorded takes for the CURRENT pattern + selected channel (each pattern loop while "
@@ -5574,53 +6125,67 @@ void DrumSequencerEditor::setupComponents()
     stepMagOverlay.grid = &stepGrid;
     stepGrid.magOverlay = &stepMagOverlay;
     stepGrid.midiLearn = &proc.midiLearn;
-    stepGrid.onStepClicked     = [this](int ch, int step) { proc.toggleStep(ch, step); };
+    stepGrid.onStepClicked     = [this](int ch, int step) {
+        if (step < 0 || step >= DrumChannel::MAX_STEPS) return;
+        int ls = step; auto& c = groupStepChannel(ch, ls);   // merged group: concat -> the right bar
+        if (ls >= 0 && ls < DrumChannel::MAX_STEPS) c.steps[ls] = ! c.steps[ls];
+    };
     stepGrid.onChannelSelected = [this](int ch) { selectChannel(ch); };
     stepGrid.onStepValueChanged = [this](int ch, int step, int mode, float value) {
-        auto& c = proc.sequencer.channel(ch);
         if (step < 0 || step >= DrumChannel::MAX_STEPS) return;
-        if (mode == StepGridComponent::ModeVel)        c.stepVel[step] = value;      // Y = velocity
-        else if (mode == StepGridComponent::ModeLen)   c.stepNoteLen[step] = value;   // X = gate length (all channels)
-        else if (mode == StepGridComponent::ModePitch) c.stepPitch[step] = value;
-        else if (mode == StepGridComponent::ModeProb)  c.stepProb[step]  = value;
-        else if (mode == StepGridComponent::ModePan)   c.stepPan[step]   = value;   // X = pan -1..+1
+        const int concat = step;
+        int ls = step; auto& c = groupStepChannel(ch, ls);   // merged group: concat -> the right bar
+        if (ls < 0 || ls >= DrumChannel::MAX_STEPS) return;
+        if (mode == StepGridComponent::ModeVel)        c.stepVel[ls] = value;      // Y = velocity
+        else if (mode == StepGridComponent::ModeLen)   c.stepNoteLen[ls] = value;   // X = gate length (all channels)
+        else if (mode == StepGridComponent::ModePitch) c.stepPitch[ls] = value;
+        else if (mode == StepGridComponent::ModePan)   c.stepPan[ls]   = value;   // X = pan -1..+1
         else if (mode == StepGridComponent::ModeRoll) {
-            c.stepRoll[step]      = juce::jlimit(1, 6, (int) value);   // Y = ratchet count
-            c.stepRollDecay[step] = stepGrid.getRollDec(ch, step);     // X = per-hit ramp (-1..+1)
+            c.stepRoll[ls]      = juce::jlimit(1, 6, (int) value);       // Y = ratchet count
+            c.stepRollDecay[ls] = stepGrid.getRollDec(ch, concat);       // X = per-hit ramp (grid mirrors concat)
         }
     };
     stepGrid.onStepSlideChanged = [this](int ch, int step, bool on) {
         if (step < 0 || step >= DrumChannel::MAX_STEPS) return;
-        proc.sequencer.channel(ch).stepSlide[step] = on;
+        int ls = step; auto& c = groupStepChannel(ch, ls);
+        if (ls >= 0 && ls < DrumChannel::MAX_STEPS) c.stepSlide[ls] = on;
     };
     stepGrid.onStepMergeChanged = [this](int ch, int step, bool on) {
         if (step < 0 || step >= DrumChannel::MAX_STEPS) return;
-        proc.sequencer.channel(ch).stepMerge[step] = on;
+        int ls = step; auto& c = groupStepChannel(ch, ls);
+        if (ls >= 0 && ls < DrumChannel::MAX_STEPS) c.stepMerge[ls] = on;
     };
-    stepGrid.onDrawWrite = [this](int ch, int colA, int colB, int semi) {   // DRAW mode: write a column run
-        auto& c = proc.sequencer.channel(ch);
-        const uint8_t defVel = (uint8_t) juce::jlimit(0, 255, (int) std::lround(c.drawVel * 255.0f));   // new notes = default vel
-        for (int col = juce::jmax(0, colA); col <= colB && col < DrumChannel::DRAW_RES; ++col) {
-            c.drawSemi[col] = (int8_t) semi;
-            if (semi != DrumChannel::DRAW_GAP) c.drawVelC[col] = defVel;
+    stepGrid.onDrawNotesChanged = [this](int ch, const DrumChannel::DrawNote* notes, int count) {
+        // PIANO ROLL: the grid pushes its whole mirror list (CONCAT columns in a merged group) -
+        // split it back into per-bar note lists (a note belongs to the bar its start column is in).
+        auto& sq = proc.sequencer;
+        const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
+        const int bars = juce::jlimit(1, StepGridComponent::GRP_MAX, end - head + 1);
+        const int RES  = DrumChannel::DRAW_RES;
+        for (int b = 0; b < bars; ++b) sq.patterns[head + b].channels[ch].clearDrawNotes();
+        for (int i = 0; i < count; ++i)
+        {
+            const auto& nt = notes[i];
+            const int b = juce::jlimit(0, bars - 1, (int) nt.start / RES);
+            sq.patterns[head + b].channels[ch].addDrawNote((int) nt.start - b * RES, nt.len, nt.semi, nt.vel);
         }
     };
-    stepGrid.onDrawVelPan = [this](int ch, float vel, float pan) {           // DRAW mode: whole-channel Pan (+ default vel)
-        auto& c = proc.sequencer.channel(ch); c.drawVel = vel; c.drawPan = pan;
-    };
-    stepGrid.onDrawVelWrite = [this](int ch, int colA, int colB, int v255) { // DRAW mode: per-column velocity edit
-        auto& c = proc.sequencer.channel(ch);
-        for (int col = juce::jmax(0, colA); col <= colB && col < DrumChannel::DRAW_RES; ++col)
-            c.drawVelC[col] = (uint8_t) juce::jlimit(0, 255, v255);
+    stepGrid.onDrawVelPan = [this](int ch, float vel, float pan) {           // whole-channel Pan (+ default vel)
+        auto& sq = proc.sequencer;
+        const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
+        for (int b = head; b <= end; ++b)   // a merged group shares the channel's Vel/Pan defaults
+        { auto& c = sq.patterns[b].channels[ch]; c.drawVel = vel; c.drawPan = pan; }
     };
     stepGrid.onStepCondChanged = [this](int ch, int step, int len, int mask) {
         if (step < 0 || step >= DrumChannel::MAX_STEPS) return;
-        auto& c = proc.sequencer.channel(ch);
-        c.stepCondLen[step]  = juce::jlimit(1, 5, len);
-        c.stepCondMask[step] = mask;
+        int ls = step; auto& c = groupStepChannel(ch, ls);
+        if (ls < 0 || ls >= DrumChannel::MAX_STEPS) return;
+        c.stepCondLen[ls]  = juce::jlimit(1, 5, len);
+        c.stepCondMask[ls] = mask;
     };
     stepGrid.onInfluenceApply = [this](int ch, int srcStep) {
-        auto& c = proc.sequencer.channel(ch);
+        int lsrc = srcStep; auto& c = groupStepChannel(ch, lsrc);   // influence stays within the source BAR
+        srcStep = lsrc;
         if (srcStep < 0 || srcStep >= DrumChannel::MAX_STEPS) return;
         const int mode = stepGrid.editMode;   // copy ONLY the parameter being edited
         for (int s = 0; s < DrumChannel::MAX_STEPS; ++s)
@@ -5710,12 +6275,12 @@ void DrumSequencerEditor::setupComponents()
         };
 
         content.addAndMakeVisible(strip.comboSteps);
+        strip.comboSteps.addItem("Piano Roll", StepGridComponent::DRAW_ITEM_ID);   // free poly note lane - TOP of the list (user)
         for (int si = 0; si < DrumChannel::NUM_VALID_STEP_COUNTS; ++si)
         {
             int s = DrumChannel::VALID_STEP_COUNTS[si];
             strip.comboSteps.addItem(juce::String(s) + (s == 1 ? " step" : " steps"), s);
         }
-        strip.comboSteps.addItem("Draw", StepGridComponent::DRAW_ITEM_ID);   // free piano-draw mode (no steps)
         { auto& c0 = proc.sequencer.channel(i);
           strip.comboSteps.setSelectedId(c0.drawMode ? StepGridComponent::DRAW_ITEM_ID : c0.numSteps, juce::dontSendNotification); }
         // RULES (regressed many times - keep them): read getSelectedId() FIRST; NEVER call setSelectedId()
@@ -5724,22 +6289,48 @@ void DrumSequencerEditor::setupComponents()
         // a drawn lane asks first; an empty lane or step->step is immediate.
         strip.comboSteps.onChange = [this, ci] {
             const int id = strips[ci].comboSteps.getSelectedId();
-            auto& c = proc.sequencer.channel(ci);
+            auto& sq = proc.sequencer;
+            const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
+            // guard: a step count that can't fit the 64-cell group view is ignored (items are also disabled)
+            if (id != StepGridComponent::DRAW_ITEM_ID && id * (end - head + 1) > DrumChannel::MAX_STEPS) return;
+            auto& c = sq.patterns[head].channels[ci];
             auto finish = [this, ci] { selectChannel(ci); refreshDrawModeButtons(); stepGrid.update(proc.sequencer, proc.anySolo); };
-            if (id == StepGridComponent::DRAW_ITEM_ID) { c.drawMode = true; finish(); return; }   // -> draw (lane kept)
-            if (! c.drawMode) { c.numSteps = id; finish(); return; }                               // step -> step
-            bool any = false; for (int i = 0; i < DrumChannel::DRAW_RES; ++i) if (c.drawSemi[i] != DrumChannel::DRAW_GAP) { any = true; break; }
-            // NOTHING drawn: just leave draw mode. The channel's original steps (on/off, pitch, merge,
-            // Length, Loop, Roll, ...) were never touched by draw, so they're restored as-is - no quantise
-            // (quantising an empty lane would wipe them). Only a REAL drawing quantises (fresh) below.
-            if (! any) { c.drawMode = false; c.numSteps = id; finish(); return; }
-            juce::PopupMenu mm;                                                                     // draw -> steps: confirm the quantise
-            mm.addSectionHeader("Switching to " + juce::String(id) + " steps quantises your drawing (fine timing is snapped).");
-            mm.addItem(1, "Quantize to " + juce::String(id) + " steps");
-            mm.addItem(2, "Cancel - stay in Draw");
+            // MERGED GROUP: the dropdown applies to EVERY bar individually (8 steps x 3 bars = a
+            // 24-cell row in front of you); the roll spans all bars likewise.
+            auto eachBar = [&](auto&& f) { for (int b = head; b <= end; ++b) f(sq.patterns[b].channels[ci]); };
+            if (id == StepGridComponent::DRAW_ITEM_ID) { eachBar([](DrumChannel& cc){ cc.drawMode = true; }); finish(); return; }   // -> piano roll (notes kept)
+            if (! c.drawMode) { eachBar([id](DrumChannel& cc){ cc.numSteps = id; }); finish(); return; }       // step -> step
+            bool anyNotes = false, anyOverlap = false;
+            for (int b = head; b <= end; ++b)
+            { const auto& cb = sq.patterns[b].channels[ci];
+              anyNotes |= cb.drawNoteCount > 0; anyOverlap |= cb.drawHasOverlaps(); }
+            // NOTHING in the roll: just leave it. The channels' original steps were never touched.
+            if (! anyNotes) { eachBar([id](DrumChannel& cc){ cc.drawMode = false; cc.numSteps = id; }); finish(); return; }
+            juce::PopupMenu mm;                                                                     // roll -> steps: confirm
+            if (anyOverlap)
+            {   // CHORDS can't fit steps (one note per step) - warn, then DELETE on OK (user's wording).
+                mm.addSectionHeader("There are overlapping notes (chords), which are not allowed in step mode - "
+                                    "switching will DELETE the piano-roll notes.");
+                mm.addSectionHeader("If you don't want that, consider deleting the overlapping notes first.");
+                mm.addItem(3, "Delete the notes and switch to " + juce::String(id) + " steps");
+                mm.addItem(2, "Cancel - stay in Piano Roll");
+            }
+            else
+            {
+                mm.addSectionHeader("Switching to " + juce::String(id) + " steps quantises your notes (fine timing is snapped).");
+                mm.addItem(1, "Quantize to " + juce::String(id) + " steps");
+                mm.addItem(2, "Cancel - stay in Piano Roll");
+            }
             mm.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&strips[ci].comboSteps),
-                             [this, ci, id, finish](int r) {
-                                 if (r == 1) quantizeDrawToSteps(proc.sequencer.channel(ci), id);   // else stay in Draw (combo reverts via the change-only refresh)
+                             [this, ci, id, head, end, finish](int r) {
+                                 auto& sq2 = proc.sequencer;
+                                 for (int b = head; b <= end; ++b)
+                                 {
+                                     auto& cc = sq2.patterns[b].channels[ci];
+                                     if (r == 1) quantizeDrawToSteps(cc, id);   // clean melody -> steps (per bar)
+                                     else if (r == 3) { cc.clearDrawNotes(); cc.drawMode = false; cc.numSteps = id; }
+                                     // else stay in Piano Roll (combo reverts via the change-only refresh)
+                                 }
                                  finish();
                              });
         };
@@ -5754,8 +6345,10 @@ void DrumSequencerEditor::setupComponents()
         strip.btnMute->setTooltip("Mute: silence this channel.");
         strip.btnSolo->setTooltip("Solo: play only this channel (and other soloed ones), muting the rest.");
         strip.comboSteps.setTooltip("Number of steps in this channel's pattern (the bar is split into this many even slices), "
-                                    "or DRAW for a free piano-draw lane. Switching from Draw to a step count QUANTISES your "
-                                    "drawing onto the grid (undoable).");
+                                    "or PIANO ROLL for a free note lane (draw or record melodies AND chords; the lens opens "
+                                    "the full editor). Switching from Piano Roll to a step count QUANTISES your notes onto "
+                                    "the grid (undoable) - but overlapping notes (chords) can't fit steps, so it asks first "
+                                    "and deletes them if you continue.");
     }
 
     // Detail panel
@@ -6896,11 +7489,18 @@ void DrumSequencerEditor::keysStartRecord()
     // Then start from a CLEAN slate - the draw lane cleared, and the step data too (both modes).
     proc.keysDrawLastCol.store(-1);
     {
-        auto& pch = proc.sequencer.patterns[currentPattern()].channels[selectedChannel];
-        pch.drawMode = true;
-        for (int i = 0; i < DrumChannel::DRAW_RES; ++i) pch.drawSemi[i] = DrumChannel::DRAW_GAP;
-        for (int i = 0; i < DrumChannel::MAX_STEPS; ++i)
-        { pch.steps[i] = false; pch.stepPitch[i] = 0.0f; pch.stepMerge[i] = false; pch.stepNoteLen[i] = 0.0f; }
+        // Clean slate across EVERY bar of a merged group (group recording is a continuous overdub:
+        // wraps never clear, so the fresh start happens HERE, once).
+        auto& sq = proc.sequencer;
+        const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
+        for (int b = head; b <= end; ++b)
+        {
+            auto& pch = sq.patterns[b].channels[selectedChannel];
+            pch.drawMode = true;
+            pch.clearDrawNotes();
+            for (int i = 0; i < DrumChannel::MAX_STEPS; ++i)
+            { pch.steps[i] = false; pch.stepPitch[i] = 0.0f; pch.stepMerge[i] = false; pch.stepNoteLen[i] = 0.0f; }
+        }
         strips[selectedChannel].comboSteps.setSelectedId(StepGridComponent::DRAW_ITEM_ID, juce::dontSendNotification);
         refreshDrawModeButtons();
         stepGrid.update(proc.sequencer, proc.anySolo);
@@ -6952,15 +7552,27 @@ void DrumSequencerEditor::keysStopRecord(bool finalize)
     auto& drawCh = proc.sequencer.channel(selectedChannel);
     if (finalize && drawCh.drawMode)
     {
-        // save the final (partial) loop as a take too
-        bool any = false; for (int i = 0; i < DrumChannel::DRAW_RES; ++i) if (drawCh.drawSemi[i] != DrumChannel::DRAW_GAP) { any = true; break; }
-        if (any && takesForPatChan(currentPattern(), selectedChannel) < 20
+        // save the final (partial) pass as a take too - for a MERGED GROUP the take holds every
+        // bar's notes in CONCAT columns (drawPat = the head; keysLoadTake splits them back).
+        auto& sq = proc.sequencer;
+        const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
+        bool any = false;
+        for (int b = head; b <= end; ++b) any |= sq.patterns[b].channels[selectedChannel].drawNoteCount > 0;
+        if (any && takesForPatChan(head, selectedChannel) < 20
                 && (int) proc.keysTakes.size() < DrumSequencerProcessor::KEYS_TAKES_MAX)
         {
             DrumSequencerProcessor::KeysTake t;
-            t.isDraw = true; t.channel = selectedChannel; t.drawPat = currentPattern();
-            t.drawLane.assign(drawCh.drawSemi, drawCh.drawSemi + DrumChannel::DRAW_RES);
-            t.drawVel.assign(drawCh.drawVelC, drawCh.drawVelC + DrumChannel::DRAW_RES);
+            t.isDraw = true; t.channel = selectedChannel; t.drawPat = head;
+            for (int b = head; b <= end; ++b)
+            {
+                const auto& cb = sq.patterns[b].channels[selectedChannel];
+                for (int i = 0; i < cb.drawNoteCount && (int) t.drawNotes.size() < DrumSequencerProcessor::DRAW_TAKE_MAX; ++i)
+                {
+                    auto nt = cb.drawNotes[i];
+                    nt.start = (int16_t) (nt.start + (b - head) * DrumChannel::DRAW_RES);
+                    t.drawNotes.push_back(nt);
+                }
+            }
             t.name = juce::Time::getCurrentTime().toString(true, true, true, true) + "  #" + juce::String((int) proc.keysTakes.size() + 1);
             proc.keysTakes.push_back(std::move(t));
         }
@@ -6999,8 +7611,8 @@ void DrumSequencerEditor::drainDrawTake()
         t.isDraw = true;
         t.channel = dChan;
         t.drawPat = dPat;
-        t.drawLane.assign(proc.keysDrawTakeBuf, proc.keysDrawTakeBuf + DrumChannel::DRAW_RES);
-        t.drawVel.assign(proc.keysDrawTakeVelBuf, proc.keysDrawTakeVelBuf + DrumChannel::DRAW_RES);
+        t.drawNotes.assign(proc.keysDrawTakeNotes,
+                           proc.keysDrawTakeNotes + juce::jlimit(0, DrumSequencerProcessor::DRAW_TAKE_MAX, proc.keysDrawTakeCount));
         t.name = juce::Time::getCurrentTime().toString(true, true, true, true) + "  #" + juce::String((int) proc.keysTakes.size() + 1);
         proc.keysTakes.push_back(std::move(t));
     }
@@ -7020,11 +7632,17 @@ void DrumSequencerEditor::keysLoadTake(int idx)
     const auto& t = proc.keysTakes[(size_t) idx];
     if (t.isDraw)
     {
-        auto& c = proc.sequencer.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, t.drawPat)].channels[t.channel];
-        c.drawMode = true;
-        for (int i = 0; i < DrumChannel::DRAW_RES; ++i) {
-            c.drawSemi[i] = (i < (int) t.drawLane.size()) ? t.drawLane[(size_t) i] : DrumChannel::DRAW_GAP;
-            c.drawVelC[i] = (i < (int) t.drawVel.size())  ? t.drawVel[(size_t) i]  : 255;
+        // Take notes are in CONCAT columns for a group take (drawPat = the head) - split per bar.
+        auto& sq = proc.sequencer;
+        const int head = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, t.drawPat);
+        const int end  = sq.groupEnd(head);
+        for (int b = head; b <= end; ++b)
+        { auto& cb = sq.patterns[b].channels[t.channel]; cb.drawMode = true; cb.clearDrawNotes(); }
+        for (const auto& nt : t.drawNotes)
+        {
+            const int b = juce::jlimit(0, end - head, (int) nt.start / DrumChannel::DRAW_RES);
+            sq.patterns[head + b].channels[t.channel].addDrawNote((int) nt.start - b * DrumChannel::DRAW_RES,
+                                                                  nt.len, nt.semi, nt.vel);
         }
         selectChannel(t.channel);
         strips[t.channel].comboSteps.setSelectedId(StepGridComponent::DRAW_ITEM_ID, juce::dontSendNotification);
@@ -7069,7 +7687,8 @@ juce::int64 DrumSequencerEditor::takeDataHash(const DrumSequencerProcessor::Keys
     juce::int64 h = 5381;
     auto mix = [&](juce::int64 v) { h = h * 33 ^ v; };
     mix(t.channel); mix(t.isDraw ? 1 : 0);
-    if (t.isDraw) { mix(t.drawPat); for (auto v : t.drawLane) mix((int) v + 128); for (auto v : t.drawVel) mix((int) v); }
+    if (t.isDraw) { mix(t.drawPat); for (const auto& nt : t.drawNotes)
+                    { mix(nt.start); mix(nt.len); mix((int) nt.semi + 128); mix((int) nt.vel); } }
     else for (auto& e : t.evts) { mix(e.pattern); mix(e.step); mix((int) e.semis + 128); mix(e.flags); }
     return h;
 }
@@ -7081,9 +7700,20 @@ DrumSequencerProcessor::KeysTake DrumSequencerEditor::captureTakeFromChannel(int
     auto& c = proc.sequencer.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, pat)].channels[t.channel];
     if (c.drawMode)
     {
-        t.isDraw = true; t.drawPat = pat;
-        t.drawLane.assign(c.drawSemi, c.drawSemi + DrumChannel::DRAW_RES);
-        t.drawVel.assign(c.drawVelC, c.drawVelC + DrumChannel::DRAW_RES);
+        // Group channels snapshot the WHOLE group in concat columns (drawPat = the head).
+        auto& sq = proc.sequencer;
+        const int head = sq.groupHead(pat), end = sq.groupEnd(pat);
+        t.isDraw = true; t.drawPat = head;
+        for (int b = head; b <= end; ++b)
+        {
+            const auto& cb = sq.patterns[b].channels[t.channel];
+            for (int i = 0; i < cb.drawNoteCount && (int) t.drawNotes.size() < DrumSequencerProcessor::DRAW_TAKE_MAX; ++i)
+            {
+                auto nt = cb.drawNotes[i];
+                nt.start = (int16_t) (nt.start + (b - head) * DrumChannel::DRAW_RES);
+                t.drawNotes.push_back(nt);
+            }
+        }
     }
     else for (int s = 0; s < c.numSteps; ++s) if (c.steps[s])
     {
@@ -7112,7 +7742,7 @@ bool DrumSequencerEditor::keysTakeDirty(int idx) const
 
 void DrumSequencerEditor::refreshKeysPanel()
 {
-    keysHighlightNote = -2;   // channel/slot settings may have changed -> recompute the key highlight next tick
+    keysHighlightMaskLo = keysHighlightMaskHi = ~0ULL;   // channel/slot settings may have changed -> recompute the key highlight next tick
     const bool recLive = proc.keysRecording.load() || keysCountdownTicks > 0;
     keysPanel.btnRec.setButtonText(recLive ? juce::String::charToString(0x25A0) + " STOP"    // filled square
                                            : juce::String::charToString(0x25CF) + " REC");   // filled circle
@@ -7135,6 +7765,9 @@ void DrumSequencerEditor::refreshKeysPanel()
     keysPanel.strumKnob.setValue(kch.strumAmt,    juce::dontSendNotification);
     keysPanel.minVelKnob.setValue(kch.keysMinVel, juce::dontSendNotification);
     keysPanel.maxVelKnob.setValue(kch.keysMaxVel, juce::dontSendNotification);
+    keysPanel.polySwitch.setToggleState(kch.keysPolyMode, juce::dontSendNotification);
+    keysPanel.polyMode = kch.keysPolyMode;
+    keysPanel.lockSwitch.setToggleState(kch.freqLocked, juce::dontSendNotification);
     ignoreKnobCallbacks = prevIgnore;
     // HUMANIZE enabled only with 2 audible slots; STRUM only when a slot is in Chord or Scale mode.
     auto slotAudible = [&](int s){ return kch.slots[s].engine >= 0 && kch.slots[s].weight > 0.001f; };
@@ -7145,11 +7778,8 @@ void DrumSequencerEditor::refreshKeysPanel()
     keysPanel.lblHuman.setAlpha(humOk ? 1.0f : 0.4f);
     keysPanel.strumKnob.setEnabled(strumOk); keysPanel.strumKnob.setAlpha(strumOk ? 1.0f : 0.4f);
     keysPanel.lblStrum.setAlpha(strumOk ? 1.0f : 0.4f);
-    keysPanel.lblHint.setText(
-        "Plays MONO (one note at a time).\n"
-        "Set each slot's Chord/Scale in the Sound Editor.\n"
-        "Lit keys: yellow = slot 1, pink = slot 2, orange = both.",
-        juce::dontSendNotification);
+    // (the hint text above the piano was removed - the Poly + Lock-transpose toggles live there now;
+    //  the colour legend moved into the keyboard's tooltip)
 }
 
 // Light up the piano keys that the currently-held note actually voices: for each slot, the chord/
@@ -7158,30 +7788,38 @@ void DrumSequencerEditor::refreshKeysPanel()
 // it works for the on-screen keyboard AND external MIDI (both set proc.keysHeldNote).
 void DrumSequencerEditor::updateKeyboardHighlight()
 {
-    const int held = (keysView && detailShown) ? proc.keysHeldNote.load(std::memory_order_relaxed) : -1;
-    if (held == keysHighlightNote) return;                 // nothing changed since last tick
-    keysHighlightNote = held;
+    // POLY: light the UNION of every held note's voicing. Change-gated on the held-note MASK
+    // (the processor mirrors its held stack into two atomics).
+    const bool active = keysView && detailShown;
+    const uint64_t mLo = active ? proc.keysHeldMaskLo.load(std::memory_order_relaxed) : 0;
+    const uint64_t mHi = active ? proc.keysHeldMaskHi.load(std::memory_order_relaxed) : 0;
+    if (mLo == keysHighlightMaskLo && mHi == keysHighlightMaskHi) return;   // nothing changed since last tick
+    keysHighlightMaskLo = mLo; keysHighlightMaskHi = mHi;
     keysPanel.clearKeyTints();
-    if (held >= 0)
+    if (mLo != 0 || mHi != 0)
     {
         const auto& c = proc.sequencer.channel(selectedChannel);
         bool used[2][128] = {};
-        for (int s = 0; s < DrumChannel::NUM_SLOTS; ++s)
+        for (int held = 0; held < 128; ++held)
         {
-            const auto& sl = c.slots[s];
-            if (sl.engine < 0 || sl.weight <= 0.001f) continue;   // empty/muted slot
-            const bool pitched = (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal
-                                  || sl.engine == DrumChannel::SrcPhys);
-            // Sample/Noise light the played key only (no chord/scale); Sample honours its slot-2 transpose
-            // unless Preserve pitch is on (then it plays regardless of the key -> show the pressed key).
-            const bool transposes = pitched || (sl.engine == DrumChannel::SrcSample && ! sl.smpPreservePitch);
-            const int base = held - (s == 1 && transposes ? c.keysSlot2Down : 0);
-            auto add = [&](int off) { const int m = base + off; if (m >= 0 && m < 128) used[s][m] = true; };
-            if (pitched && sl.scaleOn) { const int nv = juce::jlimit(1, DrumChannel::UNI_MAX, sl.scaleUnison);
-                for (int u = 0; u < nv; ++u) add(DrumChannel::scaleNoteOffset(sl.scaleType, sl.scaleKey, base, u)); }
-            else if (pitched && sl.chordMode > 0) { const int nv = juce::jlimit(1, DrumChannel::UNI_MAX, sl.chordUnison);
-                for (int u = 0; u < nv; ++u) add(DrumChannel::chordNoteOffset(sl.chordMode, u)); }
-            else add(0);                                   // plain note (Osc/Modal/Phys single, or Sample/Noise)
+            if (! ((held < 64 ? mLo : mHi) & (1ULL << (held & 63)))) continue;   // not held
+            for (int s = 0; s < DrumChannel::NUM_SLOTS; ++s)
+            {
+                const auto& sl = c.slots[s];
+                if (sl.engine < 0 || sl.weight <= 0.001f) continue;   // empty/muted slot
+                const bool pitched = (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal
+                                      || sl.engine == DrumChannel::SrcPhys);
+                // Sample/Noise light the played key only (no chord/scale); Sample honours its slot-2 transpose
+                // unless Preserve pitch is on (then it plays regardless of the key -> show the pressed key).
+                const bool transposes = pitched || (sl.engine == DrumChannel::SrcSample && ! sl.smpPreservePitch);
+                const int base = held - (s == 1 && transposes ? c.keysSlot2Down : 0);
+                auto add = [&](int off) { const int m = base + off; if (m >= 0 && m < 128) used[s][m] = true; };
+                if (pitched && sl.scaleOn) { const int nv = juce::jlimit(1, DrumChannel::UNI_MAX, sl.scaleUnison);
+                    for (int u = 0; u < nv; ++u) add(DrumChannel::scaleNoteOffset(sl.scaleType, sl.scaleKey, base, u)); }
+                else if (pitched && sl.chordMode > 0) { const int nv = juce::jlimit(1, DrumChannel::UNI_MAX, sl.chordUnison);
+                    for (int u = 0; u < nv; ++u) add(DrumChannel::chordNoteOffset(sl.chordMode, u)); }
+                else add(0);                                   // plain note (Osc/Modal/Phys single, or Sample/Noise)
+            }
         }
         const juce::Colour y(0xffe8bf4d), p(0xffe86aa8);   // slot 1 yellow / slot 2 pink (match the sound editor)
         for (int m = 0; m < 128; ++m)
@@ -7458,9 +8096,16 @@ void DrumSequencerEditor::quantizeDrawToSteps(DrumChannel& c, int n)
     for (int s = 0; s < n; ++s)
     {
         const int c0 = s * R / n, c1 = (s + 1) * R / n;
-        int cnt[73] = {}; int gap = 0;
-        for (int col = c0; col < c1; ++col) { const int v = c.drawSemi[col];
-            if (v == DrumChannel::DRAW_GAP) ++gap; else ++cnt[juce::jlimit(0, 72, v + 36)]; }
+        // Dominant NOTE of this step span = the note covering the most columns in it (note list; a
+        // non-overlapping melody gives the same result the old column scan did).
+        int cnt[73] = {}; int covered = 0;
+        for (int i = 0; i < c.drawNoteCount; ++i)
+        {
+            const auto& nt = c.drawNotes[i];
+            const int a = juce::jmax((int) nt.start, c0), b = juce::jmin((int) nt.start + nt.len, c1);
+            if (b > a) { cnt[juce::jlimit(0, 72, (int) nt.semi + 36)] += b - a; covered += b - a; }
+        }
+        const int gap = (c1 - c0) - juce::jmin(c1 - c0, covered);
         int best = -1, bestc = 0; for (int k = 0; k < 73; ++k) if (cnt[k] > bestc) { bestc = cnt[k]; best = k; }
         if (best >= 0 && bestc >= gap)   // a note dominates this step
         {
@@ -7473,6 +8118,55 @@ void DrumSequencerEditor::quantizeDrawToSteps(DrumChannel& c, int n)
     }
     for (int i = n; i < DrumChannel::MAX_STEPS; ++i) { c.steps[i] = false; c.stepMerge[i] = false; }
     c.drawMode = false; c.numSteps = n;
+}
+
+// MERGED GROUPS: copy one channel's SOUND from pattern src -> dst via the mix serializer (slots,
+// env, EQ, FX, filter, LFO, slot-2 pitch, transpose lock - NOT steps/routing/mute). Message thread.
+void DrumSequencerEditor::copyChannelSound(int srcPat, int dstPat, int ch)
+{
+    if (srcPat == dstPat) return;
+    auto& src = proc.sequencer.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, srcPat)].channels[ch];
+    auto& dst = proc.sequencer.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, dstPat)].channels[ch];
+    juce::ValueTree t("Mix");
+    juce::String missing;
+    writeChannelMix(t, src);
+    readChannelMix(t, dst, missing);   // sample reloads hit the SampleFileCache (no re-decode)
+    dst.mixName = src.mixName; dst.mixModified = src.mixModified; dst.mixHash = src.mixHash;
+    dst.markDspDirty();
+}
+
+// MERGED-GROUP view: concat step index -> the bar's channel + bar-local step.
+DrumChannel& DrumSequencerEditor::groupStepChannel(int ch, int& step)
+{
+    auto& sq = proc.sequencer;
+    const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
+    if (end <= head) return sq.channel(ch);
+    int b = head;
+    for (; b < end; ++b)
+    {
+        const int n = juce::jmax(1, sq.patterns[b].channels[ch].numSteps);
+        if (step < n) break;
+        step -= n;
+    }
+    return sq.patterns[b].channels[ch];
+}
+
+// Keep every merged-group member's sounds MIRRORING the pattern being edited (the visible one).
+// Called from the timer's throttled tick; change-only via channelSoundHash, so it's a no-op while
+// nothing is edited. Edits always happen on the CURRENT pattern -> sync flows current -> members.
+void DrumSequencerEditor::syncMergedGroupSounds()
+{
+    auto& sq = proc.sequencer;
+    const int cp = currentPattern();
+    const int head = sq.groupHead(cp), end = sq.groupEnd(cp);
+    if (end <= head) return;   // not in a group
+    for (int c = 0; c < Sequencer::NUM_CHANNELS; ++c)
+    {
+        const auto hsrc = channelSoundHash(sq.patterns[cp].channels[c]);
+        for (int m = head; m <= end; ++m)
+            if (m != cp && channelSoundHash(sq.patterns[m].channels[c]) != hsrc)
+                copyChannelSound(cp, m, c);
+    }
 }
 
 // In DRAW mode the pitch line IS the pitch, drawing sets the timing/length, and rolls make no
@@ -7497,6 +8191,7 @@ void DrumSequencerEditor::selectChannel(int ch)
     selectedChannel = ch;
     proc.lastSelectedChannel = ch; // remember across editor open/close
     stepGrid.selectedRow = ch;     // red row outline in the grid
+    stepGrid.closeDrawEditorIfNot(ch);   // don't leave another channel's piano-roll editor covering the grid
     proc.analyzeChannel.store(ch); // analyse the channel we're inspecting
     for (int i = 0; i < Sequencer::NUM_CHANNELS; ++i)
         strips[i].numBtn.setToggleState(i == ch, juce::dontSendNotification);
@@ -7511,7 +8206,13 @@ void DrumSequencerEditor::selectChannel(int ch)
 
 void DrumSequencerEditor::selectPattern(int p)
 {
+    const int clicked = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, p);
+    p = proc.sequencer.groupHead(p);   // a merged group is viewed as ONE unit - always at its head
     proc.sequencer.setCurrentPattern(p);
+    // Clicking a MIDDLE bar of a group: playback (when it next starts) begins from THAT bar and runs
+    // on through the rest of the group (setCurrentPattern parked playPattern at the head).
+    if (! proc.sequencer.isCurrentlyPlaying && clicked != p)
+        proc.sequencer.playPattern = clicked;
     stepGrid.currentPattern = p;
     updateStripParamIds();
     updateKnobParamIds();
@@ -7569,6 +8270,9 @@ void DrumSequencerEditor::refreshDetailPanel()
 {
     ignoreKnobCallbacks = true;
     auto& ch = proc.sequencer.channel(selectedChannel);
+
+    // TRANSPOSE LOCK (per-sound): tell both slot editors before their values/tooltips refresh below.
+    slotEd[0].freqLock = ch.freqLocked; slotEd[1].freqLock = ch.freqLocked;
 
     lblSelected.setText("Editing: Pattern " + juce::String(currentPattern() + 1)
                         + " / Channel " + juce::String(selectedChannel + 1),
@@ -7715,6 +8419,23 @@ void DrumSequencerEditor::refreshRouting()
 
 void DrumSequencerEditor::refreshChannelStrips()
 {
+    // MERGED GROUP: only offer step counts that FIT the 64-cell concat row (8 steps max for 8 bars,
+    // 13 steps would break a 5-bar view -> disabled). Change-only (item churn fights open dropdowns).
+    {
+        auto& sq = proc.sequencer;
+        const int bars = sq.groupEnd(currentPattern()) - sq.groupHead(currentPattern()) + 1;
+        const int cap  = DrumChannel::MAX_STEPS / juce::jmax(1, bars);
+        if (cap != lastStepCap)
+        {
+            lastStepCap = cap;
+            for (int i = 0; i < Sequencer::NUM_CHANNELS; ++i)
+                for (int si = 0; si < DrumChannel::NUM_VALID_STEP_COUNTS; ++si)
+                {
+                    const int s = DrumChannel::VALID_STEP_COUNTS[si];
+                    strips[i].comboSteps.setItemEnabled(s, s <= cap);
+                }
+        }
+    }
     for (int i = 0; i < Sequencer::NUM_CHANNELS; ++i)
     {
         strips[i].btnMute->setToggleState (proc.sequencer.channel(i).mute,        juce::dontSendNotification);
@@ -7874,7 +8595,7 @@ void DrumSequencerEditor::timerCallback()
         }
         const int uiHash = (proc.keysRecording.load() ? 1 : 0) + (keysCountdownTicks > 0 ? 2 : 0)
                          + (int) proc.keysTakes.size() * 1024
-                         + (int)(proc.keysDownEvt.load(std::memory_order_relaxed) >> 16) * 32768;
+                         + (int)(proc.keyQHead.load(std::memory_order_relaxed) & 0xffff) * 32768;   // key presses bump the ring head
         if (uiHash != keysUiHash)
         {
             keysUiHash = uiHash;
@@ -8023,6 +8744,7 @@ void DrumSequencerEditor::timerCallback()
     // (per-action snapshots: settled + no mouse button held -> one undo step; a drag = one step.)
     if (! applyingUndo && ! proc.keysRecording.load() && timerCounter % 3 == 0)
     {
+        syncMergedGroupSounds();   // merged patterns mirror the edited pattern's sounds (change-only)
         juce::int64 h = stateHash();
         undoTickHash = h;   // reuse for the "modified since saved" check below (avoid a 2nd full hash)
         const bool mouseHeld = juce::ModifierKeys::getCurrentModifiers().isAnyMouseButtonDown();
@@ -8187,6 +8909,17 @@ static constexpr int STRIP_W    = 414;   // wider so the sound-mix dropdown fits
 // The detail panel's top Y is computed at layout time = GRID_TOP + visibleChannels*ROW_H + 24,
 // so the panel sits just below however many channel rows are currently shown.
 
+// Drawn ABOVE the content's children (paintOverChildren): the strip METER sits right on the row's
+// bottom edge and was covering a background-drawn outline's bottom line.
+void DrumSequencerEditor::paintStripOutline(juce::Graphics& g)
+{
+    const int selRow = selectedChannel - firstChannelRow;
+    if (selRow < 0 || selRow >= viewRows()) return;
+    g.setColour(juce::Colour(0xffff3b30));
+    g.drawRoundedRectangle(juce::Rectangle<float>(2.0f, (float) (GRID_TOP + selRow * ROW_H) + 1.5f,
+                                                  (float) STRIP_W - 5.0f, (float) ROW_H - 4.0f), 5.0f, 2.0f);
+}
+
 void DrumSequencerEditor::paintContent(juce::Graphics& g)
 {
     const int nCh = viewRows();               // rows currently in the viewport (<= 8)
@@ -8216,10 +8949,36 @@ void DrumSequencerEditor::paintContent(juce::Graphics& g)
     g.drawHorizontalLine(detailY - 6, 0.0f, (float)DESIGN_W);
     g.drawVerticalLine(STRIP_W, (float)GRID_TOP, (float)(GRID_TOP + nCh * ROW_H));
 
+    // MERGED pattern groups: one amber box around each run of glued pattern buttons.
+    {
+        auto& sq = proc.sequencer;
+        for (int p = 0; p < proc.visiblePatterns; )
+        {
+            const int end = sq.groupEnd(p);
+            if (end > p)
+            {
+                juce::Rectangle<int> uni;
+                for (int m = p; m <= end && m < Sequencer::NUM_PATTERNS; ++m)
+                    if (patternBtns[m].isVisible())
+                        uni = uni.isEmpty() ? patternBtns[m].getBounds() : uni.getUnion(patternBtns[m].getBounds());
+                if (! uni.isEmpty())
+                {
+                    g.setColour(juce::Colour(0xffd9c46a));
+                    g.drawRoundedRectangle(uni.expanded(3).toFloat(), 6.0f, 1.6f);
+                }
+            }
+            p = end + 1;
+        }
+    }
+
     g.setColour(juce::Colour(0x18ffffff));
     const int selRow = selectedChannel - firstChannelRow;        // selection highlight at its on-screen row
     if (selRow >= 0 && selRow < nCh)
+    {
         g.fillRect(0, GRID_TOP + selRow * ROW_H, gridRightP, ROW_H);
+        // (The strip's red outline is drawn in ContentComponent::paintOverChildren - the strip METER
+        //  child sits on the row's bottom edge and painted over a background-drawn outline.)
+    }
 
     if (! detailShown) return;   // editing panel collapsed -> draw nothing below the grid
 
@@ -8377,7 +9136,8 @@ void DrumSequencerEditor::layoutContent()
     dragMidi.setBounds    (W - 156, 7, 148, 26);   // wider - fills the space the old Keys toggle left
 
     // Pattern row: a window of the pattern buttons (16 visible; 24/32 scroll via patternBar).
-    lblPatterns.setBounds(6, PAT_Y + 8, 60, 18);
+    lblPatterns.setBounds(6, PAT_Y + 2, 60, 15);
+    lblPatternsBars.setBounds(6, PAT_Y + 17, 60, 15);   // "(Bars)" under "Patterns", same size/colour
     {
         const int px0 = 70, pw = 33, pg = 3, step = pw + pg, shown = patShown();
         firstPatternCol = juce::jlimit(0, juce::jmax(0, visiblePatterns - shown), firstPatternCol);

@@ -43,6 +43,7 @@ static void clearSound(DC& c)
     c.allowOverlap = false;
     c.keysSlot2Down = 0;   // slot-2 pitch is TIED TO THE SOUND now: each sound sets its own (default 0),
                            // so picking a new sound refreshes it instead of leaking the previous value.
+    c.freqLocked = false;  // transpose lock is per-sound too (applyMix turns it ON for the Keys bank)
     c.markDspDirty();
 }
 
@@ -50,12 +51,12 @@ static void setSteps(DC& c, int n, std::initializer_list<int> on)
 {
     c.numSteps = n;
     for (int i = 0; i < DC::MAX_STEPS; ++i)
-    { c.steps[i] = false; c.stepVel[i] = 1.0f; c.stepPitch[i] = 0.0f; c.stepProb[i] = 1.0f; c.stepRoll[i] = 1;
+    { c.steps[i] = false; c.stepVel[i] = 1.0f; c.stepPitch[i] = 0.0f; c.stepRoll[i] = 1;
       c.stepRollDecay[i] = 0.0f; c.stepNoteLen[i] = 0.0f; c.stepPan[i] = 0.0f; c.stepSlide[i] = false;
       c.stepMerge[i] = false; c.stepCondLen[i] = 1; c.stepCondMask[i] = 0; }
     for (int s : on) if (s >= 0 && s < n) c.steps[s] = true;
     c.drawMode = false; c.drawVel = 1.0f; c.drawPan = 0.0f;   // presets/sounds are step-mode
-    for (int i = 0; i < DC::DRAW_RES; ++i) c.drawSemi[i] = DC::DRAW_GAP;
+    c.clearDrawNotes();
 }
 
 //==============================================================================
@@ -1166,6 +1167,9 @@ void applyMix(DC& ch, int index)
 {
     if (index < 0 || index >= kNumMixes) return;
     kMixes[index].build(ch);
+    // Keyboard-friendly sounds ship with the TRANSPOSE LOCK on (Freq faders disabled), so nothing can
+    // sneakily shift their pitch reference. Category-based: the whole Keys bank. (clearSound reset it.)
+    ch.freqLocked = (std::strcmp(kMixes[index].cat, "Keys") == 0);
     // Synth mixes author slots[] directly; legacy mixes leave them empty and are
     // converted from the per-engine fields. Only rebuild when nothing was authored.
     bool authored = false;
@@ -1283,6 +1287,7 @@ static void resetAll(Sequencer& s)
         P.swing = 0.0f; P.playMode = Sequencer::LoopForever; P.repeatTarget = 2;
         P.gotoPattern = (p + 1) % Sequencer::NUM_PATTERNS;
         P.chainLen = 0; P.chainStep = 0;
+        P.mergeWithPrev = false;                   // merged groups are preset-level -> reset
         P.master = Sequencer::MasterFX();          // default master FX + output
         for (int c = 0; c < Sequencer::NUM_CHANNELS; ++c)
         {
@@ -1292,6 +1297,7 @@ static void resetAll(Sequencer& s)
             ch.chokeGroup = 0; ch.outputBus = 0; ch.midiOut = false; ch.midiOutChannel = 1;   // routing/choke are preset-level -> reset them
             ch.keysSlot2Down = 0;   // KEYS slot-2 transpose (channel-wide) is preset-level too
             ch.humanizeAmt = 0.0f; ch.strumAmt = 0.0f; ch.keysMinVel = 0.0f; ch.keysMaxVel = 1.0f;   // HUMANIZE / STRUM / vel range reset
+            ch.keysPolyMode = false;   // keys mono on preset load (freqLocked is per-sound, clearSound handles it)
             ch.mixName = {}; ch.mixModified = false;
             setSteps(ch, 8, {});
         }

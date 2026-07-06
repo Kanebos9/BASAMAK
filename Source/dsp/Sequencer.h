@@ -53,6 +53,11 @@ public:
         int   chainLen = 0;
         int   chainStep = 0;
         float swing        = 0.0f; // 0 = straight .. 1 = max (MPC 50%..75%: off-step at 0.5+swing*0.25 of the pair)
+        // MERGE: this pattern is glued onto the PREVIOUS one (shift+click its button). A run of merged
+        // patterns = ONE multi-bar unit: bars play head..end in sequence, the HEAD's play mode governs
+        // what happens after the last bar, and every member mirrors the head's channel SOUNDS (the
+        // editor keeps them in sync - one sound editor, no clashing). Steps stay per bar.
+        bool  mergeWithPrev = false;
         MasterFX master;          // per-pattern master FX + output
     };
 
@@ -78,9 +83,10 @@ public:
                           long gate = 0;      // gate > 0 = cut the hit after this many samples (per-step Length)
                           long slideLen = 0;      // slide glide time in samples (0 = step has no slide)
                           float slideTo = 0.0f;   // slide TARGET pitch (the NEXT active step's pitch, semitones)
-                          bool  isDraw = false;   // DRAW mode note: use drawPitch + per-column drawVel + channel drawPan
+                          bool  isDraw = false;   // PIANO-ROLL note: use drawPitch + per-note drawVel + channel drawPan
                           float drawPitch = 0.0f;
-                          float drawVel = 1.0f; };   // per-column velocity (0..1) for this draw note
+                          float drawVel = 1.0f;      // per-note velocity (0..1)
+                          bool  drawOverlap = false; };   // note starts while another sounds (chord) -> don't cut it
 
     // [start, end) of step `s` (bar fraction 0..1) with this pattern's swing applied. The
     // MIDI exporter reuses it so exported clips carry the same groove the engine plays.
@@ -125,6 +131,18 @@ public:
     static bool anySoloIn(const Pattern& p)
     { for (auto& c : p.channels) if (c.solo) return true; return false; }
 
+    // While RECORDING keys into a piano-roll channel, its sequenced notes must NOT fire - the live
+    // key voices are the monitor (double-triggering re-fired the half-grown note at bar starts and
+    // MONO-cut the held voice = blips/cuts). Set per block by the processor; -1 = nothing suppressed.
+    std::atomic<int> recordSuppressCh { -1 };
+
+    // MERGED-GROUP helpers: a group = a head pattern + the following run of mergeWithPrev patterns.
+    int groupHead(int p) const { p = juce::jlimit(0, NUM_PATTERNS - 1, p);
+                                 while (p > 0 && patterns[p].mergeWithPrev) --p; return p; }
+    int groupEnd(int p) const  { p = groupHead(p);
+                                 while (p + 1 < NUM_PATTERNS && patterns[p + 1].mergeWithPrev) ++p; return p; }
+    bool inGroup(int p) const  { return groupEnd(p) > groupHead(p); }
+
     juce::Array<TriggerEvent> processBlock(
         juce::AudioBuffer<float>& audio,        // the Main output bus
         double sampleRate,
@@ -138,9 +156,18 @@ public:
     void reset();
     void resetChains()           { for (auto& p : patterns) p.chainStep = 0; }   // chain positions back to the start
     void startStandalone()       { playing = true; finished = false; patternRepeatCount = 0; loopCount = 0;
-                                   resetChains(); playPattern = currentPattern; resetTickDedupe(); }   // play from the viewed pattern
+                                   resetChains();
+                                   // Play from the viewed pattern - unless playPattern was parked on a BAR of the
+                                   // viewed merged group (the user clicked a middle bar: start THERE, run on).
+                                   if (groupHead(playPattern) != groupHead(currentPattern)) playPattern = currentPattern;
+                                   resetTickDedupe(); }
     void stopStandalone()        { playing = false; barPosition = 0.0; finished = false;
-                                   patternRepeatCount = 0; loopCount = 0; resetChains(); isCurrentlyPlaying = false; resetTickDedupe(); }
+                                   patternRepeatCount = 0; loopCount = 0; resetChains(); isCurrentlyPlaying = false;
+                                   playPattern = groupHead(playPattern);   // stopping mid-group parks at the HEAD, so the
+                                                                           // next Play starts the group from its beginning
+                                                                           // (an explicit middle-bar click AFTER stopping
+                                                                           // still re-parks it there)
+                                   resetTickDedupe(); }
     void setStandaloneBpm(float bpm) { standaloneBpm = bpm; }
 
     int getChannelStep(int ch) const

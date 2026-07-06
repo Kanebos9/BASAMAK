@@ -146,6 +146,10 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
 
     const int numSamples = audio.getNumSamples();
 
+    // Incoming-MIDI key notes gathered THIS block (handled in the keys block below with full
+    // context); local to the audio thread, so the message-thread ring stays single-producer.
+    KeyQEvt midiKeyEvts[64]; int nMidiKeyEvts = 0;
+
     //-- Handle MIDI input (MIDI learn + notes -> keys + CC routing)
     for (auto meta : midi)
     {
@@ -165,15 +169,17 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         if (midiLearn.processMidiMessage(msg))
             continue;
 
-        // Incoming MIDI NOTES play the KEYS engine (mono, selected channel) - no toggle
-        // needed: a MIDI keyboard just works. Pad-style controllers should send CC and be
-        // mapped via MIDI-learn (the factory map / TouchOSC template do exactly that).
-        if (msg.isNoteOnOrOff())
+        // Incoming MIDI NOTES play the KEYS engine (selected channel; poly follows the channel's
+        // keyboard Mono/Poly toggle) - no setup needed: a MIDI keyboard just works. Pad-style
+        // controllers should send CC + MIDI-learn. Collected LOCALLY (we're already on the audio
+        // thread) and handled in the keys block below - the ring stays single-producer.
+        if (msg.isNoteOnOrOff() && nMidiKeyEvts < (int) (sizeof(midiKeyEvts) / sizeof(midiKeyEvts[0])))
         {
             if (msg.isNoteOn())
-                pushKeyDown(msg.getNoteNumber(), msg.getFloatVelocity());
+                midiKeyEvts[nMidiKeyEvts++] = { 1, (uint8_t) (msg.getNoteNumber() & 0x7f),
+                                                (uint8_t) juce::jlimit(1, 127, (int) std::lround(msg.getFloatVelocity() * 127.0f)) };
             else
-                pushKeyUp(msg.getNoteNumber());
+                midiKeyEvts[nMidiKeyEvts++] = { 0, (uint8_t) (msg.getNoteNumber() & 0x7f), 0 };
         }
 
         // Route CC messages to assigned parameters/steps
@@ -232,13 +238,15 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
     {
         const int  chIdx = juce::jlimit(0, Sequencer::NUM_CHANNELS - 1, lastSelectedChannel);
         const bool rec   = keysRecording.load(std::memory_order_relaxed);
-        const bool chain = keysRecMode.load(std::memory_order_relaxed) >= 2;
         // Which pattern the keyboard plays (and records into):
         //  - chain record: the PLAYING pattern (follow the chain -> its loaded sound + slot-2 setting);
         //  - this-pattern record: always the ARMED pattern (the chain may play others, but we only
         //    play/record the one we armed);
         //  - not recording: the VIEWED pattern.
         const int  armedP = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, keysArmedPattern.load(std::memory_order_relaxed));
+        // A MERGED GROUP records like a chain: the armed "pattern" is really the whole group, so the
+        // recorder follows the playing bar and every bar-boundary is a take boundary.
+        const bool chain = keysRecMode.load(std::memory_order_relaxed) >= 2 || sequencer.inGroup(armedP);
         const int  keyPat = (rec && sequencer.isCurrentlyPlaying)
                               ? (chain ? juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, sequencer.playPattern) : armedP)
                               : juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, sequencer.currentPattern);
@@ -251,7 +259,8 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             if (! pc.drawMode)
             {
                 pc.drawMode = true;
-                for (int i = 0; i < DrumChannel::DRAW_RES; ++i) { pc.drawSemi[i] = DrumChannel::DRAW_GAP; pc.drawVelC[i] = 255; }
+                pc.clearDrawNotes();
+                for (auto& oi : keysHeldOpenIdx) oi = -1;
                 keysDrawLastCol.store(-1, std::memory_order_relaxed);
             }
         }
@@ -259,6 +268,12 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         // stamps the held note's semitone into the columns as the playhead moves. The step-based
         // stamping / merge / take-boundary logic is skipped for a draw channel.
         const bool drawRec = sequencer.patterns[keyPat].channels[chIdx].drawMode;
+        // While recording a piano-roll channel, MUTE its sequenced notes (the live keys monitor it) -
+        // playback re-firing the half-recorded note cut the held voice = blips/abrupt cuts.
+        // NOT gated on isCurrentlyPlaying: that flag only turns true inside the sequencer's own
+        // processBlock, so the "key starts recording" FIRST block slipped through un-suppressed and
+        // the just-opened note's trigger cut the first live key (the "first key is silent" bug).
+        sequencer.recordSuppressCh.store((rec && drawRec) ? chIdx : -1, std::memory_order_relaxed);
         auto logEvt = [this](int pat, int st, int semis, int flags) {
             const int cnt = keysEvtCount.load(std::memory_order_relaxed);
             if (cnt < KEYS_EVT_CAP)
@@ -288,23 +303,78 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                 {
                     if (drawRec)
                     {
-                        // DRAW: every finished loop is its own take. Snapshot the just-finished lane
-                        // into the handshake buffer (the editor drains it), then clear for the next loop.
-                        const int R = DrumChannel::DRAW_RES;
-                        const int pRec   = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, chain ? seenP : armed);
-                        const int pClear = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, chain ? pp2   : armed);
-                        auto& rch = sequencer.patterns[pRec].channels[chIdx];
-                        if (! keysDrawTakeReady.load(std::memory_order_acquire))
+                        const bool sameGroup = sequencer.inGroup(pp2)
+                                               && sequencer.groupHead(pp2) == sequencer.groupHead(seenP);
+                        if (sameGroup && pp2 == seenP + 1)
                         {
-                            bool any = false;
-                            for (int i = 0; i < R; ++i) { keysDrawTakeBuf[i] = rch.drawSemi[i]; keysDrawTakeVelBuf[i] = rch.drawVelC[i]; if (rch.drawSemi[i] != DrumChannel::DRAW_GAP) any = true; }
-                            if (any) { keysDrawTakeChan.store(chIdx, std::memory_order_relaxed);
-                                       keysDrawTakePat.store(pRec, std::memory_order_relaxed);
-                                       keysDrawTakeReady.store(true, std::memory_order_release); }
+                            // INTERNAL bar advance of a merged group: nothing to do - held notes keep
+                            // growing across the bar line (one continuous note).
                         }
-                        auto& cch = sequencer.patterns[pClear].channels[chIdx];
-                        for (int i = 0; i < R; ++i) { cch.drawSemi[i] = DrumChannel::DRAW_GAP; cch.drawVelC[i] = 255; }
-                        keysDrawLastCol.store(-1, std::memory_order_relaxed);
+                        else if (sameGroup)
+                        {
+                            // GROUP WRAP (back to the head): the finished PASS is ONE take. Snapshot
+                            // EVERY bar's notes in CONCAT columns (start += bar*384, drawPat = head),
+                            // clear ALL bars for the fresh pass, and re-open still-held keys at col 0.
+                            const int gh = sequencer.groupHead(pp2), ge = sequencer.groupEnd(pp2);
+                            if (! keysDrawTakeReady.load(std::memory_order_acquire))
+                            {
+                                int nn = 0;
+                                for (int b = gh; b <= ge; ++b)
+                                {
+                                    const auto& rch = sequencer.patterns[b].channels[chIdx];
+                                    const int nc = juce::jlimit(0, DrumChannel::DRAW_MAX_NOTES, rch.drawNoteCount);
+                                    for (int i = 0; i < nc && nn < DRAW_TAKE_MAX; ++i)
+                                    {
+                                        keysDrawTakeNotes[nn] = rch.drawNotes[i];
+                                        keysDrawTakeNotes[nn].start = (int16_t) (keysDrawTakeNotes[nn].start
+                                                                                 + (b - gh) * DrumChannel::DRAW_RES);
+                                        ++nn;
+                                    }
+                                }
+                                keysDrawTakeCount = nn;
+                                if (nn > 0) { keysDrawTakeChan.store(chIdx, std::memory_order_relaxed);
+                                              keysDrawTakePat.store(gh, std::memory_order_relaxed);
+                                              keysDrawTakeReady.store(true, std::memory_order_release); }
+                            }
+                            for (int i = 0; i < keysHeldCount; ++i) keysHeldOpenIdx[i] = -1;   // old handles die with the clear
+                            for (int b = gh; b <= ge; ++b) sequencer.patterns[b].channels[chIdx].clearDrawNotes();
+                            auto& cch = sequencer.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, pp2)].channels[chIdx];
+                            for (int i = 0; i < keysHeldCount; ++i)
+                            {
+                                keysHeldOpenIdx[i] = cch.addDrawNote(0, 1, keysHeldStack[i] - 60,
+                                                                     (int) std::lround(keysHeldStackVel[i] * 255.0f));
+                                keysHeldOpenPat[i] = pp2;
+                            }
+                            keysDrawLastCol.store(-1, std::memory_order_relaxed);
+                        }
+                        else
+                        {
+                            // SINGLE pattern (or leaving the unit): classic per-pass takes. Snapshot the
+                            // finished pass, clear for the next one, re-open still-held keys at column 0.
+                            const int pRec   = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, chain ? seenP : armed);
+                            const int pClear = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, chain ? pp2   : armed);
+                            auto& rch = sequencer.patterns[pRec].channels[chIdx];
+                            if (! keysDrawTakeReady.load(std::memory_order_acquire))
+                            {
+                                const int nc = juce::jlimit(0, DrumChannel::DRAW_MAX_NOTES, rch.drawNoteCount);
+                                for (int i = 0; i < nc; ++i) keysDrawTakeNotes[i] = rch.drawNotes[i];
+                                keysDrawTakeCount = nc;
+                                if (nc > 0) { keysDrawTakeChan.store(chIdx, std::memory_order_relaxed);
+                                              keysDrawTakePat.store(pRec, std::memory_order_relaxed);
+                                              keysDrawTakeReady.store(true, std::memory_order_release); }
+                            }
+                            auto& cch = sequencer.patterns[pClear].channels[chIdx];
+                            for (int i = 0; i < keysHeldCount; ++i)   // handles into the cleared pattern die here
+                                if (keysHeldOpenPat[i] == pClear) keysHeldOpenIdx[i] = -1;
+                            cch.clearDrawNotes();
+                            for (int i = 0; i < keysHeldCount; ++i)   // still-held keys start fresh notes at col 0
+                            {
+                                keysHeldOpenIdx[i] = cch.addDrawNote(0, 1, keysHeldStack[i] - 60,
+                                                                     (int) std::lround(keysHeldStackVel[i] * 255.0f));
+                                keysHeldOpenPat[i] = pClear;
+                            }
+                            keysDrawLastCol.store(-1, std::memory_order_relaxed);
+                        }
                     }
                     else
                     {
@@ -324,19 +394,30 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             }
         }
 
-        const uint32_t d = keysDownEvt.load(std::memory_order_acquire);
-        if ((d >> 16) != keysDownSeen)
+        // ---- POLY key-event handling: drain EVERY pending press/release this block, in order ----
+        // (the old single-atomic handshake could only carry one down + one up per block, so chord
+        // presses landing together lost all but the last note.)
+        auto updateHeldMask = [&] {   // atomic mirror of the held stack, for the UI highlight
+            uint64_t lo = 0, hi = 0;
+            const bool poly = sequencer.patterns[keyPat].channels[chIdx].keysPolyMode;
+            if (poly)
+                for (int i = 0; i < keysHeldCount; ++i)
+                { const int n = keysHeldStack[i] & 0x7f; (n < 64 ? lo : hi) |= 1ULL << (n & 63); }
+            else if (keysHeldCount > 0)   // MONO: only the SOUNDING note lights up (older held keys are silent)
+            { const int n = keysHeldStack[keysHeldCount - 1] & 0x7f; (n < 64 ? lo : hi) |= 1ULL << (n & 63); }
+            keysHeldMaskLo.store(lo, std::memory_order_relaxed);
+            keysHeldMaskHi.store(hi, std::memory_order_relaxed);
+        };
+        auto handleKeyDown = [&](int note, float vel)
         {
-            keysDownSeen = d >> 16;
-            const int   note = (int)((d >> 8) & 0x7f);
-            const float vel  = (float)(d & 0xff) / 127.0f;
-
+            bool kicked = false;   // "key starts recording": isCurrentlyPlaying only turns true on the
+                                   // NEXT block, so the FIRST key must record via this flag (regression fix)
             if (rec)
             {
                 // "start recording with the first key press": kick the transport if it's stopped
                 // (own transport only - with DAW Sync the host owns play).
                 if (! sequencer.isCurrentlyPlaying && ! sequencer.dawSync)
-                    sequencer.startStandalone();
+                { sequencer.startStandalone(); kicked = true; }
                 const int pat = sequencer.playPattern;
                 if (! drawRec && (chain || pat == keysArmedPattern.load(std::memory_order_relaxed)))
                 {
@@ -354,39 +435,115 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             const float mv = juce::jlimit(0.0f, 1.0f, kc.keysMinVel);
             const float xv = juce::jmax(mv, juce::jlimit(0.0f, 1.0f, kc.keysMaxVel));
             const float kvel = juce::jlimit(0.05f, 1.0f, mv + vel * (xv - mv));
-            kc.keyDown(note, kvel, kc.keysSlot2Down);   // slot-2 transpose = THIS pattern's channel setting
-            keysHeldNote.store(note, std::memory_order_relaxed);
-            keysHeldVel.store(kvel, std::memory_order_relaxed);
-        }
-        const uint32_t u = keysUpEvt.load(std::memory_order_acquire);
-        const bool upIsNew = u != keysUpSeen;
-        keysUpSeen = u;   // consume even a STALE up (released note != held note = a slide's old key)
-        if (upIsNew && (int)(u & 0x7f) == keysHeldNote.load(std::memory_order_relaxed))
-        {
-            // RELEASE captures the exact HOLD into the step data: the chain head's Note Length =
-            // the fraction of the chain you actually held (so a 2.4-step hold plays back as a
-            // 2.4-step gate, not 2.0 - the sequencer reproduces the performance without the keys).
-            const int last = keysLastStampStep.load(std::memory_order_relaxed);
-            if (rec && ! drawRec && last >= 0 && sequencer.isCurrentlyPlaying)
+            kc.keyDown(note, kvel, kc.keysSlot2Down, kc.keysPolyMode);   // poly = stack; mono = cut (as before)
+            // Held stack: a re-press moves the note to the top (most recent). openIdx/Pat ride along.
+            for (int i = 0; i < keysHeldCount; ++i)
+                if (keysHeldStack[i] == note)
+                { for (int j = i; j < keysHeldCount - 1; ++j) { keysHeldStack[j] = keysHeldStack[j + 1]; keysHeldStackVel[j] = keysHeldStackVel[j + 1]; keysHeldOpenIdx[j] = keysHeldOpenIdx[j + 1]; keysHeldOpenPat[j] = keysHeldOpenPat[j + 1]; }
+                  --keysHeldCount; break; }
+            if (keysHeldCount < (int) (sizeof(keysHeldStack) / sizeof(keysHeldStack[0])))
             {
-                const int pat = sequencer.playPattern;
-                if (chain || pat == keysArmedPattern.load(std::memory_order_relaxed))
+                keysHeldStack[keysHeldCount] = note; keysHeldStackVel[keysHeldCount] = kvel;
+                // PIANO-ROLL recording: this press OPENS a note at the current column (grown per
+                // block below, closed at release) - POLY records real chords now. `kicked` = this key
+                // just started the transport, so it opens at column 0 (the bar is about to begin).
+                int openIdx = -1, openPat = -1;
+                if (rec && drawRec && (sequencer.isCurrentlyPlaying || kicked))
                 {
-                    auto& pch = sequencer.patterns[pat].channels[chIdx];
-                    const int n = juce::jmax(1, pch.numSteps);
-                    int head = last; while (head > 0 && pch.stepMerge[head]) --head;
-                    const double posSteps = sequencer.barPos() * n;
-                    double frac = posSteps - std::floor(posSteps);
-                    if ((((int) posSteps) % n) != last) frac = 1.0;   // playhead already left the last step
-                    const int chainLen = juce::jmax(1, last - head + 1);
-                    const float len = (float) juce::jlimit(0.05, 1.0, ((double)(chainLen - 1) + frac) / (double) chainLen);
-                    pch.stepNoteLen[head] = len;
-                    logEvt(pat, head, (int) std::lround(len * 100.0f), 2);   // flags bit1 = LENGTH event
+                    openPat = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, sequencer.playPattern);
+                    auto& pch = sequencer.patterns[openPat].channels[chIdx];
+                    const int cur = kicked ? 0 : juce::jlimit(0, DrumChannel::DRAW_RES - 1,
+                                                              (int) (sequencer.barPos() * DrumChannel::DRAW_RES));
+                    openIdx = pch.addDrawNote(cur, 1, note - 60, (int) std::lround(kvel * 255.0f));
+                }
+                keysHeldOpenIdx[keysHeldCount] = openIdx;
+                keysHeldOpenPat[keysHeldCount] = openPat;
+                ++keysHeldCount;
+            }
+            keysHeldNote.store(note, std::memory_order_relaxed);   // mono projection = most recent press
+            keysHeldVel.store(kvel, std::memory_order_relaxed);
+            updateHeldMask();
+        };
+        auto handleKeyUp = [&](int note)
+        {
+            auto& kc = sequencer.patterns[keyPat].channels[chIdx];
+            // Remove from the held stack wherever it sits (poly releases arrive in any order),
+            // capturing this key's OPEN piano-roll note (if recording) to close it below.
+            bool wasHeld = false; int openIdx = -1, openPat = -1;
+            for (int i = 0; i < keysHeldCount; ++i)
+                if (keysHeldStack[i] == note)
+                { wasHeld = true; openIdx = keysHeldOpenIdx[i]; openPat = keysHeldOpenPat[i];
+                  for (int j = i; j < keysHeldCount - 1; ++j) { keysHeldStack[j] = keysHeldStack[j + 1]; keysHeldStackVel[j] = keysHeldStackVel[j + 1]; keysHeldOpenIdx[j] = keysHeldOpenIdx[j + 1]; keysHeldOpenPat[j] = keysHeldOpenPat[j + 1]; }
+                  --keysHeldCount; break; }
+            updateHeldMask();
+            // CLOSE the released key's recorded note: final length = up to the current column. In a
+            // merged group the note may have GROWN across bar lines (len spans bars).
+            if (openIdx >= 0 && openPat >= 0 && rec && drawRec && sequencer.isCurrentlyPlaying)
+            {
+                auto& pch = sequencer.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, openPat)].channels[chIdx];
+                const int barDelta = sequencer.playPattern - openPat;
+                if (openIdx < pch.drawNoteCount
+                    && sequencer.groupHead(openPat) == sequencer.groupHead(sequencer.playPattern) && barDelta >= 0)
+                {
+                    auto& nt = pch.drawNotes[openIdx];
+                    const int cur = barDelta * DrumChannel::DRAW_RES
+                                  + juce::jlimit(0, DrumChannel::DRAW_RES - 1,
+                                                 (int) (sequencer.barPos() * DrumChannel::DRAW_RES));
+                    if (cur >= nt.start) nt.len = (int16_t) juce::jlimit(1, DrumChannel::DRAW_RES * 8, cur - nt.start + 1);
                 }
             }
-            sequencer.patterns[keyPat].channels[chIdx].keyUp();
-            keysHeldNote.store(-1, std::memory_order_relaxed);
-            keysLastStampStep.store(-1, std::memory_order_relaxed);
+            // MONO slide safety (unchanged rule): a stale up (released note != the held one) does
+            // nothing - the panel emits up(old) before down(new) and the block processes down first.
+            if (! kc.keysPolyMode && note != keysHeldNote.load(std::memory_order_relaxed)) return;
+            if (kc.keysPolyMode && ! wasHeld) return;   // stale poly up: nothing to release
+            if (note == keysHeldNote.load(std::memory_order_relaxed))
+            {
+                // RELEASE captures the exact HOLD into the step data: the chain head's Note Length =
+                // the fraction of the chain you actually held (so a 2.4-step hold plays back as a
+                // 2.4-step gate, not 2.0 - the sequencer reproduces the performance without the keys).
+                const int last = keysLastStampStep.load(std::memory_order_relaxed);
+                if (rec && ! drawRec && last >= 0 && sequencer.isCurrentlyPlaying)
+                {
+                    const int pat = sequencer.playPattern;
+                    if (chain || pat == keysArmedPattern.load(std::memory_order_relaxed))
+                    {
+                        auto& pch = sequencer.patterns[pat].channels[chIdx];
+                        const int n = juce::jmax(1, pch.numSteps);
+                        int head = last; while (head > 0 && pch.stepMerge[head]) --head;
+                        const double posSteps = sequencer.barPos() * n;
+                        double frac = posSteps - std::floor(posSteps);
+                        if ((((int) posSteps) % n) != last) frac = 1.0;   // playhead already left the last step
+                        const int chainLen = juce::jmax(1, last - head + 1);
+                        const float len = (float) juce::jlimit(0.05, 1.0, ((double)(chainLen - 1) + frac) / (double) chainLen);
+                        pch.stepNoteLen[head] = len;
+                        logEvt(pat, head, (int) std::lround(len * 100.0f), 2);   // flags bit1 = LENGTH event
+                    }
+                }
+                // Mono projection falls back to the most recent STILL-HELD note (poly), else clears.
+                const int nh = keysHeldCount > 0 ? keysHeldStack[keysHeldCount - 1] : -1;
+                keysHeldNote.store(nh, std::memory_order_relaxed);
+                if (nh >= 0) keysHeldVel.store(keysHeldStackVel[keysHeldCount - 1], std::memory_order_relaxed);
+                keysLastStampStep.store(-1, std::memory_order_relaxed);
+            }
+            // Release this note's voices WHEREVER they live: the voice was created on the channel of
+            // the bar that was playing AT PRESS TIME - if the bar advanced mid-hold, releasing only
+            // the current bar's channel left the old voice keyed-on forever ("sound after I lift").
+            // keyUp(note) is a cheap 16-voice scan, so sweep every pattern's channel.
+            for (auto& pat2 : sequencer.patterns)
+                pat2.channels[chIdx].keyUp(note);
+        };
+        // Drain the message-thread ring (SPSC: panel presses), then this block's incoming-MIDI notes.
+        for (uint32_t t = keyQTail.load(std::memory_order_relaxed);
+             t != keyQHead.load(std::memory_order_acquire); ++t)
+        {
+            const KeyQEvt e = keyQ[t % KEYQ];
+            if (e.down) handleKeyDown((int) e.note, (float) e.vel / 127.0f); else handleKeyUp((int) e.note);
+            keyQTail.store(t + 1, std::memory_order_release);
+        }
+        for (int i = 0; i < nMidiKeyEvts; ++i)
+        {
+            const KeyQEvt& e = midiKeyEvts[i];
+            if (e.down) handleKeyDown((int) e.note, (float) e.vel / 127.0f); else handleKeyUp((int) e.note);
         }
 
         // AUTO-MERGE: the key is still held when the playhead enters the NEXT step -> that step
@@ -410,21 +567,28 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             }
         }
 
-        // DRAW recording: stamp the held note's SEMITONE into the lane columns the playhead crossed
-        // this block (gap when nothing is held). Fully replaces the lane each pass = the last take
-        // you play is what stays. C3 (MIDI 60) = 0, clamped to +/-36.
+        // PIANO-ROLL recording: GROW every held key's OPEN note to the column the playhead reached
+        // this block. In a MERGED GROUP a note opened in an earlier bar keeps growing ACROSS the bar
+        // line (len spans bars - one continuous note, no close/reopen at the boundary).
         if (rec && drawRec && sequencer.isCurrentlyPlaying)
         {
-            auto& pch = sequencer.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, sequencer.playPattern)].channels[chIdx];
+            juce::ignoreUnused(held);
             const int R = DrumChannel::DRAW_RES;
-            const int cur  = juce::jlimit(0, R - 1, (int) (sequencer.barPos() * R));
-            const int8_t sm = (held >= 0) ? (int8_t) juce::jlimit(-36, 36, held - 60) : DrumChannel::DRAW_GAP;
-            const uint8_t vv = (uint8_t) juce::jlimit(0, 255, (int) std::lround(keysHeldVel.load(std::memory_order_relaxed) * 255.0f));
-            auto stamp = [&](int c) { pch.drawSemi[c] = sm; if (sm != DrumChannel::DRAW_GAP) pch.drawVelC[c] = vv; };
-            int lastC = keysDrawLastCol.load(std::memory_order_relaxed);
-            if (lastC < 0) lastC = cur;
-            if (cur >= lastC) for (int c = lastC; c <= cur; ++c) stamp(c);
-            else { for (int c = lastC; c < R; ++c) stamp(c); for (int c = 0; c <= cur; ++c) stamp(c); }
+            const int cur = juce::jlimit(0, R - 1, (int) (sequencer.barPos() * R));
+            for (int i = 0; i < keysHeldCount; ++i)
+            {
+                const int oi = keysHeldOpenIdx[i], op = keysHeldOpenPat[i];
+                if (oi < 0 || op < 0) continue;
+                if (sequencer.groupHead(op) != sequencer.groupHead(sequencer.playPattern)) continue;   // left the unit
+                const int barDelta = sequencer.playPattern - op;
+                if (barDelta < 0) { keysHeldOpenIdx[i] = -1; continue; }   // wrapped: the boundary reopened it
+                auto& pch = sequencer.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, op)].channels[chIdx];
+                if (oi >= pch.drawNoteCount) continue;
+                auto& nt = pch.drawNotes[oi];
+                const int curAbs = barDelta * R + cur;
+                if (curAbs >= nt.start)
+                    nt.len = (int16_t) juce::jlimit(1, R * 8, curAbs - nt.start + 1);
+            }
             keysDrawLastCol.store(cur, std::memory_order_relaxed);
         }
     }
@@ -1006,9 +1170,14 @@ juce::File DrumSequencerProcessor::exportMidiFile(int channel)
     seq.addEvent(juce::MidiMessage::timeSignatureMetaEvent(juce::jmax(1, currentTimeSigNum),
                                                            juce::jmax(1, currentTimeSigDen)), 0.0);
 
-    const auto& pat = sequencer.current();
     const int ch = juce::jlimit(0, Sequencer::NUM_CHANNELS - 1, channel);
+    // MERGED GROUP: export every bar of the group back to back (bar b at tick offset b * barTicks).
+    const int gHead = sequencer.groupHead(sequencer.currentPattern);
+    const int gEnd  = sequencer.groupEnd(sequencer.currentPattern);
+    for (int gBar = gHead; gBar <= gEnd; ++gBar)
     {
+        const auto& pat = sequencer.patterns[gBar];
+        const double tickOff = (double) (gBar - gHead) * barTicks;
         const auto& chn = pat.channels[ch];
         const int n = chn.numSteps;
         const int midiCh = chn.midiOut ? juce::jlimit(1, 16, chn.midiOutChannel) : 1;
@@ -1044,8 +1213,8 @@ juce::File DrumSequencerProcessor::exportMidiFile(int channel)
             auto add = [&](int note) {
                 if (note < 0 || note > 127 || used[note]) return;
                 used[note] = true;
-                seq.addEvent(juce::MidiMessage::noteOn (midiCh, note, vel), tOn);
-                seq.addEvent(juce::MidiMessage::noteOff(midiCh, note),      tOff);
+                seq.addEvent(juce::MidiMessage::noteOn (midiCh, note, vel), tickOff + tOn);
+                seq.addEvent(juce::MidiMessage::noteOff(midiCh, note),      tickOff + tOff);
             };
             if (chn.midiOut)        { add(juce::jlimit(0, 127, chn.midiNote + semis)); return; }   // unchanged behaviour
             if (pslots.isEmpty())   { add(juce::jlimit(0, 127, chn.midiNote + semis)); return; }   // Sample/Noise: the channel's own note + step/draw pitch (no C3 anchor)
@@ -1065,18 +1234,13 @@ juce::File DrumSequencerProcessor::exportMidiFile(int channel)
         // the lane's resolution (no need to quantise to steps first).
         if (chn.drawMode)
         {
-            const int    R        = DrumChannel::DRAW_RES;
-            const double colTicks = barTicks / (double) R;
-            int c = 0;
-            while (c < R)
+            const double colTicks = barTicks / (double) DrumChannel::DRAW_RES;
+            for (int ni = 0; ni < chn.drawNoteCount; ++ni)   // note list: recorded/drawn chords export as chords
             {
-                const int s = (int) chn.drawSemi[c];
-                if (s == (int) DrumChannel::DRAW_GAP) { ++c; continue; }
-                int e = c + 1;
-                while (e < R && (int) chn.drawSemi[e] == s) ++e;   // extend the run of the same note
-                const auto vel = (juce::uint8) juce::jlimit(1, 127, (int) chn.drawVelC[c] >> 1);   // per-column velocity
-                emitNotes(s, vel, (double) c * colTicks, (double) e * colTicks);   // per-slot voiced (chord/scale aware)
-                c = e;
+                const auto& nt = chn.drawNotes[ni];
+                const auto vel = (juce::uint8) juce::jlimit(1, 127, (int) nt.vel >> 1);
+                emitNotes((int) nt.semi, vel, (double) nt.start * colTicks,
+                          (double) (nt.start + nt.len) * colTicks);   // per-slot voiced (chord/scale aware)
             }
         }
         else
@@ -1219,6 +1383,8 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
     chState.setProperty("strum",    ch.strumAmt,       nullptr);   // STRUM: chord/scale note time-spread
     chState.setProperty("keysMinVel", ch.keysMinVel,   nullptr);   // KEYS: minimum played velocity floor
     chState.setProperty("keysMaxVel", ch.keysMaxVel,   nullptr);   // KEYS: maximum played velocity ceiling
+    chState.setProperty("keysPoly",   ch.keysPolyMode, nullptr);   // KEYS: poly (held keys stack) vs mono (new key cuts)
+    chState.setProperty("frqLk",      ch.freqLocked,   nullptr);   // per-SOUND transpose lock (Freq faders disabled)
     chState.setProperty("chokeGrp", ch.chokeGroup,     nullptr);   // choke group (channel-wide)
     chState.setProperty("numSteps", ch.numSteps,       nullptr);
     chState.setProperty("sound",    (int)ch.soundType, nullptr);
@@ -1234,13 +1400,12 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
     chState.setProperty("mixMod",    ch.mixModified, nullptr);
     chState.setProperty("envMode",   ch.envEditMode, nullptr);   // UI: envelope-target dropdown (per channel)
 
-    juce::String stepStr, velStr, pitchStr, probStr, rollStr, rollDecStr, noteLenStr, panStr, condLenStr, condMaskStr;
+    juce::String stepStr, velStr, pitchStr, rollStr, rollDecStr, noteLenStr, panStr, condLenStr, condMaskStr;
     for (int s = 0; s < DrumChannel::MAX_STEPS; ++s)
     {
         stepStr += (ch.steps[s] ? "1" : "0");
         velStr   += juce::String(ch.stepVel[s],   3) + ",";
         pitchStr += juce::String(ch.stepPitch[s], 2) + ",";
-        probStr  += juce::String(ch.stepProb[s],  3) + ",";
         rollStr  += juce::String(ch.stepRoll[s])      + ",";
         rollDecStr += juce::String(ch.stepRollDecay[s], 3) + ",";
         noteLenStr += juce::String(ch.stepNoteLen[s], 3) + ",";
@@ -1251,7 +1416,6 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
     chState.setProperty("steps", stepStr, nullptr);
     chState.setProperty("stepVel",   velStr,   nullptr);
     chState.setProperty("stepPitch", pitchStr, nullptr);
-    chState.setProperty("stepProb",  probStr,  nullptr);
     chState.setProperty("stepRoll",  rollStr,  nullptr);
     chState.setProperty("stepRollDec", rollDecStr, nullptr);
     chState.setProperty("stepNoteLen", noteLenStr, nullptr);
@@ -1263,19 +1427,16 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
       chState.setProperty("stepSlide", sl, nullptr); }
     { juce::String mg; for (int s = 0; s < DrumChannel::MAX_STEPS; ++s) mg += ch.stepMerge[s] ? "1" : "0";
       chState.setProperty("stepMerge", mg, nullptr); }
-    // DRAW mode (only when active, to keep normal channels lean): the semitone lane packed one
-    // printable char per column (gap = '!' , note = semi + 70), plus the whole-channel Vel/Pan.
+    // PIANO ROLL (only when active, to keep normal channels lean): the NOTE LIST packed
+    // "start:len:semi:vel," per note, plus the default Vel + whole-channel Pan.
     chState.setProperty("drawMode", ch.drawMode, nullptr);
     if (ch.drawMode)
     {
-        juce::String ds; ds.preallocateBytes((size_t) DrumChannel::DRAW_RES);
-        juce::String vs; vs.preallocateBytes((size_t) DrumChannel::DRAW_RES);
-        for (int i = 0; i < DrumChannel::DRAW_RES; ++i) {
-            ds += (juce::juce_wchar) (ch.drawSemi[i] == DrumChannel::DRAW_GAP ? 33 : (ch.drawSemi[i] + 70));
-            vs += (juce::juce_wchar) (35 + (ch.drawVelC[i] >> 1));   // per-column velocity, printable
-        }
-        chState.setProperty("drawSemi", ds, nullptr);
-        chState.setProperty("drawVelC", vs, nullptr);
+        juce::String ns; ns.preallocateBytes((size_t) ch.drawNoteCount * 14);
+        for (int i = 0; i < ch.drawNoteCount; ++i)
+            ns << (int) ch.drawNotes[i].start << ':' << (int) ch.drawNotes[i].len << ':'
+               << (int) ch.drawNotes[i].semi  << ':' << (int) ch.drawNotes[i].vel << ',';
+        chState.setProperty("drawNotes", ns, nullptr);
         chState.setProperty("drawVel", ch.drawVel, nullptr);
         chState.setProperty("drawPan", ch.drawPan, nullptr);
     }
@@ -1371,6 +1532,8 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
     ch.strumAmt    = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("strum",    0.0f));   // STRUM
     ch.keysMinVel  = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("keysMinVel", 0.0f)); // KEYS min velocity
     ch.keysMaxVel  = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("keysMaxVel", 1.0f)); // KEYS max velocity
+    ch.keysPolyMode = (bool) child.getProperty("keysPoly", false);   // KEYS poly/mono
+    ch.freqLocked   = (bool) child.getProperty("frqLk",    false);   // per-sound transpose lock
     ch.chokeGroup  = (int)  child.getProperty("chokeGrp", 0);
     ch.numSteps    = (int)child.getProperty("numSteps",   8);
     ch.soundType   = (DrumSoundGenerator::Type)(int)child.getProperty("sound", 0);
@@ -1398,7 +1561,6 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
         };
         loadArr("stepVel",   ch.stepVel,   1.0f);
         loadArr("stepPitch", ch.stepPitch, 0.0f);
-        loadArr("stepProb",  ch.stepProb,  1.0f);
         loadArr("stepRollDec", ch.stepRollDecay, 0.0f);
         loadArr("stepNoteLen", ch.stepNoteLen, 0.0f);
         // MIGRATE v1 note lengths (MIDI-out only; 0..1 -> 0.1..4 steps, default 0.25 ~= 1 step):
@@ -1430,13 +1592,33 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
             ch.drawMode = (bool) child.getProperty("drawMode", false);
             ch.drawVel  = (float) child.getProperty("drawVel", 1.0f);
             ch.drawPan  = (float) child.getProperty("drawPan", 0.0f);
-            juce::String ds = child.getProperty("drawSemi", "").toString();
-            juce::String vs = child.getProperty("drawVelC", "").toString();
-            for (int i = 0; i < DrumChannel::DRAW_RES; ++i) {
-                const int cch = (i < ds.length()) ? (int) ds[i] : 33;
-                ch.drawSemi[i] = (cch == 33) ? DrumChannel::DRAW_GAP : (int8_t) juce::jlimit(-36, 36, cch - 70);
-                const int vc = (i < vs.length()) ? juce::jlimit(0, 127, (int) vs[i] - 35) : 127;
-                ch.drawVelC[i] = (uint8_t) juce::jlimit(0, 255, vc << 1);   // old projects (no drawVelC) -> full
+            ch.clearDrawNotes();
+            const juce::String ns = child.getProperty("drawNotes", "").toString();
+            if (ns.isNotEmpty())   // new format: "start:len:semi:vel," per note
+            {
+                for (auto& tok : juce::StringArray::fromTokens(ns, ",", ""))
+                {
+                    auto f = juce::StringArray::fromTokens(tok, ":", "");
+                    if (f.size() >= 4)
+                        ch.addDrawNote(f[0].getIntValue(), f[1].getIntValue(), f[2].getIntValue(), f[3].getIntValue());
+                }
+            }
+            else   // MIGRATION: old mono column lane ("drawSemi"/"drawVelC") -> same-semi runs become notes
+            {
+                const juce::String ds = child.getProperty("drawSemi", "").toString();
+                const juce::String vs = child.getProperty("drawVelC", "").toString();
+                int i = 0;
+                while (i < ds.length() && i < DrumChannel::DRAW_RES)
+                {
+                    const int cch = (int) ds[i];
+                    if (cch == 33) { ++i; continue; }               // gap
+                    const int semi = juce::jlimit(-36, 36, cch - 70);
+                    int e = i + 1;
+                    while (e < ds.length() && e < DrumChannel::DRAW_RES && (int) ds[e] == cch) ++e;
+                    const int vc = (i < vs.length()) ? juce::jlimit(0, 127, (int) vs[i] - 35) : 127;
+                    ch.addDrawNote(i, e - i, semi, vc << 1);
+                    i = e;
+                }
             }
         }
         {
@@ -1542,16 +1724,10 @@ juce::ValueTree DrumSequencerProcessor::captureStateTree()
             {
                 tt.setProperty("draw", true, nullptr);
                 tt.setProperty("drawPat", t.drawPat, nullptr);
-                juce::String ds; ds.preallocateBytes((size_t) DrumChannel::DRAW_RES);
-                juce::String vs; vs.preallocateBytes((size_t) DrumChannel::DRAW_RES);
-                for (int i = 0; i < DrumChannel::DRAW_RES; ++i) {
-                    const int v = (i < (int) t.drawLane.size()) ? t.drawLane[(size_t) i] : DrumChannel::DRAW_GAP;
-                    ds += (juce::juce_wchar) (v == DrumChannel::DRAW_GAP ? 33 : (v + 70));
-                    const int vv = (i < (int) t.drawVel.size()) ? t.drawVel[(size_t) i] : 255;
-                    vs += (juce::juce_wchar) (35 + (vv >> 1));   // 0..127 range into printable ASCII (35..162)
-                }
-                tt.setProperty("lane", ds, nullptr);
-                tt.setProperty("laneVel", vs, nullptr);
+                juce::String ns; ns.preallocateBytes(t.drawNotes.size() * 14);
+                for (const auto& nt : t.drawNotes)
+                    ns << (int) nt.start << ':' << (int) nt.len << ':' << (int) nt.semi << ':' << (int) nt.vel << ',';
+                tt.setProperty("notes", ns, nullptr);   // piano-roll take = the note list
             }
             else
             {
@@ -1578,6 +1754,7 @@ juce::ValueTree DrumSequencerProcessor::captureStateTree()
               cl += juce::String(sequencer.patterns[p].chainLoops[k]) + ","; }
           patState.setProperty("chain", cs, nullptr); patState.setProperty("chainL", cl, nullptr); }
         patState.setProperty("swing",        sequencer.patterns[p].swing,        nullptr);
+        patState.setProperty("mergePrev",    sequencer.patterns[p].mergeWithPrev, nullptr);   // merged-group glue
         // Per-pattern Master FX + Master Output.
         const auto& m = sequencer.patterns[p].master;
         patState.setProperty("revRoom", m.reverbRoom,    nullptr);
@@ -1659,15 +1836,36 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
             {
                 t.isDraw = true;
                 t.drawPat = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, (int) tt.getProperty("drawPat", 0));
-                juce::String ds = tt.getProperty("lane", "").toString();
-                juce::String vs = tt.getProperty("laneVel", "").toString();
-                t.drawLane.resize((size_t) DrumChannel::DRAW_RES);
-                t.drawVel.resize((size_t) DrumChannel::DRAW_RES);
-                for (int i = 0; i < DrumChannel::DRAW_RES; ++i) {
-                    const int cch = (i < ds.length()) ? (int) ds[i] : 33;
-                    t.drawLane[(size_t) i] = (cch == 33) ? DrumChannel::DRAW_GAP : (int8_t) juce::jlimit(-36, 36, cch - 70);
-                    const int vc = (i < vs.length()) ? juce::jlimit(0, 127, (int) vs[i] - 35) : 127;
-                    t.drawVel[(size_t) i] = (uint8_t) juce::jlimit(0, 255, vc << 1);   // old takes (no laneVel) -> full
+                const juce::String ns = tt.getProperty("notes", "").toString();
+                if (ns.isNotEmpty())   // new piano-roll take: "start:len:semi:vel," per note
+                {
+                    for (auto& tok : juce::StringArray::fromTokens(ns, ",", ""))
+                    {
+                        auto f = juce::StringArray::fromTokens(tok, ":", "");
+                        if (f.size() >= 4 && (int) t.drawNotes.size() < DRAW_TAKE_MAX)   // group takes = concat columns
+                            t.drawNotes.push_back({ (int16_t) juce::jlimit(0, DrumChannel::DRAW_RES * 8 - 1, f[0].getIntValue()),
+                                                    (int16_t) juce::jlimit(1, DrumChannel::DRAW_RES * 8, f[1].getIntValue()),
+                                                    (int8_t)  juce::jlimit(-36, 36, f[2].getIntValue()),
+                                                    (uint8_t) juce::jlimit(0, 255, f[3].getIntValue()) });
+                    }
+                }
+                else   // MIGRATION: old lane take -> same-semi runs become notes
+                {
+                    const juce::String ds = tt.getProperty("lane", "").toString();
+                    const juce::String vs = tt.getProperty("laneVel", "").toString();
+                    int i = 0;
+                    while (i < ds.length() && i < DrumChannel::DRAW_RES)
+                    {
+                        const int cch = (int) ds[i];
+                        if (cch == 33) { ++i; continue; }
+                        int e = i + 1;
+                        while (e < ds.length() && e < DrumChannel::DRAW_RES && (int) ds[e] == cch) ++e;
+                        const int vc = (i < vs.length()) ? juce::jlimit(0, 127, (int) vs[i] - 35) : 127;
+                        if ((int) t.drawNotes.size() < DrumChannel::DRAW_MAX_NOTES)
+                            t.drawNotes.push_back({ (int16_t) i, (int16_t) (e - i),
+                                                    (int8_t) juce::jlimit(-36, 36, cch - 70), (uint8_t) (vc << 1) });
+                        i = e;
+                    }
                 }
                 if (keysTakes.size() < KEYS_TAKES_MAX) keysTakes.push_back(std::move(t));
                 continue;
@@ -1691,6 +1889,7 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
         {
             int p = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, (int)child.getProperty("index", 0));
             sequencer.patterns[p].swing        = (float)child.getProperty("swing", 0.0f);
+            sequencer.patterns[p].mergeWithPrev = (bool)child.getProperty("mergePrev", false);
             sequencer.patterns[p].playMode     = (int)child.getProperty("playMode", 0);
             sequencer.patterns[p].repeatTarget = juce::jmax(1, (int)child.getProperty("repeatTarget", 2));
             sequencer.patterns[p].gotoPattern  = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1,

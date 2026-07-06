@@ -25,12 +25,12 @@ public:
     std::function<void(int ch, int step, bool on)> onStepSlideChanged;
     // Called when a step's MERGE flag is toggled (cmd/shift+click; a merged step continues the previous note).
     std::function<void(int ch, int step, bool on)> onStepMergeChanged;
-    // DRAW mode: write a run of columns [colA..colB] to a semitone (or DrumChannel::DRAW_GAP to erase).
-    std::function<void(int ch, int colA, int colB, int semi)> onDrawWrite;
-    std::function<void(int ch, float vel, float pan)> onDrawVelPan;   // whole-channel Pan (+ default Vel) in draw mode
-    std::function<void(int ch, int colA, int colB, int vel255)> onDrawVelWrite;   // per-column velocity edit (draw ModeVel)
-    std::function<void(int ch)> onDrawModeMaybeChanged;               // ch's draw-vs-step may have changed (fade buttons)
-    static constexpr int DRAW_ITEM_ID = 100;   // the "Draw" item id in the step-count dropdown
+    // PIANO ROLL: any note-list edit pushes the grid's WHOLE mirror list back to the channel.
+    std::function<void(int ch, const DrumChannel::DrawNote*, int count)> onDrawNotesChanged;
+    std::function<void(int ch, float vel, float pan)> onDrawVelPan;   // whole-channel Pan (+ default Vel) in piano-roll mode
+    std::function<void(int ch)> onDrawModeMaybeChanged;               // ch's roll-vs-step may have changed (fade buttons)
+    static constexpr int DRAW_ITEM_ID = 100;   // the "Piano Roll" item id in the step-count dropdown
+    static constexpr int GRP_MAX = 8;          // merged-group view: bars shown side by side (cap)
     // Influence: copy one source step's vel/pitch/prob/roll onto every step in the channel.
     std::function<void(int ch, int srcStep)> onInfluenceApply;
     std::function<void(int ch)>              onInfluenceDisarm; // un-highlight the strip button
@@ -52,6 +52,10 @@ public:
     juce::String getTooltip() override;   // explains edit modes + MERGE (cmd/shift+click) in one place
 
     void update(const Sequencer& seq, bool anySolo);
+    // Close the piano-roll editor unless it belongs to `ch` (selecting another channel must not
+    // leave a stale editor covering the grid - user report).
+    void closeDrawEditorIfNot(int ch)
+    { if (drawMagCh >= 0 && drawMagCh != ch) { drawMagCh = -1; prMode = 0; drawReadSemi = -128; drawReadVel = -1; prHoverSemi = -999; repaint(); } }
     float getRollDec(int ch, int step) const { return rollDec[ch][step]; }
     float getVel(int ch, int step) const { return vel[ch][step]; }   // velocity set by X-drag in Roll mode
     float getNoteLen(int ch, int step) const { return noteLen[ch][step]; }  // per-step gate length (Len mode)
@@ -61,7 +65,6 @@ private:
     bool  steps[NCH][DrumChannel::MAX_STEPS] = {};
     float vel[NCH][DrumChannel::MAX_STEPS]   = {};
     float pit[NCH][DrumChannel::MAX_STEPS]   = {};
-    float prob[NCH][DrumChannel::MAX_STEPS]  = {};
     int   roll[NCH][DrumChannel::MAX_STEPS]  = {};
     float rollDec[NCH][DrumChannel::MAX_STEPS] = {};   // roll decay 0..1 (fade across ratchet hits)
     float noteLen[NCH][DrumChannel::MAX_STEPS] = {};   // per-step GATE length 0..1 of one step (0 = off/natural)
@@ -74,26 +77,66 @@ private:
     bool  condDragged = false;
     int   curLoop = 0;          // the playing pattern's loop counter (highlights the current bar in Prob mode)
     bool  midiOutCh[NCH] = {};                         // is this channel routed to MIDI Out? (enables 2D Vel/Len)
-    // DRAW mode mirror + gesture state (a free mono pitch lane replaces the step cells for this row).
+    // MERGED-GROUP view: when the viewed pattern is in a merged group, every row shows the group's
+    // bars SIDE BY SIDE - steps are the concatenation of each bar's steps (equal cell widths), the
+    // piano roll spans grpBars * DRAW_RES columns. Edits go back to the right bar via the editor's
+    // decode (concat step -> bar + local step; concat roll column -> bar + local column).
+    int    grpBars = 1;
+    int    barStep0[NCH][GRP_MAX + 1] = {};            // per channel: concat step where each bar begins (+ total)
+    int    totalCols() const { return DrumChannel::DRAW_RES * grpBars; }
+
+    // PIANO ROLL mirror + gesture state (a poly NOTE LIST replaces the step cells for this row).
+    // MIR_MAX = capacity of the CONCATENATED group view (GRP_MAX bars of DRAW_MAX_NOTES each).
+    static constexpr int MIR_MAX = DrumChannel::DRAW_MAX_NOTES * GRP_MAX;
     bool   drawMode[NCH] = {};
-    int8_t  drawSemi[NCH][DrumChannel::DRAW_RES] = {};
-    uint8_t drawVelC[NCH][DrumChannel::DRAW_RES] = {};   // per-column velocity mirror (draw ModeVel edits it)
-    int    drawDragCh = -1, drawLastCol = -1;          // channel being drawn + last column written (interp)
+    DrumChannel::DrawNote drawNotes[NCH][MIR_MAX] = {};
+    int    drawNoteCount[NCH] = {};
+    int    drawDragCh = -1, drawLastCol = -1;          // channel being line-drawn + last column (interp)
+    int    strokeNoteIdx = -1;                          // the note the current ROW line-stroke is extending
     int    drawReadVel = -1;                            // ModeVel watermark: last velocity dragged (0-255, -1 = none)
-    bool   drawErase = false;                          // right-drag erases (writes DRAW_GAP)
-    float  playBarFrac = 0.0f;                         // current bar position 0..1 (draw-lane playhead)
-    int    drawMagCh = -1;                             // channel whose 4x-tall magnify OVERLAY is open (-1 = none)
-    int    drawRange = 36;                             // magnify view visible +/- range (36 / 24 / 12 semitones)
+    bool   drawErase = false;                          // right-drag erases (removes notes under the stroke)
+    float  playBarFrac = 0.0f;                         // current bar position 0..1 (piano-roll playhead)
+    int    drawMagCh = -1;                             // channel whose BIG piano-roll OVERLAY is open (-1 = none)
+    int    drawRange = 36;                             // overlay visible +/- range (36 / 24 / 12 / 6 semitones)
     int    drawReadSemi = -128;                        // live read-out semitone (-128 = none) shown top-right
-    float  dVel[NCH] = {}, dPan[NCH] = {};             // draw-mode whole-channel Vel/Pan mirror
+    int    drawGridDiv = 16;                            // overlay SNAP grid: divisions of the bar (0 = free)
+    // Overlay pointer gestures: 0 = none, 1 = MOVE a note, 2 = RESIZE its right edge, 3 = CREATE new,
+    // 4 = SCROLL the pitch view (drag the left note-name column when the range is < +-36).
+    int    prMode = 0, prIdx = -1, prGrabDCol = 0, prGrabDSemi = 0;
+    int    drawViewCenter = 0;                          // overlay pitch-view centre (semitones; 0 = C3 row centred)
+    int    prScrollGrabY = 0, prScrollGrabC = 0;        // scroll-gesture anchors
+    int    prHoverSemi = -999;                          // key row under the CURSOR (highlighted even over empty space)
+    // MULTI-SELECT (piano-roll editor): SHIFT+drag = marquee (prMode 5); dragging a selected note
+    // moves the whole selection (prMode 6); right/double-click a selected note deletes them all.
+    bool   prSel[MIR_MAX] = {};
+    int    prSelCount = 0;
+    juce::Point<int> prMarqA, prMarqB;                  // marquee corners while prMode == 5
+    int32_t prOrigStart[MIR_MAX] = {};                  // originals for the group move (concat columns)
+    int8_t  prOrigSemi[MIR_MAX]  = {};
+    void   prClearSel() { if (prSelCount > 0) { for (auto& b : prSel) b = false; prSelCount = 0; } }
+    int    prViewClamp() const { return 36 - drawRange; }   // |center| max so the window stays inside +-36
+    float  dVel[NCH] = {}, dPan[NCH] = {};             // piano-roll whole-channel default Vel / Pan mirror
     void   setDrawVelPan(int ch, int x);               // Pan mode: drag sets the one channel value
-    void   setDrawColVel(int ch, juce::Point<int> pos); // Vel mode: drag an EXISTING note's per-column velocity (Y = level)
+    void   setDrawColVel(int ch, juce::Point<int> pos); // Vel mode: drag a note's velocity (Y = level)
     void   paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle<int> rect, bool overlay);
     juce::Rectangle<int> drawRowRect(int ch) const;                  // the normal (1x) row rect
-    juce::Rectangle<int> drawOverlayRect() const;                    // the 4x magnify panel around drawMagCh
-    int    yToDrawSemi(juce::Rectangle<int> rect, int y, int range) const;   // pixel Y -> semitone, snapped, clamped to +/-range
-    void   drawStrokeTo(int ch, juce::Point<int> pos);               // write columns from drawLastCol to pos
-    int    drawColAt(int x) const;                                   // pixel X -> column
+    juce::Rectangle<int> drawOverlayRect() const;                    // the BIG piano-roll editor panel
+    static constexpr int PR_HEAD = 15, PR_KEYS = 30;                 // overlay header height + left note-name column width
+    juce::Rectangle<int> prLane(juce::Rectangle<int> ov) const       // the note area inside the overlay
+    { return ov.withTrimmedTop(PR_HEAD).withTrimmedLeft(PR_KEYS); }
+    int    yToDrawSemi(juce::Rectangle<int> rect, int y, int range, int centre = 0) const;   // pixel Y -> semitone (view-centre aware)
+    void   drawStrokeTo(int ch, juce::Point<int> pos);               // ROW line gesture (erase-under + extend note)
+    int    drawColAt(int x) const;                                   // pixel X -> column (row rect)
+    int    prColAt(juce::Rectangle<int> lane, int x) const           // pixel X -> concat column (overlay lane)
+    { return juce::jlimit(0, totalCols() - 1,
+             (int) ((float)(x - lane.getX()) / (float) juce::jmax(1, lane.getWidth()) * (float) totalCols())); }
+    int    prSnap(int col) const                                     // snap a concat column to the overlay grid
+    { if (drawGridDiv <= 0) return col; const int cw = DrumChannel::DRAW_RES / drawGridDiv;   // grid repeats per BAR
+      return juce::jlimit(0, totalCols() - 1, (col / cw) * cw); }
+    int    prNoteAt(int ch, int col, int semi) const;                // topmost note covering (col, semi) or -1
+    void   eraseColRange(int ch, int lo, int hi);                    // remove/trim/split notes crossing [lo..hi]
+    void   pushNotes(int ch)                                         // mirror -> channel (whole list)
+    { if (onDrawNotesChanged) onDrawNotesChanged(ch, drawNotes[ch], drawNoteCount[ch]); }
     bool   muted[NCH]       = {};
     bool  soloed[NCH]      = {};
     int   numSteps[NCH]    = {};   // filled by update(); 0 until then
@@ -471,7 +514,9 @@ public:
     juce::TextButton btnSlot2 { "0 st" };                 // slot-2 transpose (3-column popup, -24..+24)
     juce::TextButton btnTakes { "Takes (0)" };
     juce::Slider     humanKnob, strumKnob, minVelKnob, maxVelKnob;   // HUMANIZE / STRUM / min+max keyboard velocity
-    juce::Label      lblRecMode, lblSlot2, lblHint, lblHuman, lblStrum, lblMinVel, lblMaxVel;
+    ToggleSwitch     polySwitch, lockSwitch;              // keys POLY (chords stack) + per-sound TRANSPOSE LOCK
+    juce::Label      lblRecMode, lblSlot2, lblHuman, lblStrum, lblMinVel, lblMaxVel, lblPoly, lblLock;
+    bool             polyMode = false;                    // mirror of the channel's keysPolyMode (routes note-offs)
     int countdown = 0;                                    // count-in ticks left (drawn as a big 3-2-1)
 
     // Keyboard highlight (driven by the editor timer from the currently held key + selected channel):
@@ -522,6 +567,10 @@ public:
     };
     ReadoutClick freqReadoutClick;
     void hookFreqReadouts();
+    // TRANSPOSE LOCK (per-sound): disables every pitched Freq fader (osc freqFader + generic "nHz"
+    // knobs) + swaps their tooltip to say where to unlock. Set by the editor before pushValues.
+    bool freqLock = false;
+    void applyFreqLock();
     WaveMorphDisplay morphView;                     // Analog/FM only: Wave A->B morph (replaces 2 knobs)
     WavetableDisplay waveView;                       // SrcWave only: the current wavetable waveform
     StringDisplay    physView;                       // Physical only: interactive string (Position/Tone on the visual)
@@ -597,6 +646,7 @@ public:
     bool dragOver  = false;  // a pattern is being dragged over this one (drop highlight)
     MidiLearnManager* midiLearn = nullptr;
     std::function<void()> onSelect;
+    std::function<void()> onShiftClick;             // MERGE toggle: glue this pattern onto the previous one
     std::function<void(int srcIndex)> onCopyFrom;   // drop: copy srcIndex's content into this pattern
 
     void paint(juce::Graphics& g) override;
@@ -1202,6 +1252,7 @@ class ContentComponent : public juce::Component
 public:
     ContentComponent(DrumSequencerEditor& o) : owner(o) {}
     void paint(juce::Graphics& g) override;
+    void paintOverChildren(juce::Graphics& g) override;   // selected-strip outline (above the strip meters)
     void resized() override;
     DrumSequencerEditor& owner;
 };
@@ -1226,6 +1277,7 @@ public:
     // Called by the ContentComponent
     void layoutContent();
     void paintContent(juce::Graphics&);
+    void paintStripOutline(juce::Graphics&);   // selected strip's red outline, ABOVE children (the meters)
 
     // Fixed design WIDTH; the design HEIGHT grows with the number of visible channel rows
     // (contentHeightPx, recomputed by setVisibleChannels). DESIGN_H is the 8-channel default.
@@ -1351,6 +1403,7 @@ private:
 
     //-- Pattern row + per-pattern play options
     juce::Label    lblPatterns { {}, "Patterns" };
+    juce::Label    lblPatternsBars { {}, "(Bars)" };   // under "Patterns" - a merged run = one multi-bar piece
     PatternButton  patternBtns[Sequencer::NUM_PATTERNS];
     juce::TextButton patModeBtn;   // opens the Loop/Stop/Go-to menu; shows a summary
     juce::TextButton btnFollow { "Follow" };   // global toggle: view follows the playing pattern (proc.followPlayback)
@@ -1405,7 +1458,7 @@ private:
     void parseKeysEvents();                    // drain the audio event log into takes (live)
     void refreshKeysPanel();
     void updateKeyboardHighlight();   // light up the keys the held note voices (slot 1 yellow / slot 2 pink)
-    int  keysHighlightNote = -2;      // last note we tinted for (-2 = force first update)
+    uint64_t keysHighlightMaskLo = ~0ULL, keysHighlightMaskHi = ~0ULL;   // last held-note mask tinted for (~0 = force first update)
     // Host-frozen detector: if processHeartbeat stops moving (~1 s), the host isn't sending us
     // audio - the Play tooltip flips to a "Not playing?" explanation (see timerCallback).
     uint32_t lastHeartbeat = 0; int heartbeatStaleTicks = 0; bool hostFrozen = false;
@@ -1730,6 +1783,14 @@ private:
     void quantizeDrawToSteps(DrumChannel& c, int n);   // draw lane -> N steps (with a confirm)
     void selectPattern(int p);
     void copyPatternContent(int src, int dst);   // duplicate src's steps + per-pattern settings into dst
+    // MERGED GROUPS: copy ONE channel's SOUND (mix: slots/env/EQ/FX/... - not steps/routing) between
+    // patterns; the timer keeps every group member's sounds mirroring the edited pattern.
+    void copyChannelSound(int srcPat, int dstPat, int ch);
+    void syncMergedGroupSounds();
+    int  lastStepCap = -1;   // last applied step-count cap (64 / group bars) for the dropdowns
+    // MERGED-GROUP view: the grid hands out CONCAT step indices - resolve to the right bar's channel
+    // (step is rewritten to the bar-local index). Not in a group = the current pattern's channel.
+    DrumChannel& groupStepChannel(int ch, int& step);
     int  currentPattern() const { return proc.sequencer.currentPattern; }
 
     //-- Presets

@@ -117,27 +117,59 @@ public:
     static const int VALID_STEP_COUNTS[];
     static constexpr int NUM_VALID_STEP_COUNTS = 20;
 
-    DrumChannel() { for (int i = 0; i < MAX_STEPS; ++i) { stepVel[i] = 1.0f; stepPitch[i] = 0.0f; stepProb[i] = 1.0f; stepRoll[i] = 1; stepRollDecay[i] = 0.0f; stepNoteLen[i] = 0.0f; stepPan[i] = 0.0f; stepSlide[i] = false; stepMerge[i] = false; stepCondLen[i] = 1; stepCondMask[i] = 0; }
-                    for (int i = 0; i < DRAW_RES; ++i) { drawSemi[i] = DRAW_GAP; drawVelC[i] = 255; } }
+    DrumChannel() { for (int i = 0; i < MAX_STEPS; ++i) { stepVel[i] = 1.0f; stepPitch[i] = 0.0f; stepRoll[i] = 1; stepRollDecay[i] = 0.0f; stepNoteLen[i] = 0.0f; stepPan[i] = 0.0f; stepSlide[i] = false; stepMerge[i] = false; stepCondLen[i] = 1; stepCondMask[i] = 0; } }
 
-    // ===== DRAW MODE (free piano-draw, an alternative to steps for one channel) =====
-    // A monophonic pitch LANE across the whole bar at fine time resolution: each column holds a
-    // SEMITONE (-36..+36, relative to the slot base / Freq) or DRAW_GAP = silence. Time is
-    // continuous (no step quantise); pitch snaps to semitones (fine tune via the Freq knob).
-    // Playback (Sequencer::checkChannelTriggers) articulates a new mono note at each segment onset
-    // and gates it for the segment length; the engine's unison/detune/chord apply per note.
+    // ===== PIANO ROLL (was "draw" - internal names kept), an alternative to steps for a channel =====
+    // A POLYPHONIC NOTE LIST across the whole bar at fine time resolution (v-poly rework, phase 2):
+    // each note = start column + length (columns) + semitone (-36..+36 relative to the slot base /
+    // Freq) + its own velocity. Overlapping notes = chords (recorded live or drawn in the editor);
+    // a melody is simply non-overlapping notes. FIXED-CAPACITY array (never reallocates), so the
+    // audio thread can read while the editor edits - same data-race-tolerant style as the step
+    // arrays. Playback triggers each note at its start (overlap-aware: chords don't cut each other)
+    // and gates it for its length; the engine's unison/detune/chord/scale apply per note.
     static constexpr int  DRAW_RES = 384;      // columns/bar (divisible by every step count -> clean quantise)
-    static constexpr int8_t DRAW_GAP = -128;   // a column with no note
-    bool   drawMode = false;
-    int8_t drawSemi[DRAW_RES];
-    float  drawVel = 1.0f, drawPan = 0.0f;     // drawVel = the DEFAULT velocity for freshly drawn notes; drawPan whole-channel
-    uint8_t drawVelC[DRAW_RES];                // PER-COLUMN velocity (0-255 -> 0..1), so recorded/edited draw notes carry dynamics
+    static constexpr int8_t DRAW_GAP = -128;   // legacy "no note" marker (old-project migration only)
+    static constexpr int  DRAW_MAX_NOTES = 256;
+    struct DrawNote { int16_t start = 0, len = 1; int8_t semi = 0; uint8_t vel = 255; };
+    bool     drawMode = false;
+    DrawNote drawNotes[DRAW_MAX_NOTES];
+    int      drawNoteCount = 0;
+    float    drawVel = 1.0f, drawPan = 0.0f;   // drawVel = the DEFAULT velocity for freshly drawn notes; drawPan whole-channel
+    void clearDrawNotes() { drawNoteCount = 0; }
+    // Append (bounded); returns the index or -1 when full. Audio + message thread both use this;
+    // count is written LAST so a concurrent reader never sees an uninitialised note.
+    int addDrawNote(int start, int len, int semi, int vel)
+    {
+        if (drawNoteCount >= DRAW_MAX_NOTES) return -1;
+        const int i = drawNoteCount;
+        // len may exceed the bar: a note recorded/drawn across a MERGED-GROUP bar line keeps
+        // sustaining into the following bars (its voice lives in the bar it started in).
+        drawNotes[i] = { (int16_t) juce::jlimit(0, DRAW_RES - 1, start),
+                         (int16_t) juce::jlimit(1, DRAW_RES * 8, len),
+                         (int8_t)  juce::jlimit(-36, 36, semi),
+                         (uint8_t) juce::jlimit(0, 255, vel) };
+        drawNoteCount = i + 1;
+        return i;
+    }
+    void removeDrawNote(int idx)
+    {
+        if (idx < 0 || idx >= drawNoteCount) return;
+        for (int i = idx; i < drawNoteCount - 1; ++i) drawNotes[i] = drawNotes[i + 1];
+        --drawNoteCount;
+    }
+    bool drawHasOverlaps() const   // any two notes sharing time = chords (can't quantise to steps)
+    {
+        for (int a = 0; a < drawNoteCount; ++a)
+            for (int b = a + 1; b < drawNoteCount; ++b)
+                if (drawNotes[a].start < drawNotes[b].start + drawNotes[b].len
+                    && drawNotes[b].start < drawNotes[a].start + drawNotes[a].len) return true;
+        return false;
+    }
 
     //-- Sequencer state (per step)
     bool   steps[MAX_STEPS] = {};
     float  stepVel[MAX_STEPS];        // 0..1 velocity (volume) per step (default 1)
     float  stepPitch[MAX_STEPS];      // -24..+24 semitone offset per step (default 0)
-    float  stepProb[MAX_STEPS];       // 0..1 chance the step fires (default 1) - legacy, superseded by stepCond*
     int    stepRoll[MAX_STEPS];       // 1..6 ratchet/roll sub-hits per step (default 1)
     float  stepRollDecay[MAX_STEPS];  // 0..1 roll fade: 0 = all hits equal, 1 = last hit silent
     float  stepNoteLen[MAX_STEPS];    // NOTE LENGTH: 0 = off (natural ring / 1 step for MIDI-out); 0..1 = fraction of ONE step the note lasts - the DECAY is rescaled to fill it (attack keeps its punch; long = slow fall, short = tight gate)
@@ -320,6 +352,7 @@ public:
     //======================================================================
     static constexpr int NUM_SLOTS = 2;
     static constexpr int UNI_MAX   = 7;      // max unison/chord/scale voices (public: the editor's key-highlight uses it)
+    static constexpr int POLY      = 16;     // simultaneous note events (chords live INSIDE a voice); public: the processor's held stack sizes off it
 
     // SCALE diatonic harmonizer: the semitone offset (from the played note) of chord voice `voiceIdx`
     // in `scaleType`/`key` for a note `playedMidi` - off-scale notes snap to the nearest member. Public
@@ -556,6 +589,14 @@ public:
     //     Per pattern/channel, keys only. Defaults 0/1 = raw velocity.
     float keysMinVel  = 0.0f;   // 0..1
     float keysMaxVel  = 1.0f;   // 0..1
+    //   keysPolyMode = keyboard POLY: held keys stack like a piano (up to POLY notes); off = MONO,
+    //     a new key cuts the previous one (classic lead/slide feel). Per pattern/channel, keys only.
+    bool  keysPolyMode = false;
+    //-- TRANSPOSE LOCK (PER-SOUND, rides with Sound Bank mixes like the engines do): when true the
+    //   Freq knobs/faders of BOTH slots are UI-disabled, so nothing can sneakily transpose the sound's
+    //   pitch reference (keys / steps / MIDI export stay anchored). UI-only lock - the engine's keys
+    //   C3 re-base still applies (it IS the consistency mechanism). Factory Keys-bank sounds ship ON.
+    bool  freqLocked = false;
 
     //-- Polyphony: when true, a new trigger does not cut the previous sound
     //   (voices overlap and ring out); when false the channel is monophonic.
@@ -598,12 +639,14 @@ public:
     // Returns the voice index it used (keyDown patches key data onto it; other callers ignore it).
     int  trigger(float velocityGain = 1.0f, float pitchSemis = 0.0f, float pan = 0.0f, long gateSamples = 0,
                  float glideToSemis = 0.0f, long glideSamples = 0, bool forceOverlap = false);
-    // KEYS (on-screen keyboard): MONO - fades whatever is ringing, then starts one voice playing
-    // the pressed MIDI note on every ELIGIBLE slot (Analog+FM / Physical / Modal; each slot is
-    // re-tuned from its own base Freq, so the Freq knobs are ignored). slot2Down = extra
-    // transpose DOWN (semitones) applied to slot 2 only. keyUp() releases into the slot's
-    // release tail (sustain/release are live for key voices only - see keyAdsr).
-    int  keyDown(int midiNote, float velocity, int slot2Down);
+    // KEYS (on-screen keyboard / MIDI in): starts one voice playing the pressed MIDI note on every
+    // ELIGIBLE slot (each slot re-tuned from its own base Freq). slot2Down = extra transpose
+    // (semitones, +down/-up) applied to slot 2 only. poly=false (MONO, default) fades whatever is
+    // ringing first - a new key CUTS the old (classic lead feel, bit-identical to the old keyboard);
+    // poly=true stacks held notes like a piano (each voice tagged with its keyNote).
+    // keyUp(note) releases ONLY that note's voices into the slot release; keyUp() releases all.
+    int  keyDown(int midiNote, float velocity, int slot2Down, bool poly = false);
+    void keyUp(int midiNote);
     void keyUp();
     static float physDecayScale(int material);   // material ring-length multiplier (for the UI's tail read-out)
     void renderInto(juce::AudioBuffer<float>& dest, int startSample, int numSamples, bool anySolo,
@@ -649,7 +692,6 @@ private:
 
     // One playing note. The channel holds a small pool so overlapping triggers
     // can ring out together (polyphony); in mono mode only voice 0 is used.
-    static constexpr int POLY      = 8;
     static constexpr int KS_MAX    = 4096;   // Karplus-Strong delay buffer (min ~11 Hz @ 44.1k)
     static constexpr int KS_UNI    = 3;      // Physical unison/chord: up to this many real strings per voice
     // Per-slot synthesis state: each of the 2 slots runs its own engine, so it
@@ -727,6 +769,7 @@ private:
         long     glideRemain = 0;   // samples of glide left (0 = not gliding)
         bool     isKey  = false;    // KEYS voice: held-note ADSR (sustain/release live) + per-slot keySemis
         long     keyOff = -1;       // voiceSamples when the key was RELEASED (-1 = still held / not a key voice)
+        int      keyNote = -1;      // POLY keys: the MIDI note this voice is playing (keyUp(note) releases only its own voices)
         const juce::AudioBuffer<float>* smpBuf = nullptr;  // velocity-layer buffer chosen at trigger
         SlotVoice sv[NUM_SLOTS];
         bool active() const { return playHead >= 0.0; }

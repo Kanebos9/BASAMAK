@@ -147,28 +147,30 @@ public:
     std::atomic<int> lastCcNum { -1 }, lastCcVal { -1 }, lastCcChan { -1 };
 
     // ==== KEYS (the on-screen keyboard panel) =====================================
-    // Note events from the editor's piano (message thread) -> audio thread, MONO. Packed
-    // (gen << 16) | (midiNote << 8) | velocity7bit; gen bumps every event so re-pressing the
-    // same note retriggers. keysUpEvt carries just a gen. The audio thread plays them on the
-    // SELECTED channel via DrumChannel::keyDown/keyUp.
-    std::atomic<uint32_t> keysDownEvt { 0 }, keysUpEvt { 0 };
-    std::atomic<int>      keysSlot2Down { 0 };     // slot-2 transpose DOWN in semitones (0..24), persisted
+    // Note events from the editor's piano (message thread) -> audio thread via a lock-free SPSC
+    // RING (POLY: several presses/releases can land in one block; the old single-atomic handshake
+    // dropped all but the last). Producer = message thread ONLY (incoming MIDI on the audio thread
+    // calls the handler directly, keeping this strictly single-producer). Audio thread drains all
+    // pending events each block, in order, onto the selected channel via keyDown/keyUp(note).
+    struct KeyQEvt { uint8_t down, note, vel; };   // vel 1..127 (downs only)
+    static constexpr int KEYQ = 64;
+    KeyQEvt keyQ[KEYQ];
+    std::atomic<uint32_t> keyQHead { 0 }, keyQTail { 0 };   // head = write (message), tail = read (audio)
+    std::atomic<int>      keysSlot2Down { 0 };     // slot-2 transpose in semitones (+down/-up), persisted
     void pushKeyDown(int note, float vel01)
     {
-        const uint32_t gen = ((keysDownEvt.load(std::memory_order_relaxed) >> 16) + 1) & 0xffff;
-        keysDownEvt.store((gen << 16) | ((uint32_t)(note & 0x7f) << 8)
-                          | (uint32_t) juce::jlimit(1, 127, (int) std::lround(vel01 * 127.0f)),
-                          std::memory_order_release);
+        const uint32_t h = keyQHead.load(std::memory_order_relaxed);
+        if (h - keyQTail.load(std::memory_order_acquire) >= (uint32_t) KEYQ) return;   // full: drop (never blocks)
+        keyQ[h % KEYQ] = { 1, (uint8_t)(note & 0x7f),
+                           (uint8_t) juce::jlimit(1, 127, (int) std::lround(vel01 * 127.0f)) };
+        keyQHead.store(h + 1, std::memory_order_release);
     }
-    // Key-up carries WHICH note was released ((gen << 8) | note). The audio thread only
-    // applies it if that note is still the held one: a keyboard SLIDE emits up(old) before
-    // down(new) on the message thread, but both land in the same audio block and the block
-    // processes down first - an unchecked up would kill the freshly slid-to note (heard as
-    // "Analog+FM only plays the first key"; Phys/Modal masked it with their natural tails).
     void pushKeyUp(int note)
     {
-        const uint32_t gen = ((keysUpEvt.load(std::memory_order_relaxed) >> 8) + 1) & 0xffffff;
-        keysUpEvt.store((gen << 8) | (uint32_t)(note & 0x7f), std::memory_order_release);
+        const uint32_t h = keyQHead.load(std::memory_order_relaxed);
+        if (h - keyQTail.load(std::memory_order_acquire) >= (uint32_t) KEYQ) return;
+        keyQ[h % KEYQ] = { 0, (uint8_t)(note & 0x7f), 0 };
+        keyQHead.store(h + 1, std::memory_order_release);
     }
 
     // -- KEYS recording (audio thread stamps steps + logs take events; editor assembles takes) --
@@ -184,7 +186,12 @@ public:
     static constexpr int KEYS_EVT_CAP = 8192;
     KeyEvt keysEvts[KEYS_EVT_CAP];
     std::atomic<int> keysEvtCount { 0 };
-    uint32_t keysDownSeen = 0, keysUpSeen = 0;     // audio-thread only: last processed event gens
+    // POLY held-note tracking (audio thread only): press-order stack + velocities; the ATOMIC mask
+    // mirrors it for the UI (keyboard highlight unions every held note). keysHeldNote stays the
+    // MOST RECENT still-held note = the mono projection recording follows.
+    int   keysHeldStack[DrumChannel::POLY * 2] = {}; float keysHeldStackVel[DrumChannel::POLY * 2] = {};
+    int   keysHeldCount = 0;
+    std::atomic<uint64_t> keysHeldMaskLo { 0 }, keysHeldMaskHi { 0 };   // bit n = MIDI note n held
     std::atomic<int> keysHeldNote { -1 };          // audio-thread writes; the held key (for auto-merge)
     std::atomic<float> keysHeldVel { 1.0f };       // velocity of the held key (for DRAW recording of per-column velocity)
     std::atomic<int> keysLastStampStep { -1 };     // last step stamped for the held key (auto-merge chain)
@@ -195,16 +202,24 @@ public:
     // A take = the events of one loop pass (or one whole chain-mode session). Loading = clear the
     // channel in every pattern the take touches, then replay its events.
     struct KeysTake { juce::String name; int channel = 0; std::vector<KeyEvt> evts;
-                      bool isDraw = false; int drawPat = 0; std::vector<int8_t> drawLane;
-                      std::vector<uint8_t> drawVel; };  // draw takes store the lane + per-column velocity
+                      bool isDraw = false; int drawPat = 0;
+                      std::vector<DrumChannel::DrawNote> drawNotes; };  // piano-roll takes store the NOTE LIST
     std::vector<KeysTake> keysTakes;
     static constexpr int KEYS_TAKES_MAX = 1000;   // hard cap on total takes kept per preset (20 per pattern+channel)
-    // DRAW-take handshake (audio thread snapshots a finished loop's lane -> editor drains into a take).
+    // PIANO-ROLL take handshake (audio thread snapshots a finished loop's notes -> editor drains into a take).
     std::atomic<bool> keysDrawTakeReady { false };
     std::atomic<int>  keysDrawTakeChan  { -1 };
     std::atomic<int>  keysDrawTakePat   { -1 };
-    int8_t  keysDrawTakeBuf[DrumChannel::DRAW_RES] = {};
-    uint8_t keysDrawTakeVelBuf[DrumChannel::DRAW_RES] = {};
+    // Group takes hold the WHOLE pass in CONCAT columns (note start += bar*384; drawPat = the head).
+    static constexpr int DRAW_TAKE_MAX = DrumChannel::DRAW_MAX_NOTES * 8;
+    DrumChannel::DrawNote keysDrawTakeNotes[DRAW_TAKE_MAX] = {};
+    int keysDrawTakeCount = 0;
+    // POLY piano-roll recording: each held stack entry may have an OPEN note in the recording
+    // channel's list (grown per block until the key releases). -1 = none. Audio thread only.
+    // keysHeldOpenPat = the PATTERN the note was opened in: in a merged group later bars keep
+    // GROWING the same note (len crosses the bar line) instead of closing + reopening it.
+    int keysHeldOpenIdx[DrumChannel::POLY * 2] = {};
+    int keysHeldOpenPat[DrumChannel::POLY * 2] = {};
 
     // Audio-callback heartbeat: bumped at the top of every processBlock. The editor watches it -
     // if it stops moving, the HOST isn't sending us audio (device off/missing, FX offline), which

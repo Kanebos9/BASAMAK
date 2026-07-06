@@ -1252,9 +1252,10 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
 // slot is re-tuned from its OWN base Freq to the pressed note (so both slots sound the same
 // musical pitch regardless of their Freq knobs); slot 2 can be transposed DOWN by slot2Down
 // semitones (sub-oscillator style). Ineligible slots (Sample/Noise/legacy) stay silent.
-int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down)
+int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly)
 {
-    fadeOutVoices(0.015f);                             // mono: 15 ms handover (3 ms crackled on slides)
+    if (! poly)                                        // MONO: a new key cuts the old (bit-identical to the old keyboard)
+        fadeOutVoices(0.015f);                         // 15 ms handover (3 ms crackled on slides)
     // TOUCHING the keyboard RE-BASES every eligible slot's Freq to C3 (261.63 Hz; slot 2 keeps
     // its transpose baked in). This keeps the SEQUENCER consistent with what you hear: recorded
     // step pitches are relative to C3, and playback re-pitches from the slot Freq - so Freq must
@@ -1276,7 +1277,7 @@ int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down)
     }
     const int vi = trigger(velocity, 0.0f, 0.0f, 0, 0.0f, 0, /*forceOverlap*/ true);
     Voice& v = voices[vi];
-    v.isKey = true; v.keyOff = -1;
+    v.isKey = true; v.keyOff = -1; v.keyNote = midiNote;   // tag: keyUp(note) releases only this note's voices
     const double targetHz = 440.0 * std::pow(2.0, (double)(midiNote - 69) / 12.0);
     for (int s = 0; s < NUM_SLOTS; ++s)
     {
@@ -1314,6 +1315,13 @@ int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down)
 
 // Release the held key: the voice's env falls with the slot RELEASE from wherever it is
 // (see keyAdsr); Physical/Modal also drop their hold clamps back to the authored decay.
+// keyUp(note) = POLY: release only that note's voices (others keep sounding); a stale up
+// (note not held) touches nothing, which also makes the mono slide race-safe by tag.
+void DrumChannel::keyUp(int midiNote)
+{
+    for (auto& v : voices)
+        if (v.active() && v.isKey && v.keyOff < 0 && v.keyNote == midiNote) v.keyOff = v.voiceSamples;
+}
 void DrumChannel::keyUp()
 {
     for (auto& v : voices)

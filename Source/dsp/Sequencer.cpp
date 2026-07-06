@@ -43,7 +43,8 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
     {
         auto& c = patterns[playPattern].channels[e.channel];   // steps fire from the PLAYING pattern
         if (c.midiOut) return;   // MIDI-out channels make no internal sound (they emit notes in the processor)
-        if (e.isDraw) { c.trigger(e.drawVel, e.drawPitch, c.drawPan, e.gate); return; }   // DRAW mode mono note (per-column vel)
+        if (e.isDraw) { c.trigger(e.drawVel, e.drawPitch, c.drawPan, e.gate, 0.0f, 0,
+                                  e.drawOverlap); return; }   // PIANO-ROLL note (chord tones overlap, melody cuts)
         // Choke groups: a hit FADES OUT (~3 ms) the ringing tails of other channels in the same
         // group (e.g. a closed hi-hat silencing an open one). A hard cut clicked whenever the
         // choking hit was quieter than the tail it cut.
@@ -99,6 +100,24 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
             if (fc.anyVoiceActive()) anyRinging = true;
         }
         if (! anyRinging) fadeOutPattern = -1;   // all tails finished
+    }
+
+    // MERGED GROUP: while playing inside a group, EVERY member bar keeps rendering its ringing
+    // voices - a note recorded/drawn across a bar line lives in the bar it STARTED in and must keep
+    // sounding while later bars play (idle channels render nothing, so this is cheap).
+    if (inGroup(playPattern))
+    {
+        const int gh = groupHead(playPattern), ge = groupEnd(playPattern);
+        for (int p = gh; p <= ge; ++p)
+        {
+            if (p == playPattern || p == fadeOutPattern || p == currentPattern) continue;   // already rendered
+            const bool soloG = anySoloIn(patterns[p]);
+            for (int ch = 0; ch < NUM_CHANNELS; ++ch)
+            {
+                auto& gc = patterns[p].channels[ch];
+                if (! gc.midiOut && gc.anyVoiceActive()) gc.renderInto(audio, 0, numSamples, soloG);
+            }
+        }
     }
 
     // Also render the VIEWED pattern when it differs, so auditioning a channel there
@@ -229,10 +248,30 @@ void Sequencer::advanceDaw(juce::AudioPlayHead* dawHead, double sampleRate, int 
 // Apply the current pattern's play mode after a bar finishes.
 void Sequencer::onBarComplete()
 {
+    ++loopCount;                  // one more bar (for per-step loop conditions)
+    // MERGED GROUP: bars run head..end in sequence as ONE unit. Mid-group -> just move to the next
+    // bar (a group PASS counts as one playthrough, at the end). At the last bar, the HEAD's play
+    // mode decides (loop -> back to the head; StopAfterN/NextAfterN/Chain count group passes).
+    const int gHead = groupHead(playPattern), gEnd = groupEnd(playPattern);
+    if (gEnd > gHead && playPattern < gEnd)
+    {
+        fadeOutPattern = playPattern;
+        playPattern = playPattern + 1;
+        finished = false;
+        patternChanged.store(true);
+        return;
+    }
     ++patternRepeatCount;
-    ++loopCount;                  // one more pattern playthrough (for per-step loop conditions)
-    auto& p = patterns[playPattern];
+    auto& p = patterns[gHead];    // group: the HEAD's mode governs (single pattern: gHead == playPattern)
     const int target = juce::jmax(1, p.repeatTarget);
+    if (gEnd > gHead && p.playMode == LoopForever)
+    {   // loop the whole group: last bar -> back to the head
+        fadeOutPattern = playPattern;
+        playPattern = gHead;
+        finished = false;
+        patternChanged.store(true);
+        return;
+    }
 
     if (p.playMode == StopAfterN && patternRepeatCount >= target)
     {
@@ -241,6 +280,8 @@ void Sequencer::onBarComplete()
     else if (p.playMode == NextAfterN && patternRepeatCount >= target)
     {
         fadeOutPattern = playPattern;   // let the outgoing pattern's voices ring out (no hard-cut click)
+        // Jump to the EXACT target bar - even a middle bar of a merged group: playback starts there
+        // and runs on through the rest of the group (user rule; do NOT snap to the group head).
         playPattern = juce::jlimit(0, NUM_PATTERNS - 1, p.gotoPattern);
         patternRepeatCount = 0;
         finished = false;
@@ -254,8 +295,16 @@ void Sequencer::onBarComplete()
         const int tgt = juce::jlimit(0, NUM_PATTERNS - 1, p.chainSeq[p.chainStep % p.chainLen]);
         p.chainStep = (p.chainStep + 1) % p.chainLen;
         fadeOutPattern = playPattern;
-        playPattern = tgt;
+        playPattern = tgt;   // exact target bar - a middle group bar starts there and runs on (user rule)
         patternRepeatCount = 0;
+        finished = false;
+        patternChanged.store(true);
+    }
+    else if (gEnd > gHead)
+    {
+        // Group in StopAfterN / NextAfterN / Chain with N not reached yet: run the group again.
+        fadeOutPattern = playPattern;
+        playPattern = gHead;
         finished = false;
         patternChanged.store(true);
     }
@@ -280,37 +329,50 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
     {
         auto& c = pp.channels[ch];
 
-        // DRAW mode: a continuous mono pitch lane. Scan the columns crossed this block; articulate
-        // a fresh note at each SEGMENT onset (gap->note, or a semitone change) and gate it for the
-        // whole segment. The channel is mono, so each note cuts the previous = a single melodic line.
+        // PIANO ROLL: a polyphonic NOTE LIST. Trigger every note whose start column is crossed this
+        // block, gated for its own length. OVERLAP-AWARE: a note starting while another is still
+        // sounding (a chord, or a later chord tone) triggers with forceOverlap so it doesn't cut it;
+        // a plain sequential melody keeps the old mono-cut feel exactly.
         if (c.drawMode)
         {
+            // Channel being RECORDED: its notes don't fire (the live keys are the monitor).
+            if (ch == recordSuppressCh.load(std::memory_order_relaxed)) continue;
             const int R = DrumChannel::DRAW_RES;
-            const int col0 = (int) std::floor(oldPos * R), col1 = (int) std::floor(newPos * R);
-            for (int col = col0; col <= col1; ++col)
+            const int nN = juce::jlimit(0, DrumChannel::DRAW_MAX_NOTES, c.drawNoteCount);
+            // Seam dedupe: compare against the PREVIOUS pass's value and set AFTER the loop, so a
+            // chord (several notes at the SAME start col, fired in one pass) is never self-deduped.
+            const int prevTick = lastTick[ch]; const int prevTickLoop = lastTickLoop[ch];
+            int firedCol = -1;
+            for (int ni = 0; ni < nN; ++ni)
             {
-                const double colPos = (double) col / (double) R;      // bar-fraction of this column's start
+                const auto nt = c.drawNotes[ni];                      // copy (editor may edit concurrently)
+                const double colPos = (double) nt.start / (double) R; // bar-fraction of the note's start
                 const bool atZero = (oldPos == 0.0 && colPos == 0.0);
                 if (! atZero && ! (colPos > oldPos && colPos <= newPos)) continue;
-                const int cc = ((col % R) + R) % R;
-                const int semi = c.drawSemi[cc];
-                if (semi == DrumChannel::DRAW_GAP) continue;           // silence here
-                const int prev = c.drawSemi[(cc - 1 + R) % R];
-                if (cc != 0 && prev == semi) continue;                 // mid-segment (col 0 always re-articulates)
-                if (lastTick[ch] == 100000 + cc && lastTickLoop[ch] == loopCount) continue;   // seam dedupe
-                lastTick[ch] = 100000 + cc; lastTickLoop[ch] = loopCount;
+                if (prevTick == 100000 + (int) nt.start && prevTickLoop == loopCount) continue;   // seam re-crossing
+                firedCol = nt.start;
                 if (auto* tap = c.analysisTap) tap->arm();
-                int len = 1;                                           // segment length in columns (same semi, no gap)
-                while (len < R) { const int nx = (cc + len) % R; if (nx == 0 || c.drawSemi[nx] != semi) break; ++len; }
-                const double segBars = (double) len / (double) R;
+                // overlap = ANY other note is sounding at this note's start (equal starts: earlier
+                // list entries count as already sounding, so chord tone #2+ overlap tone #1)
+                bool overlap = false;
+                for (int mj = 0; mj < nN && ! overlap; ++mj)
+                {
+                    if (mj == ni) continue;
+                    const auto& m = c.drawNotes[mj];
+                    if (m.start < nt.start && nt.start < m.start + m.len) overlap = true;
+                    else if (m.start == nt.start && mj < ni) overlap = true;
+                }
+                const double segBars = (double) nt.len / (double) R;
                 const long gate = (long) juce::jmax(64.0, segBars / span * (double) spanSamples);
                 const int off = baseOffset + (int) juce::jlimit(0.0, (double) spanSamples - 1.0,
                                                 (colPos - oldPos) / span * (double) spanSamples);
                 TriggerEvent e; e.channel = ch; e.step = 0; e.offset = off; e.gate = gate;
-                e.isDraw = true; e.drawPitch = (float) semi;
-                e.drawVel = (float) c.drawVelC[cc] / 255.0f;   // per-column velocity
+                e.isDraw = true; e.drawPitch = (float) nt.semi;
+                e.drawVel = (float) nt.vel / 255.0f;                  // per-note velocity
+                e.drawOverlap = overlap;
                 events.add(e);
             }
+            if (firedCol >= 0) { lastTick[ch] = 100000 + firedCol; lastTickLoop[ch] = loopCount; }
             continue;
         }
 
