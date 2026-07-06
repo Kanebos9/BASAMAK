@@ -5642,7 +5642,7 @@ void DrumSequencerEditor::setupComponents()
     // 0..0.7 and play EXACTLY as before - the boundary math is unchanged, only the cap/label moved.
     sliderSwing.setRange(0.0, 1.0, 0.01);
     sliderSwing.setValue(proc.sequencer.current().swing, juce::dontSendNotification);
-    sliderSwing.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);   // knob = 1/3 the width of the old fader row
+    sliderSwing.setSliderStyle(juce::Slider::LinearHorizontal);   // the fader, stacked over its caption
     sliderSwing.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
     sliderSwing.textFromValueFunction = [](double v){ return v < 0.005 ? juce::String("Off")
                                                              : juce::String(juce::roundToInt(50.0 + v * 25.0)) + "%"; };
@@ -5965,11 +5965,11 @@ void DrumSequencerEditor::setupComponents()
     keysPanel.comboRecMode.addItem("Follow chain, record each - key", 3);
     keysPanel.comboRecMode.addItem("Follow chain, record each - 3s",  4);
     keysPanel.comboRecMode.setSelectedId(1, juce::dontSendNotification);
-    keysPanel.comboRecMode.setTooltip("WHERE recording writes (the chain plays either way):\n"
-                                      "- This pattern only: record just the pattern you're on; each loop of it = one "
-                                      "take. Other patterns the chain visits play but are NOT recorded.\n"
-                                      "- Follow chain, record each: record into EVERY pattern the chain visits - each "
-                                      "pattern+channel keeps its own separate takes.\n"
+    keysPanel.comboRecMode.setTooltip("WHERE recording writes:\n"
+                                      "- This pattern only: playback LOOPS the pattern you're on for the whole recording "
+                                      "(chains are ignored until you stop) and each loop = one take.\n"
+                                      "- Follow chain, record each: the chain runs and you record into EVERY pattern it "
+                                      "visits - each pattern+channel keeps its own separate takes.\n"
                                       "'key' = recording starts on your first key press; '3s' = a 3-second count-in.");
     // Slot-2 pitch: a 3-COLUMN popup (no scrolling) covering the full -24..+24 st transpose. + = UP,
     // - = DOWN. Stored as keysSlot2Down (positive = DOWN, preserving old projects), so trans = -down.
@@ -9252,8 +9252,8 @@ void DrumSequencerEditor::layoutContent()
     lblNumPat.setJustificationType(juce::Justification::centredRight);
     lblChannels.setBounds(858, PAT_Y + 8, 20, 24);   btnCh8.setBounds (880, PAT_Y + 10, 25, 21); btnCh16.setBounds(905, PAT_Y + 10, 25, 21);
     lblNumPat.setBounds  (930, PAT_Y + 8, 22, 24);   btnPat16.setBounds(954, PAT_Y + 10, 25, 21); btnPat32.setBounds(979, PAT_Y + 10, 25, 21);
-    sliderSwing.setBounds(1034, PAT_Y + 1, 26, 25);   // swing KNOB (was label+fader+readout = 3x the width)
-    lblSwing.setBounds   (1004, PAT_Y + 26, 86, 12);  // live caption under it, e.g. Swing 66%
+    sliderSwing.setBounds(1004, PAT_Y + 3, 88, 20);   // FADER on top (the tiny knob was unusable)...
+    lblSwing.setBounds   (1004, PAT_Y + 24, 88, 12);  // ...live caption under it, e.g. Swing 66%
     // Step edit-mode radio buttons at the right end of the pattern row.
     // Edit-mode group: evenly spaced (8px gaps) so it spans flush to the right edge - Clear ends ~1504 (no weird gap).
     lblEditMode.setBounds (1096, PAT_Y + 8, 30, 24);   // "Edit:" (minimumHorizontalScale squeezes it)

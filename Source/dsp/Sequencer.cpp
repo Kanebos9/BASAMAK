@@ -269,6 +269,16 @@ void Sequencer::onBarComplete()
         return;
     }
     ++patternRepeatCount;
+    if (recordLoopLock.load(std::memory_order_relaxed))
+    {
+        // "This pattern only" recording: LOOP the armed unit (pattern or whole merged group) -
+        // never follow chains / stop / next while the take is rolling.
+        fadeOutPattern = playPattern;
+        playPattern = gHead;
+        finished = false;
+        patternChanged.store(true);
+        return;
+    }
     auto& p = patterns[gEnd];     // group: the LAST bar's mode/chain governs - the bar playback
                                   // LEAVES from (user rule; single pattern: gEnd == playPattern)
     const int target = juce::jmax(1, p.repeatTarget);

@@ -274,6 +274,10 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         // processBlock, so the "key starts recording" FIRST block slipped through un-suppressed and
         // the just-opened note's trigger cut the first live key (the "first key is silent" bug).
         sequencer.recordSuppressCh.store((rec && drawRec) ? chIdx : -1, std::memory_order_relaxed);
+        // "This pattern only" modes (0/1) LOCK playback onto the armed pattern/group while recording -
+        // the chain must not pull the transport away from the take (chain modes 2/3 follow it).
+        sequencer.recordLoopLock.store(rec && keysRecMode.load(std::memory_order_relaxed) < 2,
+                                       std::memory_order_relaxed);
         auto logEvt = [this](int pat, int st, int semis, int flags) {
             const int cnt = keysEvtCount.load(std::memory_order_relaxed);
             if (cnt < KEYS_EVT_CAP)

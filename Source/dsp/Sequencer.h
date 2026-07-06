@@ -131,6 +131,11 @@ public:
     static bool anySoloIn(const Pattern& p)
     { for (auto& c : p.channels) if (c.solo) return true; return false; }
 
+    // "THIS PATTERN ONLY" recording: while set, playback LOOPS the armed pattern (or its merged
+    // group) - chains / stop-after / next-after are ignored until recording stops. Without it the
+    // chain pulled playback away from the pattern being recorded (user report).
+    std::atomic<bool> recordLoopLock { false };
+
     // While RECORDING keys into a piano-roll channel, its sequenced notes must NOT fire - the live
     // key voices are the monitor (double-triggering re-fired the half-grown note at bar starts and
     // MONO-cut the held voice = blips/cuts). Set per block by the processor; -1 = nothing suppressed.
