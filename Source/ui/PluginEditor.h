@@ -510,6 +510,42 @@ protected:
                        bool isDown, bool isOver, juce::Colour fill) override;
 };
 
+// ARP EDITOR: hold one key -> the arp plays root + these programmable semitone offsets, ONE PER STEP
+// of the channel's grid (rate-scaled), looping. Left panel = On + Rate; then 12 offset columns (notes
+// 2..13): DRAG a column up/down = its offset (-24..+24, auto-extends the pattern to include it);
+// DOUBLE-CLICK a column = toggle REST; CLICK a column's number (bottom) = make it the LAST note.
+class ArpEditor : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    bool   on   = false;
+    int8_t off[DrumChannel::ARP_ROWS];
+    int    len  = 2;     // pattern length INCLUDING the root (1 + rows)
+    int    rate = 2;     // index into {1/3,1/2,1,2,3}; 2 = x1
+    std::function<void()> onChange;    // push these back onto the channel (+ mark modified)
+    ArpEditor() { for (auto& o : off) o = DrumChannel::ARP_REST; }
+    void paint(juce::Graphics&) override;
+    void mouseDown(const juce::MouseEvent&) override;
+    void mouseDrag(const juce::MouseEvent&) override;
+    void mouseDoubleClick(const juce::MouseEvent&) override;
+private:
+    int dragCol = -1;
+    static constexpr int LW = 96, LBL_H = 13, VAL_H = 12;
+    juce::Rectangle<int> gridArea() const { return { LW, 0, juce::jmax(1, getWidth() - LW - 2), getHeight() }; }
+    juce::Rectangle<int> onRect()   const { return { 6, 20, LW - 14, 20 }; }
+    juce::Rectangle<int> rateRect() const { return { 6, 46, LW - 14, 18 }; }
+    juce::Rectangle<int> colRect(int i) const
+    { auto g = gridArea(); const float cw = (float) g.getWidth() / (float) DrumChannel::ARP_ROWS;
+      return { g.getX() + (int) (i * cw), g.getY(), (int) cw + 1, g.getHeight() }; }
+    int  colAt(juce::Point<int> p) const
+    { auto g = gridArea(); if (! g.contains(p)) return -1;
+      const float cw = (float) g.getWidth() / (float) DrumChannel::ARP_ROWS;
+      return juce::jlimit(0, DrumChannel::ARP_ROWS - 1, (int) ((p.x - g.getX()) / cw)); }
+    int  yToOffset(int y) const   // map Y in the bar area to -24..+24 (centre = 0)
+    { auto g = gridArea(); const int top = g.getY() + VAL_H, bot = g.getBottom() - LBL_H;
+      const float f = 1.0f - 2.0f * (float) (y - top) / (float) juce::jmax(1, bot - top);
+      return juce::jlimit(-24, 24, (int) std::lround(f * 24.0f)); }
+};
+
 class KeysPanel : public juce::Component, private juce::MidiKeyboardState::Listener
 {
 public:
@@ -524,6 +560,7 @@ public:
     juce::TextButton btnTakes { "Takes (0)" };
     juce::Slider     humanKnob, strumKnob, minVelKnob, maxVelKnob, glideKnob;   // HUMANIZE / STRUM / min+max vel / GLIDE
     ToggleSwitch     polySwitch;                          // keys POLY (chords stack like a piano)
+    ArpEditor        arpEditor;                            // hold one key -> programmed riff (per-step)
     juce::Label      lblRecMode, lblSlot2, lblHuman, lblStrum, lblMinVel, lblMaxVel, lblPoly, lblGlide;
     bool             polyMode = false;                    // mirror of the channel's keysPolyMode (routes note-offs)
     int countdown = 0;                                    // count-in ticks left (drawn as a big 3-2-1)

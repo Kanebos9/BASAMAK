@@ -4045,6 +4045,102 @@ KeysPanel::KeysPanel()
     lab(lblHuman, "Humanize"); lab(lblStrum, "Strum"); lab(lblMinVel, "Min vel"); lab(lblMaxVel, "Max vel");
     lab(lblPoly, "Poly"); lab(lblGlide, "Glide");
     addAndMakeVisible(polySwitch);
+    addAndMakeVisible(arpEditor);
+    arpEditor.setTooltip("ARP: hold ONE key and it plays the root then these semitone offsets, one per STEP of this "
+        "channel's grid (so it locks to your step count + swing), looping. Turn ON at the left, set Rate (1/3..x3). "
+        "DRAG a column up/down for its offset (-24..+24); DOUBLE-CLICK a column = REST (gap); CLICK a column's "
+        "number to make it the LAST note. Works stopped or playing; while a piano-roll channel RECORDS, the arp is "
+        "captured. Mono; chord/scale/glide apply per note.");
+}
+
+//==============================================================================
+// ARP EDITOR
+static const char* kArpRateName(int r) { static const char* n[5] = { "1/3", "1/2", "1", "2", "3" }; return n[juce::jlimit(0, 4, r)]; }
+
+void ArpEditor::paint(juce::Graphics& g)
+{
+    g.fillAll(juce::Colour(0xff181828));
+    // --- left panel: title, On, Rate ---
+    g.setColour(juce::Colour(on ? 0xffe8bf4d : 0xff8090b0)); g.setFont(juce::Font(12.0f, juce::Font::bold));
+    g.drawText("ARP", 6, 2, LW - 12, 15, juce::Justification::centredLeft, false);
+    auto ob = onRect().toFloat();
+    g.setColour(on ? juce::Colour(0xff35b56a) : juce::Colour(0xff33335a)); g.fillRoundedRectangle(ob, 4.0f);
+    g.setColour(on ? juce::Colours::black : juce::Colour(0xffb8b8d0)); g.setFont(juce::Font(11.5f, juce::Font::bold));
+    g.drawText(on ? "ON" : "OFF", onRect(), juce::Justification::centred, false);
+    auto rb = rateRect().toFloat();
+    g.setColour(juce::Colour(0xff26264a)); g.fillRoundedRectangle(rb, 4.0f);
+    g.setColour(juce::Colour(0xffc8d0e0)); g.setFont(juce::Font(11.0f, juce::Font::bold));
+    g.drawText(juce::String("Rate ") + kArpRateName(rate), rateRect(), juce::Justification::centred, false);
+
+    // --- 12 offset columns (notes 2..13) ---
+    auto grid = gridArea();
+    const int top = grid.getY() + VAL_H, bot = grid.getBottom() - LBL_H;
+    const float cy = (top + bot) * 0.5f, half = (bot - top) * 0.5f;
+    for (int i = 0; i < DrumChannel::ARP_ROWS; ++i)
+    {
+        auto c = colRect(i);
+        const bool active = on && i < len - 1;                 // row i (= step i+1) plays only within the length
+        const bool rest = off[i] == DrumChannel::ARP_REST;
+        g.setColour(juce::Colour(active ? 0xff20203c : 0xff16162a)); g.fillRect(c.reduced(1, 0));
+        g.setColour(juce::Colour(0x22ffffff)); g.drawHorizontalLine((int) cy, (float) c.getX(), (float) c.getRight());  // zero line
+        auto col = active ? juce::Colour(0xff35c0ff) : juce::Colour(0xff3a4a60);
+        if (rest)
+        {
+            g.setColour(active ? juce::Colour(0xff6a7690) : juce::Colour(0xff3a4050));
+            g.setFont(juce::Font(14.0f, juce::Font::bold));
+            g.drawText("-", c.withY(top).withHeight((int) (bot - top)), juce::Justification::centred, false);
+        }
+        else
+        {
+            const float y = cy - (float) off[i] / 24.0f * half;
+            g.setColour(col.withAlpha(active ? 0.9f : 0.5f));
+            g.fillRect(juce::Rectangle<float>((float) c.getX() + 3.0f, juce::jmin(cy, y),
+                                              (float) c.getWidth() - 6.0f, std::abs(y - cy) + 1.0f));
+            g.setColour(active ? juce::Colours::white : juce::Colour(0xff70809a));
+            g.setFont(juce::Font(10.0f, juce::Font::bold));
+            g.drawText((off[i] > 0 ? "+" : "") + juce::String((int) off[i]), c.withY(grid.getY()).withHeight(VAL_H),
+                       juce::Justification::centred, false);
+        }
+        // bottom label = the note ordinal (2..13); the LAST note in the pattern is highlighted amber
+        const bool isLast = (i == len - 2);
+        g.setColour(isLast ? juce::Colour(0xffe8bf4d) : (active ? juce::Colour(0xffb8c4dc) : juce::Colour(0xff53607a)));
+        g.setFont(juce::Font(9.5f, isLast ? juce::Font::bold : juce::Font::plain));
+        g.drawText(juce::String(i + 2), c.withY(bot).withHeight(LBL_H), juce::Justification::centred, false);
+        if (isLast) { g.setColour(juce::Colour(0xffe8bf4d)); g.fillRect(c.getRight() - 2, grid.getY(), 2, grid.getHeight()); }
+        g.setColour(juce::Colour(0x14ffffff)); g.drawVerticalLine(c.getX(), (float) grid.getY(), (float) grid.getBottom());
+    }
+}
+
+void ArpEditor::mouseDown(const juce::MouseEvent& e)
+{
+    dragCol = -1;
+    if (onRect().contains(e.getPosition()))   { on = ! on; if (onChange) onChange(); repaint(); return; }
+    if (rateRect().contains(e.getPosition())) { rate = e.mods.isRightButtonDown() ? (rate + 4) % 5 : (rate + 1) % 5;
+                                                if (onChange) onChange(); repaint(); return; }
+    const int c = colAt(e.getPosition());
+    if (c < 0) return;
+    if (e.getPosition().y >= gridArea().getBottom() - LBL_H)   // clicked the ROW NUMBER -> make it the LAST note
+    { len = juce::jlimit(1, 1 + DrumChannel::ARP_ROWS, c + 2); if (onChange) onChange(); repaint(); return; }
+    dragCol = c;
+    off[c] = (int8_t) yToOffset(e.getPosition().y);            // drag body = set this row's offset
+    if (c + 2 > len) len = c + 2;                              // auto-extend the pattern to include the edited row
+    if (onChange) onChange(); repaint();
+}
+
+void ArpEditor::mouseDrag(const juce::MouseEvent& e)
+{
+    if (dragCol < 0) return;
+    off[dragCol] = (int8_t) yToOffset(e.getPosition().y);
+    if (onChange) onChange(); repaint();
+}
+
+void ArpEditor::mouseDoubleClick(const juce::MouseEvent& e)
+{
+    const int c = colAt(e.getPosition());
+    if (c < 0 || e.getPosition().y >= gridArea().getBottom() - LBL_H) return;
+    off[c] = (int8_t) (off[c] == DrumChannel::ARP_REST ? 0 : DrumChannel::ARP_REST);   // toggle REST
+    if (c + 2 > len) len = c + 2;
+    if (onChange) onChange(); repaint();
 }
 
 void KeysPanel::resized()
@@ -4089,7 +4185,9 @@ void KeysPanel::resized()
     };
     placeTog(polySwitch, lblPoly, 60);
 
-    r.removeFromTop(6 + 28);    // push the keyboard down so the taller knob cell (dial + read-out) clears it
+    r.removeFromTop(6 + 28);    // push the ARP strip / keyboard down so the taller knob cell clears it
+    arpEditor.setBounds(r.removeFromTop(68));   // ARP riff editor above the keyboard
+    r.removeFromTop(4);
     kb.setBounds(r);
     // white-key width so the full C1..C7 range fits the panel (43 white keys in 6 octaves)
     kb.setKeyWidth(juce::jmax(8.0f, (float) r.getWidth() / 43.0f));
@@ -4900,6 +4998,8 @@ juce::int64 DrumSequencerEditor::stateHash() const
             h = mix(h, channelSoundHash(ch));
             h = mix(h, ch.numSteps);
             h = mix(h, f(ch.humanizeAmt)); h = mix(h, f(ch.strumAmt)); h = mix(h, f(ch.keysMinVel)); h = mix(h, f(ch.keysMaxVel)); h = mix(h, f(ch.keysGlide));   // HUMANIZE / STRUM / min+max-vel / GLIDE (undoable)
+            h = mix(h, ch.arpOn ? 1 : 0); h = mix(h, ch.arpLen); h = mix(h, ch.arpRate);
+            for (int ai = 0; ai < DrumChannel::ARP_ROWS; ++ai) h = mix(h, (int) ch.arpOffset[ai] + 128);   // ARP (undoable)
             h = mix(h, ch.keysPolyMode ? 1 : 0);   // KEYS poly/mono toggle (undoable)
             h = mix(h, ch.duckBy + 2); h = mix(h, f(ch.duckAmt));   // sidechain duck (undoable)
             juce::int64 st = 0; for (int i = 0; i < DrumChannel::MAX_STEPS; ++i) st = (st << 1) | (ch.steps[i] ? 1 : 0);
@@ -4962,6 +5062,8 @@ void DrumSequencerEditor::resetChannelToDefault(DrumChannel& c, int ch)
     c.drawMode = false; c.drawVel = 1.0f; c.drawPan = 0.0f;   // fresh channel = step mode
     c.keysSlot2Down = 0;                                      // KEYS slot-2 transpose (channel-wide) resets too
     c.humanizeAmt = 0.0f; c.strumAmt = 0.0f; c.keysMinVel = 0.0f; c.keysMaxVel = 1.0f; c.keysGlide = 0.0f;   // HUMANIZE / STRUM / vel range / GLIDE default
+    { DrumChannel d; c.arpOn = d.arpOn; c.arpLen = d.arpLen; c.arpRate = d.arpRate;   // ARP defaults
+      for (int ai = 0; ai < DrumChannel::ARP_ROWS; ++ai) c.arpOffset[ai] = d.arpOffset[ai]; }
     c.keysPolyMode = true;                                    // keys POLY by default on Init
     c.clearDrawNotes();
     c.padX = c.padY = 0.5f; c.padLayoutB = false;
@@ -7995,6 +8097,18 @@ void DrumSequencerEditor::refreshKeysPanel()
     keysPanel.glideKnob.setValue(kch.keysGlide,   juce::dontSendNotification);
     const bool glideOk = ! kch.keysPolyMode;   // glide is mono-only (poly never glides)
     keysPanel.glideKnob.setEnabled(glideOk); keysPanel.glideKnob.setAlpha(glideOk ? 1.0f : 0.4f);
+    // ARP editor: mirror the channel's arp state in, and push edits back out (+ mark modified / undoable).
+    keysPanel.arpEditor.on   = kch.arpOn;
+    keysPanel.arpEditor.len  = kch.arpLen;
+    keysPanel.arpEditor.rate = kch.arpRate;
+    for (int ai = 0; ai < DrumChannel::ARP_ROWS; ++ai) keysPanel.arpEditor.off[ai] = kch.arpOffset[ai];
+    keysPanel.arpEditor.repaint();
+    keysPanel.arpEditor.onChange = [this] {
+        if (ignoreKnobCallbacks) return;
+        auto& c = proc.sequencer.channel(selectedChannel);
+        c.arpOn = keysPanel.arpEditor.on; c.arpLen = keysPanel.arpEditor.len; c.arpRate = keysPanel.arpEditor.rate;
+        for (int ai = 0; ai < DrumChannel::ARP_ROWS; ++ai) c.arpOffset[ai] = keysPanel.arpEditor.off[ai];
+    };
     keysPanel.polySwitch.setToggleState(kch.keysPolyMode, juce::dontSendNotification);
     keysPanel.polyMode = kch.keysPolyMode;
     ignoreKnobCallbacks = prevIgnore;

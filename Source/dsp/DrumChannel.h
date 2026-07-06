@@ -607,6 +607,30 @@ public:
     //     previous one, the new note SLIDES from the old pitch to the new over keysGlide*0.4 s. Live keys
     //     only (mono); 0 = off = instant (bit-identical). Poly never glides. Per pattern/channel, keys only.
     float keysGlide   = 0.0f;   // 0..1  (glide time = keysGlide * 400 ms)
+    //   ARP = a keyboard RIFF generator: hold ONE key -> it plays the root (the pressed key) then a
+    //     programmed list of semitone OFFSETS, ONE PER STEP of this channel's grid (rate-scaled), looping
+    //     while held. Each row can be a REST (ARP_REST = empty). The clock is COMPUTED from bpm/time-sig/
+    //     numSteps, so it runs whether the transport plays or not; the phase starts at the keypress. Mono;
+    //     each note flows through keyDown so chord/scale voicing + glide apply per arp note.
+    static constexpr int  ARP_ROWS = 12;      // programmable rows = notes 2..13 (note 1 = the pressed key/root)
+    static constexpr int  ARP_REST = -128;    // a row set to this = a rest (nothing plays that step)
+    bool   arpOn = false;
+    int8_t arpOffset[ARP_ROWS] = { 12, ARP_REST, ARP_REST, ARP_REST, ARP_REST, ARP_REST,
+                                   ARP_REST, ARP_REST, ARP_REST, ARP_REST, ARP_REST, ARP_REST };  // default: root + octave
+    int    arpLen  = 2;         // pattern length INCLUDING the root (1..1+ARP_ROWS); default root + row 1
+    int    arpRate = 2;         // index into the rate table {1/3,1/2,1,2,3}; 2 = x1 (one note per step)
+    static double arpRateMul(int idx)         // notes-per-step multiplier
+    { static const double t[5] = { 1.0/3.0, 1.0/2.0, 1.0, 2.0, 3.0 }; return t[juce::jlimit(0, 4, idx)]; }
+    // The MIDI note for arp step `step` (0 = root, 1.. = the offset rows), looping within `len`.
+    // Returns -1 for a REST row. Shared by the engine (processor) and the offline test.
+    static int arpNoteAt(const int8_t* offsets, int len, int root, int step)
+    {
+        const int L = juce::jmax(1, len);
+        step = ((step % L) + L) % L;
+        if (step == 0) return juce::jlimit(0, 127, root);
+        const int off = offsets[juce::jlimit(0, ARP_ROWS - 1, step - 1)];
+        return off == ARP_REST ? -1 : juce::jlimit(0, 127, root + off);
+    }
     //   keysPolyMode = keyboard POLY: held keys stack like a piano (up to POLY notes); off = MONO,
     //     a new key cuts the previous one (classic lead/slide feel). Per pattern/channel, keys only.
     bool  keysPolyMode = true;    // POLY by default (per-sound; saved in mix files)

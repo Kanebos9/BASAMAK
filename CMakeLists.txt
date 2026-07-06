@@ -72,7 +72,7 @@ juce_generate_juce_header(DrumSequencer)
 # builds are untouched. Run tests/run.sh BEFORE EVERY RELEASE - each test exits non-zero on FAIL.
 option(BASAMAK_TESTS "Build the offline DSP regression tests" OFF)
 if(BASAMAK_TESTS)
-    foreach(T PolyTest PRollTest MergeTest PresetTest DuckTest NudgeTest SlotNoteTest GlideTest)
+    foreach(T PolyTest PRollTest MergeTest PresetTest DuckTest NudgeTest SlotNoteTest GlideTest ArpTest)
         juce_add_console_app(${T})
         juce_generate_juce_header(${T})
         target_sources(${T} PRIVATE

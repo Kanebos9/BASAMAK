@@ -198,6 +198,13 @@ public:
     std::atomic<int> keysDrawLastCol   { -1 };     // DRAW recording: last column written (unquantized lane capture)
     std::atomic<int> keysLoopSeen { -1 };          // loopCount at the last take boundary (-1 = reset)
     std::atomic<int> keysLastPlayPat { -1 };       // playPattern at the last boundary (chain-mode splits)
+    // ARP runtime (audio thread only; drives the played channel). See DrumChannel arp fields.
+    int    arpRoot = -1;       // MIDI note driving the arp (-1 = inactive)
+    float  arpVel  = 0.8f;     // velocity of the held root
+    int    arpChan = -1;       // channel the arp runs on
+    int    arpStep = 0;        // 0 = root, 1..arpLen-1 = rows
+    double arpAcc  = 0.0;      // host samples accumulated since the last arp note
+    int    arpSounding = -1;   // MIDI note currently sounding (-1 = none / rest)
     // Recorded TAKES (message thread only; PERSISTED in the plugin state, so presets keep them).
     // A take = the events of one loop pass (or one whole chain-mode session). Loading = clear the
     // channel in every pattern the take touches, then replay its events.
