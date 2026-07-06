@@ -855,23 +855,23 @@ void SlotEditor::hookFreqReadouts()
     applyFreqLock();   // the lock state must survive every re-place/refresh
 }
 
-// TRANSPOSE LOCK: grey + disable every pitched Freq control and explain where to unlock; restore the
-// original tooltip (SlotParam::tooltip / the fader's authored text) when unlocked.
+// PIANO ROLL locks pitch to C3: grey + disable every Freq control while this channel is in
+// Piano Roll mode (the note grid IS the pitch, 0 = C3). Restores the authored tooltip in step mode.
 void SlotEditor::applyFreqLock()
 {
     static const juce::String lockMsg =
-        "Transpose is disabled for this sound (its pitch reference is locked, so keys / steps / MIDI export "
-        "stay anchored). To edit the Freq again, turn OFF 'Lock transpose' above the keyboard (KEYS view).";
+        "Frequency is disabled while this channel is in PIANO ROLL: the note grid sets the pitch and "
+        "0 is fixed to C3. Switch the channel back to steps (the step-count dropdown) to use Freq again.";
     static const juce::String freqFaderTip =
         "Frequency: the oscillator's base pitch (Hz). CLICK the value read-out to switch to NOTE "
         "mode (shows A1, C2...; dragging snaps to semitones, SHIFT = free). Click again for Hz.\n\n"
         "KEYS: the moment you touch the on-screen piano this snaps to C3, so recorded step pitches "
-        "play back EXACTLY as performed (step pitch 0 = C3). Use this knob AFTERWARDS to transpose "
-        "the whole sound.";   // identical to the authored tooltip so unlock restores it verbatim
+        "play back EXACTLY as performed (step pitch 0 = C3). PIANO ROLL disables this knob and pins "
+        "0 to C3.";
     auto apply = [this](juce::Slider& sl, const juce::String& openTip) {
-        sl.setEnabled(! freqLock);
-        sl.setAlpha(freqLock ? 0.45f : 1.0f);
-        sl.setTooltip(freqLock ? lockMsg : openTip);
+        sl.setEnabled(! freqDisabled);
+        sl.setAlpha(freqDisabled ? 0.45f : 1.0f);
+        sl.setTooltip(freqDisabled ? lockMsg : openTip);
     };
     for (int i = 0; i < params.size() && i < (int) knobs.size(); ++i)
         if (params[i].suffix == "nHz") apply(*knobs[i], params[i].tooltip);
@@ -1121,6 +1121,9 @@ juce::Rectangle<int> StepGridComponent::stepRect(int ch, int step) const
     int w = (int)((step + 1) * stepW) - x;
     return { x, y, w, rowH };
 }
+
+int  StepGridComponent::gridDiv() const { return drawGridDiv; }
+void StepGridComponent::setGridDiv(int n) { drawGridDiv = juce::jlimit(0, 64, n); repaint(); }
 
 void StepGridComponent::update(const Sequencer& seq, bool hasSolo)
 {
@@ -1508,7 +1511,7 @@ void StepGridComponent::eraseColRange(int ch, int lo, int hi)
             const int rightStart = hi + 1, rightLen = b - hi;
             n.len = (int16_t) (lo - a);
             if (drawNoteCount[ch] < DrumChannel::DRAW_MAX_NOTES)
-                drawNotes[ch][drawNoteCount[ch]++] = { (int16_t) rightStart, (int16_t) rightLen, n.semi, n.vel };
+                drawNotes[ch][drawNoteCount[ch]++] = { (int16_t) rightStart, (int16_t) rightLen, n.semi, n.vel, n.slot };
             continue;
         }
         if (a < lo)      n.len = (int16_t) (lo - a);            // overlaps from the left -> trim tail
@@ -1545,7 +1548,8 @@ void StepGridComponent::drawStrokeTo(int ch, juce::Point<int> pos)
         else if (cnt < MIR_MAX)                                 // new pitch (or first stroke) -> new note
         {
             drawNotes[ch][cnt] = { (int16_t) lo, (int16_t) juce::jmax(1, hi - lo + 1), (int8_t) semi,
-                                   (uint8_t) juce::jlimit(0, 255, (int) std::lround(dVel[ch] * 255.0f)) };
+                                   (uint8_t) juce::jlimit(0, 255, (int) std::lround(dVel[ch] * 255.0f)),
+                                   (uint8_t) prTargetSlot };
             strokeNoteIdx = cnt; ++cnt;
         }
         drawReadSemi = semi;   // live read-out
@@ -1583,6 +1587,15 @@ void StepGridComponent::setDrawColVel(int ch, juce::Point<int> pos)
     pushNotes(ch);
     drawReadVel = v255;
     repaint();
+}
+
+// Piano-roll note colours by slot target - the SAME family as the keyboard highlight:
+// slot 1 = yellow, slot 2 = pink, both = the 50/50 orange blend.
+static juce::Colour slotNoteColour(int slot)
+{
+    return slot == 1 ? juce::Colour(0xffe8bf4d)
+         : slot == 2 ? juce::Colour(0xffe86aa8)
+                     : juce::Colour(0xffe8bf4d).interpolatedWith(juce::Colour(0xffe86aa8), 0.5f);
 }
 
 void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle<int> rect, bool overlay)
@@ -1731,6 +1744,29 @@ void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle
     // pitch window draw as thin edge indicators (kept, just off-view).
     const float colW = (float) lane.getWidth() / (float) R;
     g.saveState(); g.reduceClipRegion(lane);
+    if (overlay && getSlotVoicing)
+    {   // GHOST LINES: the pitches each slot ACTUALLY sounds for every note (chord/scale voicing +
+        // slot-2 transpose) - faint, non-editable, slot-coloured like the keyboard highlight.
+        for (int i = 0; i < drawNoteCount[ch]; ++i)
+        {
+            const auto& n = drawNotes[ch][i];
+            const float gx1 = (float) lane.getX() + (float) n.start * colW;
+            const float gx2 = (float) lane.getX() + (float) (n.start + n.len) * colW;
+            const float gh = juce::jmax(2.0f, rowH2 * 0.55f);
+            for (int sIdx = 0; sIdx < DrumChannel::NUM_SLOTS; ++sIdx)
+            {
+                if (n.slot != 0 && (int) n.slot != sIdx + 1) continue;   // the note doesn't play this slot
+                int vo[8]; const int cnt = getSlotVoicing(ch, sIdx, (int) n.semi, vo);
+                for (int k = 0; k < cnt; ++k)
+                {
+                    if (vo[k] == (int) n.semi) continue;                 // the solid bar already shows it
+                    if (vo[k] < ctr - range || vo[k] > ctr + range) continue;
+                    g.setColour((sIdx == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8)).withAlpha(0.30f));
+                    g.fillRect(juce::Rectangle<float>(gx1, yFor(vo[k]) - gh * 0.5f, juce::jmax(2.0f, gx2 - gx1 - 1.0f), gh));
+                }
+            }
+        }
+    }
     for (int i = 0; i < drawNoteCount[ch]; ++i)
     {
         const auto& n = drawNotes[ch][i];
@@ -1739,7 +1775,8 @@ void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle
         const bool outOfView = (int) n.semi < ctr - range || (int) n.semi > ctr + range;
         const float y = yFor(juce::jlimit(ctr - range, ctr + range, (int) n.semi));
         const float bh = outOfView ? 2.0f : (overlay ? juce::jmax(3.0f, rowH2 - 1.0f) : 4.0f);
-        auto col = dim ? juce::Colour(0xff5f6a78) : outOfView ? juce::Colour(0x8035c0ff) : juce::Colour(0xff35c0ff);
+        const auto slotCol = slotNoteColour((int) n.slot);
+        auto col = dim ? juce::Colour(0xff5f6a78) : outOfView ? slotCol.withAlpha(0.5f) : slotCol;
         if (overlay && ! outOfView)
         {
             juce::Rectangle<float> bar(x1, y - bh * 0.5f, juce::jmax(2.0f, x2 - x1 - 1.0f), bh);
@@ -1789,15 +1826,29 @@ void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle
             g.setColour(on ? juce::Colours::black : juce::Colour(0xffb8b8d0)); g.setFont(juce::Font(9.5f, juce::Font::bold));
             g.drawText(juce::String::fromUTF8("\xc2\xb1") + juce::String(ranges[i]), rr, juce::Justification::centred, false);
         }
-        { // snap grid: cycles 4 / 8 / 16 / 32 / Free (click)
+        { // snap grid: CLICK to type any 1/N (1-64, 0 = off)
             juce::Rectangle<int> gr(rect.getX() + 4 + 4 * 38 + 8, rect.getY() + 1, 64, PR_HEAD - 2);
             g.setColour(juce::Colour(0xff33335a)); g.fillRoundedRectangle(gr.toFloat(), 3.0f);
             g.setColour(juce::Colour(0xffd9c46a)); g.setFont(juce::Font(9.5f, juce::Font::bold));
             g.drawText(drawGridDiv > 0 ? "Grid 1/" + juce::String(drawGridDiv) : "Grid off", gr, juce::Justification::centred, false);
         }
+        { // DRAW TARGET swatches: which slot(s) a new note plays (orange = both, yellow = slot 1, pink = slot 2).
+          // With a selection active, clicking one RE-TAGS the selected notes.
+            static const int  sx[3] = { 236, 269, 296 }, sw2[3] = { 30, 24, 24 };
+            static const char* nm[3] = { "1+2", "S1", "S2" };
+            for (int i = 0; i < 3; ++i)
+            {
+                juce::Rectangle<int> sr(rect.getX() + sx[i], rect.getY() + 1, sw2[i], PR_HEAD - 2);
+                const auto sc = slotNoteColour(i);
+                if (prTargetSlot == i) { g.setColour(sc); g.fillRoundedRectangle(sr.toFloat(), 3.0f); g.setColour(juce::Colours::black); }
+                else                   { g.setColour(juce::Colour(0xff33335a)); g.fillRoundedRectangle(sr.toFloat(), 3.0f); g.setColour(sc); }
+                g.setFont(juce::Font(9.0f, juce::Font::bold));
+                g.drawText(nm[i], sr, juce::Justification::centred, false);
+            }
+        }
         g.setColour(juce::Colour(0xff9aa4c0)); g.setFont(juce::Font(9.5f, juce::Font::bold));
-        g.drawText("drag empty = new - drag note = move - right edge = length - dbl-click = delete - SHIFT+drag = select many",
-                   rect.getX() + 244, rect.getY() + 1, rect.getWidth() - 244 - 22, PR_HEAD - 2, juce::Justification::centredLeft, false);
+        g.drawText("drag empty = new - drag note = move - right edge = length - dbl-click = delete - SHIFT+drag = select",
+                   rect.getX() + 328, rect.getY() + 1, rect.getWidth() - 328 - 22, PR_HEAD - 2, juce::Justification::centredLeft, false);
         juce::Rectangle<int> cl(rect.getRight() - 18, rect.getY() + 1, 15, PR_HEAD - 2);
         g.setColour(juce::Colour(0xff5a2a2a)); g.fillRoundedRectangle(cl.toFloat(), 3.0f);
         g.setColour(juce::Colours::white); g.setFont(juce::Font(11.0f, juce::Font::bold));
@@ -2146,9 +2197,23 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
                 { drawRange = ranges[i];
                   drawViewCenter = juce::jlimit(-prViewClamp(), prViewClamp(), drawViewCenter);   // window stays inside +-36
                   repaint(); return; }   // range radio
-            if (juce::Rectangle<int>(ov.getX() + 4 + 4 * 38 + 8, hy + 1, 64, 13).contains(p))   // snap grid cycler
-            { drawGridDiv = drawGridDiv == 4 ? 8 : drawGridDiv == 8 ? 16 : drawGridDiv == 16 ? 32 : drawGridDiv == 32 ? 0 : 4;
-              repaint(); return; }
+            if (juce::Rectangle<int>(ov.getX() + 4 + 4 * 38 + 8, hy + 1, 64, 13).contains(p))   // snap grid: type a value
+            { if (onGridDivEdit) onGridDivEdit(); return; }
+            {   // DRAW-TARGET swatches: pick which slot new notes play; a live selection gets RE-TAGGED
+                static const int sx[3] = { 236, 269, 296 }, sw2[3] = { 30, 24, 24 };
+                for (int i = 0; i < 3; ++i)
+                    if (juce::Rectangle<int>(ov.getX() + sx[i], hy + 1, sw2[i], 13).contains(p))
+                    {
+                        prTargetSlot = i;
+                        if (prSelCount > 0)
+                        {
+                            for (int j = 0; j < drawNoteCount[drawMagCh]; ++j)
+                                if (prSel[j]) drawNotes[drawMagCh][j].slot = (uint8_t) i;
+                            pushNotes(drawMagCh);
+                        }
+                        repaint(); return;
+                    }
+            }
             const auto lane = prLane(ov);
             if (! lane.contains(p))
             {   // the LEFT note-name column = a SCROLL handle: drag it to shift the pitch window
@@ -2208,7 +2273,8 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
                 const int barEnd = (start / DrumChannel::DRAW_RES + 1) * DrumChannel::DRAW_RES;
                 drawNotes[ch2][drawNoteCount[ch2]] = { (int16_t) start, (int16_t) juce::jmax(1, juce::jmin(cw, barEnd - start)),
                                                        (int8_t) juce::jlimit(-36, 36, semi),
-                                                       (uint8_t) juce::jlimit(0, 255, (int) std::lround(dVel[ch2] * 255.0f)) };
+                                                       (uint8_t) juce::jlimit(0, 255, (int) std::lround(dVel[ch2] * 255.0f)),
+                                                       (uint8_t) prTargetSlot };
                 prIdx = drawNoteCount[ch2]++; prMode = 3; prGrabDCol = 0; prGrabDSemi = 0;
                 drawReadSemi = semi;
                 pushNotes(ch2);
@@ -3948,8 +4014,8 @@ KeysPanel::KeysPanel()
     };
     lab(lblRecMode, "Record mode"); lab(lblSlot2, "Slot 2 pitch");
     lab(lblHuman, "Humanize"); lab(lblStrum, "Strum"); lab(lblMinVel, "Min vel"); lab(lblMaxVel, "Max vel");
-    lab(lblPoly, "Poly"); lab(lblLock, "Lock transpose");
-    addAndMakeVisible(polySwitch); addAndMakeVisible(lockSwitch);   // (hint text removed to make room)
+    lab(lblPoly, "Poly");
+    addAndMakeVisible(polySwitch);
 }
 
 void KeysPanel::resized()
@@ -3991,9 +4057,7 @@ void KeysPanel::resized()
         l.setBounds(col.removeFromTop(15));
         sw.setBounds(col.getCentreX() - 16, col.getY() + 4, 32, 18);
     };
-    placeTog(polySwitch, lblPoly, 52);
-    strip.removeFromLeft(6);
-    placeTog(lockSwitch, lblLock, 92);
+    placeTog(polySwitch, lblPoly, 60);
 
     r.removeFromTop(6 + 28);    // push the keyboard down so the taller knob cell (dial + read-out) clears it
     kb.setBounds(r);
@@ -4403,7 +4467,7 @@ DrumSequencerEditor::DrumSequencerEditor(DrumSequencerProcessor& p)
     firstChannelRow = 0;
     stepGrid.visibleRows = viewRows();
     stepGrid.firstRow    = 0;
-    visiblePatterns = juce::jlimit(16, Sequencer::NUM_PATTERNS, proc.visiblePatterns) <= 16 ? 16 : 32;
+    visiblePatterns = Sequencer::NUM_PATTERNS;   // always 32
     firstPatternCol = 0;
     refreshCountButtons();
 
@@ -4437,8 +4501,7 @@ DrumSequencerEditor::~DrumSequencerEditor()
                              (juce::Button*)&btnRedo, (juce::Button*)&btnRoute, (juce::Button*)&btnSaveMix,
                              (juce::Button*)&btnToggleDetail, (juce::Button*)&btnKeysView, (juce::Button*)&btnClearPat,
                              (juce::Button*)&btnTooltips,
-                             (juce::Button*)&btnCh8, (juce::Button*)&btnCh16, (juce::Button*)&btnPat16,
-                             (juce::Button*)&btnPat32 }) b->setLookAndFeel(nullptr);
+                             (juce::Button*)&btn16View }) b->setLookAndFeel(nullptr);
     keysPanel.btnSlot2.setLookAndFeel(nullptr);   // dropBtnLNF
     keysPanel.btnTakes.setLookAndFeel(nullptr);   // dropBtnLNF
     for (auto& s : strips)
@@ -4732,7 +4795,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
     auto f   = [](float x) { juce::int64 b = 0; std::memcpy(&b, &x, sizeof(float)); return b; };
     juce::int64 h = 146959810934665603LL;
     h = mix(h, c.keysSlot2Down);   // slot-2 pitch is part of the SOUND now (rides + refreshes with mixes)
-    h = mix(h, c.freqLocked ? 1 : 0);   // transpose lock is per-sound too
+    h = mix(h, c.keysPolyMode ? 1 : 0);   // keys Poly/Mono is per-sound too
     for (int i = 0; i < DrumChannel::NUM_SOURCES; ++i) { h = mix(h, c.srcOn[i] ? 1 : 0); h = mix(h, f(c.srcWeight[i])); }
     h = mix(h, f(c.padX)); h = mix(h, f(c.padY)); h = mix(h, c.padLayoutB ? 1 : 0);
     // Slots are the runtime source of truth (incl. duplicate engines) - hash them too.
@@ -4815,7 +4878,7 @@ juce::int64 DrumSequencerEditor::stateHash() const
             h = mix(h, ch.drawMode ? 1 : 0);
             if (ch.drawMode) { h = mix(h, f(ch.drawVel)); h = mix(h, f(ch.drawPan));
                 for (int i = 0; i < ch.drawNoteCount; ++i) { const auto& nt = ch.drawNotes[i];
-                    h = mix(h, nt.start); h = mix(h, nt.len); h = mix(h, (int) nt.semi + 128); h = mix(h, (int) nt.vel); } }
+                    h = mix(h, nt.start); h = mix(h, nt.len); h = mix(h, (int) nt.semi + 128); h = mix(h, (int) nt.vel); h = mix(h, (int) nt.slot); } }
         }
     }
     h = mix(h, f(s.standaloneBpm)); h = mix(h, s.timeSigNum); h = mix(h, s.timeSigDen);
@@ -4869,7 +4932,7 @@ void DrumSequencerEditor::resetChannelToDefault(DrumChannel& c, int ch)
     c.drawMode = false; c.drawVel = 1.0f; c.drawPan = 0.0f;   // fresh channel = step mode
     c.keysSlot2Down = 0;                                      // KEYS slot-2 transpose (channel-wide) resets too
     c.humanizeAmt = 0.0f; c.strumAmt = 0.0f; c.keysMinVel = 0.0f; c.keysMaxVel = 1.0f;   // HUMANIZE / STRUM / vel range default
-    c.keysPolyMode = false; c.freqLocked = false;             // keys mono + transpose unlocked on Init
+    c.keysPolyMode = true;                                    // keys POLY by default on Init
     c.clearDrawNotes();
     c.padX = c.padY = 0.5f; c.padLayoutB = false;
     c.layerOscShape = 0; c.layerSineFreq = 60.0f; c.layerSinePEnvAmt = 0.0f; c.layerSinePEnvTime = 0.04f; c.layerSinePOffset = 0.0f;
@@ -4916,8 +4979,8 @@ void DrumSequencerEditor::initChannelMix(int ch)
 void DrumSequencerEditor::writeChannelMix(juce::ValueTree& t, const DrumChannel& ch) const
 {
     t.setProperty("sound",    (int) ch.soundType,    nullptr);
+    t.setProperty("keysPoly", ch.keysPolyMode, nullptr);
     t.setProperty("keys2Dn",  ch.keysSlot2Down,      nullptr);   // slot-2 pitch rides with the sound mix
-    t.setProperty("frqLk",    ch.freqLocked,         nullptr);   // transpose lock rides with the sound mix
     t.setProperty("userSample", ch.usingUserSample ? ch.userSampleFile.getFullPathName() : juce::String(), nullptr);
     for (int i = 0; i < DrumChannel::NUM_SOURCES; ++i) { t.setProperty("srcOn" + juce::String(i), ch.srcOn[i], nullptr);
                                   t.setProperty("srcW"  + juce::String(i), ch.srcWeight[i], nullptr); }
@@ -4991,8 +5054,8 @@ void DrumSequencerEditor::writeChannelMix(juce::ValueTree& t, const DrumChannel&
 
 void DrumSequencerEditor::readChannelMix(const juce::ValueTree& t, DrumChannel& ch, juce::String& missingSample) const
 {
+    ch.keysPolyMode = (bool) t.getProperty("keysPoly", true);
     ch.keysSlot2Down = juce::jlimit(-24, 24, (int) t.getProperty("keys2Dn", 0));   // slot-2 pitch (0 for old mix files)
-    ch.freqLocked    = (bool) t.getProperty("frqLk", false);                       // transpose lock (off for old mix files)
     for (int i = 0; i < DrumChannel::NUM_SOURCES; ++i) { ch.srcOn[i]     = (bool)  t.getProperty("srcOn" + juce::String(i), i == 0);
                                   ch.srcWeight[i] = (float) t.getProperty("srcW"  + juce::String(i), i == 0 ? 1.0f : 0.0f); }
     ch.padX = (float) t.getProperty("padX", 0.5f);
@@ -5471,7 +5534,7 @@ void DrumSequencerEditor::fullRefresh()
         }
     }
     refreshRouting();   // routing/choke are preset-level now -> recolour the strips after a preset/state change
-    visiblePatterns = juce::jlimit(16, Sequencer::NUM_PATTERNS, proc.visiblePatterns) <= 16 ? 16 : 32;
+    visiblePatterns = Sequencer::NUM_PATTERNS;   // always 32 (the 16/32 toggle is gone)
     firstPatternCol = juce::jlimit(0, juce::jmax(0, visiblePatterns - patShown()), firstPatternCol);
     refreshCountButtons();
 }
@@ -5879,34 +5942,28 @@ void DrumSequencerEditor::setupComponents()
         content.repaint();
     };
 
-    // Channel-count (8 / 16) + pattern-count (16 / 32) TOGGLE BUTTONS in the top bar; the active one highlights.
-    // They sit in two labelled boxes ("Channels" / "Patterns", drawn in paintContent) and show just the numbers.
-    for (auto* b : { &btnCh8, &btnCh16, &btnPat16, &btnPat32 }) {
-        content.addAndMakeVisible(*b); b->setLookAndFeel(&tinyBtnLNF);
-        b->setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
-    }
-    for (auto* l : { &lblChannels, &lblNumPat }) {
-        content.addAndMakeVisible(*l); l->setFont(juce::Font(9.0f, juce::Font::bold));
-        l->setJustificationType(juce::Justification::centred);
-        l->setColour(juce::Label::textColourId, juce::Colour(0xff8090b0));
-    }
-    btnCh8.setTooltip ("Show 8 channels.");
-    btnCh16.setTooltip("Show 16 channels (with the editor hidden you see them all; otherwise scroll).");
-    btnPat16.setTooltip("Use 16 patterns.");
-    btnPat32.setTooltip("Use 32 patterns - the pattern row then SCROLLS; drag the thin bar just below the patterns to the right.");
-    btnCh8.onClick   = [this] { setVisibleChannels(8); };
-    btnCh16.onClick  = [this] { setVisibleChannels(16); };
-    btnPat16.onClick = [this] { setNumPatterns(16); };
-    btnPat32.onClick = [this] { setNumPatterns(32); };
+    // All 16 channels + 32 patterns are ALWAYS active (the old count toggles are gone). This button
+    // (placed next to HIDE SOUND EDITOR/KEYS) switches the VIEW between 8 rows (default) and all 16.
+    content.addAndMakeVisible(btn16View);
+    btn16View.setLookAndFeel(&tinyBtnLNF);
+    btn16View.setClickingTogglesState(false);
+    btn16View.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
+    btn16View.setTooltip("Show all 16 channel rows at once (the window grows taller; with the sound editor open you "
+                         "still scroll 8 at a time). All 16 channels are ALWAYS active - this only changes how many "
+                         "rows you SEE. Scroll the rest with the bright bar left of the channel numbers or the mouse "
+                         "wheel over the channel strips.");
+    btn16View.onClick = [this] { setVisibleChannels(visibleChannels == 16 ? 8 : 16); };
 
-    // Vertical scrollbar for the channel area (shown only when there are more channels than fit).
+    // Vertical scrollbar for the channel area - BRIGHT so new users notice there are more channels.
     content.addAndMakeVisible(channelBar);
-    channelBar.setColour(juce::ScrollBar::thumbColourId, juce::Colour(0xff5a5a80));
+    channelBar.setColour(juce::ScrollBar::thumbColourId, juce::Colour(0xffe8bf4d));
+    channelBar.setColour(juce::ScrollBar::trackColourId, juce::Colour(0xff26263c));
     channelBar.setAutoHide(false);
     channelBar.addListener(this);
-    // Horizontal scrollbar for the pattern row (shown only with >16 patterns).
+    // Horizontal scrollbar for the pattern row - BRIGHT so the extra patterns are discoverable.
     content.addAndMakeVisible(patternBar);
-    patternBar.setColour(juce::ScrollBar::thumbColourId, juce::Colour(0xff5a5a80));
+    patternBar.setColour(juce::ScrollBar::thumbColourId, juce::Colour(0xff35c0ff));
+    patternBar.setColour(juce::ScrollBar::trackColourId, juce::Colour(0xff26263c));
     patternBar.setAutoHide(false);
     patternBar.addListener(this);
 
@@ -6039,22 +6096,14 @@ void DrumSequencerEditor::setupComponents()
     // POLY toggle: held keys stack like a piano; off = mono (a new key cuts the previous one).
     keysPanel.polySwitch.setTooltip("POLY keys: hold several keys and they all sound (chords by hand, up to 16 "
         "notes with tails). OFF = MONO: pressing a new key cuts the one before it - the classic lead/bass feel, "
-        "best for slides and basslines. Keyboard only; the sequencer's per-channel Poly button is separate. "
-        "While you play, lit keys show what each slot voices: yellow = slot 1, pink = slot 2, orange = both.");
+        "best for slides and basslines. Being in MONO mode doesn't prevent using Chord and Scale modes - one key "
+        "still plays the full chord/voicing; Mono only means a NEW key cuts the previous note. Keyboard only; the "
+        "sequencer's per-channel Poly button is separate. While you play, lit keys show what each slot voices: "
+        "yellow = slot 1, pink = slot 2, orange = both.");
     keysPanel.polySwitch.onClick = [this] {
         if (ignoreKnobCallbacks) return;
         proc.sequencer.channel(selectedChannel).keysPolyMode = keysPanel.polySwitch.getToggleState();
-        keysPanel.polyMode = keysPanel.polySwitch.getToggleState();   // routes the panel's note-offs
-    };
-    // TRANSPOSE LOCK: per-SOUND - disables both slots' Freq faders so nothing shifts the pitch reference.
-    keysPanel.lockSwitch.setTooltip("Lock transpose (saved with the SOUND): disables the Freq knobs on both sound "
-        "slots so nothing can sneakily transpose this sound's pitch reference - keys, step/draw pitch and MIDI "
-        "export stay anchored where the sound was designed. Keyboard sounds from the factory bank ship locked. "
-        "Turn OFF here to free the Freq knobs again.");
-    keysPanel.lockSwitch.onClick = [this] {
-        if (ignoreKnobCallbacks) return;
-        proc.sequencer.channel(selectedChannel).freqLocked = keysPanel.lockSwitch.getToggleState();
-        refreshDetailPanel();   // re-locks / unlocks the Freq faders + their tooltips
+        keysPanel.polyMode = keysPanel.polySwitch.getToggleState();   // routes the panel's note-offs (per-sound now)
     };
     keysPanel.btnSlot2.setLookAndFeel(&dropBtnLNF);   // dropdown look (triangle) - it's a popup button now
     keysPanel.btnTakes.setLookAndFeel(&dropBtnLNF);   // proper dropdown look (like the sound bank)
@@ -6215,6 +6264,45 @@ void DrumSequencerEditor::setupComponents()
         int ls = step; auto& c = groupStepChannel(ch, ls);
         if (ls >= 0 && ls < DrumChannel::MAX_STEPS) c.stepMerge[ls] = on;
     };
+    // PIANO-ROLL snap grid: type any value 1-64 (0 = off). Reuses the non-blocking AlertWindow
+    // pattern (askLoopCount) - a modal message box would hang the standalone.
+    // GHOST LINES: the actual pitches slot 'slot' sounds for a drawn note (chord/scale voicing +
+    // slot-2 transpose), from the REAL channel data - same source as the keyboard highlight.
+    stepGrid.getSlotVoicing = [this](int ch, int slot, int semi, int* out) -> int {
+        const auto& c  = proc.sequencer.patterns[proc.sequencer.currentPattern].channels[ch];
+        const auto& sl = c.slots[juce::jlimit(0, DrumChannel::NUM_SLOTS - 1, slot)];
+        const bool pitched = sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal
+                          || sl.engine == DrumChannel::SrcPhys;
+        if (! pitched || sl.weight <= 0.001f) return 0;
+        const int down = (slot == 1) ? c.keysSlot2Down : 0;   // positive = semitones DOWN (baked into slot 2's Freq)
+        const int base = semi - down;
+        int n = 0;
+        if (sl.scaleOn)
+        {
+            const int nv = juce::jlimit(1, 8, sl.scaleUnison);
+            for (int k = 0; k < nv && n < 8; ++k)
+                out[n++] = base + DrumChannel::scaleNoteOffset(sl.scaleType, sl.scaleKey, 60 + base, k);
+        }
+        else if (sl.chordMode > 0)
+        {
+            const int nv = juce::jlimit(1, 8, sl.chordUnison);
+            for (int k = 0; k < nv && n < 8; ++k)
+                out[n++] = base + DrumChannel::chordNoteOffset(sl.chordMode, k);
+        }
+        else out[n++] = base;   // plain slot: one line (differs from the drawn bar only when transposed)
+        return n;
+    };
+    stepGrid.onGridDivEdit = [this] {
+        auto* aw = new juce::AlertWindow("Piano-roll grid", "Snap to 1/N of the bar (1-64, or 0 for off):",
+                                         juce::MessageBoxIconType::NoIcon);
+        aw->addTextEditor("n", juce::String(stepGrid.gridDiv()));
+        aw->addButton("OK",     1, juce::KeyPress(juce::KeyPress::returnKey));
+        aw->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+        aw->enterModalState(true, juce::ModalCallbackFunction::create(
+            [this, aw](int r) {
+                if (r == 1) stepGrid.setGridDiv(aw->getTextEditorContents("n").getIntValue());
+            }), true);
+    };
     stepGrid.onDrawNotesChanged = [this](int ch, const DrumChannel::DrawNote* notes, int count) {
         // PIANO ROLL: the grid pushes its whole mirror list (CONCAT columns in a merged group) -
         // split it back into per-bar note lists (a note belongs to the bar its start column is in).
@@ -6227,7 +6315,7 @@ void DrumSequencerEditor::setupComponents()
         {
             const auto& nt = notes[i];
             const int b = juce::jlimit(0, bars - 1, (int) nt.start / RES);
-            sq.patterns[head + b].channels[ch].addDrawNote((int) nt.start - b * RES, nt.len, nt.semi, nt.vel);
+            sq.patterns[head + b].channels[ch].addDrawNote((int) nt.start - b * RES, nt.len, nt.semi, nt.vel, nt.slot);
         }
     };
     stepGrid.onDrawVelPan = [this](int ch, float vel, float pan) {           // whole-channel Pan (+ default vel)
@@ -7727,7 +7815,7 @@ void DrumSequencerEditor::keysLoadTake(int idx)
         {
             const int b = juce::jlimit(0, end - head, (int) nt.start / DrumChannel::DRAW_RES);
             sq.patterns[head + b].channels[t.channel].addDrawNote((int) nt.start - b * DrumChannel::DRAW_RES,
-                                                                  nt.len, nt.semi, nt.vel);
+                                                                  nt.len, nt.semi, nt.vel, nt.slot);
         }
         selectChannel(t.channel);
         strips[t.channel].comboSteps.setSelectedId(StepGridComponent::DRAW_ITEM_ID, juce::dontSendNotification);
@@ -7773,7 +7861,7 @@ juce::int64 DrumSequencerEditor::takeDataHash(const DrumSequencerProcessor::Keys
     auto mix = [&](juce::int64 v) { h = h * 33 ^ v; };
     mix(t.channel); mix(t.isDraw ? 1 : 0);
     if (t.isDraw) { mix(t.drawPat); for (const auto& nt : t.drawNotes)
-                    { mix(nt.start); mix(nt.len); mix((int) nt.semi + 128); mix((int) nt.vel); } }
+                    { mix(nt.start); mix(nt.len); mix((int) nt.semi + 128); mix((int) nt.vel); mix((int) nt.slot); } }
     else for (auto& e : t.evts) { mix(e.pattern); mix(e.step); mix((int) e.semis + 128); mix(e.flags); }
     return h;
 }
@@ -7852,7 +7940,6 @@ void DrumSequencerEditor::refreshKeysPanel()
     keysPanel.maxVelKnob.setValue(kch.keysMaxVel, juce::dontSendNotification);
     keysPanel.polySwitch.setToggleState(kch.keysPolyMode, juce::dontSendNotification);
     keysPanel.polyMode = kch.keysPolyMode;
-    keysPanel.lockSwitch.setToggleState(kch.freqLocked, juce::dontSendNotification);
     ignoreKnobCallbacks = prevIgnore;
     // HUMANIZE enabled only with 2 audible slots; STRUM only when a slot is in Chord or Scale mode.
     auto slotAudible = [&](int s){ return kch.slots[s].engine >= 0 && kch.slots[s].weight > 0.001f; };
@@ -8359,7 +8446,24 @@ void DrumSequencerEditor::refreshDetailPanel()
     auto& ch = proc.sequencer.channel(selectedChannel);
 
     // TRANSPOSE LOCK (per-sound): tell both slot editors before their values/tooltips refresh below.
-    slotEd[0].freqLock = ch.freqLocked; slotEd[1].freqLock = ch.freqLocked;
+    slotEd[0].freqDisabled = ch.drawMode; slotEd[1].freqDisabled = ch.drawMode;   // Piano Roll = Freq locked to C3
+    // PIANO ROLL pins the pitch 0-point to C3: force every pitched slot's base Freq to C3 (idempotent -
+    // Freq is disabled in this mode so it never drifts; the ~0.01 Hz guard avoids re-marking as modified).
+    if (ch.drawMode)
+    {
+        constexpr float kC3 = 261.6255653f;
+        for (int s = 0; s < DrumChannel::NUM_SLOTS; ++s)
+        {
+            auto& sl = ch.slots[s];
+            // slot 2 keeps its Slot-2 pitch baked (positive keysSlot2Down = semitones DOWN, like keyDown)
+            const float want = (s == 1 && ch.keysSlot2Down != 0)
+                                 ? kC3 * std::pow(2.0f, -(float) ch.keysSlot2Down / 12.0f) : kC3;
+            if (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal)
+            { if (std::abs(sl.oscFreq - want) > 0.01f) { sl.oscFreq = want; ch.markDspDirty(); } }
+            else if (sl.engine == DrumChannel::SrcPhys)
+            { if (std::abs(sl.physFreq - want) > 0.01f) { sl.physFreq = want; ch.markDspDirty(); } }
+        }
+    }
 
     lblSelected.setText("Editing: Pattern " + juce::String(currentPattern() + 1)
                         + " / Channel " + juce::String(selectedChannel + 1),
@@ -9125,16 +9229,15 @@ void DrumSequencerEditor::paintContent(juce::Graphics& g)
 
 void DrumSequencerEditor::setVisibleChannels(int n)
 {
-    n = (n <= 8) ? 8 : 16;   // only 8 or 16 now
+    n = (n <= 8) ? 8 : 16;   // VIEW rows preference; all 16 channels stay active + scrollable either way
     visibleChannels      = n;
     contentHeightPx      = contentHeightFor(n, detailShown);
     proc.visibleChannels = n;
-    firstChannelRow      = juce::jlimit(0, juce::jmax(0, n - viewRows()), firstChannelRow);
+    firstChannelRow      = juce::jlimit(0, juce::jmax(0, Sequencer::NUM_CHANNELS - viewRows()), firstChannelRow);
     stepGrid.visibleRows = viewRows();
     stepGrid.firstRow    = firstChannelRow;
-    channelBar.setRangeLimits(0.0, (double) n, juce::dontSendNotification);
+    channelBar.setRangeLimits(0.0, (double) Sequencer::NUM_CHANNELS, juce::dontSendNotification);
     channelBar.setCurrentRange((double) firstChannelRow, (double) viewRows(), juce::dontSendNotification);
-    if (selectedChannel >= n) selectChannel(n - 1);   // keep the selection within range
     refreshCountButtons();
     setResizeLimits(DESIGN_W / 2, contentHeightPx / 2, DESIGN_W * 2, contentHeightPx * 2);
     const double s = juce::jmax(0.1, (double) getWidth() / (double) DESIGN_W);  // keep the current width-scale
@@ -9145,7 +9248,7 @@ void DrumSequencerEditor::setVisibleChannels(int n)
 
 void DrumSequencerEditor::setNumPatterns(int n)
 {
-    n = (n <= 16) ? 16 : 32;   // only 16 or 32 now
+    n = Sequencer::NUM_PATTERNS;   // always 32 now (kept for the ctor call path)
     visiblePatterns  = n;
     proc.visiblePatterns = n;
     firstPatternCol  = juce::jlimit(0, juce::jmax(0, n - patShown()), firstPatternCol);
@@ -9159,14 +9262,37 @@ void DrumSequencerEditor::setNumPatterns(int n)
 
 void DrumSequencerEditor::refreshCountButtons()
 {
-    auto hl = [](juce::TextButton& b, bool on, juce::Colour onCol) {
-        b.setColour(juce::TextButton::buttonColourId, on ? onCol : juce::Colour(0xff20203a));
-        b.setColour(juce::TextButton::textColourOffId, on ? juce::Colours::black : juce::Colours::lightgrey);
-        b.repaint();
-    };
-    const juce::Colour yellow(0xffe8bf4d), blue(0xff35c0ff);
-    hl(btnCh8,  visibleChannels == 8,  yellow);  hl(btnCh16, visibleChannels == 16, yellow);   // channels = yellow
-    hl(btnPat16, visiblePatterns == 16, blue);   hl(btnPat32, visiblePatterns == 32, blue);    // patterns = blue
+    // Just the 16-CHANNELS-VIEW toggle's face now (counts are fixed at 16 ch / 32 patterns).
+    const bool on = visibleChannels == 16;
+    btn16View.setButtonText(on ? "8 CHANNELS VIEW" : "16 CHANNELS VIEW");
+    btn16View.setColour(juce::TextButton::buttonColourId, on ? juce::Colour(0xffe8bf4d) : juce::Colour(0xff20203a));
+    btn16View.setColour(juce::TextButton::textColourOffId, on ? juce::Colours::black : juce::Colours::lightgrey);
+    btn16View.repaint();
+}
+
+// Mouse WHEEL over the channel strips scrolls the channel window; over the pattern row it walks
+// the pattern window sideways (same clamps as the scrollbars; the bars stay the visual truth).
+void ContentComponent::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& w)
+{
+    owner.contentWheel(e.getEventRelativeTo(this).getPosition(), w.deltaY != 0.0f ? w.deltaY : -w.deltaX);
+}
+
+void DrumSequencerEditor::contentWheel(juce::Point<int> pos, float deltaY)
+{
+    if (deltaY == 0.0f) return;
+    const int dir = deltaY < 0.0f ? 1 : -1;
+    const int vr  = viewRows();
+    if (pos.x < STRIP_W && pos.y >= GRID_TOP && pos.y < GRID_TOP + vr * ROW_H)   // channel strips
+    {
+        const int fr = juce::jlimit(0, juce::jmax(0, Sequencer::NUM_CHANNELS - vr), firstChannelRow + dir);
+        if (fr != firstChannelRow) channelBar.setCurrentRange((double) fr, (double) vr, juce::sendNotificationSync);
+        return;
+    }
+    if (pos.y >= PAT_Y && pos.y < PAT_Y + 40)                                    // pattern row
+    {
+        const int fc = juce::jlimit(0, juce::jmax(0, visiblePatterns - patShown()), firstPatternCol + dir);
+        if (fc != firstPatternCol) patternBar.setCurrentRange((double) fc, (double) patShown(), juce::sendNotificationSync);
+    }
 }
 
 void DrumSequencerEditor::scrollBarMoved(juce::ScrollBar* sb, double newRangeStart)
@@ -9181,7 +9307,7 @@ void DrumSequencerEditor::scrollBarMoved(juce::ScrollBar* sb, double newRangeSta
         return;
     }
     if (sb != &channelBar) return;
-    const int fr = juce::jlimit(0, juce::jmax(0, visibleChannels - viewRows()), (int) (newRangeStart + 0.5));
+    const int fr = juce::jlimit(0, juce::jmax(0, Sequencer::NUM_CHANNELS - viewRows()), (int) (newRangeStart + 0.5));
     if (fr == firstChannelRow) return;
     firstChannelRow   = fr;
     stepGrid.firstRow = fr;
@@ -9241,17 +9367,14 @@ void DrumSequencerEditor::layoutContent()
         const bool patScroll = visiblePatterns > shown;
         patternBar.setVisible(patScroll);
         if (patScroll) {
-            patternBar.setBounds(px0, PAT_Y + PAT_H, shown * step - pg, 5);   // thin bar just below the patterns
+            patternBar.setBounds(px0, PAT_Y + PAT_H, shown * step - pg, 7);   // bright bar just below the patterns
             patternBar.setRangeLimits(0.0, (double) visiblePatterns, juce::dontSendNotification);
             patternBar.setCurrentRange((double) firstPatternCol, (double) shown, juce::dontSendNotification);
         }
     }
     patModeBtn.setBounds(664, PAT_Y + 8, 160, 26);   // nudged left; wide enough to show "Chain P2(4)>P3(2)"
     // Channel-count (8/16) + pattern-count (16/32) toggles, right next to the loop dropdown (Follow moved to the top bar).
-    lblChannels.setJustificationType(juce::Justification::centredRight);
-    lblNumPat.setJustificationType(juce::Justification::centredRight);
-    lblChannels.setBounds(858, PAT_Y + 8, 20, 24);   btnCh8.setBounds (880, PAT_Y + 10, 25, 21); btnCh16.setBounds(905, PAT_Y + 10, 25, 21);
-    lblNumPat.setBounds  (930, PAT_Y + 8, 22, 24);   btnPat16.setBounds(954, PAT_Y + 10, 25, 21); btnPat32.setBounds(979, PAT_Y + 10, 25, 21);
+
     sliderSwing.setBounds(1004, PAT_Y + 3, 88, 20);   // FADER on top (the tiny knob was unusable)...
     lblSwing.setBounds   (1004, PAT_Y + 24, 88, 12);  // ...live caption under it, e.g. Swing 66%
     // Step edit-mode radio buttons at the right end of the pattern row.
@@ -9272,8 +9395,8 @@ void DrumSequencerEditor::layoutContent()
     // the far left, so the strips shift right by `sbPad` to make room for it.
     juce::ignoreUnused(W);
     const int vr     = viewRows();
-    firstChannelRow  = juce::jlimit(0, juce::jmax(0, visibleChannels - vr), firstChannelRow);  // keep valid as the view grows/shrinks
-    const bool canScroll = visibleChannels > vr;
+    firstChannelRow  = juce::jlimit(0, juce::jmax(0, Sequencer::NUM_CHANNELS - vr), firstChannelRow);  // keep valid as the view grows/shrinks
+    const bool canScroll = Sequencer::NUM_CHANNELS > vr;
     const int sbPad  = canScroll ? 16 : 0;
     for (int i = 0; i < Sequencer::NUM_CHANNELS; ++i)
     {
@@ -9298,7 +9421,7 @@ void DrumSequencerEditor::layoutContent()
     channelBar.setVisible(canScroll);
     if (canScroll) {
         channelBar.setBounds(2, GRID_TOP, 12, vr * ROW_H);
-        channelBar.setRangeLimits(0.0, (double) visibleChannels, juce::dontSendNotification);
+        channelBar.setRangeLimits(0.0, (double) Sequencer::NUM_CHANNELS, juce::dontSendNotification);
         channelBar.setCurrentRange((double) firstChannelRow, (double) vr, juce::dontSendNotification);
     }
 
@@ -9345,6 +9468,7 @@ void DrumSequencerEditor::layoutContent()
     // text (no "..." truncation).
     btnToggleDetail.setBounds(DESIGN_W - 200, detailY - 2, 190, 18);   // collapse/expand (always visible)
     btnKeysView.setBounds(DESIGN_W - 200 - 116, detailY - 2, 110, 18); // KEYS <-> SOUND EDITOR (radio)
+    btn16View.setBounds(DESIGN_W - 200 - 116 - 146, detailY - 2, 140, 18);   // 8 <-> 16 channel-row VIEW
     btnKeysView.setVisible(detailShown);
     lblSelected.setVisible(detailShown); btnSaveMix.setVisible(detailShown);
     lblSelected.setBounds(12, detailY - 2, 200, 18);

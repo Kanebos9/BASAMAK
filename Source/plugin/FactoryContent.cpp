@@ -13,6 +13,7 @@ namespace Factory
 // untouched, so applying a mix swaps the sound without disturbing the groove.
 static void clearSound(DC& c)
 {
+    c.keysPolyMode = true;   // POLY by default (per-sound); a builder may set it off
     for (int i = 0; i < DC::NUM_SOURCES; ++i) { c.srcOn[i] = false; c.srcWeight[i] = 0.0f; }
     for (auto& s : c.slots) s = DC::Slot();   // empty all slots (engine = -1)
     c.legacyFmEnvFollow = false;              // per-sound flag - must not leak between builders
@@ -43,7 +44,6 @@ static void clearSound(DC& c)
     c.allowOverlap = false;
     c.keysSlot2Down = 0;   // slot-2 pitch is TIED TO THE SOUND now: each sound sets its own (default 0),
                            // so picking a new sound refreshes it instead of leaking the previous value.
-    c.freqLocked = false;  // transpose lock is per-sound too (applyMix turns it ON for the Keys bank)
     c.markDspDirty();
 }
 
@@ -1185,7 +1185,6 @@ void applyMix(DC& ch, int index)
     kMixes[index].build(ch);
     // Keyboard-friendly sounds ship with the TRANSPOSE LOCK on (Freq faders disabled), so nothing can
     // sneakily shift their pitch reference. Category-based: the whole Keys bank. (clearSound reset it.)
-    ch.freqLocked = (std::strcmp(kMixes[index].cat, "Keys") == 0);
     finishSound(ch);
 }
 
@@ -1207,7 +1206,6 @@ static void buildChP(Sequencer& s, int pat, int i, Builder build, int n, std::in
     build(c);
     // Same finishing as applyMix: slots become the sound HERE (works for old-style AND
     // slot-authored builders - presets may reference ANY factory sound now), Keys bank locks.
-    for (auto& m : kMixes) if (m.build == build) { c.freqLocked = (std::strcmp(m.cat, "Keys") == 0); break; }
     finishSound(c);
     c.mixName = nameForBuilder(build); c.mixModified = false;
     setSteps(c, n, on);
@@ -1312,7 +1310,7 @@ static void resetAll(Sequencer& s)
             ch.duckBy = -1; ch.duckAmt = 0.5f;   // sidechain duck is routing-like -> preset-level too
             ch.keysSlot2Down = 0;   // KEYS slot-2 transpose (channel-wide) is preset-level too
             ch.humanizeAmt = 0.0f; ch.strumAmt = 0.0f; ch.keysMinVel = 0.0f; ch.keysMaxVel = 1.0f;   // HUMANIZE / STRUM / vel range reset
-            ch.keysPolyMode = false;   // keys mono on preset load (freqLocked is per-sound, clearSound handles it)
+            ch.keysPolyMode = true;    // keys POLY by default
             ch.mixName = {}; ch.mixModified = false;
             setSteps(ch, 8, {});
         }

@@ -29,6 +29,12 @@ public:
     std::function<void(int ch, const DrumChannel::DrawNote*, int count)> onDrawNotesChanged;
     std::function<void(int ch, float vel, float pan)> onDrawVelPan;   // whole-channel Pan (+ default Vel) in piano-roll mode
     std::function<void(int ch)> onDrawModeMaybeChanged;               // ch's roll-vs-step may have changed (fade buttons)
+    std::function<void()> onGridDivEdit;   // clicking the snap-grid header: type a value (1-64, 0 = off)
+    // GHOST LINES: asks the editor which pitches slot 'slot' ACTUALLY sounds for a drawn note at
+    // 'semi' (chord/scale voicing + slot-2 transpose). Fills out[] (max 8), returns the count (0 = slot silent).
+    std::function<int(int ch, int slot, int semi, int* out)> getSlotVoicing;
+    int  gridDiv() const;
+    void setGridDiv(int n);
     static constexpr int DRAW_ITEM_ID = 100;   // the "Piano Roll" item id in the step-count dropdown
     static constexpr int GRP_MAX = 8;          // merged-group view: bars shown side by side (cap)
     // Influence: copy one source step's vel/pitch/prob/roll onto every step in the channel.
@@ -102,6 +108,7 @@ private:
     int    drawRange = 36;                             // overlay visible +/- range (36 / 24 / 12 / 6 semitones)
     int    drawReadSemi = -128;                        // live read-out semitone (-128 = none) shown top-right
     int    drawGridDiv = 16;                            // overlay SNAP grid: divisions of the bar (0 = free)
+    int    prTargetSlot = 0;                            // DRAW TARGET: 0 = both slots (orange), 1 = slot 1 (yellow), 2 = slot 2 (pink)
     // Overlay pointer gestures: 0 = none, 1 = MOVE a note, 2 = RESIZE its right edge, 3 = CREATE new,
     // 4 = SCROLL the pitch view (drag the left note-name column when the range is < +-36).
     int    prMode = 0, prIdx = -1, prGrabDCol = 0, prGrabDSemi = 0;
@@ -516,8 +523,8 @@ public:
     juce::TextButton btnSlot2 { "0 st" };                 // slot-2 transpose (3-column popup, -24..+24)
     juce::TextButton btnTakes { "Takes (0)" };
     juce::Slider     humanKnob, strumKnob, minVelKnob, maxVelKnob;   // HUMANIZE / STRUM / min+max keyboard velocity
-    ToggleSwitch     polySwitch, lockSwitch;              // keys POLY (chords stack) + per-sound TRANSPOSE LOCK
-    juce::Label      lblRecMode, lblSlot2, lblHuman, lblStrum, lblMinVel, lblMaxVel, lblPoly, lblLock;
+    ToggleSwitch     polySwitch;                          // keys POLY (chords stack like a piano)
+    juce::Label      lblRecMode, lblSlot2, lblHuman, lblStrum, lblMinVel, lblMaxVel, lblPoly;
     bool             polyMode = false;                    // mirror of the channel's keysPolyMode (routes note-offs)
     int countdown = 0;                                    // count-in ticks left (drawn as a big 3-2-1)
 
@@ -571,7 +578,7 @@ public:
     void hookFreqReadouts();
     // TRANSPOSE LOCK (per-sound): disables every pitched Freq fader (osc freqFader + generic "nHz"
     // knobs) + swaps their tooltip to say where to unlock. Set by the editor before pushValues.
-    bool freqLock = false;
+    bool freqDisabled = false;   // true when this channel is in PIANO ROLL: Freq is locked to C3
     void applyFreqLock();
     WaveMorphDisplay morphView;                     // Analog/FM only: Wave A->B morph (replaces 2 knobs)
     WavetableDisplay waveView;                       // SrcWave only: the current wavetable waveform
@@ -1255,6 +1262,7 @@ public:
     ContentComponent(DrumSequencerEditor& o) : owner(o) {}
     void paint(juce::Graphics& g) override;
     void paintOverChildren(juce::Graphics& g) override;   // selected-strip outline (above the strip meters)
+    void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override;   // wheel over strips/patterns scrolls them
     void resized() override;
     DrumSequencerEditor& owner;
 };
@@ -1279,6 +1287,7 @@ public:
     // Called by the ContentComponent
     void layoutContent();
     void paintContent(juce::Graphics&);
+    void contentWheel(juce::Point<int> pos, float deltaY);   // wheel over the channel strips / pattern row scrolls them
     void paintStripOutline(juce::Graphics&);   // selected strip's red outline, ABOVE children (the meters)
 
     // Fixed design WIDTH; the design HEIGHT grows with the number of visible channel rows
@@ -1410,9 +1419,9 @@ private:
     juce::TextButton patModeBtn;   // opens the Loop/Stop/Go-to menu; shows a summary
     juce::TextButton btnFollow { "Follow" };   // global toggle: view follows the playing pattern (proc.followPlayback)
     juce::TextButton btnClearPat { "Clear" };  // wipe the current pattern's steps/values back to default
-    juce::TextButton btnCh8 { "8" }, btnCh16 { "16" };     // channel-count toggle (pattern row, by the loop dropdown; "Ch")
-    juce::TextButton btnPat16 { "16" }, btnPat32 { "32" }; // pattern-count toggle (pattern row, by the loop dropdown; "Pat")
-    juce::Label      lblChannels { {}, "Ch" }, lblNumPat { {}, "Pat" };   // compact captions (moved to the pattern row)
+    // All 16 channels + 32 patterns are ALWAYS active now (the old 8/16 + 16/32 count toggles are gone).
+    // This button (next to HIDE SOUND EDITOR/KEYS) switches the VIEW between 8 rows (default) and all 16.
+    juce::TextButton btn16View { "16 CHANNELS VIEW" };
     juce::TextButton btnTooltips { "Tooltips" };  // top bar: global hover-tooltips ON/OFF (default ON)
     bool             tooltipsOn = true;
     void refreshCountButtons();

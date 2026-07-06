@@ -86,6 +86,7 @@ public:
                           bool  isDraw = false;   // PIANO-ROLL note: use drawPitch + per-note drawVel + channel drawPan
                           float drawPitch = 0.0f;
                           float drawVel = 1.0f;      // per-note velocity (0..1)
+                          int   drawSlot = 0;        // per-note slot tag (0 = both, 1 = slot 1, 2 = slot 2)
                           bool  drawOverlap = false; };   // note starts while another sounds (chord) -> don't cut it
 
     // [start, end) of step `s` (bar fraction 0..1) with this pattern's swing applied. The

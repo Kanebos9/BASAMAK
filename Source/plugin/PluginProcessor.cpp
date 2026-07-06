@@ -1195,24 +1195,25 @@ juce::File DrumSequencerProcessor::exportMidiFile(int channel)
         // de-duped). Sample/Noise slots have NO Freq base, so they don't add per-slot notes; but a
         // channel with NO pitched slot (pure Sample/Noise) still exports its step/draw PITCH contour
         // on the channel's own note (`midiNote` + pitch) - NO fixed C3 anchor.
-        struct PSlot { int base; bool scaleOn; int scaleType, scaleKey, scaleUni, chordMode, chordUni; };
+        struct PSlot { int slotIdx; int base; bool scaleOn; int scaleType, scaleKey, scaleUni, chordMode, chordUni; };
         juce::Array<PSlot> pslots;
         if (! chn.midiOut)
-            for (const auto& sl : chn.slots)
+            for (int si = 0; si < DrumChannel::NUM_SLOTS; ++si)
             {
+                const auto& sl = chn.slots[si];
                 if (sl.weight <= 0.001f) continue;
                 double hz = 0.0;
                 if      (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal) hz = sl.oscFreq;
                 else if (sl.engine == DrumChannel::SrcPhys)                                      hz = sl.physFreq;
                 else continue;   // Sample / Noise: unpitched -> contributes no notes
-                PSlot p;
+                PSlot p; p.slotIdx = si;
                 p.base = juce::jlimit(0, 127, (int) std::lround(69.0 + 12.0 * std::log2(juce::jmax(20.0, hz) / 440.0)));
                 p.scaleOn = sl.scaleOn; p.scaleType = sl.scaleType; p.scaleKey = sl.scaleKey;
                 p.scaleUni = sl.scaleUnison; p.chordMode = sl.chordMode; p.chordUni = sl.chordUnison;
                 pslots.add(p);
             }
         // Emit one hit: every slot's voiced notes (or the MIDI-out / drum fallback), de-duped per hit.
-        auto emitNotes = [&](int semis, juce::uint8 vel, double tOn, double tOff)
+        auto emitNotes = [&](int semis, juce::uint8 vel, double tOn, double tOff, int noteSlot = 0)
         {
             bool used[128] = {};
             auto add = [&](int note) {
@@ -1225,6 +1226,7 @@ juce::File DrumSequencerProcessor::exportMidiFile(int channel)
             if (pslots.isEmpty())   { add(juce::jlimit(0, 127, chn.midiNote + semis)); return; }   // Sample/Noise: the channel's own note + step/draw pitch (no C3 anchor)
             for (const auto& p : pslots)
             {
+                if (noteSlot != 0 && (noteSlot - 1) != p.slotIdx) continue;   // per-note slot tag: only that slot's voicing
                 const int played = p.base + semis;
                 if (p.scaleOn)          { const int nv = juce::jlimit(1, DrumChannel::UNI_MAX, p.scaleUni);
                     for (int k = 0; k < nv; ++k) add(played + DrumChannel::scaleNoteOffset(p.scaleType, p.scaleKey, played, k)); }
@@ -1245,7 +1247,7 @@ juce::File DrumSequencerProcessor::exportMidiFile(int channel)
                 const auto& nt = chn.drawNotes[ni];
                 const auto vel = (juce::uint8) juce::jlimit(1, 127, (int) nt.vel >> 1);
                 emitNotes((int) nt.semi, vel, (double) nt.start * colTicks,
-                          (double) (nt.start + nt.len) * colTicks);   // per-slot voiced (chord/scale aware)
+                          (double) (nt.start + nt.len) * colTicks, (int) nt.slot);   // per-slot voiced + slot-tag aware
             }
         }
         else
@@ -1391,7 +1393,6 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
     chState.setProperty("keysMinVel", ch.keysMinVel,   nullptr);   // KEYS: minimum played velocity floor
     chState.setProperty("keysMaxVel", ch.keysMaxVel,   nullptr);   // KEYS: maximum played velocity ceiling
     chState.setProperty("keysPoly",   ch.keysPolyMode, nullptr);   // KEYS: poly (held keys stack) vs mono (new key cuts)
-    chState.setProperty("frqLk",      ch.freqLocked,   nullptr);   // per-SOUND transpose lock (Freq faders disabled)
     chState.setProperty("chokeGrp", ch.chokeGroup,     nullptr);   // choke group (channel-wide)
     chState.setProperty("duckBy",   ch.duckBy,         nullptr);   // sidechain duck (channel-wide)
     chState.setProperty("duckAmt",  ch.duckAmt,        nullptr);
@@ -1445,7 +1446,8 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
         juce::String ns; ns.preallocateBytes((size_t) ch.drawNoteCount * 14);
         for (int i = 0; i < ch.drawNoteCount; ++i)
             ns << (int) ch.drawNotes[i].start << ':' << (int) ch.drawNotes[i].len << ':'
-               << (int) ch.drawNotes[i].semi  << ':' << (int) ch.drawNotes[i].vel << ',';
+               << (int) ch.drawNotes[i].semi  << ':' << (int) ch.drawNotes[i].vel  << ':'
+               << (int) ch.drawNotes[i].slot  << ',';
         chState.setProperty("drawNotes", ns, nullptr);
         chState.setProperty("drawVel", ch.drawVel, nullptr);
         chState.setProperty("drawPan", ch.drawPan, nullptr);
@@ -1542,8 +1544,7 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
     ch.strumAmt    = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("strum",    0.0f));   // STRUM
     ch.keysMinVel  = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("keysMinVel", 0.0f)); // KEYS min velocity
     ch.keysMaxVel  = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("keysMaxVel", 1.0f)); // KEYS max velocity
-    ch.keysPolyMode = (bool) child.getProperty("keysPoly", false);   // KEYS poly/mono
-    ch.freqLocked   = (bool) child.getProperty("frqLk",    false);   // per-sound transpose lock
+    ch.keysPolyMode = (bool) child.getProperty("keysPoly", true);    // KEYS poly/mono (poly default)
     ch.chokeGroup  = (int)  child.getProperty("chokeGrp", 0);
     ch.duckBy      = juce::jlimit(-1, Sequencer::NUM_CHANNELS - 1, (int) child.getProperty("duckBy", -1));
     ch.duckAmt     = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("duckAmt", 0.5f));
@@ -1612,7 +1613,8 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
                 {
                     auto f = juce::StringArray::fromTokens(tok, ":", "");
                     if (f.size() >= 4)
-                        ch.addDrawNote(f[0].getIntValue(), f[1].getIntValue(), f[2].getIntValue(), f[3].getIntValue());
+                        ch.addDrawNote(f[0].getIntValue(), f[1].getIntValue(), f[2].getIntValue(), f[3].getIntValue(),
+                                       f.size() >= 5 ? f[4].getIntValue() : 0);
                 }
             }
             else   // MIGRATION: old mono column lane ("drawSemi"/"drawVelC") -> same-semi runs become notes
@@ -1740,7 +1742,8 @@ juce::ValueTree DrumSequencerProcessor::captureStateTree()
                 tt.setProperty("drawPat", t.drawPat, nullptr);
                 juce::String ns; ns.preallocateBytes(t.drawNotes.size() * 14);
                 for (const auto& nt : t.drawNotes)
-                    ns << (int) nt.start << ':' << (int) nt.len << ':' << (int) nt.semi << ':' << (int) nt.vel << ',';
+                    ns << (int) nt.start << ':' << (int) nt.len << ':' << (int) nt.semi << ':' << (int) nt.vel
+                       << ':' << (int) nt.slot << ',';
                 tt.setProperty("notes", ns, nullptr);   // piano-roll take = the note list
             }
             else
@@ -1834,7 +1837,7 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
     sequencer.playPattern = sequencer.currentPattern;   // start playback from the restored pattern
     followPlayback = (bool) state.getProperty("followPlay", false);
     visibleChannels = (int) state.getProperty("visChans", 8);
-    visiblePatterns = juce::jlimit(16, Sequencer::NUM_PATTERNS, (int) state.getProperty("visPats", 16));
+    visiblePatterns = Sequencer::NUM_PATTERNS;   // always 32 (old files' 16 is ignored)
     auditionOnEdit.store((bool) state.getProperty("audEdit", true));   // default ON (matches a fresh instance)
     keysSlot2Down.store(juce::jlimit(-24, 24, (int) state.getProperty("keys2Down", 0)));
     keysTakes.clear();
@@ -1860,7 +1863,8 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
                             t.drawNotes.push_back({ (int16_t) juce::jlimit(0, DrumChannel::DRAW_RES * 8 - 1, f[0].getIntValue()),
                                                     (int16_t) juce::jlimit(1, DrumChannel::DRAW_RES * 8, f[1].getIntValue()),
                                                     (int8_t)  juce::jlimit(-36, 36, f[2].getIntValue()),
-                                                    (uint8_t) juce::jlimit(0, 255, f[3].getIntValue()) });
+                                                    (uint8_t) juce::jlimit(0, 255, f[3].getIntValue()),
+                                                    (uint8_t) juce::jlimit(0, 2, f.size() >= 5 ? f[4].getIntValue() : 0) });
                     }
                 }
                 else   // MIGRATION: old lane take -> same-semi runs become notes

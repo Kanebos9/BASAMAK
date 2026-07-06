@@ -130,7 +130,10 @@ public:
     static constexpr int  DRAW_RES = 384;      // columns/bar (divisible by every step count -> clean quantise)
     static constexpr int8_t DRAW_GAP = -128;   // legacy "no note" marker (old-project migration only)
     static constexpr int  DRAW_MAX_NOTES = 256;
-    struct DrawNote { int16_t start = 0, len = 1; int8_t semi = 0; uint8_t vel = 255; };
+    // slot = which sound slot(s) play this note: 0 = both, 1 = slot 1 only, 2 = slot 2 only. Lets a
+    // channel draw two independent lines (e.g. a bass on slot 1, a lead on slot 2). Colours: both =
+    // orange, slot 1 = yellow, slot 2 = pink (matches the keyboard highlight).
+    struct DrawNote { int16_t start = 0, len = 1; int8_t semi = 0; uint8_t vel = 255; uint8_t slot = 0; };
     bool     drawMode = false;
     DrawNote drawNotes[DRAW_MAX_NOTES];
     int      drawNoteCount = 0;
@@ -138,7 +141,7 @@ public:
     void clearDrawNotes() { drawNoteCount = 0; }
     // Append (bounded); returns the index or -1 when full. Audio + message thread both use this;
     // count is written LAST so a concurrent reader never sees an uninitialised note.
-    int addDrawNote(int start, int len, int semi, int vel)
+    int addDrawNote(int start, int len, int semi, int vel, int slot = 0)
     {
         if (drawNoteCount >= DRAW_MAX_NOTES) return -1;
         const int i = drawNoteCount;
@@ -147,7 +150,8 @@ public:
         drawNotes[i] = { (int16_t) juce::jlimit(0, DRAW_RES - 1, start),
                          (int16_t) juce::jlimit(1, DRAW_RES * 8, len),
                          (int8_t)  juce::jlimit(-36, 36, semi),
-                         (uint8_t) juce::jlimit(0, 255, vel) };
+                         (uint8_t) juce::jlimit(0, 255, vel),
+                         (uint8_t) juce::jlimit(0, 2, slot) };
         drawNoteCount = i + 1;
         return i;
     }
@@ -599,12 +603,11 @@ public:
     float keysMaxVel  = 1.0f;   // 0..1
     //   keysPolyMode = keyboard POLY: held keys stack like a piano (up to POLY notes); off = MONO,
     //     a new key cuts the previous one (classic lead/slide feel). Per pattern/channel, keys only.
-    bool  keysPolyMode = false;
+    bool  keysPolyMode = true;    // POLY by default (per-sound; saved in mix files)
     //-- TRANSPOSE LOCK (PER-SOUND, rides with Sound Bank mixes like the engines do): when true the
     //   Freq knobs/faders of BOTH slots are UI-disabled, so nothing can sneakily transpose the sound's
     //   pitch reference (keys / steps / MIDI export stay anchored). UI-only lock - the engine's keys
     //   C3 re-base still applies (it IS the consistency mechanism). Factory Keys-bank sounds ship ON.
-    bool  freqLocked = false;
 
     //-- Polyphony: when true, a new trigger does not cut the previous sound
     //   (voices overlap and ring out); when false the channel is monophonic.
@@ -645,8 +648,10 @@ public:
     // gateSamples > 0 = cut this hit after that many samples (soft 3 ms fade - the per-step Length).
     // glideSamples > 0 = SLIDE: the pitch starts at pitchSemis and glides to glideToSemis over that time.
     // Returns the voice index it used (keyDown patches key data onto it; other callers ignore it).
+    // slotMask = which slots this hit sounds (bit 0 = slot 1, bit 1 = slot 2); 0 or 3 = both (default).
+    // Piano-roll notes carry a per-note slot tag so slot 1 + slot 2 can play different lines.
     int  trigger(float velocityGain = 1.0f, float pitchSemis = 0.0f, float pan = 0.0f, long gateSamples = 0,
-                 float glideToSemis = 0.0f, long glideSamples = 0, bool forceOverlap = false);
+                 float glideToSemis = 0.0f, long glideSamples = 0, bool forceOverlap = false, int slotMask = 0);
     // KEYS (on-screen keyboard / MIDI in): starts one voice playing the pressed MIDI note on every
     // ELIGIBLE slot (each slot re-tuned from its own base Freq). slot2Down = extra transpose
     // (semitones, +down/-up) applied to slot 2 only. poly=false (MONO, default) fades whatever is

@@ -1029,8 +1029,10 @@ int DrumChannel::scaleNoteOffset(int scaleType, int key, int playedMidi, int voi
 int DrumChannel::chordNoteOffset(int chordMode, int k) { return chordSemis(chordMode, k); }
 
 int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long gateSamples,
-                         float glideToSemis, long glideSamples, bool forceOverlap)
+                         float glideToSemis, long glideSamples, bool forceOverlap, int slotMask)
 {
+    // slotMask 0 (or all-bits) = every slot sounds; a piano-roll note may restrict to slot 1 or 2.
+    const int mask = (slotMask == 0) ? ~0 : slotMask;
     // If this is the channel the editor is analysing, start a fresh spectrum
     // capture aligned to this hit's attack so repeats look identical.
     if (analysisTap != nullptr) analysisTap->arm();
@@ -1092,7 +1094,8 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         sv.gateDec = gateSamples > 0
             ? juce::jmax(0.01f, (float) gateSamples / (float) sr - sl.atk - sl.hold) : 0.0f;
         sv.lfoPhase[0] = sv.lfoPhase[1] = sv.lfoPhase[2] = 0.0;  // per-hit LFO restart (wobbles lock to the groove)
-        sv.keySemis = 0.0f; sv.keyMute = false;   // plain hit: no keyboard re-tune / muting
+        sv.keySemis = 0.0f;
+        sv.keyMute = ! ((mask >> s) & 1);          // per-note slot tag: mute the slots this note doesn't play
         sv.sinePhase = 0.0;
         sv.noiseBP.reset();
         sv.pinkB[0] = sv.pinkB[1] = sv.pinkB[2] = 0.0f;

@@ -94,7 +94,7 @@ public:
     int lastSelectedChannel = 0;
     bool followPlayback = false;   // global (whole-instrument): editor view follows the playing pattern
     int  visibleChannels = 8;      // how many channel rows the editor shows (4/8/12/16); UI-only
-    int  visiblePatterns = 16;     // how many patterns the editor shows/uses (16/24/32); UI-only
+    int  visiblePatterns = 32;     // always 32 now (kept persisted for old files); UI-only
 
     // A fresh STANDALONE must open at FACTORY DEFAULTS, not restore its last session (the JUCE
     // standalone auto-persists + reloads state on launch). We skip that ONE startup restore - it
