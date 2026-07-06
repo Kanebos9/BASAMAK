@@ -6156,6 +6156,7 @@ void DrumSequencerEditor::setupComponents()
         if (ignoreKnobCallbacks) return;
         proc.sequencer.channel(selectedChannel).keysPolyMode = keysPanel.polySwitch.getToggleState();
         keysPanel.polyMode = keysPanel.polySwitch.getToggleState();   // routes the panel's note-offs (per-sound now)
+        refreshKeysPanel();   // re-evaluate mono-only controls (Glide) now that poly/mono changed
     };
     keysPanel.btnSlot2.setLookAndFeel(&dropBtnLNF);   // dropdown look (triangle) - it's a popup button now
     keysPanel.btnTakes.setLookAndFeel(&dropBtnLNF);   // proper dropdown look (like the sound bank)
