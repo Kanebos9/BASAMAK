@@ -1264,8 +1264,25 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
 // semitones (sub-oscillator style). Ineligible slots (Sample/Noise/legacy) stay silent.
 int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly)
 {
-    if (! poly)                                        // MONO: a new key cuts the old (bit-identical to the old keyboard)
+    // MONO LEGATO GLIDE (portamento): if a key is still HELD when this new one is pressed and Glide > 0,
+    // the new note SLIDES from the held note's pitch to the new pitch. Poly never glides. Glide 0 = the
+    // old instant behaviour (glideFrom/glideSamp both 0 -> the trigger() call below is bit-identical).
+    long  glideSamp = 0; float glideFrom = 0.0f;
+    if (! poly)
+    {
+        if (keysGlide > 0.0001f)
+        {
+            int prevNote = -1;
+            for (auto& vv : voices)
+                if (vv.active() && vv.isKey && vv.keyOff < 0 && vv.keyNote >= 0) { prevNote = vv.keyNote; break; }
+            if (prevNote >= 0 && prevNote != midiNote)
+            {
+                glideFrom = (float) (prevNote - midiNote);                              // start this many semitones off target
+                glideSamp = (long) (juce::jmax(0.005f, keysGlide * 0.4f) * (float) sr); // up to 400 ms
+            }
+        }
         fadeOutVoices(0.015f);                         // 15 ms handover (3 ms crackled on slides)
+    }
     // TOUCHING the keyboard RE-BASES every eligible slot's Freq to C3 (261.63 Hz; slot 2 keeps
     // its transpose baked in). This keeps the SEQUENCER consistent with what you hear: recorded
     // step pitches are relative to C3, and playback re-pitches from the slot Freq - so Freq must
@@ -1285,7 +1302,7 @@ int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly)
             default: break;
         }
     }
-    const int vi = trigger(velocity, 0.0f, 0.0f, 0, 0.0f, 0, /*forceOverlap*/ true);
+    const int vi = trigger(velocity, glideFrom, 0.0f, 0, /*glideTo*/ 0.0f, glideSamp, /*forceOverlap*/ true);
     Voice& v = voices[vi];
     v.isKey = true; v.keyOff = -1; v.keyNote = midiNote;   // tag: keyUp(note) releases only this note's voices
     const double targetHz = 440.0 * std::pow(2.0, (double)(midiNote - 69) / 12.0);

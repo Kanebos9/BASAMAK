@@ -601,6 +601,10 @@ public:
     //     Per pattern/channel, keys only. Defaults 0/1 = raw velocity.
     float keysMinVel  = 0.0f;   // 0..1
     float keysMaxVel  = 1.0f;   // 0..1
+    //   keysGlide = MONO LEGATO portamento: when > 0 and you press a new key while still HOLDING the
+    //     previous one, the new note SLIDES from the old pitch to the new over keysGlide*0.4 s. Live keys
+    //     only (mono); 0 = off = instant (bit-identical). Poly never glides. Per pattern/channel, keys only.
+    float keysGlide   = 0.0f;   // 0..1  (glide time = keysGlide * 400 ms)
     //   keysPolyMode = keyboard POLY: held keys stack like a piano (up to POLY notes); off = MONO,
     //     a new key cuts the previous one (classic lead/slide feel). Per pattern/channel, keys only.
     bool  keysPolyMode = true;    // POLY by default (per-sound; saved in mix files)

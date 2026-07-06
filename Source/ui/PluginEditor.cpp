@@ -4016,7 +4016,7 @@ KeysPanel::KeysPanel()
         s.setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
         s.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
     };
-    knob(humanKnob); knob(strumKnob); knob(minVelKnob); knob(maxVelKnob);
+    knob(humanKnob); knob(strumKnob); knob(minVelKnob); knob(maxVelKnob); knob(glideKnob);
     maxVelKnob.setValue(1.0);   // default full
     addAndMakeVisible(btnRec);
     btnRec.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
@@ -4030,7 +4030,7 @@ KeysPanel::KeysPanel()
     };
     lab(lblRecMode, "Record mode"); lab(lblSlot2, "Slot 2 pitch");
     lab(lblHuman, "Humanize"); lab(lblStrum, "Strum"); lab(lblMinVel, "Min vel"); lab(lblMaxVel, "Max vel");
-    lab(lblPoly, "Poly");
+    lab(lblPoly, "Poly"); lab(lblGlide, "Glide");
     addAndMakeVisible(polySwitch);
 }
 
@@ -4060,12 +4060,13 @@ void KeysPanel::resized()
         l.setBounds(cell.removeFromTop(14));
         s.setBounds(cell.reduced(3, 0));
     };
-    auto knobArea = strip.removeFromLeft(4 * 62);
+    auto knobArea = strip.removeFromLeft(5 * 62);
     knobArea.setBottom(knobArea.getBottom() + 28);          // taller cell: big dial (~50 px) + the % read-out under it
     placeKnob(humanKnob,  lblHuman,  knobArea.removeFromLeft(62));
     placeKnob(strumKnob,  lblStrum,  knobArea.removeFromLeft(62));
     placeKnob(minVelKnob, lblMinVel, knobArea.removeFromLeft(62));
-    placeKnob(maxVelKnob, lblMaxVel, knobArea);
+    placeKnob(maxVelKnob, lblMaxVel, knobArea.removeFromLeft(62));
+    placeKnob(glideKnob,  lblGlide,  knobArea);
     strip.removeFromLeft(12);
     // POLY + TRANSPOSE-LOCK toggles (the hint text used to live here): label above, switch below.
     auto placeTog = [&strip](ToggleSwitch& sw, juce::Label& l, int w) {
@@ -4885,7 +4886,7 @@ juce::int64 DrumSequencerEditor::stateHash() const
             auto& ch = P.channels[c];
             h = mix(h, channelSoundHash(ch));
             h = mix(h, ch.numSteps);
-            h = mix(h, f(ch.humanizeAmt)); h = mix(h, f(ch.strumAmt)); h = mix(h, f(ch.keysMinVel)); h = mix(h, f(ch.keysMaxVel));   // HUMANIZE / STRUM / min+max-vel (undoable)
+            h = mix(h, f(ch.humanizeAmt)); h = mix(h, f(ch.strumAmt)); h = mix(h, f(ch.keysMinVel)); h = mix(h, f(ch.keysMaxVel)); h = mix(h, f(ch.keysGlide));   // HUMANIZE / STRUM / min+max-vel / GLIDE (undoable)
             h = mix(h, ch.keysPolyMode ? 1 : 0);   // KEYS poly/mono toggle (undoable)
             h = mix(h, ch.duckBy + 2); h = mix(h, f(ch.duckAmt));   // sidechain duck (undoable)
             juce::int64 st = 0; for (int i = 0; i < DrumChannel::MAX_STEPS; ++i) st = (st << 1) | (ch.steps[i] ? 1 : 0);
@@ -4947,7 +4948,7 @@ void DrumSequencerEditor::resetChannelToDefault(DrumChannel& c, int ch)
     c.srcOn[DrumChannel::SrcPhys] = false; c.srcWeight[DrumChannel::SrcPhys] = 0.0f;
     c.drawMode = false; c.drawVel = 1.0f; c.drawPan = 0.0f;   // fresh channel = step mode
     c.keysSlot2Down = 0;                                      // KEYS slot-2 transpose (channel-wide) resets too
-    c.humanizeAmt = 0.0f; c.strumAmt = 0.0f; c.keysMinVel = 0.0f; c.keysMaxVel = 1.0f;   // HUMANIZE / STRUM / vel range default
+    c.humanizeAmt = 0.0f; c.strumAmt = 0.0f; c.keysMinVel = 0.0f; c.keysMaxVel = 1.0f; c.keysGlide = 0.0f;   // HUMANIZE / STRUM / vel range / GLIDE default
     c.keysPolyMode = true;                                    // keys POLY by default on Init
     c.clearDrawNotes();
     c.padX = c.padY = 0.5f; c.padLayoutB = false;
@@ -6126,6 +6127,15 @@ void DrumSequencerEditor::setupComponents()
         "so the hardest press = this level. Turn down to tame a heavy hand or an aggressive controller. "
         "1 = off (full). Min/Max together map [soft..hard] -> [min..max].");
     keysPanel.maxVelKnob.setColour(juce::Slider::rotarySliderFillColourId, juce::Colour(0xff5ad17a));
+    keysPanel.glideKnob.setTooltip("GLIDE (MONO keyboard only): when up, pressing a new key while you're still "
+        "HOLDING the previous one makes the pitch SLIDE from the old note to the new (portamento, like a Minimoog). "
+        "Play detached (let go before the next key) and there's no slide. 0% = off. Longer = slower glide (up to "
+        "~0.4 s). Live playing only - it isn't baked into recordings (use the piano roll / step Slide for that).");
+    keysPanel.glideKnob.setColour(juce::Slider::rotarySliderFillColourId, juce::Colour(0xff35c0ff));   // cyan = pitch/glide
+    keysPanel.glideKnob.onValueChange = [this] {
+        if (ignoreKnobCallbacks) return;
+        proc.sequencer.channel(selectedChannel).keysGlide = (float) keysPanel.glideKnob.getValue();
+    };
     keysPanel.maxVelKnob.onValueChange = [this] {
         if (ignoreKnobCallbacks) return;
         auto& ch = proc.sequencer.channel(selectedChannel);
@@ -7968,6 +7978,9 @@ void DrumSequencerEditor::refreshKeysPanel()
     keysPanel.strumKnob.setValue(kch.strumAmt,    juce::dontSendNotification);
     keysPanel.minVelKnob.setValue(kch.keysMinVel, juce::dontSendNotification);
     keysPanel.maxVelKnob.setValue(kch.keysMaxVel, juce::dontSendNotification);
+    keysPanel.glideKnob.setValue(kch.keysGlide,   juce::dontSendNotification);
+    const bool glideOk = ! kch.keysPolyMode;   // glide is mono-only (poly never glides)
+    keysPanel.glideKnob.setEnabled(glideOk); keysPanel.glideKnob.setAlpha(glideOk ? 1.0f : 0.4f);
     keysPanel.polySwitch.setToggleState(kch.keysPolyMode, juce::dontSendNotification);
     keysPanel.polyMode = kch.keysPolyMode;
     ignoreKnobCallbacks = prevIgnore;

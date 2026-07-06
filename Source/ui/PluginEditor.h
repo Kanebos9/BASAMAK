@@ -522,9 +522,9 @@ public:
     juce::ComboBox   comboRecMode;
     juce::TextButton btnSlot2 { "0 st" };                 // slot-2 transpose (3-column popup, -24..+24)
     juce::TextButton btnTakes { "Takes (0)" };
-    juce::Slider     humanKnob, strumKnob, minVelKnob, maxVelKnob;   // HUMANIZE / STRUM / min+max keyboard velocity
+    juce::Slider     humanKnob, strumKnob, minVelKnob, maxVelKnob, glideKnob;   // HUMANIZE / STRUM / min+max vel / GLIDE
     ToggleSwitch     polySwitch;                          // keys POLY (chords stack like a piano)
-    juce::Label      lblRecMode, lblSlot2, lblHuman, lblStrum, lblMinVel, lblMaxVel, lblPoly;
+    juce::Label      lblRecMode, lblSlot2, lblHuman, lblStrum, lblMinVel, lblMaxVel, lblPoly, lblGlide;
     bool             polyMode = false;                    // mirror of the channel's keysPolyMode (routes note-offs)
     int countdown = 0;                                    // count-in ticks left (drawn as a big 3-2-1)
 
