@@ -4516,6 +4516,7 @@ DrumSequencerEditor::~DrumSequencerEditor()
     for (juce::Button* b : { (juce::Button*)&btnPlay, (juce::Button*)&btnStop, (juce::Button*)&btnUndo,
                              (juce::Button*)&btnRedo, (juce::Button*)&btnRoute, (juce::Button*)&btnSaveMix,
                              (juce::Button*)&btnToggleDetail, (juce::Button*)&btnKeysView, (juce::Button*)&btnClearPat,
+                             (juce::Button*)&btnInfluenceTop,
                              (juce::Button*)&btnTooltips,
                              (juce::Button*)&btn16View }) b->setLookAndFeel(nullptr);
     keysPanel.btnSlot2.setLookAndFeel(nullptr);   // dropBtnLNF
@@ -4523,7 +4524,6 @@ DrumSequencerEditor::~DrumSequencerEditor()
     for (auto& s : strips)
     {
         s.btnPoly.setLookAndFeel(nullptr);
-        s.btnInfluence.setLookAndFeel(nullptr);
         s.numBtn.setLookAndFeel(nullptr);
         s.comboSound.setLookAndFeel(nullptr);
         if (s.btnMute)  s.btnMute->setLookAndFeel(nullptr);
@@ -5929,6 +5929,24 @@ void DrumSequencerEditor::setupComponents()
     btnTooltips.onClick = [this] { tooltipsOn = ! tooltipsOn; applyTooltipsSetting(); };
     applyTooltipsSetting();
 
+    // INFLUENCE moved off the channel strips (they were too cramped to read the step-count dropdown)
+    // to ONE button here, purple-outlined so it reads as a different KIND of action. It arms influence
+    // for the SELECTED channel; then in a value edit mode you touch one step to copy it across the row.
+    content.addAndMakeVisible(btnInfluenceTop);
+    btnInfluenceTop.setClickingTogglesState(true);
+    btnInfluenceTop.setLookAndFeel(&purpleOutlineLNF);
+    btnInfluenceTop.setColour(juce::TextButton::buttonColourId,   juce::Colour(0xff20203a));
+    btnInfluenceTop.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xffb96bff));
+    btnInfluenceTop.setTooltip("Influence (acts on the SELECTED channel): arm this, then in a Vel/Pitch/Loop/Roll/"
+        "Pan/Nudge edit mode touch ONE step - the value being edited is copied from that step onto every step in "
+        "the channel. In Pitch mode, touching a step's SLIDE strip copies just the slide flag. It un-arms after "
+        "one use (so you can still tweak individual steps), and re-arms for a different step. The purple outline "
+        "marks it as a copy-across action, not plain per-step editing.\n\nRight-click to assign a MIDI control.");
+    btnInfluenceTop.midiLearn = &proc.midiLearn;
+    btnInfluenceTop.paramId   = "ui_influence";   // single UI control now (selected channel)
+    btnInfluenceTop.onClick = [this] {
+        stepGrid.influenceArmed[selectedChannel] = btnInfluenceTop.getToggleState();
+    };
     content.addAndMakeVisible(btnClearPat);
     btnClearPat.setLookAndFeel(&tinyBtnLNF);
     btnClearPat.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff3a2030));
@@ -6377,7 +6395,7 @@ void DrumSequencerEditor::setupComponents()
         }
     };
     stepGrid.onInfluenceDisarm = [this](int ch) {
-        strips[ch].btnInfluence.setToggleState(false, juce::dontSendNotification);
+        if (ch == selectedChannel) btnInfluenceTop.setToggleState(false, juce::dontSendNotification);
     };
 
     // Channel strips:  [#] [sound mixes ▾] [TEST] [M] [S] [OV] [steps ▾]
@@ -6438,18 +6456,6 @@ void DrumSequencerEditor::setupComponents()
         strip.btnPoly.onClick = [this, ci] {
             selectChannel(ci);
             proc.sequencer.channel(ci).allowOverlap = strips[ci].btnPoly.getToggleState();
-        };
-
-        content.addAndMakeVisible(strip.btnInfluence);
-        strip.btnInfluence.setClickingTogglesState(true);
-        strip.btnInfluence.setLookAndFeel(&tinyBtnLNF);
-        strip.btnInfluence.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xffb96bff));
-        strip.btnInfluence.setTooltip("Influence: arm, then in a Vel/Pitch/Prob/Roll mode touch ONE step - the parameter being edited is copied from that step onto every step in this channel. In Pitch mode, touching a step's SLIDE strip copies just the slide flag to every step (pitches are left alone). It un-arms after that, so you can still tweak individual steps afterwards. Re-arm to copy from a different step.\n\nRight-click to assign a MIDI control.");
-        strip.btnInfluence.midiLearn = &proc.midiLearn;
-        strip.btnInfluence.paramId   = "ui_influence_ch" + juce::String(i); // UI state (not per-pattern)
-        strip.btnInfluence.onClick = [this, ci] {
-            selectChannel(ci);
-            stepGrid.influenceArmed[ci] = strips[ci].btnInfluence.getToggleState();
         };
 
         content.addAndMakeVisible(strip.comboSteps);
@@ -8398,6 +8404,7 @@ void DrumSequencerEditor::selectChannel(int ch)
     proc.analyzeChannel.store(ch); // analyse the channel we're inspecting
     for (int i = 0; i < Sequencer::NUM_CHANNELS; ++i)
         strips[i].numBtn.setToggleState(i == ch, juce::dontSendNotification);
+    btnInfluenceTop.setToggleState(stepGrid.influenceArmed[ch], juce::dontSendNotification);
     updateKnobParamIds();
     refreshDrawModeButtons();   // grey Len/Pitch/Roll when this channel is a draw lane
     syncBoxesFromSrcOn();   // set boxEngine[] from this channel's active sources
@@ -8935,7 +8942,7 @@ void DrumSequencerEditor::timerCallback()
     {
         bool ns = ! stepGrid.influenceArmed[ic];
         stepGrid.influenceArmed[ic] = ns;
-        strips[ic].btnInfluence.setToggleState(ns, juce::dontSendNotification);
+        if (ic == selectedChannel) btnInfluenceTop.setToggleState(ns, juce::dontSendNotification);
     }
 
     stepGrid.update(proc.sequencer, proc.anySolo);      // 60 Hz: smooth playhead
@@ -9310,6 +9317,11 @@ void ContentComponent::mouseWheelMove(const juce::MouseEvent& e, const juce::Mou
 void DrumSequencerEditor::contentWheel(juce::Point<int> pos, float deltaY)
 {
     if (deltaY == 0.0f) return;
+    // Rate-limit: a wheel/trackpad can fire many events per physical notch - without this each event
+    // moved a whole row, so the list rocketed. ~70 ms min between steps = smooth, still responsive.
+    const double now = juce::Time::getMillisecondCounterHiRes();
+    if (now - lastContentWheelMs < 70.0) return;
+    lastContentWheelMs = now;
     const int dir = deltaY < 0.0f ? 1 : -1;
     const int vr  = viewRows();
     if (pos.x < STRIP_W && pos.y >= GRID_TOP && pos.y < GRID_TOP + vr * ROW_H)   // channel strips
@@ -9405,18 +9417,18 @@ void DrumSequencerEditor::layoutContent()
     patModeBtn.setBounds(664, PAT_Y + 8, 160, 26);   // nudged left; wide enough to show "Chain P2(4)>P3(2)"
     // Channel-count (8/16) + pattern-count (16/32) toggles, right next to the loop dropdown (Follow moved to the top bar).
 
-    sliderSwing.setBounds(1004, PAT_Y + 3, 88, 20);   // FADER on top (the tiny knob was unusable)...
-    lblSwing.setBounds   (1004, PAT_Y + 24, 88, 12);  // ...live caption under it, e.g. Swing 66%
-    // Step edit-mode radio buttons at the right end of the pattern row.
-    // Edit-mode group: evenly spaced (8px gaps) so it spans flush to the right edge - Clear ends ~1504 (no weird gap).
-    lblEditMode.setBounds (1096, PAT_Y + 8, 30, 24);   // "Edit:" (minimumHorizontalScale squeezes it)
-    btnModeVel.setBounds  (1130, PAT_Y + 8, 36, 24);   // (Slide has no button - it lives in Pitch mode's bottom band)
-    btnModeLen.setBounds  (1170, PAT_Y + 8, 36, 24);
-    btnModePitch.setBounds(1210, PAT_Y + 8, 42, 24);
-    btnModeProb.setBounds (1256, PAT_Y + 8, 38, 24);
-    btnModeRoll.setBounds (1298, PAT_Y + 8, 36, 24);
-    btnModePan.setBounds  (1338, PAT_Y + 8, 32, 24);
-    btnModeNudge.setBounds(1374, PAT_Y + 8, 56, 24);   // wide enough for the full word (42 showed Nud...)
+    sliderSwing.setBounds(940, PAT_Y + 3, 88, 20);    // moved left to open room for the Influence button
+    lblSwing.setBounds   (940, PAT_Y + 24, 88, 12);   // ...live caption under it, e.g. Swing 66%
+    // Step edit-mode radio buttons, then the purple Influence button, then Clear (flush right).
+    lblEditMode.setBounds (1044, PAT_Y + 8, 30, 24);   // "Edit:" (minimumHorizontalScale squeezes it)
+    btnModeVel.setBounds  (1078, PAT_Y + 8, 36, 24);   // (Slide has no button - it lives in Pitch mode's bottom band)
+    btnModeLen.setBounds  (1118, PAT_Y + 8, 36, 24);
+    btnModePitch.setBounds(1158, PAT_Y + 8, 42, 24);
+    btnModeProb.setBounds (1204, PAT_Y + 8, 38, 24);
+    btnModeRoll.setBounds (1246, PAT_Y + 8, 36, 24);
+    btnModePan.setBounds  (1286, PAT_Y + 8, 32, 24);
+    btnModeNudge.setBounds(1322, PAT_Y + 8, 56, 24);   // wide enough for the full word (42 showed Nud...)
+    btnInfluenceTop.setBounds(1384, PAT_Y + 8, 44, 24);// purple-outlined; left of Clear
     btnClearPat.setBounds (1434, PAT_Y + 8, 70, 24);   // Clear - flush near the right edge
 
     // Channel strips:  [#] [sound ▸ sub-menu] [M] [S] [Ø] [steps]
@@ -9435,7 +9447,7 @@ void DrumSequencerEditor::layoutContent()
         auto& st = strips[i];
         st.numBtn.setVisible(vis);  st.comboSound.setVisible(vis);  st.btnTest.setVisible(vis);
         st.btnMute->setVisible(vis); st.btnSolo->setVisible(vis);   st.btnPoly.setVisible(vis);
-        st.btnInfluence.setVisible(vis); st.comboSteps.setVisible(vis); stripMeter[i].setVisible(vis);
+        st.comboSteps.setVisible(vis); stripMeter[i].setVisible(vis);
         if (! vis) continue;
         int y = GRID_TOP + rrow * ROW_H;
         st.numBtn.setBounds      (sbPad + 4,   y + 8, 20, 24);
@@ -9444,8 +9456,7 @@ void DrumSequencerEditor::layoutContent()
         st.btnMute->setBounds    (sbPad + 220, y + 8, 23, 24);
         st.btnSolo->setBounds    (sbPad + 245, y + 8, 23, 24);
         st.btnPoly.setBounds     (sbPad + 270, y + 8, 26, 24);
-        st.btnInfluence.setBounds(sbPad + 299, y + 8, 22, 24);
-        st.comboSteps.setBounds  (sbPad + 325, y + 7, 81 - sbPad, 26);
+        st.comboSteps.setBounds  (sbPad + 300, y + 7, 108 - sbPad, 26);   // wider now Influence moved to the top bar (text was clipped)
         stripMeter[i].setBounds  (sbPad + 27,  y + ROW_H - 5, 382 - sbPad, 4);  // thin level bar under the row
     }
     channelBar.setVisible(canScroll);

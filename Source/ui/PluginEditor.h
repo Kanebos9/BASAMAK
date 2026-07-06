@@ -1106,6 +1106,21 @@ struct TinyButtonLNF : juce::LookAndFeel_V4
     int getTextButtonWidthToFitText(juce::TextButton&, int) override { return 0; }
 };
 
+// Tiny-button font PLUS a purple rounded outline - marks a button whose action is NOT plain
+// per-step editing (the top-bar Influence button, so users notice it behaves differently).
+struct PurpleOutlineLNF : juce::LookAndFeel_V4
+{
+    juce::Font getTextButtonFont(juce::TextButton&, int) override { return juce::Font(11.5f, juce::Font::bold); }
+    int getTextButtonWidthToFitText(juce::TextButton&, int) override { return 0; }
+    void drawButtonBackground(juce::Graphics& g, juce::Button& b, const juce::Colour& bg,
+                              bool over, bool down) override
+    {
+        juce::LookAndFeel_V4::drawButtonBackground(g, b, bg, over, down);
+        g.setColour(juce::Colour(0xffb96bff).withAlpha(b.isEnabled() ? 0.95f : 0.4f));
+        g.drawRoundedRectangle(b.getLocalBounds().toFloat().reduced(1.0f), 4.0f, 1.8f);
+    }
+};
+
 // Makes a ComboBox's popup flow into up to 3 columns (and only the 3rd scrolls)
 // instead of one tall scrolling list - used for the big sound-mix menu.
 struct WideMenuLNF : juce::LookAndFeel_V4
@@ -1288,6 +1303,7 @@ public:
     void layoutContent();
     void paintContent(juce::Graphics&);
     void contentWheel(juce::Point<int> pos, float deltaY);   // wheel over the channel strips / pattern row scrolls them
+    double lastContentWheelMs = 0.0;   // rate-limit so a fast wheel/trackpad flood doesn't rocket the scroll
     void paintStripOutline(juce::Graphics&);   // selected strip's red outline, ABOVE children (the meters)
 
     // Fixed design WIDTH; the design HEIGHT grows with the number of visible channel rows
@@ -1419,6 +1435,7 @@ private:
     juce::TextButton patModeBtn;   // opens the Loop/Stop/Go-to menu; shows a summary
     juce::TextButton btnFollow { "Follow" };   // global toggle: view follows the playing pattern (proc.followPlayback)
     juce::TextButton btnClearPat { "Clear" };  // wipe the current pattern's steps/values back to default
+    LearnableButton  btnInfluenceTop { "Infl" };  // arm step-influence for the SELECTED channel (moved off the strips)
     // All 16 channels + 32 patterns are ALWAYS active now (the old 8/16 + 16/32 count toggles are gone).
     // This button (next to HIDE SOUND EDITOR/KEYS) switches the VIEW between 8 rows (default) and all 16.
     juce::TextButton btn16View { "16 CHANNELS VIEW" };
@@ -1733,6 +1750,7 @@ private:
     KnobLNF knobLNF;                       // value read-out under each knob
     TwoToneFaderLNF blendLNF;              // pink/yellow two-tone SOUND BLEND fader
     TinyButtonLNF tinyBtnLNF;              // small font for M/S/Ø/OV strip buttons
+    PurpleOutlineLNF purpleOutlineLNF;     // purple-bordered tiny button (top-bar Influence)
     WideMenuLNF wideMenuLNF;               // 3-column popup for the sound-mix menu
     BigComboLNF bigComboLNF;               // larger font for the sample chooser
     LogoStepMeter logoMeter;              // live master-volume meter built into the logo step ramp
