@@ -873,8 +873,16 @@ void SlotEditor::applyFreqLock()
         sl.setAlpha(freqDisabled ? 0.45f : 1.0f);
         sl.setTooltip(freqDisabled ? lockMsg : openTip);
     };
+    // Reset EVERY param knob, then lock only the CURRENT nHz ones: the knob objects are REUSED
+    // across engines, so a knob disabled as "Freq" on Physical must come back to life when the same
+    // knob becomes "FM Amount" on Oscillator (stale disable = the faded/uncontrollable FM knob bug).
     for (int i = 0; i < params.size() && i < (int) knobs.size(); ++i)
-        if (params[i].suffix == "nHz") apply(*knobs[i], params[i].tooltip);
+    {
+        const bool lockThis = freqDisabled && params[i].suffix == "nHz";
+        knobs[i]->setEnabled(! lockThis);
+        knobs[i]->setAlpha(lockThis ? 0.45f : 1.0f);
+        knobs[i]->setTooltip(lockThis ? lockMsg : params[i].tooltip);
+    }
     if (freqFader != nullptr) apply(*freqFader, freqFaderTip);
 }
 
