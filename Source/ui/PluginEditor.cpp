@@ -1802,11 +1802,16 @@ void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle
             if (bar.getWidth() > 14.0f)   // resize tab on the right edge
             { g.setColour(juce::Colours::white.withAlpha(0.55f));
               g.fillRect(juce::Rectangle<float>(bar.getRight() - 4.0f, bar.getY() + 1.0f, 3.0f, bar.getHeight() - 2.0f)); }
+            if (n.glide)   // GLIDE flag: a cyan ramp sliding UP into the note's left edge (portamento)
+            { g.setColour(juce::Colour(0xff35c0ff));
+              g.drawLine(x1 - 8.0f, bar.getBottom() + 3.0f, x1, bar.getY(), 2.2f); }
         }
         else
         {
             g.setColour(col);
             g.fillRect(juce::Rectangle<float>(x1, y - bh * 0.5f, juce::jmax(2.0f, x2 - x1 - 1.0f), bh));
+            if (n.glide)   // tiny cyan tick at the note start (glide) in the compact row view
+            { g.setColour(juce::Colour(0xff35c0ff)); g.fillRect(juce::Rectangle<float>(x1 - 2.0f, y - bh, 2.0f, bh * 2.0f)); }
         }
     }
     if (overlay && prMode == 5)   // MARQUEE rubber band (shift+drag)
@@ -1861,7 +1866,7 @@ void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle
             }
         }
         g.setColour(juce::Colour(0xff9aa4c0)); g.setFont(juce::Font(12.0f, juce::Font::bold));
-        g.drawText("drag = draw/move - right edge = length - dbl-click = delete - SHIFT+drag = select",
+        g.drawText("drag=draw/move - right edge=length - dbl-click=delete - SHIFT=select - CMD/CTRL+click=glide",
                    rect.getX() + 522, rect.getY(), rect.getWidth() - 522 - 34, PR_HEAD, juce::Justification::centredLeft, false);
         const auto cl = prHdrClose(rect);
         g.setColour(juce::Colour(0xff5a2a2a)); g.fillRoundedRectangle(cl.toFloat(), 4.0f);
@@ -2003,7 +2008,9 @@ juce::String StepGridComponent::getTooltip()
                             "SHIFT+drag-select notes, then click a colour button to move them onto that slot. FAINT "
                             "lines show every pitch each slot really sounds (chord/scale voicings, slot-2 pitch) - "
                             "they follow your notes and can't be edited. Humanize/Strum from the KEYS panel apply "
-                            "here too. Pick a step count in the dropdown to QUANTISE the roll to steps.");
+                            "here too. CMD/CTRL+click a note to toggle GLIDE (a cyan ramp): it slides in from the "
+                            "previous note's pitch - turn up the KEYS-panel Glide knob for the slide time (mono). "
+                            "Pick a step count in the dropdown to QUANTISE the roll to steps.");
     return juce::String("STEP GRID. Click = toggle steps; the buttons top-right switch edit modes (Vel/Len/Pitch/"
                         "Loop/Roll/Pan). Hold a step in any value mode to MAGNIFY it for fine edits.\n\n"
                         "MERGE: Shift + CLICK a step to merge it into the previous step's note - the run plays as "
@@ -2261,6 +2268,12 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
                                 for (int j = idx; j < drawNoteCount[ch2] - 1; ++j) drawNotes[ch2][j] = drawNotes[ch2][j + 1];
                                 --drawNoteCount[ch2]; pushNotes(ch2); repaint(); }
                 return;
+            }
+            if ((e.mods.isCommandDown() || e.mods.isCtrlDown()) && idx >= 0)
+            {   // cmd/ctrl+click toggles GLIDE on this note: it slides in from the previous (legato) note's
+                // pitch (Glide knob = time). The piano-roll equivalent of a step's Slide flag.
+                drawNotes[ch2][idx].glide = drawNotes[ch2][idx].glide ? 0 : 1;
+                pushNotes(ch2); repaint(); return;
             }
             if (idx >= 0 && prSel[idx])
             {   // drag any SELECTED note = move the WHOLE selection together
@@ -4895,7 +4908,7 @@ juce::int64 DrumSequencerEditor::stateHash() const
             h = mix(h, ch.drawMode ? 1 : 0);
             if (ch.drawMode) { h = mix(h, f(ch.drawVel)); h = mix(h, f(ch.drawPan));
                 for (int i = 0; i < ch.drawNoteCount; ++i) { const auto& nt = ch.drawNotes[i];
-                    h = mix(h, nt.start); h = mix(h, nt.len); h = mix(h, (int) nt.semi + 128); h = mix(h, (int) nt.vel); h = mix(h, (int) nt.slot); } }
+                    h = mix(h, nt.start); h = mix(h, nt.len); h = mix(h, (int) nt.semi + 128); h = mix(h, (int) nt.vel); h = mix(h, (int) nt.slot); h = mix(h, (int) nt.glide); } }
         }
     }
     h = mix(h, f(s.standaloneBpm)); h = mix(h, s.timeSigNum); h = mix(h, s.timeSigDen);
@@ -6368,7 +6381,7 @@ void DrumSequencerEditor::setupComponents()
         {
             const auto& nt = notes[i];
             const int b = juce::jlimit(0, bars - 1, (int) nt.start / RES);
-            sq.patterns[head + b].channels[ch].addDrawNote((int) nt.start - b * RES, nt.len, nt.semi, nt.vel, nt.slot);
+            sq.patterns[head + b].channels[ch].addDrawNote((int) nt.start - b * RES, nt.len, nt.semi, nt.vel, nt.slot, nt.glide);
         }
     };
     stepGrid.onDrawVelPan = [this](int ch, float vel, float pan) {           // whole-channel Pan (+ default vel)
@@ -7856,7 +7869,7 @@ void DrumSequencerEditor::keysLoadTake(int idx)
         {
             const int b = juce::jlimit(0, end - head, (int) nt.start / DrumChannel::DRAW_RES);
             sq.patterns[head + b].channels[t.channel].addDrawNote((int) nt.start - b * DrumChannel::DRAW_RES,
-                                                                  nt.len, nt.semi, nt.vel, nt.slot);
+                                                                  nt.len, nt.semi, nt.vel, nt.slot, nt.glide);
         }
         selectChannel(t.channel);
         strips[t.channel].comboSteps.setSelectedId(StepGridComponent::DRAW_ITEM_ID, juce::dontSendNotification);
@@ -7902,7 +7915,7 @@ juce::int64 DrumSequencerEditor::takeDataHash(const DrumSequencerProcessor::Keys
     auto mix = [&](juce::int64 v) { h = h * 33 ^ v; };
     mix(t.channel); mix(t.isDraw ? 1 : 0);
     if (t.isDraw) { mix(t.drawPat); for (const auto& nt : t.drawNotes)
-                    { mix(nt.start); mix(nt.len); mix((int) nt.semi + 128); mix((int) nt.vel); mix((int) nt.slot); } }
+                    { mix(nt.start); mix(nt.len); mix((int) nt.semi + 128); mix((int) nt.vel); mix((int) nt.slot); mix((int) nt.glide); } }
     else for (auto& e : t.evts) { mix(e.pattern); mix(e.step); mix((int) e.semis + 128); mix(e.flags); }
     return h;
 }

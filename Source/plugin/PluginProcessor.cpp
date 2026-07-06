@@ -459,6 +459,10 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                     const int cur = kicked ? 0 : juce::jlimit(0, DrumChannel::DRAW_RES - 1,
                                                               (int) (sequencer.barPos() * DrumChannel::DRAW_RES));
                     openIdx = pch.addDrawNote(cur, 1, note - 60, (int) std::lround(kvel * 255.0f));
+                    // Legato + mono + Glide up: mark this note to SLIDE from the note already held (so a
+                    // recorded portamento performance reproduces; editable by hand in the piano roll).
+                    if (openIdx >= 0 && keysHeldCount > 0 && ! pch.keysPolyMode && pch.keysGlide > 0.0001f)
+                        pch.drawNotes[openIdx].glide = 1;
                 }
                 keysHeldOpenIdx[keysHeldCount] = openIdx;
                 keysHeldOpenPat[keysHeldCount] = openPat;
@@ -1448,7 +1452,8 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
         for (int i = 0; i < ch.drawNoteCount; ++i)
             ns << (int) ch.drawNotes[i].start << ':' << (int) ch.drawNotes[i].len << ':'
                << (int) ch.drawNotes[i].semi  << ':' << (int) ch.drawNotes[i].vel  << ':'
-               << (int) ch.drawNotes[i].slot  << ',';
+               << (int) ch.drawNotes[i].slot  << ':'
+               << (int) ch.drawNotes[i].glide << ',';
         chState.setProperty("drawNotes", ns, nullptr);
         chState.setProperty("drawVel", ch.drawVel, nullptr);
         chState.setProperty("drawPan", ch.drawPan, nullptr);
@@ -1616,7 +1621,8 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
                     auto f = juce::StringArray::fromTokens(tok, ":", "");
                     if (f.size() >= 4)
                         ch.addDrawNote(f[0].getIntValue(), f[1].getIntValue(), f[2].getIntValue(), f[3].getIntValue(),
-                                       f.size() >= 5 ? f[4].getIntValue() : 0);
+                                       f.size() >= 5 ? f[4].getIntValue() : 0,
+                                       f.size() >= 6 ? f[5].getIntValue() : 0);
                 }
             }
             else   // MIGRATION: old mono column lane ("drawSemi"/"drawVelC") -> same-semi runs become notes
@@ -1745,7 +1751,7 @@ juce::ValueTree DrumSequencerProcessor::captureStateTree()
                 juce::String ns; ns.preallocateBytes(t.drawNotes.size() * 14);
                 for (const auto& nt : t.drawNotes)
                     ns << (int) nt.start << ':' << (int) nt.len << ':' << (int) nt.semi << ':' << (int) nt.vel
-                       << ':' << (int) nt.slot << ',';
+                       << ':' << (int) nt.slot << ':' << (int) nt.glide << ',';
                 tt.setProperty("notes", ns, nullptr);   // piano-roll take = the note list
             }
             else
@@ -1866,7 +1872,8 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
                                                     (int16_t) juce::jlimit(1, DrumChannel::DRAW_RES * 8, f[1].getIntValue()),
                                                     (int8_t)  juce::jlimit(-36, 36, f[2].getIntValue()),
                                                     (uint8_t) juce::jlimit(0, 255, f[3].getIntValue()),
-                                                    (uint8_t) juce::jlimit(0, 2, f.size() >= 5 ? f[4].getIntValue() : 0) });
+                                                    (uint8_t) juce::jlimit(0, 2, f.size() >= 5 ? f[4].getIntValue() : 0),
+                                                    (uint8_t) (f.size() >= 6 && f[5].getIntValue() ? 1 : 0) });
                     }
                 }
                 else   // MIGRATION: old lane take -> same-semi runs become notes

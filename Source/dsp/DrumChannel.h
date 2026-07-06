@@ -133,7 +133,8 @@ public:
     // slot = which sound slot(s) play this note: 0 = both, 1 = slot 1 only, 2 = slot 2 only. Lets a
     // channel draw two independent lines (e.g. a bass on slot 1, a lead on slot 2). Colours: both =
     // orange, slot 1 = yellow, slot 2 = pink (matches the keyboard highlight).
-    struct DrawNote { int16_t start = 0, len = 1; int8_t semi = 0; uint8_t vel = 255; uint8_t slot = 0; };
+    struct DrawNote { int16_t start = 0, len = 1; int8_t semi = 0; uint8_t vel = 255; uint8_t slot = 0;
+                      uint8_t glide = 0; };   // glide=1: slide INTO this note from the previous (legato) note's pitch
     bool     drawMode = false;
     DrawNote drawNotes[DRAW_MAX_NOTES];
     int      drawNoteCount = 0;
@@ -141,7 +142,7 @@ public:
     void clearDrawNotes() { drawNoteCount = 0; }
     // Append (bounded); returns the index or -1 when full. Audio + message thread both use this;
     // count is written LAST so a concurrent reader never sees an uninitialised note.
-    int addDrawNote(int start, int len, int semi, int vel, int slot = 0)
+    int addDrawNote(int start, int len, int semi, int vel, int slot = 0, int glide = 0)
     {
         if (drawNoteCount >= DRAW_MAX_NOTES) return -1;
         const int i = drawNoteCount;
@@ -151,7 +152,8 @@ public:
                          (int16_t) juce::jlimit(1, DRAW_RES * 8, len),
                          (int8_t)  juce::jlimit(-36, 36, semi),
                          (uint8_t) juce::jlimit(0, 255, vel),
-                         (uint8_t) juce::jlimit(0, 2, slot) };
+                         (uint8_t) juce::jlimit(0, 2, slot),
+                         (uint8_t) (glide ? 1 : 0) };
         drawNoteCount = i + 1;
         return i;
     }

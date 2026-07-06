@@ -87,7 +87,8 @@ public:
                           float drawPitch = 0.0f;
                           float drawVel = 1.0f;      // per-note velocity (0..1)
                           int   drawSlot = 0;        // per-note slot tag (0 = both, 1 = slot 1, 2 = slot 2)
-                          bool  drawOverlap = false; };   // note starts while another sounds (chord) -> don't cut it
+                          bool  drawOverlap = false;   // note starts while another sounds (chord) -> don't cut it
+                          float drawGlideFrom = -999.0f; };   // MONO glide: slide this note FROM this pitch (semis); -999 = no glide
 
     // [start, end) of step `s` (bar fraction 0..1) with this pattern's swing applied. The
     // MIDI exporter reuses it so exported clips carry the same groove the engine plays.

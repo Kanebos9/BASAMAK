@@ -52,7 +52,14 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
         if (c.midiOut) return;   // MIDI-out channels make no internal sound (they emit notes in the processor)
         if (e.isDraw) {   // PIANO-ROLL note (chord tones overlap, melody cuts). drawSlot 0=both, 1/2=one slot.
             const int mask = e.drawSlot == 1 ? 0b01 : e.drawSlot == 2 ? 0b10 : 0b11;
-            c.trigger(e.drawVel, e.drawPitch, c.drawPan, e.gate, 0.0f, 0, e.drawOverlap, mask, /*keyGate*/ true); return; }
+            if (e.drawGlideFrom > -900.0f) {   // MONO legato glide: slide from the previous note's pitch to this one's
+                const long gs = (long) (c.keysGlide * 0.4 * sampleRate);   // same 0..400 ms as live keys
+                c.fadeOutVoices(0.015f);                                   // 15 ms handover on the outgoing voice (like keyDown)
+                c.trigger(e.drawVel, e.drawGlideFrom, c.drawPan, e.gate, /*glideTo*/ e.drawPitch, gs,
+                          /*forceOverlap*/ true, mask, /*keyGate*/ true);
+            } else
+                c.trigger(e.drawVel, e.drawPitch, c.drawPan, e.gate, 0.0f, 0, e.drawOverlap, mask, /*keyGate*/ true);
+            return; }
         // Choke groups: a hit FADES OUT (~3 ms) the ringing tails of other channels in the same
         // group (e.g. a closed hi-hat silencing an open one). A hard cut clicked whenever the
         // choking hit was quieter than the tail it cut.
@@ -385,11 +392,30 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
                 const long gate = (long) juce::jmax(64.0, segBars / span * (double) spanSamples);
                 const int off = baseOffset + (int) juce::jlimit(0.0, (double) spanSamples - 1.0,
                                                 (colPos - oldPos) / span * (double) spanSamples);
+                // PER-NOTE GLIDE (portamento): a note FLAGGED glide slides FROM its LEGATO predecessor's
+                // pitch (the most recent earlier note that overlaps or butts up to it). The Glide knob sets
+                // the time. Recording sets the flag for legato passes; the piano roll toggles it by hand
+                // (the roll equivalent of per-step Slide). No flag / no predecessor / Glide 0 = no slide.
+                float glideFrom = -999.0f;
+                if (nt.glide && c.keysGlide > 0.0001f)
+                {
+                    const int adjGap = R / 64;   // "adjacent" tolerance (~1/64 bar) so butted notes count as legato
+                    int bestStart = -1;
+                    for (int mj = 0; mj < nN; ++mj)
+                    {
+                        if (mj == ni) continue;
+                        const auto& m = c.drawNotes[mj];
+                        if (m.start < nt.start && (m.start + m.len) >= (nt.start - adjGap)
+                            && m.semi != nt.semi && m.start > bestStart)
+                        { bestStart = m.start; glideFrom = (float) m.semi; }
+                    }
+                }
                 TriggerEvent e; e.channel = ch; e.step = 0; e.offset = off; e.gate = gate;
                 e.isDraw = true; e.drawPitch = (float) nt.semi;
                 e.drawVel = (float) nt.vel / 255.0f;                  // per-note velocity
                 e.drawSlot = nt.slot;                                 // per-note slot tag
                 e.drawOverlap = overlap;
+                e.drawGlideFrom = glideFrom;
                 events.add(e);
             }
             if (firedCol >= 0) { lastTick[ch] = 100000 + firedCol; lastTickLoop[ch] = loopCount; }

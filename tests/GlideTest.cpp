@@ -3,6 +3,7 @@
 // near the new, passing through the middle (a real sweep). [2] glide OFF: the 2nd note JUMPS straight
 // to the new pitch. [3] poly never glides (jumps even with glide up).
 #include "DrumChannel.h"
+#include "Sequencer.h"
 #include <cstdio>
 #include <cmath>
 #include <vector>
@@ -71,6 +72,28 @@ int main() {
         const double eHi = W(out, 0.00, 0.05, C4);
         printf("[3] poly: C4 present immediately=%.3f -> %s\n", eHi,
                CHK(eHi > 0.05) ? "no glide in poly (OK)" : "FAIL");
+    }
+
+    {   // [4] RECORDED glide reproduces on PLAYBACK: a mono draw channel with two LEGATO notes
+        //     (C3 then C4, butted) + Glide up -> the sequencer slides note 2 from C3 to C4.
+        auto* sq = new Sequencer();
+        sq->setStandaloneBpm(120.0f);                 // 1 bar = 2 s; DRAW_RES 384 -> beat = 96 cols = 0.5 s
+        auto& ch = sq->patterns[0].channels[0];
+        setupSine(ch);
+        ch.drawMode = true; ch.keysPolyMode = false; ch.keysGlide = 1.0f;   // mono + glide
+        ch.addDrawNote(0,  96, 0,  255, 0, 0);        // C3, beat 1
+        ch.addDrawNote(96, 96, 12, 255, 0, 1);        // C4, beat 2 (butted -> legato), GLIDE flag set
+        for (auto& p : sq->patterns) for (auto& c2 : p.channels) c2.prepareToPlay(SR, bs);
+        sq->startStandalone();
+        std::vector<float> out;
+        const int blocks = (int) (1.1 * SR / bs) + 1;
+        juce::AudioBuffer<float> buf(2, bs);
+        for (int b = 0; b < blocks; ++b) { buf.clear(); sq->processBlock(buf, SR, bs, nullptr); for (int i = 0; i < bs; ++i) out.push_back(buf.getSample(0, i)); }
+        const double eLo = W(out, 0.50, 0.54, C3), eHi = W(out, 0.50, 0.54, C4);   // note 2 start -> near C3
+        const double lLo = W(out, 0.86, 0.96, C3), lHi = W(out, 0.86, 0.96, C4);   // glide done -> near C4
+        printf("[4] recorded playback: note2 start C3=%.3f>C4=%.3f | end C4=%.3f>C3=%.3f -> %s\n",
+               eLo, eHi, lHi, lLo, CHK(eLo > eHi && lHi > lLo) ? "SLIDES on playback (RECORDABLE OK)" : "FAIL");
+        delete sq;
     }
 
     printf(fails ? "\n>>> GLIDE FAILURES\n" : "\n>>> GlideTest PASS\n");
