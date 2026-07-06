@@ -52,7 +52,7 @@ static void setSteps(DC& c, int n, std::initializer_list<int> on)
     c.numSteps = n;
     for (int i = 0; i < DC::MAX_STEPS; ++i)
     { c.steps[i] = false; c.stepVel[i] = 1.0f; c.stepPitch[i] = 0.0f; c.stepRoll[i] = 1;
-      c.stepRollDecay[i] = 0.0f; c.stepNoteLen[i] = 0.0f; c.stepPan[i] = 0.0f; c.stepSlide[i] = false;
+      c.stepRollDecay[i] = 0.0f; c.stepNoteLen[i] = 0.0f; c.stepPan[i] = 0.0f; c.stepNudge[i] = 0.0f; c.stepSlide[i] = false;
       c.stepMerge[i] = false; c.stepCondLen[i] = 1; c.stepCondMask[i] = 0; }
     for (int s : on) if (s >= 0 && s < n) c.steps[s] = true;
     c.drawMode = false; c.drawVel = 1.0f; c.drawPan = 0.0f;   // presets/sounds are step-mode
@@ -1163,6 +1163,22 @@ juce::String mixSourceTag(int index)
     return "Synth";
 }
 
+// THE MODERN INVARIANT: a channel's slots[] ARE its sound the moment any builder finishes.
+// Old-style builders describe the sound via per-engine channel fields and leave slots empty -
+// finishSound() converts them to slots RIGHT HERE, once, so nothing downstream ever needs a
+// legacy pass again (applyPreset's old blanket buildSlotsFromLegacy wiped slot-authored sounds).
+// Message thread only (allocates KS lines).
+static void finishSound(DC& ch)
+{
+    bool authored = false;
+    for (auto& s : ch.slots) if (s.engine >= 0) { authored = true; break; }
+    if (! authored) ch.buildSlotsFromLegacy();
+    // Slot-authored KS sounds (e.g. String Keys = Physical) never hit buildSlotsFromLegacy, so
+    // allocate the lazy KS delay lines here too - else the audio thread gates them to SILENCE
+    // (ksReady == false) until a later prepareToPlay happens to allocate them.
+    ch.ensureKsBuffers();
+}
+
 void applyMix(DC& ch, int index)
 {
     if (index < 0 || index >= kNumMixes) return;
@@ -1170,15 +1186,7 @@ void applyMix(DC& ch, int index)
     // Keyboard-friendly sounds ship with the TRANSPOSE LOCK on (Freq faders disabled), so nothing can
     // sneakily shift their pitch reference. Category-based: the whole Keys bank. (clearSound reset it.)
     ch.freqLocked = (std::strcmp(kMixes[index].cat, "Keys") == 0);
-    // Synth mixes author slots[] directly; legacy mixes leave them empty and are
-    // converted from the per-engine fields. Only rebuild when nothing was authored.
-    bool authored = false;
-    for (auto& s : ch.slots) if (s.engine >= 0) { authored = true; break; }
-    if (! authored) ch.buildSlotsFromLegacy();   // (this path already allocates KS lines)
-    // AUTHORED KS sounds (e.g. String Keys / Square Lead = Physical) never hit buildSlotsFromLegacy,
-    // so allocate the lazy KS delay lines here too - else the audio thread gates them to SILENCE
-    // (ksReady == false) until a later prepareToPlay happens to allocate them. Message thread only.
-    ch.ensureKsBuffers();
+    finishSound(ch);
 }
 
 //==============================================================================
@@ -1197,6 +1205,10 @@ static void buildChP(Sequencer& s, int pat, int i, Builder build, int n, std::in
 {
     auto& c = s.patterns[pat].channels[i];
     build(c);
+    // Same finishing as applyMix: slots become the sound HERE (works for old-style AND
+    // slot-authored builders - presets may reference ANY factory sound now), Keys bank locks.
+    for (auto& m : kMixes) if (m.build == build) { c.freqLocked = (std::strcmp(m.cat, "Keys") == 0); break; }
+    finishSound(c);
     c.mixName = nameForBuilder(build); c.mixModified = false;
     setSteps(c, n, on);
 }
@@ -1293,8 +1305,11 @@ static void resetAll(Sequencer& s)
         {
             auto& ch = P.channels[c];
             clearSound(ch);
+            finishSound(ch);   // even an EMPTY channel carries its (init) sound as slots - the
+                               // modern invariant; applyPreset's blanket legacy pass is GONE
             ch.mute = false; ch.solo = false;
             ch.chokeGroup = 0; ch.outputBus = 0; ch.midiOut = false; ch.midiOutChannel = 1;   // routing/choke are preset-level -> reset them
+            ch.duckBy = -1; ch.duckAmt = 0.5f;   // sidechain duck is routing-like -> preset-level too
             ch.keysSlot2Down = 0;   // KEYS slot-2 transpose (channel-wide) is preset-level too
             ch.humanizeAmt = 0.0f; ch.strumAmt = 0.0f; ch.keysMinVel = 0.0f; ch.keysMaxVel = 1.0f;   // HUMANIZE / STRUM / vel range reset
             ch.keysPolyMode = false;   // keys mono on preset load (freqLocked is per-sound, clearSound handles it)
@@ -1307,10 +1322,9 @@ static void resetAll(Sequencer& s)
 void applyPreset(Sequencer& seq, int index)
 {
     if (index < 0 || index >= kNumPresets) return;
-    resetAll(seq);                 // fresh slate - same result every time
+    resetAll(seq);                 // fresh slate - same result every time (channels finished there)
     seq.currentPattern = 0;
-    kPresets[index].build(seq);
-    for (auto& pat : seq.patterns) for (auto& ch : pat.channels) ch.buildSlotsFromLegacy();
+    kPresets[index].build(seq);    // buildChP finishes each sound as it lands - NO legacy pass
 }
 
 } // namespace Factory

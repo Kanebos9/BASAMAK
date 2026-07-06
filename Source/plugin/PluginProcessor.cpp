@@ -961,6 +961,7 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
     if (pid == "ui_mode_roll")  { if (on) uiMidiEditMode.store(4); return; }
     if (pid == "ui_mode_pan")   { if (on) uiMidiEditMode.store(5); return; }
     if (pid == "ui_mode_len")   { if (on) uiMidiEditMode.store(6); return; }
+    if (pid == "ui_mode_nudge") { if (on) uiMidiEditMode.store(7); return; }
     if (pid.startsWith("ui_influence_ch")) { if (on) uiMidiInfluence.store(pid.substring(15).getIntValue()); return; }
 
     // Pattern-scoped controls:  "p{P}_..."
@@ -1264,9 +1265,11 @@ juce::File DrumSequencerProcessor::exportMidiFile(int channel)
             // Length = fraction of the WHOLE chain, measured from the chain start.
             const double chainGateEnd = st + (chainEn - st) * (gl > 0.001f ? (double) gl : 1.0);
 
+            // NUDGE: the exported note shifts early/late exactly like the engine plays it.
+            const double nud = (double) juce::jlimit(-1.0f, 1.0f, chn.stepNudge[step]) * 0.5 * (en - st);
             for (int j = 0; j < roll; ++j)
             {
-                const double pos = st + (en - st) * (double) j / (double) roll;   // bar fraction
+                const double pos = juce::jlimit(0.0, 0.9999995, st + nud + (en - st) * (double) j / (double) roll);   // bar fraction
                 float velScale = 1.0f;
                 if (roll > 1)
                 {
@@ -1386,6 +1389,8 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
     chState.setProperty("keysPoly",   ch.keysPolyMode, nullptr);   // KEYS: poly (held keys stack) vs mono (new key cuts)
     chState.setProperty("frqLk",      ch.freqLocked,   nullptr);   // per-SOUND transpose lock (Freq faders disabled)
     chState.setProperty("chokeGrp", ch.chokeGroup,     nullptr);   // choke group (channel-wide)
+    chState.setProperty("duckBy",   ch.duckBy,         nullptr);   // sidechain duck (channel-wide)
+    chState.setProperty("duckAmt",  ch.duckAmt,        nullptr);
     chState.setProperty("numSteps", ch.numSteps,       nullptr);
     chState.setProperty("sound",    (int)ch.soundType, nullptr);
     chState.setProperty("userSample", ch.userSampleFile.getFullPathName(), nullptr);
@@ -1400,7 +1405,7 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
     chState.setProperty("mixMod",    ch.mixModified, nullptr);
     chState.setProperty("envMode",   ch.envEditMode, nullptr);   // UI: envelope-target dropdown (per channel)
 
-    juce::String stepStr, velStr, pitchStr, rollStr, rollDecStr, noteLenStr, panStr, condLenStr, condMaskStr;
+    juce::String stepStr, velStr, pitchStr, rollStr, rollDecStr, noteLenStr, panStr, nudgeStr, condLenStr, condMaskStr;
     for (int s = 0; s < DrumChannel::MAX_STEPS; ++s)
     {
         stepStr += (ch.steps[s] ? "1" : "0");
@@ -1410,6 +1415,7 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
         rollDecStr += juce::String(ch.stepRollDecay[s], 3) + ",";
         noteLenStr += juce::String(ch.stepNoteLen[s], 3) + ",";
         panStr   += juce::String(ch.stepPan[s],   3) + ",";
+        nudgeStr += juce::String(ch.stepNudge[s], 3) + ",";
         condLenStr  += juce::String(ch.stepCondLen[s])  + ",";
         condMaskStr += juce::String(ch.stepCondMask[s]) + ",";
     }
@@ -1535,6 +1541,8 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
     ch.keysPolyMode = (bool) child.getProperty("keysPoly", false);   // KEYS poly/mono
     ch.freqLocked   = (bool) child.getProperty("frqLk",    false);   // per-sound transpose lock
     ch.chokeGroup  = (int)  child.getProperty("chokeGrp", 0);
+    ch.duckBy      = juce::jlimit(-1, Sequencer::NUM_CHANNELS - 1, (int) child.getProperty("duckBy", -1));
+    ch.duckAmt     = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("duckAmt", 0.5f));
     ch.numSteps    = (int)child.getProperty("numSteps",   8);
     ch.soundType   = (DrumSoundGenerator::Type)(int)child.getProperty("sound", 0);
     ch.useRegion   = (bool) child.getProperty("useRegion", false);
@@ -1679,6 +1687,7 @@ void DrumSequencerProcessor::copyChannel(int pat, int src, int dst)
     const bool keepMidi  = chans[dst].midiOut;
     const int  keepMidiCh= chans[dst].midiOutChannel;
     const int  keepChoke = chans[dst].chokeGroup;  // choke is channel-wide too
+    const int  keepDuckBy = chans[dst].duckBy; const float keepDuckAmt = chans[dst].duckAmt;
 
     juce::ValueTree t("ch");
     writeChannel(t, chans[src]);
@@ -1688,6 +1697,7 @@ void DrumSequencerProcessor::copyChannel(int pat, int src, int dst)
     chans[dst].midiOut    = keepMidi;
     chans[dst].midiOutChannel = keepMidiCh;
     chans[dst].chokeGroup = keepChoke;
+    chans[dst].duckBy = keepDuckBy; chans[dst].duckAmt = keepDuckAmt;
 
     // Takes are channel-specific: copying a channel carries its takes to the destination (the user's
     // way to "copy takes between channels"). Replace the destination's existing takes for this channel.

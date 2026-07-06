@@ -117,7 +117,7 @@ public:
     static const int VALID_STEP_COUNTS[];
     static constexpr int NUM_VALID_STEP_COUNTS = 20;
 
-    DrumChannel() { for (int i = 0; i < MAX_STEPS; ++i) { stepVel[i] = 1.0f; stepPitch[i] = 0.0f; stepRoll[i] = 1; stepRollDecay[i] = 0.0f; stepNoteLen[i] = 0.0f; stepPan[i] = 0.0f; stepSlide[i] = false; stepMerge[i] = false; stepCondLen[i] = 1; stepCondMask[i] = 0; } }
+    DrumChannel() { for (int i = 0; i < MAX_STEPS; ++i) { stepVel[i] = 1.0f; stepPitch[i] = 0.0f; stepRoll[i] = 1; stepRollDecay[i] = 0.0f; stepNoteLen[i] = 0.0f; stepPan[i] = 0.0f; stepNudge[i] = 0.0f; stepSlide[i] = false; stepMerge[i] = false; stepCondLen[i] = 1; stepCondMask[i] = 0; } }
 
     // ===== PIANO ROLL (was "draw" - internal names kept), an alternative to steps for a channel =====
     // A POLYPHONIC NOTE LIST across the whole bar at fine time resolution (v-poly rework, phase 2):
@@ -173,7 +173,8 @@ public:
     int    stepRoll[MAX_STEPS];       // 1..6 ratchet/roll sub-hits per step (default 1)
     float  stepRollDecay[MAX_STEPS];  // 0..1 roll fade: 0 = all hits equal, 1 = last hit silent
     float  stepNoteLen[MAX_STEPS];    // NOTE LENGTH: 0 = off (natural ring / 1 step for MIDI-out); 0..1 = fraction of ONE step the note lasts - the DECAY is rescaled to fill it (attack keeps its punch; long = slow fall, short = tight gate)
-    float  stepPan[MAX_STEPS];        // -1..+1 stereo pan per step (default 0 = centre; internal sounds only)
+    float  stepPan[MAX_STEPS];
+    float  stepNudge[MAX_STEPS];      // micro-timing: -1..+1 shifts the hit EARLY/LATE by up to half a step        // -1..+1 stereo pan per step (default 0 = centre; internal sounds only)
     bool   stepSlide[MAX_STEPS];      // SLIDE: this step's pitch glides across the step to land on the NEXT active step's pitch
     bool   stepMerge[MAX_STEPS];      // MERGE: this step CONTINUES the previous step's note (no retrigger; the head's gate extends through it - piano-roll style long notes; head's values apply)
     // Per-step LOOP condition (the "Prob" mode): the step fires only on certain pattern loops. stepCondLen = the
@@ -215,6 +216,13 @@ public:
     int   sliceCount  = 1;      // sample slicing: 1 = whole; N = chop the region into N equal slices,
     int   sliceCounter = 0;     // and each consecutive hit plays the next slice (transient runtime state)
     int   chokeGroup = 0;       // 0 = none; channels sharing a group cut each other's tails (e.g. hi-hats)
+    // SIDECHAIN DUCK (channel-wide, set in the Routing popup): when channel `duckBy` fires a hit,
+    // THIS channel's level dips by duckAmt and recovers over ~130 ms (classic kick-ducks-bass pump).
+    // Unlike CHOKE this never cuts the sound - it only pushes the volume down and lets it back up.
+    int   duckBy  = -1;         // -1 = off; else the TRIGGER channel index (0-based)
+    float duckAmt = 0.5f;       // dip depth 0..1 (0.5 = -6 dB-ish at the bottom of the dip)
+    float duckEnv = 0.0f, duckGainZ = 1.0f;   // audio-thread envelope state (not persisted)
+    void  duckPulse() { duckEnv = 1.0f; }     // called by the sequencer when the trigger channel fires
     float stretchAmt = 1.0f;    // time-stretch: output duration = original x this, pitch unchanged (needs SoundTouch)
 
     // Fill min/max peaks for a cached waveform display of ONE slot (message thread, lock-free try).

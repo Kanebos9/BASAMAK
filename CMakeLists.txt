@@ -72,12 +72,13 @@ juce_generate_juce_header(DrumSequencer)
 # builds are untouched. Run tests/run.sh BEFORE EVERY RELEASE - each test exits non-zero on FAIL.
 option(BASAMAK_TESTS "Build the offline DSP regression tests" OFF)
 if(BASAMAK_TESTS)
-    foreach(T PolyTest PRollTest MergeTest)
+    foreach(T PolyTest PRollTest MergeTest PresetTest DuckTest NudgeTest)
         juce_add_console_app(${T})
         juce_generate_juce_header(${T})
         target_sources(${T} PRIVATE
             Source/dsp/DrumChannel.cpp
             Source/dsp/Sequencer.cpp
+            Source/plugin/FactoryContent.cpp
             tests/${T}.cpp)
         target_include_directories(${T} PRIVATE Source/dsp Source/midi Source/ui Source/plugin)
         target_compile_definitions(${T} PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 BASAMAK_VERSION="test")

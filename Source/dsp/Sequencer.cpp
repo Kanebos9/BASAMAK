@@ -42,6 +42,13 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
     auto fireEvent = [this, sampleRate](const TriggerEvent& e)
     {
         auto& c = patterns[playPattern].channels[e.channel];   // steps fire from the PLAYING pattern
+        // SIDECHAIN DUCK: this hit pushes down every channel set to "Duck by" this channel
+        // (Routing popup). Level-only - the ducked sound recovers; nothing is cut like choke.
+        for (int o = 0; o < NUM_CHANNELS; ++o)
+        {
+            auto& d = patterns[playPattern].channels[o];
+            if (o != e.channel && d.duckBy == e.channel && d.duckAmt > 0.001f) d.duckPulse();
+        }
         if (c.midiOut) return;   // MIDI-out channels make no internal sound (they emit notes in the processor)
         if (e.isDraw) { c.trigger(e.drawVel, e.drawPitch, c.drawPan, e.gate, 0.0f, 0,
                                   e.drawOverlap); return; }   // PIANO-ROLL note (chord tones overlap, melody cuts)
@@ -385,9 +392,13 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
             stepSpan(s, n, pp.swing, st, en);
             const int roll = juce::jlimit(1, 6, c.stepRoll[s]);
 
+            // NUDGE (micro-timing): shift this step's hit early/late by up to HALF its span.
+            // Clamped inside the bar (an early-nudged step 1 fires AT the bar start; a late-nudged
+            // last step can't spill into the next bar).
+            const double nud = (double) juce::jlimit(-1.0f, 1.0f, c.stepNudge[s]) * 0.5 * (en - st);
             for (int j = 0; j < roll; ++j)
             {
-                const double pos = st + (en - st) * (double) j / (double) roll;
+                const double pos = juce::jlimit(0.0, 0.9999995, st + nud + (en - st) * (double) j / (double) roll);
                 const bool atZero = (oldPos == 0.0 && pos == 0.0);           // bar start fires inclusively
                 if (! atZero && ! (pos > oldPos && pos <= newPos)) continue;
 

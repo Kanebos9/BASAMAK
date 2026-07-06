@@ -2321,6 +2321,29 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
 
     applyEQ(renderBuf, numSamples);
 
+    // SIDECHAIN DUCK: another channel's hits push this one down (duckBy/duckAmt from the Routing
+    // popup; the sequencer pulses duckEnv on the trigger). The envelope releases over ~130 ms and
+    // the applied gain is slewed ~2 ms so the dip never clicks. The per-slot FX sends duck too
+    // (they were accumulated pre-duck in the voice loop). Unlike CHOKE this only lowers the level.
+    if (duckBy >= 0 && duckAmt > 0.001f)
+    {
+        const float rel  = std::exp(-1.0f / (0.13f  * (float) sr));
+        const float slew = 1.0f - std::exp(-1.0f / (0.002f * (float) sr));
+        auto* dl = renderBuf.getWritePointer(0);
+        auto* dr = renderBuf.getWritePointer(1);
+        float* sb[4] = { fxSendBuf.getWritePointer(0), fxSendBuf.getWritePointer(1),
+                         fxSendBuf.getWritePointer(2), fxSendBuf.getWritePointer(3) };
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const float target = 1.0f - duckAmt * duckEnv;
+            duckGainZ += (target - duckGainZ) * slew;
+            duckEnv *= rel;
+            dl[i] *= duckGainZ; dr[i] *= duckGainZ;
+            sb[0][i] *= duckGainZ; sb[1][i] *= duckGainZ; sb[2][i] *= duckGainZ; sb[3][i] *= duckGainZ;
+        }
+    }
+    else { duckEnv = 0.0f; duckGainZ = 1.0f; }
+
     // Feed the analyser if this channel is being inspected: the final mix (All), or - when a
     // slot is selected on the EQ - just THAT slot's signal (captured pre-mix above).
     if (analysisTap != nullptr)
