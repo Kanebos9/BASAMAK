@@ -5982,23 +5982,18 @@ void DrumSequencerEditor::setupComponents()
     btn16View.setLookAndFeel(&tinyBtnLNF);
     btn16View.setClickingTogglesState(false);
     btn16View.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
-    btn16View.setTooltip("Show all 16 channel rows at once (the sound editor/keys panel hides automatically to make "
-                         "room and comes back when you return to 8 rows). All 16 channels are ALWAYS active - this "
-                         "only changes how many rows you SEE. Scroll with the yellow bar left of the channel numbers "
-                         "or the mouse wheel over the channel strips.");
+    btn16View.setTooltip("Switch the channel area between 8 and 16 rows. Either way the sound editor/keys panel "
+                         "hides (16 rows don't fit with it open, and 8-rows-with-editor is just the Show Editor "
+                         "view). Press SHOW SOUND EDITOR/KEYS to bring the editor back (it then shows 8 rows). All "
+                         "16 channels are always active - this only changes how many you SEE; scroll the rest with "
+                         "the yellow bar or the mouse wheel over the strips.");
     btn16View.onClick = [this] {
-        if (visibleChannels != 16)
-        {   // 16 rows can't fit with the editor open - hide it first (and remember we did)
-            detailHiddenBy16 = detailShown;
-            if (detailShown) btnToggleDetail.onClick();
-            setVisibleChannels(16);
-        }
-        else
-        {
-            setVisibleChannels(8);
-            if (detailHiddenBy16 && ! detailShown) btnToggleDetail.onClick();   // bring the editor back
-            detailHiddenBy16 = false;
-        }
+        // The view toggle is about SEEING channel rows, so it always hides the sound editor/keys (both
+        // 8 and 16 rows show with the editor down). Bringing the editor back is the Show Editor button's
+        // job (it caps the view at 8 rows). This keeps the two buttons genuinely different (user).
+        const int target = (visibleChannels == 16) ? 8 : 16;
+        if (detailShown) btnToggleDetail.onClick();
+        setVisibleChannels(target);
     };
 
     // Vertical scrollbar for the channel area - BRIGHT so new users notice there are more channels.

@@ -1439,7 +1439,6 @@ private:
     // All 16 channels + 32 patterns are ALWAYS active now (the old 8/16 + 16/32 count toggles are gone).
     // This button (next to HIDE SOUND EDITOR/KEYS) switches the VIEW between 8 rows (default) and all 16.
     juce::TextButton btn16View { "16 CHANNELS VIEW" };
-    bool detailHiddenBy16 = false;   // 16-view auto-hid the editor -> restore it on the way back to 8
     juce::TextButton btnTooltips { "Tooltips" };  // top bar: global hover-tooltips ON/OFF (default ON)
     bool             tooltipsOn = true;
     void refreshCountButtons();
