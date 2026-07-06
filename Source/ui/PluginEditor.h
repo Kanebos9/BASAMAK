@@ -130,7 +130,7 @@ private:
     void   paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle<int> rect, bool overlay);
     juce::Rectangle<int> drawRowRect(int ch) const;                  // the normal (1x) row rect
     juce::Rectangle<int> drawOverlayRect() const;                    // the BIG piano-roll editor panel
-    static constexpr int PR_HEAD = 15, PR_KEYS = 30;                 // overlay header height + left note-name column width
+    static constexpr int PR_HEAD = 32, PR_KEYS = 30;                 // overlay header height (2x - small was unreadable) + note-name column width
     juce::Rectangle<int> prLane(juce::Rectangle<int> ov) const       // the note area inside the overlay
     { return ov.withTrimmedTop(PR_HEAD).withTrimmedLeft(PR_KEYS); }
     int    yToDrawSemi(juce::Rectangle<int> rect, int y, int range, int centre = 0) const;   // pixel Y -> semitone (view-centre aware)
@@ -1422,6 +1422,7 @@ private:
     // All 16 channels + 32 patterns are ALWAYS active now (the old 8/16 + 16/32 count toggles are gone).
     // This button (next to HIDE SOUND EDITOR/KEYS) switches the VIEW between 8 rows (default) and all 16.
     juce::TextButton btn16View { "16 CHANNELS VIEW" };
+    bool detailHiddenBy16 = false;   // 16-view auto-hid the editor -> restore it on the way back to 8
     juce::TextButton btnTooltips { "Tooltips" };  // top bar: global hover-tooltips ON/OFF (default ON)
     bool             tooltipsOn = true;
     void refreshCountButtons();

@@ -1029,7 +1029,7 @@ int DrumChannel::scaleNoteOffset(int scaleType, int key, int playedMidi, int voi
 int DrumChannel::chordNoteOffset(int chordMode, int k) { return chordSemis(chordMode, k); }
 
 int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long gateSamples,
-                         float glideToSemis, long glideSamples, bool forceOverlap, int slotMask)
+                         float glideToSemis, long glideSamples, bool forceOverlap, int slotMask, bool keyGate)
 {
     // slotMask 0 (or all-bits) = every slot sounds; a piano-roll note may restrict to slot 1 or 2.
     const int mask = (slotMask == 0) ? ~0 : slotMask;
@@ -1070,6 +1070,13 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
     v.killing = false; v.killGain = 1.0f; v.killStep = 0.0f;   // fresh hit cancels any choke fade on this voice
     v.gateLen = gateSamples;                // per-step Length gate (0 = play naturally)
     v.isKey = false; v.keyOff = -1;         // sequencer hit by default (keyDown() patches these after)
+    if (keyGate && gateSamples > 0)
+    {   // PIANO-ROLL note: behave like a key held for the note's length and RELEASED at its end -
+        // natural ring while it runs (no decay-rescale), the authored release fade after. This is
+        // what makes a recording SOUND like the take (a sustain-0 pluck used to get its whole ring
+        // compressed into the note length). keyNote -1 = keyUp(note) never matches it.
+        v.isKey = true; v.keyNote = -1; v.keyOff = gateSamples;
+    }
     // SLIDE: start at THIS step's own pitch (normal attack) and glide per-sample toward the
     // NEXT step's pitch, landing exactly when the glide time (= the step span) runs out.
     if (glideSamples > 0) { v.glideRemain = glideSamples;
@@ -1091,7 +1098,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         const Slot& sl = slots[s];
         // Per-step LENGTH: rescale THIS slot's decay so attack+hold+fall fills the note length.
         // Frozen here (per voice) - ties extend the voice's life but never reshape a running decay.
-        sv.gateDec = gateSamples > 0
+        sv.gateDec = (gateSamples > 0 && ! keyGate)   // keyGate = natural envelope, never rescaled
             ? juce::jmax(0.01f, (float) gateSamples / (float) sr - sl.atk - sl.hold) : 0.0f;
         sv.lfoPhase[0] = sv.lfoPhase[1] = sv.lfoPhase[2] = 0.0;  // per-hit LFO restart (wobbles lock to the groove)
         sv.keySemis = 0.0f;
@@ -1816,7 +1823,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             for (int u = 0; u < UNI_MAX; ++u) d = juce::jmax(d, (long) v.sv[s].startDelay + v.sv[s].uniDelay[u]);
             maxDelay = juce::jmax(maxDelay, d);
         }
-        if (! v.isKey) veEnd += maxDelay;   // key voices already run open-ended while held
+        if (! v.isKey || v.keyOff >= 0) veEnd += maxDelay;   // still-held key voices already run open-ended
         bool finished = false;
 
         for (int i = 0; i < numSamples; ++i)

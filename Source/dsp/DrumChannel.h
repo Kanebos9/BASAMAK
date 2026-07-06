@@ -650,8 +650,11 @@ public:
     // Returns the voice index it used (keyDown patches key data onto it; other callers ignore it).
     // slotMask = which slots this hit sounds (bit 0 = slot 1, bit 1 = slot 2); 0 or 3 = both (default).
     // Piano-roll notes carry a per-note slot tag so slot 1 + slot 2 can play different lines.
+    // keyGate = play the gate like a HELD KEY (natural envelope while the note runs, RELEASE at its
+    // end) instead of the per-step Length decay-rescale - piano-roll notes reproduce the performance.
     int  trigger(float velocityGain = 1.0f, float pitchSemis = 0.0f, float pan = 0.0f, long gateSamples = 0,
-                 float glideToSemis = 0.0f, long glideSamples = 0, bool forceOverlap = false, int slotMask = 0);
+                 float glideToSemis = 0.0f, long glideSamples = 0, bool forceOverlap = false, int slotMask = 0,
+                 bool keyGate = false);
     // KEYS (on-screen keyboard / MIDI in): starts one voice playing the pressed MIDI note on every
     // ELIGIBLE slot (each slot re-tuned from its own base Freq). slot2Down = extra transpose
     // (semitones, +down/-up) applied to slot 2 only. poly=false (MONO, default) fades whatever is

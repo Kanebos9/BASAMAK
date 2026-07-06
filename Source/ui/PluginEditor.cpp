@@ -1589,6 +1589,13 @@ void StepGridComponent::setDrawColVel(int ch, juce::Point<int> pos)
     repaint();
 }
 
+// Piano-roll header controls - ONE geometry for paint AND hit-testing (the header is PR_HEAD=32 tall).
+static juce::Rectangle<int> prHdrRange(const juce::Rectangle<int>& ov, int i) { return { ov.getX() + 6 + i * 50,      ov.getY() + 4, 46, 24 }; }
+static juce::Rectangle<int> prHdrGrid (const juce::Rectangle<int>& ov)        { return { ov.getX() + 6 + 4 * 50 + 10, ov.getY() + 4, 84, 24 }; }
+static juce::Rectangle<int> prHdrSlot (const juce::Rectangle<int>& ov, int i)
+{ static const int x[3] = { 308, 388, 452 }, w[3] = { 76, 60, 60 }; return { ov.getX() + x[i], ov.getY() + 4, w[i], 24 }; }
+static juce::Rectangle<int> prHdrClose(const juce::Rectangle<int>& ov)        { return { ov.getRight() - 30, ov.getY() + 4, 24, 24 }; }
+
 // Piano-roll note colours by slot target - the SAME family as the keyboard highlight:
 // slot 1 = yellow, slot 2 = pink, both = the 50/50 orange blend.
 static juce::Colour slotNoteColour(int slot)
@@ -1639,11 +1646,11 @@ void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle
             g.drawText("VEL: drag notes up/down", rect.getX() + 24, rect.getY() + 2, 220, 11, juce::Justification::topLeft, false);
         } else {           // overlay header: title + close X
             g.setColour(juce::Colour(0xff262646)); g.fillRect(rect.getX(), rect.getY(), rect.getWidth(), PR_HEAD);
-            g.setColour(juce::Colour(0xffb8b8d0)); g.setFont(juce::Font(9.5f, juce::Font::bold));
-            g.drawText("VELOCITY - drag notes up/down", rect.getX() + 6, rect.getY() + 1, 260, PR_HEAD - 2, juce::Justification::centredLeft, false);
-            juce::Rectangle<int> cl(rect.getRight() - 18, rect.getY() + 1, 15, PR_HEAD - 2);
-            g.setColour(juce::Colour(0xff5a2a2a)); g.fillRoundedRectangle(cl.toFloat(), 3.0f);
-            g.setColour(juce::Colours::white); g.setFont(juce::Font(11.0f, juce::Font::bold)); g.drawText("x", cl, juce::Justification::centred, false);
+            g.setColour(juce::Colour(0xffb8b8d0)); g.setFont(juce::Font(13.0f, juce::Font::bold));
+            g.drawText("VELOCITY - drag notes up/down", rect.getX() + 8, rect.getY(), 300, PR_HEAD, juce::Justification::centredLeft, false);
+            const auto cl = prHdrClose(rect);
+            g.setColour(juce::Colour(0xff5a2a2a)); g.fillRoundedRectangle(cl.toFloat(), 4.0f);
+            g.setColour(juce::Colours::white); g.setFont(juce::Font(15.0f, juce::Font::bold)); g.drawText("x", cl, juce::Justification::centred, false);
             g.setColour(juce::Colours::white.withAlpha(0.85f)); g.drawRect(rect, 2);
         }
         if (ch == selectedRow && ! overlay) { g.setColour(juce::Colour(0xffff3b30)); g.drawRect(rect.reduced(1), 2); }
@@ -1820,38 +1827,37 @@ void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle
         g.setColour(juce::Colour(0xff262646)); g.fillRect(rect.getX(), rect.getY(), rect.getWidth(), PR_HEAD);
         static const int ranges[4] = { 6, 12, 24, 36 };
         for (int i = 0; i < 4; ++i) {
-            juce::Rectangle<int> rr(rect.getX() + 4 + i * 38, rect.getY() + 1, 34, PR_HEAD - 2);
+            const auto rr = prHdrRange(rect, i);
             const bool on = (drawRange == ranges[i]);
-            g.setColour(on ? juce::Colour(0xff35c0ff) : juce::Colour(0xff33335a)); g.fillRoundedRectangle(rr.toFloat(), 3.0f);
-            g.setColour(on ? juce::Colours::black : juce::Colour(0xffb8b8d0)); g.setFont(juce::Font(9.5f, juce::Font::bold));
+            g.setColour(on ? juce::Colour(0xff35c0ff) : juce::Colour(0xff33335a)); g.fillRoundedRectangle(rr.toFloat(), 4.0f);
+            g.setColour(on ? juce::Colours::black : juce::Colour(0xffb8b8d0)); g.setFont(juce::Font(13.0f, juce::Font::bold));
             g.drawText(juce::String::fromUTF8("\xc2\xb1") + juce::String(ranges[i]), rr, juce::Justification::centred, false);
         }
         { // snap grid: CLICK to type any 1/N (1-64, 0 = off)
-            juce::Rectangle<int> gr(rect.getX() + 4 + 4 * 38 + 8, rect.getY() + 1, 64, PR_HEAD - 2);
-            g.setColour(juce::Colour(0xff33335a)); g.fillRoundedRectangle(gr.toFloat(), 3.0f);
-            g.setColour(juce::Colour(0xffd9c46a)); g.setFont(juce::Font(9.5f, juce::Font::bold));
+            const auto gr = prHdrGrid(rect);
+            g.setColour(juce::Colour(0xff33335a)); g.fillRoundedRectangle(gr.toFloat(), 4.0f);
+            g.setColour(juce::Colour(0xffd9c46a)); g.setFont(juce::Font(13.0f, juce::Font::bold));
             g.drawText(drawGridDiv > 0 ? "Grid 1/" + juce::String(drawGridDiv) : "Grid off", gr, juce::Justification::centred, false);
         }
-        { // DRAW TARGET swatches: which slot(s) a new note plays (orange = both, yellow = slot 1, pink = slot 2).
-          // With a selection active, clicking one RE-TAGS the selected notes.
-            static const int  sx[3] = { 236, 269, 296 }, sw2[3] = { 30, 24, 24 };
-            static const char* nm[3] = { "1+2", "S1", "S2" };
+        { // DRAW TARGET buttons: which slot(s) a new note plays (orange = both, yellow = slot 1, pink =
+          // slot 2, like the keyboard highlight). Clicking one with a live selection RE-TAGS those notes.
+            static const char* nm[3] = { "Both slots", "Slot 1", "Slot 2" };
             for (int i = 0; i < 3; ++i)
             {
-                juce::Rectangle<int> sr(rect.getX() + sx[i], rect.getY() + 1, sw2[i], PR_HEAD - 2);
+                const auto sr = prHdrSlot(rect, i);
                 const auto sc = slotNoteColour(i);
-                if (prTargetSlot == i) { g.setColour(sc); g.fillRoundedRectangle(sr.toFloat(), 3.0f); g.setColour(juce::Colours::black); }
-                else                   { g.setColour(juce::Colour(0xff33335a)); g.fillRoundedRectangle(sr.toFloat(), 3.0f); g.setColour(sc); }
-                g.setFont(juce::Font(9.0f, juce::Font::bold));
+                if (prTargetSlot == i) { g.setColour(sc); g.fillRoundedRectangle(sr.toFloat(), 4.0f); g.setColour(juce::Colours::black); }
+                else                   { g.setColour(juce::Colour(0xff33335a)); g.fillRoundedRectangle(sr.toFloat(), 4.0f); g.setColour(sc); }
+                g.setFont(juce::Font(12.5f, juce::Font::bold));
                 g.drawText(nm[i], sr, juce::Justification::centred, false);
             }
         }
-        g.setColour(juce::Colour(0xff9aa4c0)); g.setFont(juce::Font(9.5f, juce::Font::bold));
-        g.drawText("drag empty = new - drag note = move - right edge = length - dbl-click = delete - SHIFT+drag = select",
-                   rect.getX() + 328, rect.getY() + 1, rect.getWidth() - 328 - 22, PR_HEAD - 2, juce::Justification::centredLeft, false);
-        juce::Rectangle<int> cl(rect.getRight() - 18, rect.getY() + 1, 15, PR_HEAD - 2);
-        g.setColour(juce::Colour(0xff5a2a2a)); g.fillRoundedRectangle(cl.toFloat(), 3.0f);
-        g.setColour(juce::Colours::white); g.setFont(juce::Font(11.0f, juce::Font::bold));
+        g.setColour(juce::Colour(0xff9aa4c0)); g.setFont(juce::Font(12.0f, juce::Font::bold));
+        g.drawText("drag = draw/move - right edge = length - dbl-click = delete - SHIFT+drag = select",
+                   rect.getX() + 522, rect.getY(), rect.getWidth() - 522 - 34, PR_HEAD, juce::Justification::centredLeft, false);
+        const auto cl = prHdrClose(rect);
+        g.setColour(juce::Colour(0xff5a2a2a)); g.fillRoundedRectangle(cl.toFloat(), 4.0f);
+        g.setColour(juce::Colours::white); g.setFont(juce::Font(15.0f, juce::Font::bold));
         g.drawText("x", cl, juce::Justification::centred, false);
     }
     // read-out (semitones from 0): a big low-alpha WATERMARK in the top-right.
@@ -1982,11 +1988,14 @@ juce::String StepGridComponent::getTooltip()
 {
     const int dch = firstRow + juce::jmax(0, getMouseXYRelative().y) / juce::jmax(1, rowH);
     if (dch >= 0 && dch < NCH && drawMode[dch])
-        return juce::String("DRAW LANE (free piano-draw, no steps). LEFT-drag draws the pitch line (snaps to "
-                            "semitones; the centre line = the slot's Freq = pitch 0). RIGHT-drag erases (a gap = "
-                            "silence). The magnifier button (top-left) opens a tall zoom with +/-6/12/24/36 range "
-                            "and a live semitone read-out. In Vel or Pan edit mode the row sets ONE value for the "
-                            "whole channel. Pick a number in the step-count dropdown to QUANTISE the lane to steps.");
+        return juce::String("PIANO ROLL (free notes, no steps; pitch 0 = C3, always). LEFT-drag draws/moves notes, "
+                            "RIGHT-drag erases. The magnifier (top-left) opens the BIG editor. There, the colour "
+                            "buttons 'Both slots / Slot 1 / Slot 2' pick which SOUND SLOT new notes play - orange = "
+                            "both, yellow = slot 1, pink = slot 2, the same colours as the keyboard highlight. "
+                            "SHIFT+drag-select notes, then click a colour button to move them onto that slot. FAINT "
+                            "lines show every pitch each slot really sounds (chord/scale voicings, slot-2 pitch) - "
+                            "they follow your notes and can't be edited. Humanize/Strum from the KEYS panel apply "
+                            "here too. Pick a step count in the dropdown to QUANTISE the roll to steps.");
     return juce::String("STEP GRID. Click = toggle steps; the buttons top-right switch edit modes (Vel/Len/Pitch/"
                         "Loop/Roll/Pan). Hold a step in any value mode to MAGNIFY it for fine edits.\n\n"
                         "MERGE: Shift + CLICK a step to merge it into the previous step's note - the run plays as "
@@ -2188,21 +2197,20 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
         if (ov.contains(p))
         {
             const int hy = ov.getY();
-            if (juce::Rectangle<int>(ov.getRight() - 18, hy + 1, 15, 13).contains(p)) { drawMagCh = -1; drawReadSemi = -128; drawReadVel = -1; prMode = 0; repaint(); return; }  // close (both modes)
+            if (prHdrClose(ov).contains(p)) { drawMagCh = -1; drawReadSemi = -128; drawReadVel = -1; prMode = 0; repaint(); return; }  // close (both modes)
             if (editMode == ModeVel)   // VELOCITY overlay: drag a note up/down
             { if (p.y > hy + PR_HEAD) { drawDragCh = drawMagCh; setDrawColVel(drawMagCh, p); } return; }
             static const int ranges[4] = { 6, 12, 24, 36 };
             for (int i = 0; i < 4; ++i)
-                if (juce::Rectangle<int>(ov.getX() + 4 + i * 38, hy + 1, 34, 13).contains(p))
+                if (prHdrRange(ov, i).contains(p))
                 { drawRange = ranges[i];
                   drawViewCenter = juce::jlimit(-prViewClamp(), prViewClamp(), drawViewCenter);   // window stays inside +-36
                   repaint(); return; }   // range radio
-            if (juce::Rectangle<int>(ov.getX() + 4 + 4 * 38 + 8, hy + 1, 64, 13).contains(p))   // snap grid: type a value
+            if (prHdrGrid(ov).contains(p))   // snap grid: type a value
             { if (onGridDivEdit) onGridDivEdit(); return; }
-            {   // DRAW-TARGET swatches: pick which slot new notes play; a live selection gets RE-TAGGED
-                static const int sx[3] = { 236, 269, 296 }, sw2[3] = { 30, 24, 24 };
+            {   // DRAW-TARGET buttons: pick which slot new notes play; a live selection gets RE-TAGGED
                 for (int i = 0; i < 3; ++i)
-                    if (juce::Rectangle<int>(ov.getX() + sx[i], hy + 1, sw2[i], 13).contains(p))
+                    if (prHdrSlot(ov, i).contains(p))
                     {
                         prTargetSlot = i;
                         if (prSelCount > 0)
@@ -5948,11 +5956,24 @@ void DrumSequencerEditor::setupComponents()
     btn16View.setLookAndFeel(&tinyBtnLNF);
     btn16View.setClickingTogglesState(false);
     btn16View.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
-    btn16View.setTooltip("Show all 16 channel rows at once (the window grows taller; with the sound editor open you "
-                         "still scroll 8 at a time). All 16 channels are ALWAYS active - this only changes how many "
-                         "rows you SEE. Scroll the rest with the bright bar left of the channel numbers or the mouse "
-                         "wheel over the channel strips.");
-    btn16View.onClick = [this] { setVisibleChannels(visibleChannels == 16 ? 8 : 16); };
+    btn16View.setTooltip("Show all 16 channel rows at once (the sound editor/keys panel hides automatically to make "
+                         "room and comes back when you return to 8 rows). All 16 channels are ALWAYS active - this "
+                         "only changes how many rows you SEE. Scroll with the yellow bar left of the channel numbers "
+                         "or the mouse wheel over the channel strips.");
+    btn16View.onClick = [this] {
+        if (visibleChannels != 16)
+        {   // 16 rows can't fit with the editor open - hide it first (and remember we did)
+            detailHiddenBy16 = detailShown;
+            if (detailShown) btnToggleDetail.onClick();
+            setVisibleChannels(16);
+        }
+        else
+        {
+            setVisibleChannels(8);
+            if (detailHiddenBy16 && ! detailShown) btnToggleDetail.onClick();   // bring the editor back
+            detailHiddenBy16 = false;
+        }
+    };
 
     // Vertical scrollbar for the channel area - BRIGHT so new users notice there are more channels.
     content.addAndMakeVisible(channelBar);
@@ -5962,7 +5983,7 @@ void DrumSequencerEditor::setupComponents()
     channelBar.addListener(this);
     // Horizontal scrollbar for the pattern row - BRIGHT so the extra patterns are discoverable.
     content.addAndMakeVisible(patternBar);
-    patternBar.setColour(juce::ScrollBar::thumbColourId, juce::Colour(0xff35c0ff));
+    patternBar.setColour(juce::ScrollBar::thumbColourId, juce::Colour(0xffe8bf4d));
     patternBar.setColour(juce::ScrollBar::trackColourId, juce::Colour(0xff26263c));
     patternBar.setAutoHide(false);
     patternBar.addListener(this);
@@ -9111,8 +9132,9 @@ void DrumSequencerEditor::paintStripOutline(juce::Graphics& g)
     const int selRow = selectedChannel - firstChannelRow;
     if (selRow < 0 || selRow >= viewRows()) return;
     g.setColour(juce::Colour(0xffff3b30));
-    g.drawRoundedRectangle(juce::Rectangle<float>(2.0f, (float) (GRID_TOP + selRow * ROW_H) + 1.0f,
-                                                  (float) STRIP_W - 5.0f, (float) ROW_H - 1.5f), 5.0f, 2.0f);   // bottom edge BELOW the level meter
+    const float x0 = channelBar.isVisible() ? 17.0f : 2.0f;   // start AFTER the yellow scrollbar (x 2..14)
+    g.drawRoundedRectangle(juce::Rectangle<float>(x0, (float) (GRID_TOP + selRow * ROW_H) + 1.0f,
+                                                  (float) STRIP_W - 3.0f - x0, (float) ROW_H - 1.5f), 5.0f, 2.0f);   // bottom edge BELOW the level meter
 }
 
 void DrumSequencerEditor::paintContent(juce::Graphics& g)

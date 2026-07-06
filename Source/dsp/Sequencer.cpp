@@ -52,7 +52,7 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
         if (c.midiOut) return;   // MIDI-out channels make no internal sound (they emit notes in the processor)
         if (e.isDraw) {   // PIANO-ROLL note (chord tones overlap, melody cuts). drawSlot 0=both, 1/2=one slot.
             const int mask = e.drawSlot == 1 ? 0b01 : e.drawSlot == 2 ? 0b10 : 0b11;
-            c.trigger(e.drawVel, e.drawPitch, c.drawPan, e.gate, 0.0f, 0, e.drawOverlap, mask); return; }
+            c.trigger(e.drawVel, e.drawPitch, c.drawPan, e.gate, 0.0f, 0, e.drawOverlap, mask, /*keyGate*/ true); return; }
         // Choke groups: a hit FADES OUT (~3 ms) the ringing tails of other channels in the same
         // group (e.g. a closed hi-hat silencing an open one). A hard cut clicked whenever the
         // choking hit was quieter than the tail it cut.
