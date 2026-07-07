@@ -4956,6 +4956,7 @@ class SoundPickerPanel : public juce::Component,
 {
 public:
     std::function<void(int id)> onPick;
+    std::function<void()> onClosed;           // clears the opening combo's menuActive latch
     juce::Component* clickIgnore = nullptr;   // the combo that opened us (its click toggles)
 
     SoundPickerPanel()
@@ -4981,7 +4982,7 @@ public:
         toFront(false);
         ed.grabKeyboardFocus();
     }
-    void close() { setVisible(false); giveAwayKeyboardFocus(); }
+    void close() { setVisible(false); giveAwayKeyboardFocus(); if (onClosed) onClosed(); }
 
     void resized() override
     {
@@ -5009,7 +5010,7 @@ public:
     }
 
 private:
-    struct Entry { juce::String text; int id = 0; };
+    struct Entry { juce::String text; int id = 0; bool action = false; };   // action = command row (tinted)
     struct Row   { juce::String header; Entry a, b; bool isHeader = false; bool hasB = false; };
     juce::Array<Row> rows;
     juce::Array<juce::File> files;
@@ -5049,7 +5050,7 @@ private:
         auto cats  = Factory::mixCategories();
         if (q.isEmpty())
         {
-            juce::Array<Entry> init; init.add({ "Initialize new sound mix", ID_INIT_MIX });
+            juce::Array<Entry> init; init.add({ "Initialize new sound mix", ID_INIT_MIX, true });
             addSection(init);
         }
         for (auto* cat : kSoundCatOrder)
@@ -5075,8 +5076,8 @@ private:
         {
             addHeader("");
             juce::Array<Entry> acts;
-            acts.add({ "Refresh sound bank folder", ID_REFRESH_BANK });
-            acts.add({ "Show Folder", ID_SHOW_BANK });
+            acts.add({ "Refresh sound bank folder", ID_REFRESH_BANK, true });
+            acts.add({ "Show Folder", ID_SHOW_BANK, true });
             addSection(acts);
         }
         else if (rows.isEmpty()) addHeader("(no sounds match)");
@@ -5113,9 +5114,18 @@ private:
                                                        .getMainMouseSource().getScreenPosition().toInt()).x;
         auto halfCell = [&](const Entry& en, int x0, bool hov)
         {
-            if (hov) { g.setColour(juce::Colour(0xff2a2a4a)); g.fillRect(x0, 0, half, h); }
-            g.setColour(juce::Colours::white);
-            g.setFont(juce::Font(13.5f));
+            if (en.action)   // command rows (Initialize / Refresh / Show Folder) - tinted so they
+            {                // never read as sounds
+                g.setColour(juce::Colour(hov ? 0xff2e4468 : 0xff223046));
+                g.fillRoundedRectangle((float) x0 + 2.0f, 1.0f, (float) half - 6.0f, (float) h - 2.0f, 4.0f);
+                g.setColour(juce::Colour(0xff9fd1ff));
+            }
+            else
+            {
+                if (hov) { g.setColour(juce::Colour(0xff2a2a4a)); g.fillRect(x0, 0, half, h); }
+                g.setColour(juce::Colours::white);
+            }
+            g.setFont(juce::Font(13.5f, en.action ? juce::Font::bold : juce::Font::plain));
             g.drawFittedText(en.text, x0 + 14, 0, half - 18, h, juce::Justification::centredLeft, 1, 0.8f);
         };
         halfCell(r.a, 0, over && mx < half);
@@ -5494,7 +5504,9 @@ void DrumSequencerEditor::openSoundPicker(int ch)
     auto& panel = static_cast<SoundPickerPanel&>(*soundPicker);
     auto& combo = strips[ch].comboSound;
     if (panel.isVisible() && panel.clickIgnore == &combo) { panel.close(); return; }   // toggle
+    if (panel.isVisible()) panel.close();          // switching combos: release the OLD combo's latch
     panel.clickIgnore = &combo;
+    panel.onClosed = [&combo] { combo.hidePopup(); };   // free the menuActive latch for the next click
     panel.onPick = [this, ch](int id) { applySoundPickId(ch, id); selectChannel(ch); };
     const auto r = content.getLocalArea(&combo, combo.getLocalBounds());
     int y = r.getBottom() + 2;
@@ -7341,6 +7353,11 @@ void DrumSequencerEditor::setupComponents()
         strip.comboSound.setLookAndFeel(&wideMenuLNF); // 3-column popup (no tall scroll)
         strip.comboSound.onChange = [this, ci] { handleSoundMixChange(ci); selectChannel(ci); };
         strip.comboSound.onOpen   = [this, ci] { selectChannel(ci); openSoundPicker(ci); };   // the searchable dropdown
+        strip.comboSound.panelOpen = [this, ci]
+        { return soundPicker != nullptr && soundPicker->isVisible()
+                 && static_cast<SoundPickerPanel&>(*soundPicker).clickIgnore == &strips[ci].comboSound; };
+        strip.comboSound.onToggleClose = [this]
+        { if (soundPicker != nullptr) static_cast<SoundPickerPanel&>(*soundPicker).close(); };
 
         content.addAndMakeVisible(strip.btnTest);
         strip.btnTest.onClick = [this, ci] { selectChannel(ci); proc.requestTestTrigger(ci); };

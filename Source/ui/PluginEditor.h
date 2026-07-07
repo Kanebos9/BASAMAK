@@ -1716,14 +1716,19 @@ private:
     // for the display text + the id-based apply plumbing.
     struct PickerCombo : juce::ComboBox
     {
-        std::function<void()> onOpen;
-        void showPopup() override
+        // ComboBox's private menuActive latch is set before showPopup() and calls
+        // showPopupIfNotActive from BOTH mouseDown and mouseUp. Rules that make the panel behave:
+        // leave the latch SET while the panel is open (the mouseUp call must stay a no-op - clearing
+        // it in showPopup made the panel open-then-close on one click), and the panel calls
+        // hidePopup() on the combo when it CLOSES so the next click can open again.
+        std::function<void()> onOpen;          // open the picker panel
+        std::function<bool()> panelOpen;       // panel currently open for THIS combo?
+        std::function<void()> onToggleClose;   // close it (click on the combo = toggle)
+        void showPopup() override { if (onOpen) onOpen(); else juce::ComboBox::showPopup(); }
+        void mouseDown(const juce::MouseEvent& e) override
         {
-            // ComboBox sets its private menuActive latch BEFORE calling showPopup and only clears
-            // it when the real menu closes - since we never open one, hidePopup() must clear it or
-            // every click after the first is swallowed ("dropdown mostly doesnt open at all").
-            juce::ComboBox::hidePopup();
-            if (onOpen) onOpen(); else juce::ComboBox::showPopup();
+            if (panelOpen && panelOpen()) { if (onToggleClose) onToggleClose(); return; }
+            juce::ComboBox::mouseDown(e);
         }
     };
     struct ChannelStrip
