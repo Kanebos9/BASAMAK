@@ -533,7 +533,7 @@ public:
     void mouseDoubleClick(const juce::MouseEvent&) override;
     void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
     void visibilityChanged() override;        // (un)hooks the click-outside closer
-    static constexpr int UI_COLS = 6, UI_ROWS = 2, TOPH = 36;
+    static constexpr int UI_COLS = 6, UI_ROWS = 2, TOPH = 58;   // tall top bar: fader + a readable caption under it
 private:
     // Clicking ANYWHERE outside the popup closes it, like a real dropdown (global mouse listener,
     // hooked only while visible; the Arp button is exempt - its own click toggles).
@@ -556,12 +556,12 @@ private:
     void bump(int i, int d)   // nudge row i by d semitones (a REST cell lands on 0 first), extend length
     { if (i < 0) return; int v = (off[i] == DrumChannel::ARP_REST) ? 0 : (int) off[i] + d;
       off[i] = (int8_t) juce::jlimit(-24, 24, v); if (i + 2 > len) len = i + 2; if (onChange) onChange(); repaint(); }
-    juce::Rectangle<int> onRect()    const { return { 6, 6, 46, TOPH - 12 }; }
-    juce::Rectangle<int> rateRect()  const { return { 58, 6, 66, TOPH - 12 }; }
-    juce::Rectangle<int> faderRect() const { return { 130, 4, getWidth() - 130 - 136, TOPH - 8 }; }
-    juce::Rectangle<int> lenDnRect() const { return { getWidth() - 130, 6, 22, TOPH - 12 }; }
-    juce::Rectangle<int> lenValRect()const { return { getWidth() - 106, 6, 70, TOPH - 12 }; }
-    juce::Rectangle<int> lenUpRect() const { return { getWidth() - 34, 6, 22, TOPH - 12 }; }
+    juce::Rectangle<int> onRect()    const { return { 6, 8, 46, 28 }; }
+    juce::Rectangle<int> rateRect()  const { return { 58, 8, 66, 28 }; }
+    juce::Rectangle<int> faderRect() const { return { 132, 4, getWidth() - 132 - 162, TOPH - 8 }; }
+    juce::Rectangle<int> lenDnRect() const { return { getWidth() - 156, 8, 24, 28 }; }
+    juce::Rectangle<int> lenValRect()const { return { getWidth() - 130, 8, 94, 28 }; }
+    juce::Rectangle<int> lenUpRect() const { return { getWidth() - 34, 8, 26, 28 }; }
     juce::Rectangle<int> cellRect(int i) const
     { const int r = i / UI_COLS, c = i % UI_COLS;
       const int gw = getWidth(), gh = getHeight() - TOPH;

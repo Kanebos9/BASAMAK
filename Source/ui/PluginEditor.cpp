@@ -4084,38 +4084,37 @@ void ArpEditor::paint(juce::Graphics& g)
     // --- top bar: On | Rate | Notes/bar FADER | Notes(length) ---
     auto ob = onRect().toFloat();
     g.setColour(on ? juce::Colour(0xff35b56a) : juce::Colour(0xff33335a)); g.fillRoundedRectangle(ob, 4.0f);
-    g.setColour(on ? juce::Colours::black : juce::Colour(0xffb8b8d0)); g.setFont(juce::Font(12.0f, juce::Font::bold));
+    g.setColour(on ? juce::Colours::black : juce::Colour(0xffb8b8d0)); g.setFont(juce::Font(13.0f, juce::Font::bold));
     g.drawText(on ? "ON" : "OFF", onRect(), juce::Justification::centred, false);
     g.setColour(juce::Colour(0xff26264a)); g.fillRoundedRectangle(rateRect().toFloat(), 4.0f);
-    g.setColour(juce::Colour(0xffc8d0e0)); g.setFont(juce::Font(12.0f, juce::Font::bold));
+    g.setColour(juce::Colour(0xffc8d0e0)); g.setFont(juce::Font(13.0f, juce::Font::bold));
     g.drawText(juce::String("Rate ") + kArpRateName6(rate), rateRect(), juce::Justification::centred, false);
-    { // NOTES/BAR fader: 6 detents (7 8 9 10 11 13); the base grid, multiplied by Rate
+    { // NOTES/BAR fader: 6 detents (7 8 9 10 11 13) - a clean track; the caption UNDER it names the
+      // control AND shows the pick ("Notes per bar x8"), big enough to read (the tiny tick numbers went).
         auto f = faderRect();
-        g.setColour(juce::Colour(0xff9aa4c0)); g.setFont(juce::Font(10.5f, juce::Font::bold));
-        g.drawText("Notes/bar", f.removeFromLeft(64), juce::Justification::centredLeft, false);
-        auto tr = f.reduced(4, 0);
+        auto tr = f.removeFromTop(24).reduced(8, 0);
         const int track = tr.getCentreY();
-        g.setColour(juce::Colour(0xff33335a)); g.fillRoundedRectangle((float) tr.getX(), track - 2.0f, (float) tr.getWidth(), 4.0f, 2.0f);
+        g.setColour(juce::Colour(0xff33335a)); g.fillRoundedRectangle((float) tr.getX(), track - 2.5f, (float) tr.getWidth(), 5.0f, 2.5f);
         int selIdx = 0;
         for (int i = 0; i < 6; ++i)
         {
             const float x = tr.getX() + (float) i / 5.0f * (float) tr.getWidth();
             if (DrumChannel::ARP_SYNCS[i] == sync) selIdx = i;
-            g.setColour(juce::Colour(0xff53607a)); g.fillRect(juce::Rectangle<float>(x - 0.75f, track - 5.0f, 1.5f, 10.0f));
-            g.setColour(juce::Colour(0xff8090b0)); g.setFont(juce::Font(9.0f, juce::Font::bold));
-            g.drawText(juce::String((int) DrumChannel::ARP_SYNCS[i]), (int) x - 10, track + 6, 20, 10, juce::Justification::centred, false);
+            g.setColour(juce::Colour(0xff53607a)); g.fillRect(juce::Rectangle<float>(x - 1.0f, track - 6.0f, 2.0f, 12.0f));
         }
         const float hx = tr.getX() + (float) selIdx / 5.0f * (float) tr.getWidth();
         g.setColour(juce::Colour(0xffe8bf4d));
-        g.fillEllipse(hx - 6.0f, track - 6.0f, 12.0f, 12.0f);
+        g.fillEllipse(hx - 7.0f, track - 7.0f, 14.0f, 14.0f);
+        g.setColour(juce::Colour(0xffd8e0f0)); g.setFont(juce::Font(13.5f, juce::Font::bold));
+        g.drawText("Notes per bar  x" + juce::String(sync), f, juce::Justification::centred, false);
     }
     auto stepBtn = [&](juce::Rectangle<int> rr, const juce::String& t) {
         g.setColour(juce::Colour(0xff26264a)); g.fillRoundedRectangle(rr.toFloat(), 4.0f);
         g.setColour(juce::Colour(0xffc8d0e0)); g.setFont(juce::Font(13.0f, juce::Font::bold));
         g.drawText(t, rr, juce::Justification::centred, false); };
     stepBtn(lenDnRect(), "<");
-    g.setColour(juce::Colour(0xff9aa4c0)); g.setFont(juce::Font(11.5f, juce::Font::bold));
-    g.drawText("Notes " + juce::String(len), lenValRect(), juce::Justification::centred, false);   // total incl. root
+    g.setColour(juce::Colour(0xffc8d0e0)); g.setFont(juce::Font(13.0f, juce::Font::bold));
+    g.drawText("Last note " + juce::String(len), lenValRect(), juce::Justification::centred, false);   // = the note ordinal the pattern ends on
     stepBtn(lenUpRect(), ">");
 
     // --- 2 x 6 cells (notes 2..13): big "Note N" header + big value ("+5 st" / "0 st" / "REST") ---
@@ -4169,7 +4168,7 @@ void ArpEditor::mouseDrag(const juce::MouseEvent& e)
 {
     if (dragFader)
     {   // fader: snap to the nearest of the 6 detents
-        auto tr = faderRect(); tr.removeFromLeft(64); tr = tr.reduced(4, 0);
+        auto tr = faderRect().withHeight(24).reduced(8, 0);
         const float f = juce::jlimit(0.0f, 1.0f, (float) (e.getPosition().x - tr.getX()) / (float) juce::jmax(1, tr.getWidth()));
         const int idx = juce::jlimit(0, 5, (int) std::lround(f * 5.0f));
         if (DrumChannel::ARP_SYNCS[idx] != sync) { sync = DrumChannel::ARP_SYNCS[idx]; if (onChange) onChange(); repaint(); }
