@@ -1097,7 +1097,7 @@ juce::String mixSourceTag(int index)
     // Oscillator sounds are tagged by what they USE: any slot with the FM section engaged
     // (fmDepth > 0) = "Analog+FM", pure = "Analog" (user: sounds that don't touch FM shouldn't
     // say "+FM"). Two OSC slots (e.g. lead + sub) are still one engine family, NOT "Hybrid".
-    static const char* eng[] = { "Sample", "Noise", "Analog", "FM", "Physical", "Synth", "Wave", "Modal" };
+    static const char* eng[] = { "Sample", "Noise", "Analog", "FM", "Karplus-Strong", "Synth", "Wave", "Modal" };
     int firstEng = -1; bool sameEng = true, anyEng = false, allOsc = true, anyFM = false;
     for (auto& sl : tmp.slots)
         if (sl.engine >= 0 && sl.weight > 0.001f)
@@ -1114,7 +1114,7 @@ juce::String mixSourceTag(int index)
     }
     // Legacy per-engine authoring (factory drum sounds): read the srcOn[] flags. Legacy "FM"
     // sounds run on the merged Analog+FM engine after conversion, so tag them that way.
-    static const char* names[DC::NUM_SOURCES] = { "Sample", "Noise", "Analog", "Analog+FM", "Physical" };
+    static const char* names[DC::NUM_SOURCES] = { "Sample", "Noise", "Analog", "Analog+FM", "Karplus-Strong" };
     int count = 0, last = -1;
     for (int s = 0; s < DC::NUM_SOURCES; ++s)
         if (tmp.srcOn[s] && tmp.srcWeight[s] > 0.001f) { ++count; last = s; }

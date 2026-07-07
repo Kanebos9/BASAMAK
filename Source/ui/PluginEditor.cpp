@@ -7646,7 +7646,7 @@ void DrumSequencerEditor::setupComponents()
         proc.sequencer.channel(selectedChannel).markDspDirty();
     };
 
-    static const char* srcNames[5] = { "Sample", "Noise", "Analog", "FM", "Physical" };
+    static const char* srcNames[5] = { "Sample", "Noise", "Analog", "FM", "Karplus-Strong" };
     for (int i = 0; i < 5; ++i)
     {
         content.addAndMakeVisible(lblSrc[i]);
@@ -7893,7 +7893,7 @@ void DrumSequencerEditor::setupComponents()
     setupGroupHeader(hdrOscG,   "ANALOG");
     setupGroupHeader(hdrNoiseG, "NOISE");
     setupGroupHeader(hdrFmG,    "FM");
-    setupGroupHeader(hdrPhysG,  "PHYSICAL");
+    setupGroupHeader(hdrPhysG,  "KARPLUS-STRONG");
 
     // Reverse toggle for the Sample source (plays the region/sample backwards)
 
@@ -8110,7 +8110,7 @@ static juce::String engineDescription(int eng)
                                             "FM section on top (Amount 0 = pure analog). Kicks, basses, bells, leads.";
         case DrumChannel::SrcFM:     return "FM (legacy) - an old project's 2-operator FM slot. New sounds: use "
                                             "Analog + FM (its FM section is the same maths).";
-        case DrumChannel::SrcPhys:   return "PHYSICAL - a plucked/struck string (Karplus-Strong): materials, stiffness, "
+        case DrumChannel::SrcPhys:   return "KARPLUS-STRONG - a plucked/struck string synthesis: materials, stiffness, "
                                             "strike position. Drag the string visual; Ring = its natural decay.";
         case DrumChannel::SrcSynth:  return "SYNTH (legacy) - an old project's unified-synth slot (osc + noise + resonator).";
         case DrumChannel::SrcWave:   return "WAVETABLE (legacy) - an old project's wavetable slot. New sounds: the "
@@ -8169,7 +8169,7 @@ void DrumSequencerEditor::rebuildSlotMenus()
         sampleSub.addItem(ID_SHOW_SAMPLES,    "Show Folder");              // open the Samples folder to drop files in
         root->addSubMenu("Sample", sampleSub);
         root->addItem(3, "Noise"); root->addItem(4, "Analog + FM");   // Depth 0 = analog, raise it for FM (resonator removed)
-        root->addItem(6, "Physical");   // "FM"/"Synth"/"Wavetable" retired from the menu (kept parseable for old
+        root->addItem(6, "Karplus-Strong");   // (was "Physical") - the honest algorithm name; "FM"/"Synth"/"Wavetable" retired (kept parseable for old
                                         // projects); the Oscillator now covers wavetable-style shaping (more shapes + Warp).
         root->addItem(9, "Modal");      // id = engine+2 -> SrcModal (7); maps automatically (struck resonant body)
     }
@@ -8184,7 +8184,7 @@ void DrumSequencerEditor::rebuildSlotMenus()
 void DrumSequencerEditor::syncPadFromSlots(bool recenter)
 {
     auto& ch = proc.sequencer.channel(selectedChannel);
-    static const char* eng[DrumChannel::NUM_SOURCES + 3] = { "Sample", "Noise", "Analog + FM", "FM", "Physical", "Synth", "Wavetable", "Modal" };
+    static const char* eng[DrumChannel::NUM_SOURCES + 3] = { "Sample", "Noise", "Analog + FM", "FM", "Karplus-Strong", "Synth", "Wavetable", "Modal" };
     bool a[DrumChannel::NUM_SLOTS];
     int total[DrumChannel::NUM_SOURCES + 3] = {}, seen[DrumChannel::NUM_SOURCES + 3] = {};
     for (int b = 0; b < DrumChannel::NUM_SLOTS; ++b)
