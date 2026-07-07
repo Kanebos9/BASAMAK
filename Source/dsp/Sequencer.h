@@ -142,6 +142,7 @@ public:
     // key voices are the monitor (double-triggering re-fired the half-grown note at bar starts and
     // MONO-cut the held voice = blips/cuts). Set per block by the processor; -1 = nothing suppressed.
     std::atomic<int> recordSuppressCh { -1 };
+    std::atomic<int> recordSuppressCh2 { -1 };   // the merged PARTNER channel while recording a pair
 
     // MERGED-GROUP helpers: a group = a head pattern + the following run of mergeWithPrev patterns.
     int groupHead(int p) const { p = juce::jlimit(0, NUM_PATTERNS - 1, p);

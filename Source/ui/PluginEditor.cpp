@@ -3997,8 +3997,9 @@ void TintKeyboard::drawWhiteNote(int n, juce::Graphics& g, juce::Rectangle<float
     }
     { // EVERY key gets its note name: BLACK on white keys (C keys bold as landmarks); faded when dimmed
         const bool isC = (n % 12) == 0;
-        g.setColour(dim[n] && c.getAlpha() == 0 ? juce::Colour(0x59101018)
-                                                : juce::Colour(isC ? 0xff101018 : 0xcc10141c));
+        g.setColour(dim[n] && c.getAlpha() == 0 ? juce::Colour(isC ? 0x66c01818 : 0x59101018)
+                                                : (isC ? juce::Colour(0xffd21f1f)              // C = bold RED landmarks
+                                                       : juce::Colour(0xcc10141c)));
         g.setFont(juce::Font(juce::jmin(10.5f, area.getWidth() * 0.5f), isC ? juce::Font::bold : juce::Font::plain));
         g.drawFittedText(juce::MidiMessage::getMidiNoteName(n, true, true, 4),
                          area.reduced(1.0f, 2.0f).removeFromBottom(12.0f).toNearestInt(),
@@ -4123,31 +4124,38 @@ juce::String ScaleBox::getTooltip()
 }
 
 //==============================================================================
-// KeySplitBox
+// KeySplitBox (Merge & Split)
+static const juce::Colour kPairCols[2] = { juce::Colour(0xffff9f43),    // FIRST channel / RIGHT half = orange
+                                           juce::Colour(0xff3ec6a8) };  // SECOND channel / LEFT half = teal
+
 void KeySplitBox::paint(juce::Graphics& g)
 {
+    const bool on = merged();
     auto ob = onRect().toFloat();
     g.setColour(on ? juce::Colour(0xff35b56a) : juce::Colour(0xff33335a)); g.fillRoundedRectangle(ob, 4.0f);
-    g.setColour(on ? juce::Colours::black : juce::Colour(0xffb8b8d0)); g.setFont(juce::Font(11.5f, juce::Font::bold));
-    g.drawText("Split", onRect(), juce::Justification::centred, false);
+    g.setColour(on ? juce::Colours::black : juce::Colour(0xffb8b8d0)); g.setFont(juce::Font(12.0f, juce::Font::bold));
+    g.drawFittedText("Merge\n& Split", onRect().reduced(2), juce::Justification::centred, 2, 0.8f);
     for (int i = 0; i < 2; ++i)
     {
         const int  ws  = (i == 0) ? w1 : w2;
-        const auto acc = kSlotCols[i];
+        const auto acc = kPairCols[i];
         auto r = boxRect(i);
         g.setColour(juce::Colour(0xff26264a)); g.fillRoundedRectangle(r.toFloat(), 4.0f);
-        // the 4-octave WINDOW inside the C0..C8 span (96 semis wide)
         const float x0 = (float) r.getX() + (float)(ws - 12) / 96.0f * (float) r.getWidth();
         const float ww = 48.0f / 96.0f * (float) r.getWidth();
         juce::Rectangle<float> win(x0, (float) r.getY() + 1.5f, ww, (float) r.getHeight() - 3.0f);
-        g.setColour(acc.withAlpha(on ? 0.30f : 0.12f)); g.fillRoundedRectangle(win, 3.0f);
-        g.setColour(acc.withAlpha(on ? 0.95f : 0.4f));  g.drawRoundedRectangle(win, 3.0f, 1.2f);
+        g.setColour(acc.withAlpha(on ? 0.30f : 0.10f)); g.fillRoundedRectangle(win, 3.0f);
+        g.setColour(acc.withAlpha(on ? 0.95f : 0.35f)); g.drawRoundedRectangle(win, 3.0f, 1.2f);
         g.setColour(on ? juce::Colours::white : juce::Colour(0xff6a7690)); g.setFont(juce::Font(11.0f, juce::Font::bold));
-        g.drawFittedText(juce::MidiMessage::getMidiNoteName(ws, true, true, 4) + "-"
-                         + juce::MidiMessage::getMidiNoteName(ws + 48, true, true, 4),
+        g.drawFittedText(on ? juce::MidiMessage::getMidiNoteName(ws, true, true, 4) + "-"
+                              + juce::MidiMessage::getMidiNoteName(ws + 48, true, true, 4)
+                            : juce::String("off"),
                          win.toNearestInt(), juce::Justification::centred, 1, 0.7f);
-        g.setColour(acc.withAlpha(0.9f)); g.setFont(juce::Font(9.0f, juce::Font::bold));
-        g.drawText(i == 0 ? "1" : "2", r.getX() + 3, r.getY() + 1, 10, 10, juce::Justification::topLeft, false);
+        // corner tag = the pair's CHANNEL NUMBER for this half (R = right hand, L = left hand)
+        g.setColour(acc.withAlpha(on ? 0.95f : 0.4f)); g.setFont(juce::Font(9.0f, juce::Font::bold));
+        const juce::String tag = on ? (i == 0 ? "R " + juce::String(chFirst + 1) : "L " + juce::String(chSecond + 1))
+                                    : juce::String(i == 0 ? "R" : "L");
+        g.drawText(tag, r.getX() + 3, r.getY() + 1, 26, 10, juce::Justification::topLeft, false);
     }
 }
 void KeySplitBox::dragTo(int i, int x)
@@ -4161,7 +4169,8 @@ void KeySplitBox::dragTo(int i, int x)
 void KeySplitBox::mouseDown(const juce::MouseEvent& e)
 {
     dragBox = -1;
-    if (onRect().contains(e.getPosition())) { on = ! on; if (onChange) onChange(); repaint(); return; }
+    if (onRect().contains(e.getPosition())) { if (onMergeClick) onMergeClick(); return; }
+    if (! merged()) return;
     for (int i = 0; i < 2; ++i)
         if (boxRect(i).contains(e.getPosition())) { dragBox = i; dragTo(i, e.getPosition().x); return; }
 }
@@ -4170,14 +4179,19 @@ juce::String KeySplitBox::getTooltip()
 {
     const auto p = getMouseXYRelative();
     if (onRect().contains(p))
-        return "SPLIT KEYBOARD: keys LEFT of middle C play SLOT 2 only, keys RIGHT of it SLOT 1 only - "
-               "bass with one hand, lead with the other.\n\nWhile split is ON the Slot-2 pitch dropdown is "
-               "disabled (the two would fight). The arp is not split (it owns the whole keyboard).";
+        return "MERGE & SPLIT: pairs this channel with the PREVIOUS or NEXT one (click for the popup; "
+               "SHIFT+click a channel number does the same with its previous channel).\n\n"
+               "- The keyboard splits BETWEEN the pair: keys from middle C up play the FIRST (lower-numbered) "
+               "channel, keys below it the SECOND - two full sounds, one keyboard.\n"
+               "- Merged channels are PIANO-ROLL only, and each half RECORDS into its own channel's roll "
+               "(looper-style while recording).\n"
+               "- Select either channel to edit its sound - selection never blocks the pairing.";
     if (boxRect(0).contains(p) || boxRect(1).contains(p))
-        return "This slot's 4-OCTAVE WINDOW (drag; snaps to octaves). The whole box = C0..C8; the coloured "
-               "window = the pitches this half of the keyboard actually plays. Example: slot 1 window C1-C5 "
-               "means the RIGHT half of the keys is remapped to sound C1..C5.";
-    return "Split keyboard: left half = slot 2 (pink window), right half = slot 1 (yellow window).";
+        return "This half's 4-OCTAVE WINDOW (drag; snaps to octaves; needs a merged pair). The whole box = "
+               "C0..C8; the coloured window = the pitches this half of the keyboard actually plays. Orange = "
+               "the FIRST channel (right hand), teal = the SECOND (left hand); the corner tag shows WHICH "
+               "channel number that is.";
+    return "Merge & Split: pair two adjacent channels and split the keyboard between them.";
 }
 
 KeysPanel::KeysPanel()
@@ -5256,7 +5270,6 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
     juce::int64 h = 146959810934665603LL;
     h = mix(h, c.keysSlot2Down);   // slot-2 pitch is part of the SOUND now (rides + refreshes with mixes)
     h = mix(h, c.keysPolyMode ? 1 : 0);   // keys Poly/Mono is per-sound too
-    h = mix(h, c.keysSplit ? 1 : 0); h = mix(h, c.keysSplitW1); h = mix(h, c.keysSplitW2);   // SPLIT rides with the sound
     for (int i = 0; i < DrumChannel::NUM_SOURCES; ++i) { h = mix(h, c.srcOn[i] ? 1 : 0); h = mix(h, f(c.srcWeight[i])); }
     h = mix(h, f(c.padX)); h = mix(h, f(c.padY)); h = mix(h, c.padLayoutB ? 1 : 0);
     // Slots are the runtime source of truth (incl. duplicate engines) - hash them too.
@@ -5331,7 +5344,7 @@ juce::int64 DrumSequencerEditor::stateHash() const
             h = mix(h, channelSoundHash(ch));
             h = mix(h, ch.numSteps);
             h = mix(h, f(ch.humanizeAmt)); h = mix(h, f(ch.strumAmt)); h = mix(h, f(ch.keysMinVel)); h = mix(h, f(ch.keysMaxVel)); h = mix(h, f(ch.keysGlide));   // HUMANIZE / STRUM / min+max-vel / GLIDE (undoable)
-            h = mix(h, ch.keysSplit ? 1 : 0); h = mix(h, ch.keysSplitW1); h = mix(h, ch.keysSplitW2);   // SPLIT keyboard
+            h = mix(h, ch.mergeWith + 1); h = mix(h, ch.keysSplitW1); h = mix(h, ch.keysSplitW2);   // MERGE&SPLIT pair + windows
             h = mix(h, ch.arpOn ? 1 : 0); h = mix(h, ch.arpLen); h = mix(h, ch.arpSync); h = mix(h, ch.arpRate);
             h = mix(h, ch.arpAlign ? 1 : 0); h = mix(h, ch.arpHold ? 1 : 0); h = mix(h, f(ch.arpGate));
             for (int ai = 0; ai < DrumChannel::ARP_ROWS; ++ai) h = mix(h, (int) ch.arpOffset[ai] + 128);   // ARP (undoable)
@@ -5397,7 +5410,7 @@ void DrumSequencerEditor::resetChannelToDefault(DrumChannel& c, int ch)
     c.drawMode = false; c.drawVel = 1.0f; c.drawPan = 0.0f;   // fresh channel = step mode
     c.keysSlot2Down = 0;                                      // KEYS slot-2 transpose (channel-wide) resets too
     c.humanizeAmt = 0.0f; c.strumAmt = 0.0f; c.keysMinVel = 0.0f; c.keysMaxVel = 1.0f; c.keysGlide = 0.0f;   // HUMANIZE / STRUM / vel range / GLIDE default
-    c.keysSplit = false; c.keysSplitW1 = 60; c.keysSplitW2 = 12;   // SPLIT keyboard default off/identity
+    c.mergeWith = -1; c.keysSplitW1 = 60; c.keysSplitW2 = 12;   // MERGE&SPLIT off / identity windows
     { DrumChannel d; c.arpOn = d.arpOn; c.arpLen = d.arpLen; c.arpSync = d.arpSync; c.arpRate = d.arpRate;
       c.arpAlign = d.arpAlign; c.arpHold = d.arpHold; c.arpGate = d.arpGate;   // ARP defaults
       for (int ai = 0; ai < DrumChannel::ARP_ROWS; ++ai) c.arpOffset[ai] = d.arpOffset[ai]; }
@@ -5463,9 +5476,6 @@ void DrumSequencerEditor::writeChannelMix(juce::ValueTree& t, const DrumChannel&
         juce::String ao; for (int i = 0; i < DrumChannel::ARP_ROWS; ++i) ao << (int) ch.arpOffset[i] << ',';
         t.setProperty("arpOff", ao, nullptr);
     }
-    t.setProperty("keysSplit", ch.keysSplit, nullptr);
-    t.setProperty("splitW1", ch.keysSplitW1, nullptr);
-    t.setProperty("splitW2", ch.keysSplitW2, nullptr);
     t.setProperty("keys2Dn",  ch.keysSlot2Down,      nullptr);   // slot-2 pitch rides with the sound mix
     t.setProperty("userSample", ch.usingUserSample ? ch.userSampleFile.getFullPathName() : juce::String(), nullptr);
     for (int i = 0; i < DrumChannel::NUM_SOURCES; ++i) { t.setProperty("srcOn" + juce::String(i), ch.srcOn[i], nullptr);
@@ -5555,9 +5565,6 @@ void DrumSequencerEditor::readChannelMix(const juce::ValueTree& t, DrumChannel& 
             for (int i = 0; i < DrumChannel::ARP_ROWS && i < f.size(); ++i)
                 ch.arpOffset[i] = (int8_t) juce::jlimit(-128, 127, f[i].getIntValue()); }
     }
-    ch.keysSplit    = (bool) t.getProperty("keysSplit", false);
-    ch.keysSplitW1  = juce::jlimit(12, 60, (int) t.getProperty("splitW1", 60));
-    ch.keysSplitW2  = juce::jlimit(12, 60, (int) t.getProperty("splitW2", 12));
     ch.keysSlot2Down = juce::jlimit(-24, 24, (int) t.getProperty("keys2Dn", 0));   // slot-2 pitch (0 for old mix files)
     for (int i = 0; i < DrumChannel::NUM_SOURCES; ++i) { ch.srcOn[i]     = (bool)  t.getProperty("srcOn" + juce::String(i), i == 0);
                                   ch.srcWeight[i] = (float) t.getProperty("srcW"  + juce::String(i), i == 0 ? 1.0f : 0.0f); }
@@ -6890,15 +6897,38 @@ void DrumSequencerEditor::setupComponents()
     stepGrid.onRollPreviewEnd = [this] {
         if (rollPreviewNote >= 0) { proc.pushKeyUp(rollPreviewNote); rollPreviewNote = -1; }
     };
-    // SPLIT box: write the toggle + the two 4-octave windows onto the channel (keys-feel, undoable).
+    // MERGE&SPLIT box: the two 4-octave WINDOWS write to the pair's FIRST channel across ALL patterns
+    // (pairing is channel-wide, like routing). The big button opens the merge/un-merge popup.
     keysPanel.splitBox.onChange = [this] {
         if (ignoreKnobCallbacks) return;
-        auto& c = proc.sequencer.channel(selectedChannel);
-        c.keysSplit   = keysPanel.splitBox.on;
-        c.keysSplitW1 = juce::jlimit(12, 60, keysPanel.splitBox.w1);
-        c.keysSplitW2 = juce::jlimit(12, 60, keysPanel.splitBox.w2);
-        keysHighlightMaskLo = keysHighlightMaskHi = ~0ULL;   // routing changed -> recompute highlight/names
-        refreshKeysPanel();                                   // greys/ungreys the Slot-2 pitch dropdown
+        const int p0 = proc.sequencer.channel(selectedChannel).mergeWith;
+        const int first = (p0 >= 0) ? juce::jmin(selectedChannel, p0) : selectedChannel;
+        for (auto& pat : proc.sequencer.patterns)
+        {
+            pat.channels[first].keysSplitW1 = juce::jlimit(12, 60, keysPanel.splitBox.w1);
+            pat.channels[first].keysSplitW2 = juce::jlimit(12, 60, keysPanel.splitBox.w2);
+        }
+        keysHighlightMaskLo = keysHighlightMaskHi = ~0ULL;   // mapping changed -> recompute highlight/names
+    };
+    keysPanel.splitBox.onMergeClick = [this] {
+        const int ch = selectedChannel;
+        const int cur = proc.sequencer.channel(ch).mergeWith;
+        juce::PopupMenu m;
+        if (cur >= 0)
+            m.addItem(3, "Un-merge channels " + juce::String(juce::jmin(ch, cur) + 1) + " & "
+                          + juce::String(juce::jmax(ch, cur) + 1));
+        else
+        {
+            m.addItem(1, "Merge & Split with PREVIOUS (channel " + juce::String(ch) + ")", ch > 0);
+            m.addItem(2, "Merge & Split with NEXT (channel " + juce::String(ch + 2) + ")",
+                      ch < Sequencer::NUM_CHANNELS - 1);
+        }
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&keysPanel.splitBox),
+            [this, ch, cur](int r) {
+                if (r == 1) setChannelMerge(ch, ch - 1);
+                else if (r == 2) setChannelMerge(ch, ch + 1);
+                else if (r == 3) setChannelMerge(ch, cur);   // toggles OFF
+            });
     };
     // SCALE box: write the edited slot's harmonizer fields straight onto the channel (they're part of
     // the SOUND - channelSoundHash picks them up), then refresh so the guide/highlight/detail follow.
@@ -6988,7 +7018,11 @@ void DrumSequencerEditor::setupComponents()
         strip.numBtn.setColour(juce::TextButton::textColourOffId, juce::Colours::lightgrey);
         strip.numBtn.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xff20203a));
         strip.numBtn.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff3355aa));
-        strip.numBtn.onClick = [this, ci] { selectChannel(ci); };
+        strip.numBtn.onClick = [this, ci] {
+            if (juce::ModifierKeys::getCurrentModifiers().isShiftDown() && ci > 0)
+            { selectChannel(ci); setChannelMerge(ci, ci - 1); return; }   // SHIFT+click = Merge&Split with previous
+            selectChannel(ci);
+        };
         strip.numBtn.chIndex = i;
         strip.numBtn.onCopyFrom = [this, ci] (int src) { proc.copyChannel(currentPattern(), src, ci); selectChannel(ci); fullRefresh(); };
 
@@ -8276,6 +8310,7 @@ void DrumSequencerEditor::keysStartRecord()
         // wraps never clear, so the fresh start happens HERE, once).
         auto& sq = proc.sequencer;
         const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
+        const int recPartner = sq.channel(selectedChannel).mergeWith;   // MERGE&SPLIT: both rolls start clean
         for (int b = head; b <= end; ++b)
         {
             auto& pch = sq.patterns[b].channels[selectedChannel];
@@ -8283,6 +8318,12 @@ void DrumSequencerEditor::keysStartRecord()
             pch.clearDrawNotes();
             for (int i = 0; i < DrumChannel::MAX_STEPS; ++i)
             { pch.steps[i] = false; pch.stepPitch[i] = 0.0f; pch.stepMerge[i] = false; pch.stepNoteLen[i] = 0.0f; }
+            if (recPartner >= 0)
+            {
+                auto& qch = sq.patterns[b].channels[recPartner];
+                qch.drawMode = true;
+                qch.clearDrawNotes();
+            }
         }
         strips[selectedChannel].comboSteps.setSelectedId(StepGridComponent::DRAW_ITEM_ID, juce::dontSendNotification);
         refreshDrawModeButtons();
@@ -8560,13 +8601,14 @@ void DrumSequencerEditor::refreshKeysPanel()
                                      ((sl.scaleKey % 12) + 12) % 12, juce::jlimit(1, 7, sl.scaleUnison) };
     }
     keysPanel.scaleBox.repaint();
-    keysPanel.splitBox.on = kch.keysSplit;
-    keysPanel.splitBox.w1 = kch.keysSplitW1;
-    keysPanel.splitBox.w2 = kch.keysSplitW2;
-    keysPanel.splitBox.repaint();
-    keysPanel.btnSlot2.setEnabled(! kch.keysSplit);            // split owns the slot routing - Slot-2 pitch would fight it
-    keysPanel.btnSlot2.setAlpha(kch.keysSplit ? 0.4f : 1.0f);
-    keysPanel.lblSlot2.setAlpha(kch.keysSplit ? 0.4f : 1.0f);
+    { const int p0 = kch.mergeWith;
+      const int first  = (p0 >= 0) ? juce::jmin(selectedChannel, p0) : -1;
+      const int second = (p0 >= 0) ? juce::jmax(selectedChannel, p0) : -1;
+      keysPanel.splitBox.chFirst = first; keysPanel.splitBox.chSecond = second;
+      const auto& fc = proc.sequencer.channel(first >= 0 ? first : selectedChannel);
+      keysPanel.splitBox.w1 = fc.keysSplitW1;
+      keysPanel.splitBox.w2 = fc.keysSplitW2;
+      keysPanel.splitBox.repaint(); }
     keysPanel.arpEditor.on   = kch.arpOn;
     keysPanel.arpEditor.len  = kch.arpLen;
     keysPanel.arpEditor.sync = kch.arpSync;
@@ -8717,12 +8759,19 @@ void DrumSequencerEditor::updateKeyboardHighlight()
         for (int held = 0; held < 128; ++held)
         {
             if (! ((held < 64 ? mLo : mHi) & (1ULL << (held & 63)))) continue;   // not held
-            if (c.keysSplit)
-            {   // SPLIT: the pressed half decides the slot; light the MAPPED pitch on that slot only
+            if (c.mergeWith >= 0)
+            {   // MERGE&SPLIT: the pressed half picks a CHANNEL. The SELECTED channel's half lights in
+                // its slot colours; the PARTNER's half lights BLUE (it is another channel's sound).
+                const int first = juce::jmin(selectedChannel, (int) c.mergeWith);
+                const auto& fc = proc.sequencer.channel(first);
                 const bool left = held < 60;
-                const int mapped = juce::jlimit(0, 127, left ? c.keysSplitW2 + (held - 12)
-                                                             : c.keysSplitW1 + (held - 60));
-                lightNote(mapped, left ? 1 : 0);
+                const int mapped = juce::jlimit(0, 127, left ? fc.keysSplitW2 + (held - 12)
+                                                             : fc.keysSplitW1 + (held - 60));
+                const int tgt = left ? juce::jmax(selectedChannel, (int) c.mergeWith) : first;
+                if (tgt == selectedChannel)
+                    for (int s = 0; s < DrumChannel::NUM_SLOTS; ++s) lightNote(mapped, s);
+                else
+                    keysPanel.setKeyTint(mapped, juce::Colour(0xff4a7fff));   // the OTHER channel = blue
             }
             else
                 for (int s = 0; s < DrumChannel::NUM_SLOTS; ++s) lightNote(held, s);
@@ -8750,6 +8799,34 @@ void DrumSequencerEditor::updateKeyboardHighlight()
 }
 
 // KEY GUIDE: dim the keyboard keys OUTSIDE the chosen scale (display only; change-gated).
+// MERGE & SPLIT a pair of ADJACENT channels (toggle). Pairing is CHANNEL-WIDE (like routing):
+// written to BOTH channels in EVERY pattern; merging forces both into PIANO ROLL everywhere
+// (pairs are roll-only). Any existing pairing of either party is dissolved first.
+void DrumSequencerEditor::setChannelMerge(int a, int b)
+{
+    if (a == b || b < 0 || b >= Sequencer::NUM_CHANNELS || std::abs(a - b) != 1) return;
+    auto& sq = proc.sequencer;
+    const bool unmerge = sq.channel(a).mergeWith == b;
+    auto clearPairOf = [&](int ch) {
+        const int p = sq.channel(ch).mergeWith;
+        if (p < 0) return;
+        for (auto& pat : sq.patterns) { pat.channels[ch].mergeWith = -1; pat.channels[p].mergeWith = -1; }
+    };
+    clearPairOf(a); clearPairOf(b);
+    if (! unmerge)
+        for (auto& pat : sq.patterns)
+        {
+            pat.channels[a].mergeWith = b;
+            pat.channels[b].mergeWith = a;
+            pat.channels[a].drawMode = true;   // pairs are PIANO-ROLL only
+            pat.channels[b].drawMode = true;
+        }
+    keysHighlightMaskLo = keysHighlightMaskHi = ~0ULL;
+    refreshKeysPanel();
+    refreshChannelStrips();
+    stepGrid.repaint();
+}
+
 void DrumSequencerEditor::updateKeyboardGuide()
 {
     // Build a 12-bit pitch-class mask of the keys that stay LIT (-1 = guide off / nothing to dim).
@@ -9402,7 +9479,10 @@ void DrumSequencerEditor::refreshChannelStrips()
         { auto& cc = proc.sequencer.channel(i);
           const int tgt = cc.drawMode ? StepGridComponent::DRAW_ITEM_ID : cc.numSteps;
           if (strips[i].comboSteps.getSelectedId() != tgt)   // change-ONLY (touching it every tick fought the open dropdown)
-              strips[i].comboSteps.setSelectedId(tgt, juce::dontSendNotification); }
+              strips[i].comboSteps.setSelectedId(tgt, juce::dontSendNotification);
+          const bool lockRoll = proc.sequencer.channel(i).mergeWith >= 0;   // merged pairs are PIANO-ROLL only
+          if (strips[i].comboSteps.isEnabled() == lockRoll)
+              strips[i].comboSteps.setEnabled(! lockRoll); }
         updateStripMixLabel(i);   // per-pattern sound-mix name (+ * if edited)
     }
     refreshRouting();   // recolour strips by MIDI/aux routing

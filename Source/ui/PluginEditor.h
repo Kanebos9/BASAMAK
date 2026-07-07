@@ -615,22 +615,27 @@ private:
 // SPLIT KEYBOARD control: a toggle + two Arp-style boxes. Each box = the full C0..C8 range; the
 // INNER box = that slot's 4-OCTAVE WINDOW (drag it; octave-snapped; label = "C1-C5"). With Split ON,
 // keys LEFT of middle C play SLOT 2 only (mapped into its window), keys RIGHT of it SLOT 1 only.
+// MERGE & SPLIT control: a big two-line button (popup: merge with previous/next, or un-merge) + two
+// STACKED window boxes. Merging two ADJACENT channels splits the keyboard BETWEEN them: keys at/above
+// middle C play the pair's FIRST (lower-numbered) channel, below it the SECOND - each half mapped onto
+// its 4-octave window (whole box = C0..C8; drag the inner box, octave-snapped; labels show the range).
 class KeySplitBox : public juce::Component, public juce::SettableTooltipClient
 {
 public:
-    bool on = false;
+    int  chFirst = -1, chSecond = -1;         // the merged pair (channel indices; -1 = not merged)
     int  w1 = 60, w2 = 12;                    // window starts (MIDI, 12..60, octave-snapped)
-    std::function<void()> onChange;
+    std::function<void()> onChange;           // window edits (written to the FIRST channel, all patterns)
+    std::function<void()> onMergeClick;       // the big button -> merge/un-merge popup
     void paint(juce::Graphics&) override;
     void mouseDown(const juce::MouseEvent&) override;
     void mouseDrag(const juce::MouseEvent&) override;
     juce::String getTooltip() override;
 private:
-    int dragBox = -1;                         // 0 = slot 1 (yellow), 1 = slot 2 (pink)
-    juce::Rectangle<int> onRect() const  { return { 0, (getHeight() - 22) / 2, 48, 22 }; }
-    // STACKED: slot 1 (yellow) on top, slot 2 (pink) below - frees horizontal room for the chord names
+    bool merged() const { return chFirst >= 0 && chSecond >= 0; }
+    int  dragBox = -1;                        // 0 = first/right window, 1 = second/left window
+    juce::Rectangle<int> onRect() const  { return { 0, 1, 62, getHeight() - 2 }; }   // the tall Merge&Split button
     juce::Rectangle<int> boxRect(int i) const
-    { const int hh = (getHeight() - 2) / 2; return { 54, 1 + i * (hh + 1), 158, hh - 1 }; }
+    { const int hh = (getHeight() - 2) / 2; return { 68, 1 + i * (hh + 1), 148, hh - 1 }; }
     void dragTo(int i, int x);
 };
 
@@ -1464,6 +1469,7 @@ public:
     void layoutContent();
     void paintContent(juce::Graphics&);
     void contentWheel(juce::Point<int> pos, float deltaY);   // wheel over the channel strips / pattern row scrolls them
+    void setChannelMerge(int a, int b);   // MERGE&SPLIT toggle for two adjacent channels (channel-wide)
     double lastContentWheelMs = 0.0;   // rate-limit so a fast wheel/trackpad flood doesn't rocket the scroll
     void paintStripOutline(juce::Graphics&);   // selected strip's red outline, ABOVE children (the meters)
 

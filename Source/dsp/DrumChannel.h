@@ -609,12 +609,14 @@ public:
     //     previous one, the new note SLIDES from the old pitch to the new over keysGlide*0.4 s. Live keys
     //     only (mono); 0 = off = instant (bit-identical). Poly never glides. Per pattern/channel, keys only.
     float keysGlide   = 0.0f;   // 0..1  (glide time = keysGlide * 400 ms)
-    //   SPLIT KEYBOARD: left half (below middle C) plays SLOT 2 only, right half SLOT 1 only. Each half
-    //   (4 octaves physically) is MAPPED onto its slot's 4-octave WINDOW inside C0..C8 (start MIDI,
-    //   octave-snapped 12..60). Slot-2 pitch is ignored while split is on (UI greys it). Keys-feel field.
-    bool  keysSplit   = false;
-    int   keysSplitW1 = 60;     // slot 1 (RIGHT half) window start = C4 by default (identity mapping)
-    int   keysSplitW2 = 12;     // slot 2 (LEFT half) window start = C0 by default (identity mapping)
+    //   MERGE & SPLIT (channel pairing, CHANNEL-WIDE like routing): two ADJACENT channels merge so the
+    //   keyboard splits BETWEEN them - keys at/above middle C play the pair's FIRST (lower-numbered)
+    //   channel, below it the SECOND. Each half maps onto a 4-octave WINDOW (starts stored on the
+    //   FIRST channel; octave-snapped 12..60). Merged channels are PIANO-ROLL only; each records into
+    //   its own roll (looper-style while recording, like merged pattern groups). -1 = not merged.
+    int   mergeWith   = -1;
+    int   keysSplitW1 = 60;     // FIRST channel / RIGHT half window start (C4 = identity)
+    int   keysSplitW2 = 12;     // SECOND channel / LEFT half window start (C0 = identity)
     //   ARP = a keyboard RIFF generator: hold ONE key -> it plays the root (the pressed key) then a
     //     programmed list of semitone OFFSETS, ONE PER STEP of this channel's grid (rate-scaled), looping
     //     while held. Each row can be a REST (ARP_REST = empty). The clock is COMPUTED from bpm/time-sig/

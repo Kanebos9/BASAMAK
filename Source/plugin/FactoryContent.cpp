@@ -14,7 +14,6 @@ namespace Factory
 static void clearSound(DC& c)
 {
     c.keysPolyMode = true;   // POLY by default (per-sound); a builder may set it off
-    c.keysSplit = false; c.keysSplitW1 = 60; c.keysSplitW2 = 12;   // SPLIT is per-sound too (default off)
     for (int i = 0; i < DC::NUM_SOURCES; ++i) { c.srcOn[i] = false; c.srcWeight[i] = 0.0f; }
     for (auto& s : c.slots) s = DC::Slot();   // empty all slots (engine = -1)
     c.legacyFmEnvFollow = false;              // per-sound flag - must not leak between builders
@@ -979,43 +978,6 @@ static void kOctaveBells(DC& c) {   // major-triad bells with an OCTAVE-UP glass
     c.keysSlot2Down = -12;                                          // SLOT-2 PITCH: sparkle an octave ABOVE the key
     c.reverbSend = 0.34f; c.volume = 0.64f;
 }
-// -- SPLIT-KEYBOARD sounds (post-1.3.2): ship with keysSplit ON - left hand plays slot 2 in its
-//    window, right hand slot 1 in its window (clearSound resets split, so builders may set it). --
-static void kSplitBassLead(DC& c) {   // right = filtered saw LEAD (C3-C7), left = square SUB BASS (C1-C5)
-    auto& s = mkSlot(c, DC::SrcOsc);
-    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
-    s.oscUnison = 2; s.oscDetune = 0.12f;
-    s.atk = 0.004f; s.dec = 0.7f; s.sustain = 0.8f; s.release = 0.15f;
-    s.filterType = DC::LowPass; s.filterCutoff = 2600.0f; s.filterReso = 1.2f; s.filterEnvAmt = 0.35f;
-    auto& b = mkSlot2(c, DC::SrcOsc, 0.6f);
-    b.oscShape = b.oscShapeB = DC::WvSquare; b.oscFreq = 261.63f;
-    b.atk = 0.004f; b.dec = 0.5f; b.sustain = 0.85f; b.release = 0.1f;
-    b.filterType = DC::LowPass; b.filterCutoff = 900.0f; b.filterReso = 0.7f;
-    c.keysSplit = true; c.keysSplitW1 = 48; c.keysSplitW2 = 24;   // lead C3-C7 / bass C1-C5
-    c.volume = 0.68f;
-}
-static void kSplitEpBass(DC& c) {     // right = FM tine E-PIANO (C3-C7), left = pure sine BASS (C0-C4)
-    auto& s = mkSlot(c, DC::SrcOsc);
-    s.oscShape = s.oscShapeB = DC::WvSine; s.oscFreq = 261.63f;
-    s.fmDepth = 0.3f; s.fmPitch = 0.5f; s.fmEnvFollow = true;
-    s.atk = 0.003f; s.dec = 1.3f; s.sustain = 0.5f; s.release = 0.3f;
-    auto& b = mkSlot2(c, DC::SrcOsc, 0.62f);
-    b.oscShape = b.oscShapeB = DC::WvSine; b.oscFreq = 261.63f;
-    b.atk = 0.004f; b.dec = 0.8f; b.sustain = 0.85f; b.release = 0.12f;
-    c.keysSplit = true; c.keysSplitW1 = 48; c.keysSplitW2 = 12;   // EP C3-C7 / deep bass C0-C4
-    c.reverbSend = 0.18f; c.volume = 0.66f;
-}
-static void kSplitOrganBass(DC& c) {  // right = drawbar ORGAN (C3-C7), left = warm reed BASS (C1-C5)
-    auto& s = mkSlot(c, DC::SrcOsc);
-    s.oscShape = s.oscShapeB = 9; s.oscFreq = 261.63f;             // Organ (additive drawbars)
-    s.atk = 0.006f; s.dec = 0.5f; s.sustain = 0.95f; s.release = 0.08f;
-    auto& b = mkSlot2(c, DC::SrcOsc, 0.58f);
-    b.oscShape = b.oscShapeB = 12; b.oscFreq = 261.63f;            // Reed warmth for the bass hand
-    b.atk = 0.008f; b.dec = 0.6f; b.sustain = 0.9f; b.release = 0.1f;
-    b.filterType = DC::LowPass; b.filterCutoff = 1400.0f; b.filterReso = 0.6f;
-    c.keysSplit = true; c.keysSplitW1 = 48; c.keysSplitW2 = 24;   // organ C3-C7 / bass C1-C5
-    c.reverbSend = 0.22f; c.volume = 0.62f;
-}
 static void kDorianPad(DC& c) {     // scale-locked pad (Dorian): every key voices a diatonic chord, always in key
     auto& s = mkSlot(c, DC::SrcOsc);
     s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
@@ -1144,8 +1106,6 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Power Keys",   kPowerKeys,   "Keys" },           { "Octave Bells", kOctaveBells, "Keys" },
     { "Dorian Pad",   kDorianPad,   "Keys" },           { "Major Choir",  kMajorChoir,  "Keys" },
     { "Minor Rhodes", kMinorRhodes, "Keys" },
-    { "Split Bass Lead", kSplitBassLead, "Keys" },      { "Split EP Bass", kSplitEpBass, "Keys" },
-    { "Split Organ Bass", kSplitOrganBass, "Keys" },
     // ---- MODAL engine (struck resonant bodies). Names carry no "(Modal)" - the tag adds it. ----
     { "Mod Marimba",   moMarimba,    "Modal" }, { "Mod Tubular Bell", moTubular,   "Modal" },
     { "Mod Glass",     moGlass,      "Modal" }, { "Mod Tom",          moTomDrum,   "Modal" },
@@ -1358,7 +1318,7 @@ static void resetAll(Sequencer& s)
             ch.duckBy = -1; ch.duckAmt = 0.5f;   // sidechain duck is routing-like -> preset-level too
             ch.keysSlot2Down = 0;   // KEYS slot-2 transpose (channel-wide) is preset-level too
             ch.humanizeAmt = 0.0f; ch.strumAmt = 0.0f; ch.keysMinVel = 0.0f; ch.keysMaxVel = 1.0f; ch.keysGlide = 0.0f;   // HUMANIZE / STRUM / vel range / GLIDE reset
-            ch.keysSplit = false; ch.keysSplitW1 = 60; ch.keysSplitW2 = 12;   // SPLIT keyboard reset
+            ch.mergeWith = -1; ch.keysSplitW1 = 60; ch.keysSplitW2 = 12;   // MERGE&SPLIT reset (channel-wide)
             { DC d; ch.arpOn = d.arpOn; ch.arpLen = d.arpLen; ch.arpSync = d.arpSync; ch.arpRate = d.arpRate;
               ch.arpAlign = d.arpAlign; ch.arpHold = d.arpHold; ch.arpGate = d.arpGate;
               for (int ai = 0; ai < DC::ARP_ROWS; ++ai) ch.arpOffset[ai] = d.arpOffset[ai]; }   // ARP reset

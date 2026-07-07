@@ -233,6 +233,7 @@ public:
     // GROWING the same note (len crosses the bar line) instead of closing + reopening it.
     int keysHeldOpenIdx[DrumChannel::POLY * 2] = {};
     int keysHeldOpenPat[DrumChannel::POLY * 2] = {};
+    int keysHeldOpenChan[DrumChannel::POLY * 2] = {};   // MERGE&SPLIT: which channel's roll the note opened in
 
     // Audio-callback heartbeat: bumped at the top of every processBlock. The editor watches it -
     // if it stops moving, the HOST isn't sending us audio (device off/missing, FX offline), which

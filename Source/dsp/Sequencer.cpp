@@ -362,7 +362,8 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
         if (c.drawMode)
         {
             // Channel being RECORDED: its notes don't fire (the live keys are the monitor).
-            if (ch == recordSuppressCh.load(std::memory_order_relaxed)) continue;
+            if (ch == recordSuppressCh.load(std::memory_order_relaxed)
+                || ch == recordSuppressCh2.load(std::memory_order_relaxed)) continue;
             const int R = DrumChannel::DRAW_RES;
             const int nN = juce::jlimit(0, DrumChannel::DRAW_MAX_NOTES, c.drawNoteCount);
             // Seam dedupe: compare against the PREVIOUS pass's value and set AFTER the loop, so a
