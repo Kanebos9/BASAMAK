@@ -6447,14 +6447,17 @@ void DrumSequencerEditor::setupComponents()
     keysPanel.btnSlot2.setLookAndFeel(&dropBtnLNF);   // dropdown look (triangle) - it's a popup button now
     keysPanel.btnArp.setLookAndFeel(&dropBtnLNF);     // same: the Arp button opens a dropdown
     keysPanel.btnGuide.setLookAndFeel(&dropBtnLNF);   // Key-guide popup button
-    keysPanel.btnGuide.setTooltip("KEY GUIDE (display only): dims the keys OUTSIDE a scale so you can stay in key "
-        "while jamming.\n\n"
-        "- Follow sound = use the SCALE already set on the selected channel's sound slot (nothing dims if its "
-        "Scale mode is off).\n"
-        "- Or pick any key + scale here, independent of the sound.\n\n"
-        "Purely visual - it never changes what plays. And it is about the key YOU press (the root): in "
-        "Chord/Scale modes the extra harmony notes are added automatically by the sound - you never press "
-        "them yourself. That auto-voicing lives in the sound editor's UNISON / CHORD / SCALE selector.");
+    keysPanel.btnGuide.setTooltip("KEY GUIDE (display only): dims the keys OUTSIDE a scale. Lit keys = the "
+        "notes of the scale - ALL of them, not just chord roots.\n\n"
+        "- MELODIES: stay on lit keys and you stay in key.\n"
+        "- CHORDS BY HAND (Poly on): press several lit keys together. Classic recipe: press a lit key, SKIP "
+        "the next lit one, press the one after, skip, press again - root / third / fifth, that key's chord "
+        "in the scale.\n"
+        "- If the sound's own CHORD/SCALE mode is on (sound editor, UNISON / CHORD / SCALE), one key already "
+        "plays a full chord automatically - the lit keys are then the valid ROOTS, and a dimmed key snaps to "
+        "the nearest lit one.\n"
+        "- Follow sound reads the scale from the selected channel's slots (two slots with DIFFERENT scales: "
+        "only keys in BOTH stay lit).");
     keysPanel.btnGuide.onClick = [this] {
         juce::PopupMenu m;
         m.addItem(1, "Off",                        true, proc.kbGuideMode == 0);
@@ -8422,25 +8425,29 @@ void DrumSequencerEditor::updateKeyboardHighlight()
 // KEY GUIDE: dim the keyboard keys OUTSIDE the chosen scale (display only; change-gated).
 void DrumSequencerEditor::updateKeyboardGuide()
 {
-    int mode = proc.kbGuideMode, key = proc.kbGuideKey, type = proc.kbGuideScale;
-    if (mode == 1)   // follow the sound: the selected channel's first audible slot with SCALE on
-    {
+    // Build a 12-bit pitch-class mask of the keys that stay LIT (-1 = guide off / nothing to dim).
+    auto scaleMask = [](int key, int type) {
+        int m = 0; type = juce::jlimit(0, 9, type);
+        for (int k = 0; k < kUiScaleLen[type]; ++k) m |= 1 << ((key + kUiScaleTab[type][k]) % 12);
+        return m;
+    };
+    int mask = -1;
+    if (proc.kbGuideMode == 2) mask = scaleMask(proc.kbGuideKey, proc.kbGuideScale);
+    else if (proc.kbGuideMode == 1)
+    {   // FOLLOW SOUND: the slots can carry DIFFERENT scales - only keys that are members of EVERY
+        // audible scale-on slot stay lit (a key outside one slot's scale gets snapped by that slot).
         const auto& c = proc.sequencer.channel(selectedChannel);
-        mode = 0;
+        int m = 0xFFF; bool any = false;
         for (const auto& sl : c.slots)
-            if (sl.scaleOn && sl.engine >= 0 && sl.weight > 0.001f) { key = sl.scaleKey; type = sl.scaleType; mode = 2; break; }
+            if (sl.scaleOn && sl.engine >= 0 && sl.weight > 0.001f)
+            { any = true; m &= scaleMask(sl.scaleKey, sl.scaleType); }
+        if (any) mask = m;
     }
-    const int state = (mode == 2) ? ((2 << 8) | (key << 4) | type) : mode;
-    if (state == kbGuideApplied) return;
-    kbGuideApplied = state;
+    if (mask == kbGuideApplied) return;
+    kbGuideApplied = mask;
     keysPanel.clearKeyDims();
-    if (mode == 2)
-    {
-        bool in[12] = {};
-        for (int k = 0; k < kUiScaleLen[juce::jlimit(0, 9, type)]; ++k)
-            in[(key + kUiScaleTab[juce::jlimit(0, 9, type)][k]) % 12] = true;
-        for (int m = 0; m < 128; ++m) if (! in[m % 12]) keysPanel.setKeyDim(m, true);
-    }
+    if (mask >= 0)
+        for (int m = 0; m < 128; ++m) if (! ((mask >> (m % 12)) & 1)) keysPanel.setKeyDim(m, true);
     keysPanel.applyKeyTints();   // repaint
 }
 
