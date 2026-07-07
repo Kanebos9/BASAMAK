@@ -3256,7 +3256,7 @@ void VoiceModDisplay::setValues(int unison, int chordUnison, int scaleUnison, fl
     uniChord = juce::jlimit(1, maxUni, chordUnison);
     uniScale = juce::jlimit(1, maxUni, scaleUnison);
     det = juce::jlimit(0.0f, 1.0f, detune);
-    spread = juce::jlimit(0.0f, 1.0f, uniSpreadIn);
+    uniWidth = juce::jlimit(0.0f, 1.0f, uniSpreadIn);
     vib = juce::jlimit(0.0f, 1.0f, vibrato);
     centre = centreOn;
     mode = juce::jlimit(0, 2, detuneMode);
@@ -3410,13 +3410,13 @@ void VoiceModDisplay::paint(juce::Graphics& g)
     // Mode chips: STD = detuned copies; CHORD = the unison voices become chord notes. When CHORD
     // is on, a third chip cycles the chord TYPE and shows the actual stacked intervals for the
     // current voice count, e.g. "Maj (+4,+3)".
-    if (uniOn) {   // STEREO WIDTH mini-fader (bottom-left): unison/chord voices fan across the field
+    if (uniOn) {   // STEREO WIDTH mini-fader (top-left, in the old chip band): drag = widen the voices
         auto wr = widthRect();
         g.setColour(juce::Colour(0xff26264a)); g.fillRoundedRectangle(wr, 3.0f);
-        g.setColour(juce::Colour(0xff35c0ff).withAlpha(0.30f));
-        g.fillRoundedRectangle(wr.withWidth(juce::jmax(4.0f, spread * wr.getWidth())), 3.0f);
-        g.setColour(juce::Colour(0xffb8c4dc)); g.setFont(juce::Font(8.5f, juce::Font::bold));
-        g.drawText("Width " + juce::String(juce::roundToInt(spread * 100.0f)) + "%", wr.toNearestInt(),
+        g.setColour(juce::Colour(0xff35c0ff).withAlpha(0.35f));
+        g.fillRoundedRectangle(wr.withWidth(juce::jmax(4.0f, uniWidth * wr.getWidth())), 3.0f);
+        g.setColour(juce::Colour(0xffc8d4ea)); g.setFont(juce::Font(9.5f, juce::Font::bold));
+        g.drawText("Width " + juce::String(juce::roundToInt(uniWidth * 100.0f)) + "%", wr.toNearestInt(),
                    juce::Justification::centred, false);
     }
     // (The UNISON/CHORD/SCALE chips are GONE - the visual is UNISON-only; the SCALE harmonizer is
@@ -3501,7 +3501,7 @@ void VoiceModDisplay::mouseDrag(const juce::MouseEvent& e)
     if (drag < 0) return;
     if (drag == 4) {   // WIDTH mini-fader: horizontal drag
         auto wr = widthRect();
-        spread = juce::jlimit(0.0f, 1.0f, (e.position.x - wr.getX()) / juce::jmax(1.0f, wr.getWidth()));
+        uniWidth = juce::jlimit(0.0f, 1.0f, (e.position.x - wr.getX()) / juce::jmax(1.0f, wr.getWidth()));
         emit(); repaint(); return;
     }
     const Geo q = geom();

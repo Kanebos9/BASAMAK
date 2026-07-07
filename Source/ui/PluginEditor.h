@@ -972,7 +972,7 @@ private:
     int   uniScale = 3;   // SCALE-mode voice count (chord size for the diatonic harmonizer)
     int   curUni() const { return scaleOn ? uniScale : chord > 0 ? uniChord : uni; }   // the ACTIVE mode's count
     float det = 0.0f, vib = 0.0f;
-    float spread = 0.0f;   // stereo WIDTH of the unison/chord voices (bottom-left mini bar)
+    float uniWidth = 0.0f;   // stereo WIDTH of the unison/chord voices (top-left mini bar; NOT 'spread' - paint() has a pixel local by that name)
     bool  centre = false;          // also play the original/undetuned pitch (toggled by double-click on Detune)
     int   mode = 0;                // detune direction: 0 = symmetric (drag right), 1 = up (drag up), 2 = down (drag down)
     bool  uniOn = true, vibOn = true;
@@ -990,8 +990,8 @@ private:
                  float rangeX, rangeY, dPtX, dPtY, rootY, upRange, uniTop; };   // rootY = root line; upRange = room above it; uniTop = unison-dot ceiling (below the chips)
     Geo  geom() const;
     int  nearestHandle(juce::Point<float> p) const;
-    juce::Rectangle<float> widthRect() const { return { 6.0f, (float) getHeight() - 15.0f, 86.0f, 11.0f }; }
-    void emit() { if (onChange) onChange(curUni(), det, vib, centre, mode, emitChord, emitScaleOn, emitScaleType, emitScaleKey, spread); }
+    juce::Rectangle<float> widthRect() const { return { 6.0f, 4.0f, 92.0f, 13.0f }; }   // TOP-left (the old chip band - empty now)
+    void emit() { if (onChange) onChange(curUni(), det, vib, centre, mode, emitChord, emitScaleOn, emitScaleType, emitScaleKey, uniWidth); }
 };
 
 //==============================================================================
