@@ -623,7 +623,7 @@ public:
     //   entries (7/9/11/13) give polyrhythmic grids; 12/16/24 are reached via Rate (e.g. 8 x 2 = 16).
     //   arpRate multiplies it: {1/3, 1/2, 1, 1.5, 2, 3}. Default 8 x 2 = classic 16ths.
     int    arpSync = 8;
-    int    arpRate = 4;                       // index into the multiplier table; 4 = x2
+    int    arpRate = 8;                       // index into the multiplier table; 8 = x2
     static constexpr int ARP_SYNCS[6] = { 7, 8, 9, 10, 11, 13 };   // the fader's detents
     static int arpSnapSync(int v)             // snap to the nearest fader detent (tie -> lower)
     {
@@ -631,8 +631,10 @@ public:
         for (int c : ARP_SYNCS) { const int d = std::abs(c - v); if (d < bd) { bd = d; best = c; } }
         return best;
     }
-    static double arpRateMul(int idx)         // the Rate button's multiplier
-    { static const double t[6] = { 1.0/3.0, 1.0/2.0, 1.0, 1.5, 2.0, 3.0 }; return t[juce::jlimit(0, 5, idx)]; }
+    static constexpr int ARP_RATES = 11;      // decimal rates (drag-fader): x0.25 .. x3
+    static double arpRateMul(int idx)         // the Rate fader's multiplier
+    { static const double t[ARP_RATES] = { 0.25, 1.0/3.0, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0 };
+      return t[juce::jlimit(0, ARP_RATES - 1, idx)]; }
     // The MIDI note for arp step `step` (0 = root, 1.. = the offset rows), looping within `len`.
     // Returns -1 for a REST row. Shared by the engine (processor) and the offline test.
     static int arpNoteAt(const int8_t* offsets, int len, int root, int step)

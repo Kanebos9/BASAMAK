@@ -4074,8 +4074,9 @@ ArpEditor::~ArpEditor()
     if (closerHooked) juce::Desktop::getInstance().removeGlobalMouseListener(&closer);
 }
 
-static const char* kArpRateName6(int r)
-{ static const char* n[6] = { "x1/3", "x1/2", "x1", "x1.5", "x2", "x3" }; return n[juce::jlimit(0, 5, r)]; }
+static const char* kArpRateName11(int r)
+{ static const char* n[11] = { "x0.25", "x0.33", "x0.5", "x0.75", "x1", "x1.25", "x1.5", "x1.75", "x2", "x2.5", "x3" };
+  return n[juce::jlimit(0, 10, r)]; }
 
 void ArpEditor::paint(juce::Graphics& g)
 {
@@ -4086,9 +4087,15 @@ void ArpEditor::paint(juce::Graphics& g)
     g.setColour(on ? juce::Colour(0xff35b56a) : juce::Colour(0xff33335a)); g.fillRoundedRectangle(ob, 4.0f);
     g.setColour(on ? juce::Colours::black : juce::Colour(0xffb8b8d0)); g.setFont(juce::Font(13.0f, juce::Font::bold));
     g.drawText(on ? "ON" : "OFF", onRect(), juce::Justification::centred, false);
-    g.setColour(juce::Colour(0xff26264a)); g.fillRoundedRectangle(rateRect().toFloat(), 4.0f);
-    g.setColour(juce::Colour(0xffc8d0e0)); g.setFont(juce::Font(13.0f, juce::Font::bold));
-    g.drawText(juce::String("Rate ") + kArpRateName6(rate), rateRect(), juce::Justification::centred, false);
+    { // RATE: a click-and-drag FADER inside the button shape (subtle fill = position; label semi-transparent)
+        auto rr = rateRect();
+        g.setColour(juce::Colour(0xff26264a)); g.fillRoundedRectangle(rr.toFloat(), 4.0f);
+        const float pos = (float)(rate + 1) / (float) DrumChannel::ARP_RATES;
+        g.setColour(juce::Colour(0xff35c0ff).withAlpha(0.22f));
+        g.fillRoundedRectangle(rr.toFloat().withWidth(juce::jmax(6.0f, pos * (float) rr.getWidth())), 4.0f);
+        g.setColour(juce::Colour(0xffc8d0e0).withAlpha(0.75f)); g.setFont(juce::Font(13.0f, juce::Font::bold));
+        g.drawText(juce::String("Rate ") + kArpRateName11(rate), rr, juce::Justification::centred, false);
+    }
     { // NOTES/BAR fader: 6 detents (7 8 9 10 11 13) - a clean track; the caption UNDER it names the
       // control AND shows the pick ("Notes per bar x8"), big enough to read (the tiny tick numbers went).
         auto f = faderRect();
@@ -4145,11 +4152,10 @@ void ArpEditor::paint(juce::Graphics& g)
 
 void ArpEditor::mouseDown(const juce::MouseEvent& e)
 {
-    dragCell = -1; dragFader = false;
+    dragCell = -1; dragFader = false; dragRate = false;
     const auto p = e.getPosition();
     if (onRect().contains(p))    { on = ! on; if (onChange) onChange(); repaint(); return; }
-    if (rateRect().contains(p))  { rate = e.mods.isRightButtonDown() ? (rate + 5) % 6 : (rate + 1) % 6;
-                                   if (onChange) onChange(); repaint(); return; }
+    if (rateRect().contains(p))  { dragRate = true; mouseDrag(e); return; }   // drag-fader inside the box
     if (faderRect().contains(p)) { dragFader = true; mouseDrag(e); return; }
     if (lenDnRect().contains(p)) { len = juce::jmax(1, len - 1); if (onChange) onChange(); repaint(); return; }
     if (lenUpRect().contains(p)) { len = juce::jmin(1 + DrumChannel::ARP_ROWS, len + 1); if (onChange) onChange(); repaint(); return; }
@@ -4166,6 +4172,14 @@ void ArpEditor::mouseDown(const juce::MouseEvent& e)
 
 void ArpEditor::mouseDrag(const juce::MouseEvent& e)
 {
+    if (dragRate)
+    {   // RATE fader: absolute position across the box picks one of the 11 rates
+        auto rr = rateRect();
+        const float f = juce::jlimit(0.0f, 1.0f, (float)(e.getPosition().x - rr.getX()) / (float) juce::jmax(1, rr.getWidth()));
+        const int idx = juce::jlimit(0, DrumChannel::ARP_RATES - 1, (int) (f * (float) DrumChannel::ARP_RATES));
+        if (idx != rate) { rate = idx; if (onChange) onChange(); repaint(); }
+        return;
+    }
     if (dragFader)
     {   // fader: snap to the nearest of the 6 detents
         auto tr = faderRect().withHeight(24).reduced(8, 0);

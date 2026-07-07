@@ -418,6 +418,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         // and glide/chord/scale apply since it's the normal key path). While recording a piano-roll
         // channel it also stamps the note so the arp is captured.
         auto& arpKc = sequencer.patterns[keyPat].channels[chIdx];
+        bool arpKicked = false;   // this key just STARTED the transport (isCurrentlyPlaying turns true next block)
         auto fireArp = [&](int step)
         {
             const int note = DrumChannel::arpNoteAt(arpKc.arpOffset, arpKc.arpLen, arpRoot, step);
@@ -427,11 +428,11 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             arpKc.keyDown(note, arpVel, arpKc.keysSlot2Down, false);   // mono arp note
             arpSounding = note;
             arpSoundingUi.store(note, std::memory_order_relaxed);      // the keyboard highlight follows this live
-            if (rec && drawRec && sequencer.isCurrentlyPlaying)        // capture the arp into the piano roll
+            if (rec && drawRec && (sequencer.isCurrentlyPlaying || arpKicked))   // capture the arp into the piano roll
             {
                 const int colLen = juce::jmax(1, (int) ((double) DrumChannel::DRAW_RES
                                                         / ((double) juce::jmax(1, arpKc.arpSync) * DrumChannel::arpRateMul(arpKc.arpRate))));
-                const int col = juce::jlimit(0, DrumChannel::DRAW_RES - 1, (int) (sequencer.barPos() * DrumChannel::DRAW_RES));
+                const int col = arpKicked ? 0 : juce::jlimit(0, DrumChannel::DRAW_RES - 1, (int) (sequencer.barPos() * DrumChannel::DRAW_RES));
                 sequencer.patterns[sequencer.playPattern].channels[chIdx].addDrawNote(col, colLen, note - 60,
                                                                                       (int) std::lround(arpVel * 255.0f));
             }
@@ -456,11 +457,17 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
 
         auto handleKeyDown = [&](int note, float vel)
         {
-            if (arpKc.arpOn)   // ARP owns the note: it generates the riff from this root (bypass normal play/record)
+            if (arpKc.arpOn)   // ARP owns the note: it generates the riff from this root
             {
+                // "First key starts recording" works for the arp too: kick the transport (own transport
+                // only), and let fireArp stamp the kicked note at column 0 (isCurrentlyPlaying only turns
+                // true NEXT block - same regression the normal path fixed with its `kicked` flag).
+                if (rec && ! sequencer.isCurrentlyPlaying && ! sequencer.dawSync)
+                { sequencer.startStandalone(); arpKicked = true; }
                 const float mv = juce::jlimit(0.0f, 1.0f, arpKc.keysMinVel);
                 const float xv = juce::jmax(mv, juce::jlimit(0.0f, 1.0f, arpKc.keysMaxVel));
                 startArp(note, juce::jlimit(0.05f, 1.0f, mv + vel * (xv - mv)));
+                arpKicked = false;
                 return;
             }
             bool kicked = false;   // "key starts recording": isCurrentlyPlaying only turns true on the
@@ -1631,7 +1638,7 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
     ch.arpOn   = (bool) child.getProperty("arpOn", false);
     ch.arpLen  = juce::jlimit(1, 1 + DrumChannel::ARP_ROWS, (int) child.getProperty("arpLen", 2));
     ch.arpSync = DrumChannel::arpSnapSync((int) child.getProperty("arpSync", 8));
-    ch.arpRate = juce::jlimit(0, 5, (int) child.getProperty("arpRate", 4));
+    ch.arpRate = juce::jlimit(0, DrumChannel::ARP_RATES - 1, (int) child.getProperty("arpRate", 8));
     { const juce::String ao = child.getProperty("arpOff", "").toString();
       if (ao.isNotEmpty()) { auto f = juce::StringArray::fromTokens(ao, ",", "");
         for (int i = 0; i < DrumChannel::ARP_ROWS && i < f.size(); ++i)

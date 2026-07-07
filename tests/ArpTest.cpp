@@ -32,10 +32,12 @@ int main() {
                CHK(s0==60 && s1==67 && s2==-1 && s3==72 && s4==60) ? "root/offset/REST/wrap OK" : "FAIL");
     }
     {   // [2] Notes/bar fader snap onto {7,8,9,10,11,13} (nearest; tie -> lower) + the Rate table
-        printf("[2] snap: 8->%d 12->%d 6->%d 100->%d | rate x1.5=%.1f -> %s\n",
-               DC::arpSnapSync(8), DC::arpSnapSync(12), DC::arpSnapSync(6), DC::arpSnapSync(100), DC::arpRateMul(3),
+        printf("[2] snap: 8->%d 12->%d 6->%d 100->%d | rates x%.2f..x%.1f, x1.5=%.1f -> %s\n",
+               DC::arpSnapSync(8), DC::arpSnapSync(12), DC::arpSnapSync(6), DC::arpSnapSync(100),
+               DC::arpRateMul(0), DC::arpRateMul(10), DC::arpRateMul(6),
                CHK(DC::arpSnapSync(8)==8 && DC::arpSnapSync(12)==11 && DC::arpSnapSync(6)==7
-                   && DC::arpSnapSync(100)==13 && std::abs(DC::arpRateMul(3)-1.5)<1e-9) ? "OK" : "FAIL");
+                   && DC::arpSnapSync(100)==13 && std::abs(DC::arpRateMul(0)-0.25)<1e-9
+                   && std::abs(DC::arpRateMul(6)-1.5)<1e-9 && std::abs(DC::arpRateMul(10)-3.0)<1e-9) ? "OK" : "FAIL");
     }
     {   // [3] an arp note (root + offset) rendered via keyDown plays the right pitch: root C3 + 7 = G3
         DrumChannel ch;

@@ -522,7 +522,7 @@ public:
     int8_t off[DrumChannel::ARP_ROWS];
     int    len  = 2;     // pattern length INCLUDING the root (1 + rows)
     int    sync = 8;     // the Notes/bar fader (7/8/9/10/11/13) - the BASE grid
-    int    rate = 4;     // Rate multiplier index {x1/3, x1/2, x1, x1.5, x2, x3}; 4 = x2
+    int    rate = 8;     // Rate multiplier index (11 decimal rates x0.25..x3); 8 = x2
     juce::Component* clickIgnore = nullptr;   // the Arp button: its own click toggles the popup
     std::function<void()> onChange;    // push these back onto the channel (+ mark modified)
     ArpEditor() { for (auto& o : off) o = DrumChannel::ARP_REST; }
@@ -552,13 +552,13 @@ private:
     Closer closer { *this };
     bool closerHooked = false;
     int  dragCell = -1;
-    bool dragFader = false;
+    bool dragFader = false, dragRate = false;
     void bump(int i, int d)   // nudge row i by d semitones (a REST cell lands on 0 first), extend length
     { if (i < 0) return; int v = (off[i] == DrumChannel::ARP_REST) ? 0 : (int) off[i] + d;
       off[i] = (int8_t) juce::jlimit(-24, 24, v); if (i + 2 > len) len = i + 2; if (onChange) onChange(); repaint(); }
     juce::Rectangle<int> onRect()    const { return { 6, 8, 46, 28 }; }
-    juce::Rectangle<int> rateRect()  const { return { 58, 8, 66, 28 }; }
-    juce::Rectangle<int> faderRect() const { return { 132, 4, getWidth() - 132 - 162, TOPH - 8 }; }
+    juce::Rectangle<int> rateRect()  const { return { 58, 8, 146, 28 }; }                             // drag-fader (same width as Notes/bar)
+    juce::Rectangle<int> faderRect() const { return { 210, 4, getWidth() - 210 - 164, TOPH - 8 }; }   // ~146 at the popup's width
     juce::Rectangle<int> lenDnRect() const { return { getWidth() - 156, 8, 24, 28 }; }
     juce::Rectangle<int> lenValRect()const { return { getWidth() - 130, 8, 94, 28 }; }
     juce::Rectangle<int> lenUpRect() const { return { getWidth() - 34, 8, 26, 28 }; }
