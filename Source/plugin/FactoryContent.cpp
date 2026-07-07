@@ -453,6 +453,58 @@ static void mDistKick(DC& c) {   // gnarly distorted kick with a proper knock
     c.fmPitchEnvAmt = 20.0f; c.fmPitchEnvTime = 0.035f;
     c.srcDec[DC::SrcFM] = 0.40f; c.driveType = DC::Fuzz; c.driveAmount = 0.35f; c.volume = 0.92f;
 }
+// ---- Kicks batch 1 (v1.3.4 taxonomy fill). Roles, so the family stays distinct:
+// 808 = long boom | 909 = click+tube | Punch = hard rave | Dist = fuzz | FM = trap sub |
+// Sub = knockless layer | Break = tight boxy | Rumble = techno noise tail |
+// Crunch = foldback grit | Acoustic = modal head + beater. (A round "Deep Kick" and a Bitcrush
+// "Lofi Kick" were BOTH cut here: audited 0.99 vs 909/Punch - the short-sine space is FULL.)
+static void mSubKick(DC& c) {   // pure 38 Hz layering sub: NO knock at all, soft attack, long-ish
+    clearSound(c); c.srcOn[DC::SrcOsc] = true; c.srcWeight[DC::SrcOsc] = 1.0f;
+    c.layerOscShape = DC::OscSine; c.layerSineFreq = 38.0f;
+    c.srcAtk[DC::SrcOsc] = 0.004f; c.srcDec[DC::SrcOsc] = 0.75f;
+    c.driveType = DC::SoftClip; c.driveAmount = 0.10f; c.volume = 0.97f;
+}
+static void mBreakKick(DC& c) {   // tight boxy breakbeat kick: mid-forward, small knock, very short
+    clearSound(c); c.srcOn[DC::SrcOsc] = true; c.srcWeight[DC::SrcOsc] = 1.0f;
+    c.layerOscShape = DC::OscSine; c.layerSineFreq = 78.0f;
+    c.layerSinePEnvAmt = 8.0f; c.layerSinePEnvTime = 0.025f;
+    c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 0.16f;
+    c.eqBand[DC::EQ_HP] = { true, 55.0f, 0.0f, 0.707f };   // boxy = no sub weight
+    c.driveType = DC::Tube; c.driveAmount = 0.22f; c.volume = 0.93f;
+}
+static void mRumbleKick(DC& c) {   // hard-techno: clipped knock + a LONG dark noise rumble tail
+    clearSound(c);
+    c.srcOn[DC::SrcOsc]   = true; c.srcWeight[DC::SrcOsc]   = 0.48f;
+    c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 0.52f;
+    c.padX = 0.14f + 0.82f * 0.52f; c.padY = 0.5f;
+    c.layerOscShape = DC::OscSine; c.layerSineFreq = 52.0f;
+    c.layerSinePEnvAmt = 24.0f; c.layerSinePEnvTime = 0.022f;
+    c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 0.38f;
+    c.noiseType = 2; c.layerNoiseCenter = 1400.0f; c.layerNoiseWidth = 0.35f;   // brown = the dark rumble
+    c.srcAtk[DC::SrcNoise] = 0.002f; c.srcDec[DC::SrcNoise] = 0.70f;
+    c.eqBand[DC::EQ_HP] = { true, 40.0f, 0.0f, 0.707f };
+    c.driveType = DC::HardClip; c.driveAmount = 0.38f; c.volume = 0.90f;
+}
+static void mCrunchKick(DC& c) {   // foldback grit (the only kick on Foldback): harmonics bite mid-band
+    clearSound(c); c.srcOn[DC::SrcOsc] = true; c.srcWeight[DC::SrcOsc] = 1.0f;
+    c.layerOscShape = DC::OscSine; c.layerSineFreq = 60.0f;
+    c.layerSinePEnvAmt = 18.0f; c.layerSinePEnvTime = 0.030f;
+    c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 0.30f;
+    c.driveType = DC::Foldback; c.driveAmount = 0.40f; c.volume = 0.90f;
+}
+static void mAcousticKick(DC& c) {   // organic: Modal membrane head + a felt-beater noise tick
+    clearSound(c);
+    DC::Slot& b = c.slots[0]; b.engine = DC::SrcModal; b.weight = 0.62f;
+    b.modalMaterial = 3;                // Membrane (circular drumhead modes)
+    b.oscFreq = 52.0f; b.modalDecay = 0.28f; b.modalTone = 0.35f; b.modalHit = 0.25f;
+    b.atk = 0.001f;
+    DC::Slot& n = c.slots[1]; n.engine = DC::SrcNoise; n.weight = 0.38f;
+    n.noiseType = 0; n.noiseCenter = 2600.0f; n.noiseWidth = 0.15f;
+    n.atk = 0.0005f; n.dec = 0.02f;     // the beater = one short soft tick
+    c.padX = 0.38f; c.padY = 0.5f;
+    c.eqBand[DC::EQ_HP] = { true, 35.0f, 0.0f, 0.707f };
+    c.volume = 0.95f;
+}
 // -- Snares & Claps --
 static void mTrapSnare(DC& c) {   // sharp trap crack
     clearSound(c);
@@ -989,6 +1041,11 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "909 Kick", m909Kick, "Kicks" },
     { "Punch Kick", mPunchKick, "Kicks" },
     { "Dist Kick", mDistKick, "Kicks" },
+    { "Sub Kick", mSubKick, "Kicks" },
+    { "Break Kick", mBreakKick, "Kicks" },
+    { "Rumble Kick", mRumbleKick, "Kicks" },
+    { "Crunch Kick", mCrunchKick, "Kicks" },
+    { "Acoustic Kick", mAcousticKick, "Kicks" },
     // ---- Snares ----
     { "Noise Snare", mNoiseSnare, "Snares" },
     { "808 Snare", m808Snare, "Snares" },
@@ -1089,6 +1146,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Pluck Synth", mPluckSynth, "Plucks & Strings" },
     { "Filter Pluck", eFilterPluck, "Plucks & Strings" },
     { "Synth Pluck", kSynthPluck, "Plucks & Strings" },
+    { "Stab", mStab, "Plucks & Strings" },
     { "Nylon Guitar", mNylonGuitar, "Plucks & Strings" },
     { "Koto", mKoto, "Plucks & Strings" },
     { "Pizzicato", mPizzicato, "Plucks & Strings" },
@@ -1108,7 +1166,6 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Glockenspiel", mGlockenspiel, "Bells & Mallets" },
     { "Celesta", mCelesta, "Bells & Mallets" },
     // ---- Chords & Arps ----
-    { "Stab", mStab, "Chords & Arps" },
     { "Power Keys", kPowerKeys, "Chords & Arps" },
     { "Octave Bells", kOctaveBells, "Chords & Arps" },
     { "Dorian Pad", kDorianPad, "Chords & Arps" },

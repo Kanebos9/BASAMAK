@@ -4906,6 +4906,28 @@ void WaveformDisplay::mouseDoubleClick(const juce::MouseEvent&)
 // DrumSequencerEditor
 //==============================================================================
 
+// Sound Bank menu category order (2026-07 taxonomy: INSTRUMENT roles - the old engine-named
+// "Modal" category was dissolved into Bells/Percussion/Toms/Cymbals; "FX & Synth" split into
+// Electro Perc + the three FX shelves). A category missing here is silently dropped!
+static const char* kSoundCatOrder[] = { "Kicks", "Snares", "Claps", "Hi-Hats", "Cymbals", "Toms",
+                                        "Percussion", "Electro Perc", "Bass", "Keys", "Pads & Choirs",
+                                        "Leads", "Plucks & Strings", "Bells & Mallets", "Chords & Arps",
+                                        "Risers & Falls", "Impacts & Booms", "Noise & Texture" };
+// Factory indices in CATEGORY cat, alphabetical; a non-empty query keeps only matches
+// (against the sound NAME or the category title - the search feature).
+static juce::Array<int> factoryIndicesFor(const char* cat, const juce::StringArray& names,
+                                          const juce::StringArray& cats, const juce::String& query)
+{
+    juce::Array<int> idx;
+    for (int i = 0; i < names.size(); ++i)
+        if (cats[i] == cat && (query.isEmpty() || names[i].containsIgnoreCase(query)
+                               || juce::String(cat).containsIgnoreCase(query)))
+            idx.add(i);
+    std::sort(idx.begin(), idx.end(),
+              [&](int a, int b) { return names[a].compareIgnoreCase(names[b]) < 0; });
+    return idx;
+}
+
 static constexpr int SAMPLE_ID_BASE   = 1000;
 static constexpr int FACTORY_MIX_BASE = 5000;   // factory sound mixes: 5000 + index
 static constexpr int FACTORY_PST_BASE = 6000;   // factory presets:     6000 + index
@@ -4914,6 +4936,7 @@ static constexpr int ID_INIT_MIX      = 9996;
 static constexpr int ID_REFRESH_SAMPLES = 9990;  // rescan the Samples folder so newly-added files appear in the dropdown
 static constexpr int ID_SHOW_SAMPLES    = 9989;  // reveal the Samples folder in Finder/Explorer
 static constexpr int ID_REFRESH_BANK    = 9995;  // rescan the Sound Bank folder
+static constexpr int ID_SEARCH_MIX      = 9992;  // type-to-find across sound names + categories
 static constexpr int ID_SHOW_BANK       = 9993;  // reveal the Sound Bank folder
 static constexpr int ID_BROWSE        = 10001;   // open the sound-browser window (outside the sample-id range)
 
@@ -5235,26 +5258,20 @@ void DrumSequencerEditor::rebuildSoundMixMenu(int ch)
     auto* root = combo.getRootMenu();
     root->clear();
     root->addItem(ID_INIT_MIX, "Initialize new sound mix");
+    root->addItem(ID_SEARCH_MIX, "Search sounds...");
     // Built-in factory sounds (read-only). Categories are SECTION HEADERS in one
     // flat list (no nested submenus); when the list is taller than the screen JUCE
-    // automatically flows it into extra columns to the side.
+    // automatically flows it into extra columns to the side. ALPHABETICAL inside
+    // each category (the table itself is grouped by authoring batch, not by name).
     auto facNames = Factory::mixNames();
     auto facCats  = Factory::mixCategories();
-    static const char* catOrder[] = { "Kicks", "Snares", "Claps", "Hi-Hats", "Cymbals", "Toms",
-                                      "Percussion", "Electro Perc", "Bass", "Keys", "Pads & Choirs",
-                                      "Leads", "Plucks & Strings", "Bells & Mallets", "Chords & Arps",
-                                      "Risers & Falls", "Impacts & Booms", "Noise & Texture" };
-    // 2026-07 taxonomy: categories are INSTRUMENT roles (the old engine-named "Modal" category was
-    // dissolved into Bells/Percussion/Toms/Cymbals; "FX & Synth" split into the three FX shelves).
-    for (auto* cat : catOrder)
+    for (auto* cat : kSoundCatOrder)
     {
-        bool wroteHeader = false;
-        for (int i = 0; i < facNames.size(); ++i)
-            if (facCats[i] == cat)
-            {
-                if (! wroteHeader) { root->addSectionHeader(cat); wroteHeader = true; }
-                root->addItem(FACTORY_MIX_BASE + i, facNames[i] + "  (" + Factory::mixSourceTag(i) + ")");
-            }
+        auto idx = factoryIndicesFor(cat, facNames, facCats, {});
+        if (idx.isEmpty()) continue;
+        root->addSectionHeader(cat);
+        for (int i : idx)
+            root->addItem(FACTORY_MIX_BASE + i, facNames[i] + "  (" + Factory::mixSourceTag(i) + ")");
     }
     // The user's own saved sounds (Your Sound Bank), mirroring any subfolders as submenus.
     root->addSectionHeader("Your Sound Bank");
@@ -5286,6 +5303,45 @@ void DrumSequencerEditor::handleSoundMixChange(int ch)
     {
         getSoundMixFolder().revealToUser();
         strips[ch].comboSound.setSelectedId(0, juce::dontSendNotification);
+    }
+    else if (id == ID_SEARCH_MIX)   // type-to-find: matches sound NAMES and the category titles
+    {
+        strips[ch].comboSound.setSelectedId(0, juce::dontSendNotification);
+        auto* aw = new juce::AlertWindow("Search sounds",
+                                         "Type part of a name or category (e.g. \"kick\", \"bells\"):",
+                                         juce::AlertWindow::NoIcon);
+        aw->addTextEditor("q", "");
+        aw->addButton("Search", 1, juce::KeyPress(juce::KeyPress::returnKey));
+        aw->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+        aw->enterModalState(true, juce::ModalCallbackFunction::create([this, aw, ch](int r)
+        {
+            const juce::String q = aw->getTextEditorContents("q").trim();
+            delete aw;
+            if (r != 1 || q.isEmpty()) return;
+            juce::PopupMenu m;                        // results reuse the combo's own item ids, so
+            auto names = Factory::mixNames();         // picking one routes through the normal apply
+            auto cats  = Factory::mixCategories();
+            int found = 0;
+            for (auto* cat : kSoundCatOrder)
+            {
+                auto idx = factoryIndicesFor(cat, names, cats, q);
+                if (idx.isEmpty()) continue;
+                m.addSectionHeader(cat);
+                for (int i : idx) { m.addItem(FACTORY_MIX_BASE + i, names[i] + "  (" + Factory::mixSourceTag(i) + ")"); ++found; }
+            }
+            bool userHdr = false;                     // saved sounds match on file name or folder name
+            for (int i = 0; i < soundMixFiles.size(); ++i)
+                if (soundMixFiles[i].getFileNameWithoutExtension().containsIgnoreCase(q)
+                    || soundMixFiles[i].getParentDirectory().getFileName().containsIgnoreCase(q))
+                {
+                    if (! userHdr) { m.addSectionHeader("Your Sound Bank"); userHdr = true; }
+                    m.addItem(i + 1, soundMixFiles[i].getFileNameWithoutExtension()); ++found;
+                }
+            if (found == 0) m.addItem(-1, "(no sounds match \"" + q + "\")", false, false);
+            m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(strips[ch].comboSound),
+                            [this, ch](int pick)
+                            { if (pick > 0) strips[ch].comboSound.setSelectedId(pick, juce::sendNotificationSync); });
+        }), false);
     }
     else if (id == ID_INIT_MIX)
     {
