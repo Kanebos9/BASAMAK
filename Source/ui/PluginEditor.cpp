@@ -1561,6 +1561,7 @@ void StepGridComponent::drawStrokeTo(int ch, juce::Point<int> pos)
             strokeNoteIdx = cnt; ++cnt;
         }
         drawReadSemi = semi;   // live read-out
+        if (onRollPreview) onRollPreview(semi);   // hear the drawn pitch
     }
     pushNotes(ch);
     drawLastCol = col;
@@ -2010,7 +2011,9 @@ juce::String StepGridComponent::getTooltip()
                             "- Faint lines show every pitch each slot REALLY sounds (chords, scales, slot-2 pitch) "
                             "- display only.\n"
                             "- CMD/CTRL+click a note = GLIDE (slides in from the previous note; the KEYS Glide "
-                            "knob sets the time).\n\n"
+                            "knob sets the time).\n"
+                            "- SHIFT+drag = SELECT an area: move the selected notes together, right-click or "
+                            "double-click deletes them, a colour button re-slots them.\n\n"
                             "Humanize/Strum apply here too. Pick a step count in the dropdown to QUANTISE the roll "
                             "to steps.");
     return juce::String("STEP GRID. Click = toggle steps; the buttons top-right switch edit modes (Vel/Len/Pitch/"
@@ -2308,6 +2311,7 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
                                                        (uint8_t) prTargetSlot };
                 prIdx = drawNoteCount[ch2]++; prMode = 3; prGrabDCol = 0; prGrabDSemi = 0;
                 drawReadSemi = semi;
+                if (onRollPreview) onRollPreview(semi);   // hear what you just drew
                 pushNotes(ch2);
             }
             repaint();
@@ -2441,7 +2445,8 @@ void StepGridComponent::mouseDrag(const juce::MouseEvent& e)
                 n.start = (int16_t) juce::jlimit(0, totalCols() - 1, (int) prOrigStart[i] + dCol);
                 n.semi  = (int8_t)  juce::jlimit(-36, 36, (int) prOrigSemi[i] + dSemi);
             }
-        if (prIdx >= 0 && prIdx < drawNoteCount[ch2]) drawReadSemi = drawNotes[ch2][prIdx].semi;
+        if (prIdx >= 0 && prIdx < drawNoteCount[ch2]) { drawReadSemi = drawNotes[ch2][prIdx].semi;
+                                                        if (onRollPreview) onRollPreview((int) drawReadSemi); }
         pushNotes(ch2);
         repaint();
         return;
@@ -2459,6 +2464,7 @@ void StepGridComponent::mouseDrag(const juce::MouseEvent& e)
             n.start = (int16_t) juce::jlimit(0, totalCols() - 1, prSnap(juce::jmax(0, col - prGrabDCol)));
             n.semi  = (int8_t) juce::jlimit(-36, 36, yToDrawSemi(lane, e.getPosition().y, drawRange, drawViewCenter) - prGrabDSemi);
             drawReadSemi = n.semi;
+            if (onRollPreview) onRollPreview((int) n.semi);   // hear the pitch as you drag
         }
         else               // RESIZE / CREATE-stretch: the right edge follows the cursor (end snaps UP;
         {                  // notes may SPAN bar lines - the note keeps sounding into the next bar)
@@ -2500,6 +2506,8 @@ void StepGridComponent::mouseDrag(const juce::MouseEvent& e)
 
 void StepGridComponent::mouseUp(const juce::MouseEvent&)
 {
+    if (onRollPreviewEnd) onRollPreviewEnd();   // any gesture end releases the drawing-audition note
+
     if (prMode == 5 && drawMagCh >= 0)   // MARQUEE released: select every note inside the band
     {
         const int ch2 = drawMagCh;
@@ -6600,6 +6608,21 @@ void DrumSequencerEditor::setupComponents()
         }
         else out[n++] = base;   // plain slot: one line (differs from the drawn bar only when transposed)
         return n;
+    };
+    // AUDITION WHILE DRAWING: hear the note you're creating/dragging in the roll, played through the
+    // normal keys path (so slot-2/chord/scale voicing is what you hear). Skipped while recording (the
+    // live keys are the monitor) and when the ARP owns the keyboard.
+    stepGrid.onRollPreview = [this](int semi) {
+        auto& c = proc.sequencer.channel(selectedChannel);
+        if (proc.keysRecording.load() || c.arpOn || ! c.drawMode) return;
+        const int note = juce::jlimit(0, 127, 60 + semi);
+        if (note == rollPreviewNote) return;
+        if (rollPreviewNote >= 0) proc.pushKeyUp(rollPreviewNote);
+        proc.pushKeyDown(note, 0.8f);
+        rollPreviewNote = note;
+    };
+    stepGrid.onRollPreviewEnd = [this] {
+        if (rollPreviewNote >= 0) { proc.pushKeyUp(rollPreviewNote); rollPreviewNote = -1; }
     };
     stepGrid.onGridDivEdit = [this] {
         auto* aw = new juce::AlertWindow("Piano-roll grid", "Snap to 1/N of the bar (1-64, or 0 for off):",

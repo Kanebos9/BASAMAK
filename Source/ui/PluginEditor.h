@@ -30,6 +30,8 @@ public:
     std::function<void(int ch, float vel, float pan)> onDrawVelPan;   // whole-channel Pan (+ default Vel) in piano-roll mode
     std::function<void(int ch)> onDrawModeMaybeChanged;               // ch's roll-vs-step may have changed (fade buttons)
     std::function<void()> onGridDivEdit;   // clicking the snap-grid header: type a value (1-64, 0 = off)
+    std::function<void(int semi)> onRollPreview;   // AUDITION while drawing/moving a note (hear the pitch live)
+    std::function<void()> onRollPreviewEnd;        // gesture ended -> release the preview note
     // GHOST LINES: asks the editor which pitches slot 'slot' ACTUALLY sounds for a drawn note at
     // 'semi' (chord/scale voicing + slot-2 transpose). Fills out[] (max 8), returns the count (0 = slot silent).
     std::function<int(int ch, int slot, int semi, int* out)> getSlotVoicing;
@@ -1591,6 +1593,7 @@ private:
     void updateKeyboardHighlight();   // light up the keys the held note voices (slot 1 yellow / slot 2 pink)
     uint64_t keysHighlightMaskLo = ~0ULL, keysHighlightMaskHi = ~0ULL;   // last held-note mask tinted for (~0 = force first update)
     int keysHighlightArpNote = -2;   // last arp note tinted for (the highlight FOLLOWS the arp live; -2 = force)
+    int rollPreviewNote = -1;        // drawing-audition note currently held via pushKeyDown (-1 = none)
     // Host-frozen detector: if processHeartbeat stops moving (~1 s), the host isn't sending us
     // audio - the Play tooltip flips to a "Not playing?" explanation (see timerCallback).
     uint32_t lastHeartbeat = 0; int heartbeatStaleTicks = 0; bool hostFrozen = false;
