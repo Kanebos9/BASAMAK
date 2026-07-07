@@ -3997,6 +3997,11 @@ void TintKeyboard::drawWhiteNote(int n, juce::Graphics& g, juce::Rectangle<float
     }
     { // EVERY key gets its note name: BLACK on white keys (C keys bold as landmarks); faded when dimmed
         const bool isC = (n % 12) == 0;
+        if (isC && c.getAlpha() == 0)   // shade the whole C key softly (the common octave-landmark look);
+        {                               // tinted/held keys keep their highlight colour instead
+            g.setColour(juce::Colour(dim[n] ? 0x0fb02020 : 0x1ab02020));
+            g.fillRect(area.reduced(0.5f));
+        }
         g.setColour(dim[n] && c.getAlpha() == 0 ? juce::Colour(isC ? 0x66c01818 : 0x59101018)
                                                 : (isC ? juce::Colour(0xffd21f1f)              // C = bold RED landmarks
                                                        : juce::Colour(0xcc10141c)));
@@ -6080,6 +6085,17 @@ void DrumSequencerEditor::applyUndoState(const UndoEntry& e)
     updateUndoRedoEnabled();
 }
 
+// Cmd+Z (mac) / Ctrl+Z (win) = undo; Cmd+Shift+Z or Ctrl+Y = redo. commandModifier abstracts the
+// platform key. Best-effort: some hosts eat plugin key events before we see them.
+bool DrumSequencerEditor::keyPressed(const juce::KeyPress& k)
+{
+    using MK = juce::ModifierKeys;
+    if (k == juce::KeyPress('z', MK::commandModifier, 0))                       { doUndo(); return true; }
+    if (k == juce::KeyPress('z', MK::commandModifier | MK::shiftModifier, 0)
+        || k == juce::KeyPress('y', MK::commandModifier, 0))                    { doRedo(); return true; }
+    return false;
+}
+
 void DrumSequencerEditor::doUndo()
 {
     if (undoStack.size() < 2) return;          // top is the current state; need a prior one
@@ -6189,6 +6205,7 @@ void DrumSequencerEditor::setupComponents()
     content.addAndMakeVisible(btnUndo);
     btnUndo.setTooltip("Undo the last change (sounds, steps, FX, patterns - up to a couple dozen steps back).");
     btnUndo.onClick = [this] { doUndo(); };
+    setWantsKeyboardFocus(true);   // so Cmd/Ctrl+Z reaches keyPressed (children bubble unconsumed keys up)
     btnUndo.getProperties().set("icon", "undo"); btnUndo.setLookAndFeel(&iconBtnLNF);
     content.addAndMakeVisible(btnRedo);
     btnRedo.setTooltip("Redo a change you just undid.");

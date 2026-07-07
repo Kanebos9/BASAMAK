@@ -1469,6 +1469,7 @@ public:
     void layoutContent();
     void paintContent(juce::Graphics&);
     void contentWheel(juce::Point<int> pos, float deltaY);   // wheel over the channel strips / pattern row scrolls them
+    bool keyPressed(const juce::KeyPress&) override;         // Cmd/Ctrl+Z = undo, Cmd+Shift+Z / Ctrl+Y = redo
     void setChannelMerge(int a, int b);   // MERGE&SPLIT toggle for two adjacent channels (channel-wide)
     double lastContentWheelMs = 0.0;   // rate-limit so a fast wheel/trackpad flood doesn't rocket the scroll
     void paintStripOutline(juce::Graphics&);   // selected strip's red outline, ABOVE children (the meters)
