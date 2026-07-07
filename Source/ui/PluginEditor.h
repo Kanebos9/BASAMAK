@@ -1717,7 +1717,14 @@ private:
     struct PickerCombo : juce::ComboBox
     {
         std::function<void()> onOpen;
-        void showPopup() override { if (onOpen) onOpen(); else juce::ComboBox::showPopup(); }
+        void showPopup() override
+        {
+            // ComboBox sets its private menuActive latch BEFORE calling showPopup and only clears
+            // it when the real menu closes - since we never open one, hidePopup() must clear it or
+            // every click after the first is swallowed ("dropdown mostly doesnt open at all").
+            juce::ComboBox::hidePopup();
+            if (onOpen) onOpen(); else juce::ComboBox::showPopup();
+        }
     };
     struct ChannelStrip
     {

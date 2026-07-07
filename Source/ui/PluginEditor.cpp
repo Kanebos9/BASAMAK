@@ -5009,7 +5009,8 @@ public:
     }
 
 private:
-    struct Row { juce::String text; int id; bool header; };
+    struct Entry { juce::String text; int id = 0; };
+    struct Row   { juce::String header; Entry a, b; bool isHeader = false; bool hasB = false; };
     juce::Array<Row> rows;
     juce::Array<juce::File> files;
     juce::File root;
@@ -5030,52 +5031,68 @@ private:
     };
     Closer closer { *this };
 
+    void addHeader(const juce::String& text) { Row r; r.header = text; r.isHeader = true; rows.add(r); }
+    void addSection(const juce::Array<Entry>& items)   // pack 2 per row: the section FLOWS across
+    {                                                  // both columns (user spec)
+        for (int i = 0; i < items.size(); i += 2)
+        {
+            Row r; r.a = items[i];
+            if (i + 1 < items.size()) { r.b = items[i + 1]; r.hasB = true; }
+            rows.add(r);
+        }
+    }
     void rebuild()
     {
         rows.clear();
         const juce::String q = ed.getText().trim();
         auto names = Factory::mixNames();
         auto cats  = Factory::mixCategories();
-        if (q.isEmpty()) rows.add({ "Initialize new sound mix", ID_INIT_MIX, false });
+        if (q.isEmpty())
+        {
+            juce::Array<Entry> init; init.add({ "Initialize new sound mix", ID_INIT_MIX });
+            addSection(init);
+        }
         for (auto* cat : kSoundCatOrder)
         {
             auto idx = factoryIndicesFor(cat, names, cats, q);
             if (idx.isEmpty()) continue;
-            rows.add({ cat, 0, true });
+            addHeader(cat);
+            juce::Array<Entry> items;
             for (int i : idx)
-                rows.add({ names[i] + "  (" + Factory::mixSourceTag(i) + ")", FACTORY_MIX_BASE + i, false });
+                items.add({ names[i] + "  (" + Factory::mixSourceTag(i) + ")", FACTORY_MIX_BASE + i });
+            addSection(items);
         }
-        bool hdr = false;
+        juce::Array<Entry> user;
         for (int i = 0; i < files.size(); ++i)
         {
             const bool inRoot = files[i].getParentDirectory() == root;
             const juce::String label = inRoot ? files[i].getFileNameWithoutExtension()
                 : files[i].getParentDirectory().getFileName() + " / " + files[i].getFileNameWithoutExtension();
-            if (! q.isEmpty() && ! label.containsIgnoreCase(q)) continue;
-            if (! hdr) { rows.add({ "Your Sound Bank", 0, true }); hdr = true; }
-            rows.add({ label, i + 1, false });
+            if (q.isEmpty() || label.containsIgnoreCase(q)) user.add({ label, i + 1 });
         }
+        if (! user.isEmpty()) { addHeader("Your Sound Bank"); addSection(user); }
         if (q.isEmpty())
         {
-            rows.add({ "", 0, true });
-            rows.add({ "Refresh sound bank folder", ID_REFRESH_BANK, false });
-            rows.add({ "Show Folder", ID_SHOW_BANK, false });
+            addHeader("");
+            juce::Array<Entry> acts;
+            acts.add({ "Refresh sound bank folder", ID_REFRESH_BANK });
+            acts.add({ "Show Folder", ID_SHOW_BANK });
+            addSection(acts);
         }
-        else if (rows.isEmpty()) rows.add({ "(no sounds match)", 0, true });
+        else if (rows.isEmpty()) addHeader("(no sounds match)");
         list.updateContent();
         list.repaint();
     }
-    void pick(int row)
+    void pick(const Entry& en)
     {
-        if (row < 0 || row >= rows.size() || rows[row].header) return;
-        const int id = rows[row].id;
+        if (en.id == 0) return;
         close();
-        if (onPick) onPick(id);
+        if (onPick) onPick(en.id);
     }
     // TextEditor::Listener
     void textEditorTextChanged(juce::TextEditor&) override { rebuild(); }
     void textEditorReturnKeyPressed(juce::TextEditor&) override
-    { for (int r = 0; r < rows.size(); ++r) if (! rows[r].header) { pick(r); return; } }
+    { for (const auto& r : rows) if (! r.isHeader) { pick(r.a); return; } }
     void textEditorEscapeKeyPressed(juce::TextEditor&) override { close(); }
     // ListBoxModel
     int getNumRows() override { return rows.size(); }
@@ -5083,12 +5100,34 @@ private:
     {
         if (row < 0 || row >= rows.size()) return;
         const auto& r = rows[row];
-        if (! r.header && over) { g.setColour(juce::Colour(0xff2a2a4a)); g.fillRect(0, 0, w, h); }
-        g.setColour(r.header ? juce::Colour(0xffcf9a2a) : juce::Colours::white);
-        g.setFont(juce::Font(r.header ? 11.5f : 13.5f, r.header ? juce::Font::bold : juce::Font::plain));
-        g.drawFittedText(r.text, r.header ? 4 : 14, 0, w - 8, h, juce::Justification::centredLeft, 1, 0.8f);
+        if (r.isHeader)
+        {
+            g.setColour(juce::Colour(0xffcf9a2a));
+            g.setFont(juce::Font(11.5f, juce::Font::bold));
+            g.drawFittedText(r.header, 4, 0, w - 8, h, juce::Justification::centredLeft, 1, 0.8f);
+            return;
+        }
+        const int half = w / 2;
+        int mx = -1;   // hover: highlight only the half under the cursor
+        if (over) mx = list.getLocalPoint(nullptr, juce::Desktop::getInstance()
+                                                       .getMainMouseSource().getScreenPosition().toInt()).x;
+        auto halfCell = [&](const Entry& en, int x0, bool hov)
+        {
+            if (hov) { g.setColour(juce::Colour(0xff2a2a4a)); g.fillRect(x0, 0, half, h); }
+            g.setColour(juce::Colours::white);
+            g.setFont(juce::Font(13.5f));
+            g.drawFittedText(en.text, x0 + 14, 0, half - 18, h, juce::Justification::centredLeft, 1, 0.8f);
+        };
+        halfCell(r.a, 0, over && mx < half);
+        if (r.hasB) halfCell(r.b, half, over && mx >= half);
     }
-    void listBoxItemClicked(int row, const juce::MouseEvent&) override { pick(row); }
+    void listBoxItemClicked(int row, const juce::MouseEvent& e) override
+    {
+        if (row < 0 || row >= rows.size() || rows[row].isHeader) return;
+        const auto& r = rows[row];
+        const int half = juce::jmax(1, list.getVisibleRowWidth() / 2);
+        pick(r.hasB && e.x >= half ? r.b : r.a);
+    }
 };
 
 // On-brand extension for a saved per-pattern note grid (the "MIDI pattern" menu).
@@ -5462,7 +5501,7 @@ void DrumSequencerEditor::openSoundPicker(int ch)
     int h = content.getHeight() - y - 6;
     if (h < 300) { h = juce::jmin(620, content.getHeight() - 12); y = content.getHeight() - h - 6; }
     h = juce::jmin(h, 620);
-    panel.setBounds(juce::jlimit(2, juce::jmax(2, content.getWidth() - 382), r.getX()), y, 380, h);
+    panel.setBounds(juce::jlimit(2, juce::jmax(2, content.getWidth() - 602), r.getX()), y, 600, h);
     panel.openWith(soundMixFiles, getSoundMixFolder());
 }
 
@@ -7301,7 +7340,7 @@ void DrumSequencerEditor::setupComponents()
         content.addAndMakeVisible(strip.comboSound);  // now the "Sound Bank" selector
         strip.comboSound.setLookAndFeel(&wideMenuLNF); // 3-column popup (no tall scroll)
         strip.comboSound.onChange = [this, ci] { handleSoundMixChange(ci); selectChannel(ci); };
-        strip.comboSound.onOpen   = [this, ci] { openSoundPicker(ci); };   // the searchable dropdown
+        strip.comboSound.onOpen   = [this, ci] { selectChannel(ci); openSoundPicker(ci); };   // the searchable dropdown
 
         content.addAndMakeVisible(strip.btnTest);
         strip.btnTest.onClick = [this, ci] { selectChannel(ci); proc.requestTestTrigger(ci); };
@@ -10224,6 +10263,8 @@ void DrumSequencerEditor::paintStripOutline(juce::Graphics& g)
 {
     const int selRow = selectedChannel - firstChannelRow;
     if (selRow < 0 || selRow >= viewRows()) return;
+    if (soundPicker != nullptr && soundPicker->isVisible())   // the picker dropdown stays ON TOP
+        g.excludeClipRegion(soundPicker->getBounds());        // (paintOverChildren covers children)
     g.setColour(juce::Colour(0xffff3b30));
     const float x0 = channelBar.isVisible() ? 17.0f : 2.0f;   // start AFTER the yellow scrollbar (x 2..14)
     g.drawRoundedRectangle(juce::Rectangle<float>(x0, (float) (GRID_TOP + selRow * ROW_H) + 1.0f,
