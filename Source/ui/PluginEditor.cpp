@@ -3390,11 +3390,18 @@ void VoiceModDisplay::paint(juce::Graphics& g)
     const float spread  = uniOn ? det * q.hh * 0.85f : 0.0f;
     const float vibAmp  = vibOn ? vib * q.hh * 0.30f : 0.0f;
     const int   W = juce::jmax(2, (int) (q.right - q.left));
-    auto drawVoice = [&](float off, juce::Colour col, float thick) {
+    // pan: -1 (hard left) .. +1 (hard right). The line's HORIZONTAL SPAN moves with it: a panned
+    // voice occupies only its side of the box (full width at pan 0 = the old look), so at high Width
+    // the lines visibly FAN out across the stereo field instead of just changing colour.
+    auto drawVoice = [&](float off, juce::Colour col, float thick, float pan = 0.0f) {
+        const float boxW = q.right - q.left;
+        const float spanW = boxW * (1.0f - 0.45f * std::abs(pan));          // panned = shorter line...
+        const float x0 = q.left + juce::jmax(0.0f, pan) * (boxW - spanW);   // ...pushed to its side
         juce::Path path;
-        for (int xi = 0; xi <= W; xi += 2) {
-            const float x = q.left + (float) xi;
-            const float ph = (float) xi / (float) W * juce::MathConstants<float>::twoPi * 3.0f;
+        const int Wv = juce::jmax(2, (int) spanW);
+        for (int xi = 0; xi <= Wv; xi += 2) {
+            const float x = x0 + (float) xi;
+            const float ph = (float) xi / (float) Wv * juce::MathConstants<float>::twoPi * 3.0f;
             const float y = rootY + off + std::sin(ph) * vibAmp;
             if (xi == 0) path.startNewSubPath(x, y); else path.lineTo(x, y);
         }
@@ -3411,21 +3418,16 @@ void VoiceModDisplay::paint(juce::Graphics& g)
         if (stacked)   // chord/scale: the lines sit at their chord notes (root on the low line, going up)
             off = -(float) voiceSemi / (float) maxSemi * availUp + off * 0.15f;
         const bool isRoot = stacked ? (voiceSemi % 12 == 0) : (n % 2 == 1 && k == n / 2);
-        // WIDTH visual: each line tints toward BLUE (left) or ORANGE (right) by its REAL pan position
-        // (the same symmetric law the DSP pans with). Width 0 = the plain cyan = the old look.
+        // WIDTH visual: the voice's PAN moves its line to its side of the box (geometry, not just
+        // colour) with a hue shift as reinforcement. Width 0 = full-width plain cyan = the old look.
+        float p = 0.0f;
         juce::Colour vc = juce::Colour(isRoot ? 0xff35c0ff : 0x9935c0ff);
         if (uniWidth > 0.001f && n > 1) {
-            const float p = (2.0f * (float) k / (float)(n - 1) - 1.0f) * uniWidth;   // -1 (L) .. +1 (R)
+            p = (2.0f * (float) k / (float)(n - 1) - 1.0f) * uniWidth;   // -1 (L) .. +1 (R)
             vc = vc.interpolatedWith(p < 0.0f ? juce::Colour(0xff4a7fff) : juce::Colour(0xffff9f43),
-                                     juce::jlimit(0.0f, 1.0f, std::abs(p)) * 0.85f);
+                                     juce::jlimit(0.0f, 1.0f, std::abs(p)) * 0.7f);
         }
-        drawVoice(off, vc.withMultipliedAlpha(isRoot ? 1.0f : 0.55f), isRoot ? 1.6f : 1.0f);
-    }
-    if (uniWidth > 0.001f && n > 1) {   // tiny L / R anchors so the tint reads instantly
-        g.setColour(juce::Colour(0x884a7fff)); g.setFont(juce::Font(8.0f, juce::Font::bold));
-        g.drawText("L", (int) q.left + 1, (int) q.top, 10, 9, juce::Justification::centredLeft, false);
-        g.setColour(juce::Colour(0x88ff9f43));
-        g.drawText("R", (int) q.right - 11, (int) q.top, 10, 9, juce::Justification::centredRight, false);
+        drawVoice(off, vc.withMultipliedAlpha(isRoot ? 1.0f : 0.55f), isRoot ? 1.6f : 1.0f, p);
     }
     // Mode chips: STD = detuned copies; CHORD = the unison voices become chord notes. When CHORD
     // is on, a third chip cycles the chord TYPE and shows the actual stacked intervals for the
