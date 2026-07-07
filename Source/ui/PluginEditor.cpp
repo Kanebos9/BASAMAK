@@ -3357,6 +3357,11 @@ juce::String VoiceModDisplay::getTooltip()
                "is how far the outermost voice sits from the original, each way (100c = 1 semitone).";
     if (hover == 2 && vibOn)
         return "Vibrato (pink dot): drag up for more pitch wobble at ~5.5 Hz. Shown in semitones (up to ~1.5 st).";
+    if (hover == 3 && uniOn)
+        return "Width (teal dot): STEREO spread of the stacked voices - drag up and the unison/chord notes fan "
+               "out across the stereo field (equal-power panning; the voice lines tint BLUE = panned left, "
+               "ORANGE = right). 0% = mono, exactly the old sound. The sub-oscillator always stays centred so "
+               "the bass keeps its punch. Needs more than one voice to hear anything.";
     juce::String s = "Voice controls for the selected slot. Hover the UNISON / CHORD / SCALE chips for what each mode "
                      "does. ";
     if (vibOn) s += "Vibrato = ~5.5 Hz pitch wobble (works on every engine here).";
@@ -3406,8 +3411,21 @@ void VoiceModDisplay::paint(juce::Graphics& g)
         if (stacked)   // chord/scale: the lines sit at their chord notes (root on the low line, going up)
             off = -(float) voiceSemi / (float) maxSemi * availUp + off * 0.15f;
         const bool isRoot = stacked ? (voiceSemi % 12 == 0) : (n % 2 == 1 && k == n / 2);
-        drawVoice(off, juce::Colour(isRoot ? 0xff35c0ff : 0x9935c0ff).withMultipliedAlpha(isRoot ? 1.0f : 0.55f),
-                  isRoot ? 1.6f : 1.0f);
+        // WIDTH visual: each line tints toward BLUE (left) or ORANGE (right) by its REAL pan position
+        // (the same symmetric law the DSP pans with). Width 0 = the plain cyan = the old look.
+        juce::Colour vc = juce::Colour(isRoot ? 0xff35c0ff : 0x9935c0ff);
+        if (uniWidth > 0.001f && n > 1) {
+            const float p = (2.0f * (float) k / (float)(n - 1) - 1.0f) * uniWidth;   // -1 (L) .. +1 (R)
+            vc = vc.interpolatedWith(p < 0.0f ? juce::Colour(0xff4a7fff) : juce::Colour(0xffff9f43),
+                                     juce::jlimit(0.0f, 1.0f, std::abs(p)) * 0.85f);
+        }
+        drawVoice(off, vc.withMultipliedAlpha(isRoot ? 1.0f : 0.55f), isRoot ? 1.6f : 1.0f);
+    }
+    if (uniWidth > 0.001f && n > 1) {   // tiny L / R anchors so the tint reads instantly
+        g.setColour(juce::Colour(0x884a7fff)); g.setFont(juce::Font(8.0f, juce::Font::bold));
+        g.drawText("L", (int) q.left + 1, (int) q.top, 10, 9, juce::Justification::centredLeft, false);
+        g.setColour(juce::Colour(0x88ff9f43));
+        g.drawText("R", (int) q.right - 11, (int) q.top, 10, 9, juce::Justification::centredRight, false);
     }
     // Mode chips: STD = detuned copies; CHORD = the unison voices become chord notes. When CHORD
     // is on, a third chip cycles the chord TYPE and shows the actual stacked intervals for the
