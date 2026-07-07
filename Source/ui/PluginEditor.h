@@ -510,6 +510,7 @@ public:
     void clearDims() { if (! anyDim) return; for (auto& d : dim) d = false; anyDim = false; repaint(); }
     void setDim(int midi, bool d) { if (midi >= 0 && midi < 128) { dim[midi] = d; anyDim |= d; } }
 protected:
+    juce::String getWhiteNoteText(int) override { return {}; }   // base labels off - we label EVERY key ourselves
     void drawWhiteNote(int n, juce::Graphics& g, juce::Rectangle<float> area,
                        bool isDown, bool isOver, juce::Colour line, juce::Colour text) override;
     void drawBlackNote(int n, juce::Graphics& g, juce::Rectangle<float> area,

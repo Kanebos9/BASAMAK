@@ -4005,6 +4005,14 @@ void TintKeyboard::drawWhiteNote(int n, juce::Graphics& g, juce::Rectangle<float
     else if (dim[n]) {                                   // KEY GUIDE: out-of-scale white key = dark wash
         g.setColour(juce::Colour(0x63131320)); g.fillRect(area.reduced(0.5f));
     }
+    { // EVERY key gets its note name; Cs pop in bold amber (they're the octave landmarks)
+        const bool isC = (n % 12) == 0;
+        g.setColour(isC ? juce::Colour(0xffcf9a2a) : juce::Colour(0x997a86a0));
+        g.setFont(juce::Font(juce::jmin(10.5f, area.getWidth() * 0.5f), isC ? juce::Font::bold : juce::Font::plain));
+        g.drawFittedText(juce::MidiMessage::getMidiNoteName(n, true, true, 3),
+                         area.reduced(1.0f, 2.0f).removeFromBottom(12.0f).toNearestInt(),
+                         juce::Justification::centred, 1, 0.7f);
+    }
 }
 void TintKeyboard::drawBlackNote(int n, juce::Graphics& g, juce::Rectangle<float> area,
                                  bool isDown, bool isOver, juce::Colour fill)
@@ -4014,9 +4022,17 @@ void TintKeyboard::drawBlackNote(int n, juce::Graphics& g, juce::Rectangle<float
     // keep a dark border so it still reads as a raised black key.
     juce::MidiKeyboardComponent::drawBlackNote(n, g, area, isDown, isOver,
                                                c.getAlpha() != 0 ? c.darker(0.15f)
-                                             : dim[n]            ? juce::Colour(0xff3a4052)   // guide: dimmed = grey, not black
+                                             : dim[n]            ? juce::Colour(0xff9aa0ae)   // guide: dimmed = the SAME grey as faded whites
                                                                  : fill);
     if (c.getAlpha() != 0) { g.setColour(juce::Colour(0xff101018)); g.drawRect(area, 1.0f); }
+    { // black keys get their name too (dark text on a dimmed/tinted key, light on plain black)
+        const bool lightBg = dim[n] || c.getAlpha() != 0;
+        g.setColour(lightBg ? juce::Colour(0xd0181820) : juce::Colour(0xaa9aa4bc));
+        g.setFont(juce::Font(7.5f));
+        g.drawFittedText(juce::MidiMessage::getMidiNoteName(n, true, true, 3),
+                         area.reduced(0.5f, 2.0f).removeFromBottom(11.0f).toNearestInt(),
+                         juce::Justification::centred, 1, 0.55f);
+    }
 }
 
 KeysPanel::KeysPanel()
@@ -6436,8 +6452,9 @@ void DrumSequencerEditor::setupComponents()
         "- Follow sound = use the SCALE already set on the selected channel's sound slot (nothing dims if its "
         "Scale mode is off).\n"
         "- Or pick any key + scale here, independent of the sound.\n\n"
-        "Purely visual - it never changes what plays. The AUTO-VOICING itself (one key playing chords / scale "
-        "harmonies) lives in the sound editor's UNISON / CHORD / SCALE selector.");
+        "Purely visual - it never changes what plays. And it is about the key YOU press (the root): in "
+        "Chord/Scale modes the extra harmony notes are added automatically by the sound - you never press "
+        "them yourself. That auto-voicing lives in the sound editor's UNISON / CHORD / SCALE selector.");
     keysPanel.btnGuide.onClick = [this] {
         juce::PopupMenu m;
         m.addItem(1, "Off",                        true, proc.kbGuideMode == 0);
