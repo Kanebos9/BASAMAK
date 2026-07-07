@@ -5240,9 +5240,12 @@ void DrumSequencerEditor::rebuildSoundMixMenu(int ch)
     // automatically flows it into extra columns to the side.
     auto facNames = Factory::mixNames();
     auto facCats  = Factory::mixCategories();
-    static const char* catOrder[] = { "Kicks", "Snares & Claps", "Hats & Cymbals", "Toms",
-                                      "Percussion", "Bass", "Keys", "Bells & Mallets", "Plucks & Strings", "Modal", "FX & Synth" };
-    // "Unified Synth" category removed - that engine + its factory mixes are retired from the UI.
+    static const char* catOrder[] = { "Kicks", "Snares", "Claps", "Hi-Hats", "Cymbals", "Toms",
+                                      "Percussion", "Electro Perc", "Bass", "Keys", "Pads & Choirs",
+                                      "Leads", "Plucks & Strings", "Bells & Mallets", "Chords & Arps",
+                                      "Risers & Falls", "Impacts & Booms", "Noise & Texture" };
+    // 2026-07 taxonomy: categories are INSTRUMENT roles (the old engine-named "Modal" category was
+    // dissolved into Bells/Percussion/Toms/Cymbals; "FX & Synth" split into the three FX shelves).
     for (auto* cat : catOrder)
     {
         bool wroteHeader = false;

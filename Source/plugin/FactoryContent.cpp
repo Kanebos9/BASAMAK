@@ -981,96 +981,150 @@ static void mCelesta(DC& c)    { clearSound(c); c.srcOn[DC::SrcPhys] = true; c.s
 using Builder = void (*)(DC&);
 
 static const struct { const char* name; Builder build; const char* cat; } kMixes[] = {
-    // Categories are by SOUND TYPE (not synthesis source).
-    { "FM Kick",     mFMKick,    "Kicks" },
-    { "Sub Bass",    mSubBass,    "Bass" },           { "Noise Snare", mNoiseSnare,"Snares & Claps" },
-    { "Clap",        mClap,       "Snares & Claps" }, { "Closed Hat",  mClosedHat, "Hats & Cymbals" },
-    { "Open Hat",    mOpenHat,    "Hats & Cymbals" }, { "FM Tom",      mFMTom,     "Toms" },
-
-    { "Rimshot",     mRimshot,   "Percussion" },
-    { "Woodblock",   mWoodblock,  "Percussion" },     { "Zap",         mZap,       "FX & Synth" },
-    { "808 Bass",    m808Bass,    "Bass" },           
-               { "Shaker",      mShaker,    "Percussion" },
-    { "Crash",       mCrash,      "Hats & Cymbals" }, 
-    { "Saw Bass",    mSawBass,    "Bass" },           { "Glass Bell",  mGlassBell, "Bells & Mallets" },
-    { "Sub Drop",    mSubDrop,    "FX & Synth" },     { "Noise Sweep", mNoiseSweep,"FX & Synth" },
-
-    { "Pluck",       mPluck,      "Plucks & Strings" },
-    
-               { "Wood Clave",  mWoodClave, "Percussion" },
-     
-    // Classic drum machines
-    { "808 Kick",     m808Kick,      "Kicks" },          { "808 Snare",    m808Snare,     "Snares & Claps" },
-    { "808 Clap",     m808Clap,      "Snares & Claps" }, { "808 CH",       m808ClosedHat, "Hats & Cymbals" },
-    { "808 OH",       m808OpenHat,   "Hats & Cymbals" }, { "808 Cowbell",  m808Cowbell,   "Percussion" },
-    { "808 Low Tom",  m808LowTom,    "Toms" },           { "808 Mid Tom",  m808MidTom,    "Toms" },
-    { "808 Hi Tom",   m808HiTom,     "Toms" },           { "808 Rimshot",  m808Rimshot,   "Percussion" },
-    { "808 Conga",    m808Conga,     "Percussion" },     { "808 Maracas",  m808Maracas,   "Percussion" },
-    { "808 Clave",    m808Clave,     "Percussion" },
-    { "909 Kick",     m909Kick,      "Kicks" },          { "909 Snare",    m909Snare,     "Snares & Claps" },
-    { "909 Clap",     m909Clap,      "Snares & Claps" }, { "909 CH",       m909ClosedHat, "Hats & Cymbals" },
-    { "909 OH",       m909OpenHat,   "Hats & Cymbals" }, { "909 Ride",     m909Ride,      "Hats & Cymbals" },
-    { "909 Crash",    m909Crash,     "Hats & Cymbals" }, { "909 Low Tom",  m909LowTom,    "Toms" },
-    { "909 Mid Tom",  m909MidTom,    "Toms" },           { "909 Hi Tom",   m909HiTom,     "Toms" },
-    { "909 Rimshot",  m909Rim,       "Percussion" },
-    { "606 Snare",    m606Snare,     "Snares & Claps" },
-    { "606 CH",       m606ClosedHat, "Hats & Cymbals" },
-
-    // Extra mixes (round 8)
-    { "Reese Bass",   mReeseBass,   "Bass" },           
-    { "Square Bass",  mSquareBass,  "Bass" },           { "FM Bass",      mFMBass,      "Bass" },
-    { "Growl Bass",   mGrowlBass,   "Bass" },           { "Acid Bass",    mAcidBass,    "Bass" },
-    { "Punch Kick",   mPunchKick,   "Kicks" },          { "Dist Kick",    mDistKick,    "Kicks" },
-    { "Trap Snare",   mTrapSnare,   "Snares & Claps" },
-    { "Mod Snare",    mModSnare,    "Snares & Claps" },
-    { "Metal Hat",    mMetalHat,    "Hats & Cymbals" }, { "Tight Hat",    mTightHat,    "Hats & Cymbals" },
-    { "Sizzle",       mSizzle,      "Hats & Cymbals" }, 
-    { "Roto Tom",     mRotoTom,     "Toms" },           { "Tabla",        mTabla,       "Percussion" },
-    { "Log Drum",     mLogDrum,     "Percussion" },     { "Bongo",        mBongo,       "Percussion" },
-    { "Vibraphone",   mVibraphone,  "Bells & Mallets" },
-    { "Harp",         mHarp,        "Plucks & Strings" },{ "Pluck Synth", mPluckSynth,  "Plucks & Strings" },
-     { "Riser",       mRiser,       "FX & Synth" },
-    { "Wind",         mWind,        "FX & Synth" },      { "Vinyl",       mVinyl,       "FX & Synth" },
-    { "Stab",         mStab,        "FX & Synth" },       { "Big Riser",   mBigRiser,    "FX & Synth" },
-    { "Vox",          mVox,         "FX & Synth" }, { "Talkbox",      mTalkbox,     "FX & Synth" },
-    { "Whistle",      mWhistle,     "FX & Synth" },
-    // ---- Filter-envelope sounds, filed by sound TYPE ----
-
-    { "Filter Bass",  eFilterBass, "Bass" },            { "Filter Pluck", eFilterPluck,"Plucks & Strings" },
-    { "Filter Zap",   eFilterZap,  "FX & Synth" },
-    // ---- BASS BANK (v1.1.0): two-osc / osc+sub, per-slot filter env + drive ----
-    { "Station Bass", bStationBass, "Bass" },           { "Ladder Bass",  bLadderBass, "Bass" },
-    { "Rubber Bass",  bRubberBass,  "Bass" },           { "Neuro Bass",   bNeuroBass,  "Bass" },
-    { "Hoover Bass",  bHooverBass,  "Bass" },           { "Reed Bass",    bReedBass,   "Bass" },
-    // ---- LFO showcases ----
-    { "Wobble Bass",  bWobbleBass,  "Bass" },
-    { "Siren",        eSiren,       "FX & Synth" },     { "Chopper",      eChopper,    "FX & Synth" },
-    // ---- KEYS bank (v1.2.0): sustain/release live on the on-screen keyboard ----
-    { "Keys Bass",    kKeysBass,    "Keys" },           { "E-Piano",      kEPiano,     "Keys" },
-    { "Soft Pad",     kSoftPad,     "Keys" },           { "Organ",        kOrgan,      "Keys" },
-    { "Square Lead",  kSquareLead,  "Keys" },           { "String Keys",  kStringKeys, "Keys" },
-    // ---- KEYS bank additions (v1.2.1): 12 more, all distinct ----
-    { "Grand Piano",  kGrandPiano,  "Keys" },           { "Wurli",        kWurli,      "Keys" },
-    { "Clavinet",     kClav,        "Keys" },           { "Synth Brass",  kSynthBrass, "Keys" },
-    { "Choir Aah",    kChoir,       "Keys" },           { "Warm Pad",     kWarmPad,    "Keys" },
-    { "Glass Bells",  kGlassBells,  "Keys" },           { "Vibraphone",   kVibes,      "Keys" },
-    { "Marimba Keys", kMarimbaKeys, "Keys" },           { "Saw Lead",     kSawLead,    "Keys" },
-    { "Sub Bass",     kSubBass,     "Keys" },           { "Synth Pluck",  kSynthPluck, "Keys" },
-    // ---- KEYS chord/scale sounds (v1.2.3): both slots, a slot in chord/scale; Power/Octave use slot-2 pitch ----
-    { "Power Keys",   kPowerKeys,   "Keys" },           { "Octave Bells", kOctaveBells, "Keys" },
-    { "Dorian Pad",   kDorianPad,   "Keys" },           { "Major Choir",  kMajorChoir,  "Keys" },
-    { "Minor Rhodes", kMinorRhodes, "Keys" },
-    // ---- MODAL engine (struck resonant bodies). Names carry no "(Modal)" - the tag adds it. ----
-    { "Mod Marimba",   moMarimba,    "Modal" }, { "Mod Tubular Bell", moTubular,   "Modal" },
-    { "Mod Glass",     moGlass,      "Modal" }, { "Mod Tom",          moTomDrum,   "Modal" },
-    { "Mod Metal Plate", moMetalPlate, "Modal" }, { "Mod Wood Block", moWoodBlock, "Modal" },
-    { "Mod Kalimba",   moKalimba,    "Modal" }, { "Mod Cowbell",      moCowbell,   "Modal" },
-    { "Mod Tuned Bell", moBellTuned, "Modal" }, { "Mod Gong",         moGong,      "Modal" },
-    // ---- New plucked strings + mallets (Physical) ----
-    { "Nylon Guitar", mNylonGuitar, "Plucks & Strings" }, { "Koto",     mKoto,      "Plucks & Strings" },
-    { "Pizzicato",    mPizzicato,   "Plucks & Strings" }, { "Banjo",    mBanjo,     "Plucks & Strings" },
-    { "Sitar",        mSitar,       "Plucks & Strings" },
-    { "Glockenspiel", mGlockenspiel,"Bells & Mallets" },  { "Celesta",  mCelesta,   "Bells & Mallets" },
+    // Categories are by INSTRUMENT (never by engine). Grouped + ordered like catOrder[] in
+    // rebuildSoundMixMenu() - a category missing there is silently dropped from the menu.
+    // ---- Kicks ----
+    { "FM Kick", mFMKick, "Kicks" },
+    { "808 Kick", m808Kick, "Kicks" },
+    { "909 Kick", m909Kick, "Kicks" },
+    { "Punch Kick", mPunchKick, "Kicks" },
+    { "Dist Kick", mDistKick, "Kicks" },
+    // ---- Snares ----
+    { "Noise Snare", mNoiseSnare, "Snares" },
+    { "808 Snare", m808Snare, "Snares" },
+    { "909 Snare", m909Snare, "Snares" },
+    { "606 Snare", m606Snare, "Snares" },
+    { "Trap Snare", mTrapSnare, "Snares" },
+    { "Mod Snare", mModSnare, "Snares" },
+    // ---- Claps ----
+    { "Clap", mClap, "Claps" },
+    { "808 Clap", m808Clap, "Claps" },
+    { "909 Clap", m909Clap, "Claps" },
+    // ---- Hi-Hats ----
+    { "Closed Hat", mClosedHat, "Hi-Hats" },
+    { "Open Hat", mOpenHat, "Hi-Hats" },
+    { "808 CH", m808ClosedHat, "Hi-Hats" },
+    { "808 OH", m808OpenHat, "Hi-Hats" },
+    { "909 CH", m909ClosedHat, "Hi-Hats" },
+    { "909 OH", m909OpenHat, "Hi-Hats" },
+    { "606 CH", m606ClosedHat, "Hi-Hats" },
+    { "Metal Hat", mMetalHat, "Hi-Hats" },
+    { "Tight Hat", mTightHat, "Hi-Hats" },
+    // ---- Cymbals ----
+    { "Crash", mCrash, "Cymbals" },
+    { "909 Ride", m909Ride, "Cymbals" },
+    { "909 Crash", m909Crash, "Cymbals" },
+    { "Sizzle", mSizzle, "Cymbals" },
+    { "Mod Gong", moGong, "Cymbals" },
+    // ---- Toms ----
+    { "FM Tom", mFMTom, "Toms" },
+    { "808 Low Tom", m808LowTom, "Toms" },
+    { "808 Mid Tom", m808MidTom, "Toms" },
+    { "808 Hi Tom", m808HiTom, "Toms" },
+    { "909 Low Tom", m909LowTom, "Toms" },
+    { "909 Mid Tom", m909MidTom, "Toms" },
+    { "909 Hi Tom", m909HiTom, "Toms" },
+    { "Roto Tom", mRotoTom, "Toms" },
+    { "Mod Tom", moTomDrum, "Toms" },
+    // ---- Percussion ----
+    { "Rimshot", mRimshot, "Percussion" },
+    { "Woodblock", mWoodblock, "Percussion" },
+    { "Shaker", mShaker, "Percussion" },
+    { "Wood Clave", mWoodClave, "Percussion" },
+    { "808 Cowbell", m808Cowbell, "Percussion" },
+    { "808 Rimshot", m808Rimshot, "Percussion" },
+    { "808 Conga", m808Conga, "Percussion" },
+    { "808 Maracas", m808Maracas, "Percussion" },
+    { "808 Clave", m808Clave, "Percussion" },
+    { "909 Rimshot", m909Rim, "Percussion" },
+    { "Tabla", mTabla, "Percussion" },
+    { "Log Drum", mLogDrum, "Percussion" },
+    { "Bongo", mBongo, "Percussion" },
+    { "Mod Metal Plate", moMetalPlate, "Percussion" },
+    { "Mod Wood Block", moWoodBlock, "Percussion" },
+    { "Mod Cowbell", moCowbell, "Percussion" },
+    // ---- Electro Perc ----
+    { "Zap", mZap, "Electro Perc" },
+    { "Filter Zap", eFilterZap, "Electro Perc" },
+    // ---- Bass ----
+    { "Sub Bass", mSubBass, "Bass" },
+    { "808 Bass", m808Bass, "Bass" },
+    { "Saw Bass", mSawBass, "Bass" },
+    { "Reese Bass", mReeseBass, "Bass" },
+    { "Square Bass", mSquareBass, "Bass" },
+    { "FM Bass", mFMBass, "Bass" },
+    { "Growl Bass", mGrowlBass, "Bass" },
+    { "Acid Bass", mAcidBass, "Bass" },
+    { "Filter Bass", eFilterBass, "Bass" },
+    { "Station Bass", bStationBass, "Bass" },
+    { "Ladder Bass", bLadderBass, "Bass" },
+    { "Rubber Bass", bRubberBass, "Bass" },
+    { "Neuro Bass", bNeuroBass, "Bass" },
+    { "Hoover Bass", bHooverBass, "Bass" },
+    { "Reed Bass", bReedBass, "Bass" },
+    { "Wobble Bass", bWobbleBass, "Bass" },
+    { "Keys Bass", kKeysBass, "Bass" },
+    { "Deep Sub", kSubBass, "Bass" },
+    // ---- Keys ----
+    { "E-Piano", kEPiano, "Keys" },
+    { "Organ", kOrgan, "Keys" },
+    { "String Keys", kStringKeys, "Keys" },
+    { "Grand Piano", kGrandPiano, "Keys" },
+    { "Wurli", kWurli, "Keys" },
+    { "Clavinet", kClav, "Keys" },
+    // ---- Pads & Choirs ----
+    { "Soft Pad", kSoftPad, "Pads & Choirs" },
+    { "Choir Aah", kChoir, "Pads & Choirs" },
+    { "Warm Pad", kWarmPad, "Pads & Choirs" },
+    // ---- Leads ----
+    { "Vox", mVox, "Leads" },
+    { "Talkbox", mTalkbox, "Leads" },
+    { "Whistle", mWhistle, "Leads" },
+    { "Square Lead", kSquareLead, "Leads" },
+    { "Synth Brass", kSynthBrass, "Leads" },
+    { "Saw Lead", kSawLead, "Leads" },
+    // ---- Plucks & Strings ----
+    { "Pluck", mPluck, "Plucks & Strings" },
+    { "Harp", mHarp, "Plucks & Strings" },
+    { "Pluck Synth", mPluckSynth, "Plucks & Strings" },
+    { "Filter Pluck", eFilterPluck, "Plucks & Strings" },
+    { "Synth Pluck", kSynthPluck, "Plucks & Strings" },
+    { "Nylon Guitar", mNylonGuitar, "Plucks & Strings" },
+    { "Koto", mKoto, "Plucks & Strings" },
+    { "Pizzicato", mPizzicato, "Plucks & Strings" },
+    { "Banjo", mBanjo, "Plucks & Strings" },
+    { "Sitar", mSitar, "Plucks & Strings" },
+    // ---- Bells & Mallets ----
+    { "Glass Bell", mGlassBell, "Bells & Mallets" },
+    { "Vibraphone", mVibraphone, "Bells & Mallets" },
+    { "Glass Bells", kGlassBells, "Bells & Mallets" },
+    { "Vibes", kVibes, "Bells & Mallets" },
+    { "Marimba Keys", kMarimbaKeys, "Bells & Mallets" },
+    { "Mod Marimba", moMarimba, "Bells & Mallets" },
+    { "Mod Tubular Bell", moTubular, "Bells & Mallets" },
+    { "Mod Glass", moGlass, "Bells & Mallets" },
+    { "Mod Kalimba", moKalimba, "Bells & Mallets" },
+    { "Mod Tuned Bell", moBellTuned, "Bells & Mallets" },
+    { "Glockenspiel", mGlockenspiel, "Bells & Mallets" },
+    { "Celesta", mCelesta, "Bells & Mallets" },
+    // ---- Chords & Arps ----
+    { "Stab", mStab, "Chords & Arps" },
+    { "Power Keys", kPowerKeys, "Chords & Arps" },
+    { "Octave Bells", kOctaveBells, "Chords & Arps" },
+    { "Dorian Pad", kDorianPad, "Chords & Arps" },
+    { "Major Choir", kMajorChoir, "Chords & Arps" },
+    { "Minor Rhodes", kMinorRhodes, "Chords & Arps" },
+    // ---- Risers & Falls ----
+    { "Noise Sweep", mNoiseSweep, "Risers & Falls" },
+    { "Riser", mRiser, "Risers & Falls" },
+    { "Big Riser", mBigRiser, "Risers & Falls" },
+    // ---- Impacts & Booms ----
+    { "Sub Drop", mSubDrop, "Impacts & Booms" },
+    // ---- Noise & Texture ----
+    { "Wind", mWind, "Noise & Texture" },
+    { "Vinyl", mVinyl, "Noise & Texture" },
+    { "Siren", eSiren, "Noise & Texture" },
+    { "Chopper", eChopper, "Noise & Texture" },
 };
 static constexpr int kNumMixes = (int) (sizeof(kMixes) / sizeof(kMixes[0]));
 
@@ -1145,8 +1199,9 @@ void applyMix(DC& ch, int index)
     kMixes[index].build(ch);
     // Keyboard-friendly sounds ship with the TRANSPOSE LOCK on (Freq faders disabled), so nothing can
     // sneakily shift their pitch reference. Category-based: the whole Keys bank. (clearSound reset it.)
-    if (juce::String(kMixes[index].cat) == "Keys")
-        ch.drawMode = true;   // KEYS sounds open in PIANO ROLL by default (user; step data is kept underneath)
+    const juce::String cat(kMixes[index].cat);   // keyboard-first categories open in PIANO ROLL by
+    if (cat == "Keys" || cat == "Pads & Choirs" || cat == "Leads" || cat == "Chords & Arps")
+        ch.drawMode = true;   // default (user; step data is kept underneath)
     finishSound(ch);
 }
 
