@@ -1175,6 +1175,34 @@ struct LogoStepMeter : juce::Component
 
 // Small bold font for the tiny channel-strip toggle buttons (M / S / Ø / OV)
 // so 2-letter labels fit without being cut to "...".
+// Plugin-wide TOOLTIP look: bigger font (14px) + wider wrap (440px) so the long structured tips
+// (one-line WHAT, blank line, "- " bullet lines) actually read as paragraphs, not a wall of text.
+struct TipLNF : juce::LookAndFeel_V4
+{
+    static juce::TextLayout layoutTip(const juce::String& text, juce::Colour colour)
+    {
+        juce::AttributedString a;
+        a.setJustification(juce::Justification::topLeft);
+        a.append(text, juce::Font(14.0f), colour);
+        juce::TextLayout tl; tl.createLayout(a, 440.0f); return tl;
+    }
+    juce::Rectangle<int> getTooltipBounds(const juce::String& text, juce::Point<int> pos, juce::Rectangle<int> parent) override
+    {
+        const auto tl = layoutTip(text, juce::Colours::black);
+        const int w = (int) tl.getWidth() + 18, hh = (int) tl.getHeight() + 14;
+        return juce::Rectangle<int>(pos.x > parent.getCentreX() ? pos.x - (w + 12) : pos.x + 24,
+                                    pos.y > parent.getCentreY() ? pos.y - (hh + 6) : pos.y + 6, w, hh)
+                 .constrainedWithin(parent);
+    }
+    void drawTooltip(juce::Graphics& g, const juce::String& text, int w, int hh) override
+    {
+        g.fillAll(findColour(juce::TooltipWindow::backgroundColourId));
+        g.setColour(findColour(juce::TooltipWindow::outlineColourId));
+        g.drawRect(juce::Rectangle<int>(w, hh), 1);
+        layoutTip(text, findColour(juce::TooltipWindow::textColourId)).draw(g, juce::Rectangle<float>((float) w, (float) hh).reduced(9.0f, 7.0f));
+    }
+};
+
 struct TinyButtonLNF : juce::LookAndFeel_V4
 {
     juce::Font getTextButtonFont(juce::TextButton&, int) override { return juce::Font(11.5f, juce::Font::bold); }
@@ -1835,6 +1863,7 @@ private:
     DropButtonLNF dropBtnLNF;             // down-triangle for the play-mode + routing "dropdown" buttons
     IconButtonLNF iconBtnLNF;             // play / stop / undo / redo glyphs
     std::vector<LearnableKnob*> allKnobs;  // for clean LNF teardown
+    TipLNF tipLNF;                                    // 14px/440px structured-tooltip look (cleared in teardown)
     juce::TooltipWindow tooltipWindow { this, 1000 }; // shows tooltips after ~1s hover
 
     //-- Visuals

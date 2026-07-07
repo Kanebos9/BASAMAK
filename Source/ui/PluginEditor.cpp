@@ -2001,16 +2001,18 @@ juce::String StepGridComponent::getTooltip()
 {
     const int dch = firstRow + juce::jmax(0, getMouseXYRelative().y) / juce::jmax(1, rowH);
     if (dch >= 0 && dch < NCH && drawMode[dch])
-        return juce::String("PIANO ROLL (free notes, no steps; pitch 0 = C3, always). LEFT-drag draws/moves notes, "
-                            "RIGHT-drag erases. The magnifier (top-left) opens the BIG editor. There, the colour "
-                            "buttons 'Both slots / Slot 1 / Slot 2' pick which SOUND SLOT new notes play - orange = "
-                            "both, yellow = slot 1, pink = slot 2, the same colours as the keyboard highlight. "
-                            "SHIFT+drag-select notes, then click a colour button to move them onto that slot. FAINT "
-                            "lines show every pitch each slot really sounds (chord/scale voicings, slot-2 pitch) - "
-                            "they follow your notes and can't be edited. Humanize/Strum from the KEYS panel apply "
-                            "here too. CMD/CTRL+click a note to toggle GLIDE (a cyan ramp): it slides in from the "
-                            "previous note's pitch - turn up the KEYS-panel Glide knob for the slide time (mono). "
-                            "Pick a step count in the dropdown to QUANTISE the roll to steps.");
+        return juce::String("PIANO ROLL (free notes; pitch 0 = C3, always).\n\n"
+                            "- LEFT-drag draws/moves notes; RIGHT-drag erases; the magnifier (top-left) opens the "
+                            "BIG editor.\n"
+                            "- The colour buttons pick which SOUND SLOT new notes play: orange = both, yellow = "
+                            "slot 1, pink = slot 2 (same as the keyboard). SHIFT+select notes, then click a colour "
+                            "to move them.\n"
+                            "- Faint lines show every pitch each slot REALLY sounds (chords, scales, slot-2 pitch) "
+                            "- display only.\n"
+                            "- CMD/CTRL+click a note = GLIDE (slides in from the previous note; the KEYS Glide "
+                            "knob sets the time).\n\n"
+                            "Humanize/Strum apply here too. Pick a step count in the dropdown to QUANTISE the roll "
+                            "to steps.");
     return juce::String("STEP GRID. Click = toggle steps; the buttons top-right switch edit modes (Vel/Len/Pitch/"
                         "Loop/Roll/Pan). Hold a step in any value mode to MAGNIFY it for fine edits.\n\n"
                         "MERGE: Shift + CLICK a step to merge it into the previous step's note - the run plays as "
@@ -4038,8 +4040,9 @@ KeysPanel::KeysPanel()
 
     auto lab = [this](juce::Label& l, const juce::String& t) {
         addAndMakeVisible(l); l.setText(t, juce::dontSendNotification);
-        l.setFont(juce::Font(10.0f)); l.setJustificationType(juce::Justification::centred);
-        l.setColour(juce::Label::textColourId, juce::Colour(0xff8090b0));
+        l.setFont(juce::Font(12.0f, juce::Font::bold)); l.setJustificationType(juce::Justification::centred);
+        l.setMinimumHorizontalScale(0.72f);   // squeeze long words instead of "..." (user: must read the FULL text)
+        l.setColour(juce::Label::textColourId, juce::Colour(0xffaebadA));
     };
     lab(lblRecMode, "Record mode"); lab(lblSlot2, "Slot 2 pitch");
     lab(lblHuman, "Humanize"); lab(lblStrum, "Strum"); lab(lblMinVel, "Min vel"); lab(lblMaxVel, "Max vel");
@@ -4165,9 +4168,10 @@ juce::String ArpEditor::getTooltip()
         return "NOTES/BAR (drag, 7-13): the arp's base grid - how many notes fill one bar at Rate x1. "
                "Odd values (7/9/11/13) give polyrhythms; get 12/16/24 via Rate (8 x 1.5 = 12, 8 x 2 = 16).";
     if (alignRect().contains(p))
-        return "ALIGN BAR: while the beat plays, the riff locks onto the bar grid - press a key mid-cell and "
-               "the following notes still land ON the groove. When the transport is stopped it free-runs from "
-               "your keypress.";
+        return "ALIGN BAR: while the beat plays, the riff plays as if you had pressed the key EXACTLY on the "
+               "bar start - notes land on the arp's OWN grid (Notes/bar x Rate), in time with the pattern.\n\n"
+               "It does NOT use the channel's step count; only Notes/bar and Rate set the spacing. When the "
+               "transport is stopped it free-runs from your keypress.";
     if (holdRect().contains(p))
         return "HOLD (latch): release the key and the arp keeps looping on its own. Press the SAME key again "
                "to stop it; a DIFFERENT key re-roots the riff. The plugin's STOP button also ends it.";
@@ -4755,6 +4759,7 @@ DrumSequencerEditor::~DrumSequencerEditor()
                              (juce::Button*)&btn16View }) b->setLookAndFeel(nullptr);
     keysPanel.btnSlot2.setLookAndFeel(nullptr);   // dropBtnLNF
     keysPanel.btnArp.setLookAndFeel(nullptr);     // dropBtnLNF
+    tooltipWindow.setLookAndFeel(nullptr);        // tipLNF
     keysPanel.btnTakes.setLookAndFeel(nullptr);   // dropBtnLNF
     for (auto& s : strips)
     {
@@ -6060,13 +6065,14 @@ void DrumSequencerEditor::setupComponents()
 
     content.addAndMakeVisible(dragMidi);
     dragMidi.getMidiFile = [this] { return proc.exportMidiFile(selectedChannel); };
-    dragMidi.setTooltip("Dragging pitch values works for selected channel, not for the whole pattern. It is useful "
-                        "when steps have different pitch values. Pitched slots (Oscillator/Modal/Physical) export "
-                        "from their own Freq knob; a slot in CHORD or SCALE mode exports its FULL voicing (every "
-                        "chord note), and both slots export together. A channel with only Sample/Noise exports its "
-                        "step/draw pitch on the channel's own note (no fixed anchor). If your MIDI lands transposed, "
-                        "check the Freq knobs on the sound slots: they set the 0-point of the pitch (playing the keys "
-                        "re-bases them to C3 automatically).");
+    dragMidi.setTooltip(
+        "Drag this onto a DAW track to export the SELECTED channel as a MIDI clip.\n\n"
+        "- Pitched slots (Oscillator / Modal / Physical) export from their own Freq knob; a slot in "
+        "Chord or Scale mode exports its FULL voicing. Both slots export together.\n"
+        "- A channel with only Sample/Noise slots exports its step/draw pitch on the channel's own note.\n"
+        "- Merged step chains come out as one long note; rolls and swing are kept.\n\n"
+        "MIDI lands transposed? Check the slots' Freq knobs - they set the pitch 0-point (playing the "
+        "keys re-bases them to C3).");
 
 
     // Preset menu
@@ -6178,11 +6184,14 @@ void DrumSequencerEditor::setupComponents()
     btnInfluenceTop.setLookAndFeel(&purpleOutlineLNF);
     btnInfluenceTop.setColour(juce::TextButton::buttonColourId,   juce::Colour(0xff20203a));
     btnInfluenceTop.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xffb96bff));
-    btnInfluenceTop.setTooltip("Influence (acts on the SELECTED channel): arm this, then in a Vel/Pitch/Loop/Roll/"
-        "Pan/Nudge edit mode touch ONE step - the value being edited is copied from that step onto every step in "
-        "the channel. In Pitch mode, touching a step's SLIDE strip copies just the slide flag. It un-arms after "
-        "one use (so you can still tweak individual steps), and re-arms for a different step. The purple outline "
-        "marks it as a copy-across action, not plain per-step editing.\n\nRight-click to assign a MIDI control.");
+    btnInfluenceTop.setTooltip(
+        "Influence: copy ONE step's value onto the whole SELECTED channel.\n\n"
+        "- Arm this, then in a value edit mode (Vel/Len/Pitch/Loop/Roll/Pan/Nudge) touch the step to "
+        "copy FROM.\n"
+        "- It un-arms after one use; re-arm to copy a different step.\n"
+        "- In Pitch mode, touching a step's SLIDE strip copies just the slide flag.\n\n"
+        "The purple outline marks it as a copy-across action, not per-step editing. Right-click to "
+        "assign a MIDI control.");
     btnInfluenceTop.midiLearn = &proc.midiLearn;
     btnInfluenceTop.paramId   = "ui_influence";   // single UI control now (selected channel)
     btnInfluenceTop.onClick = [this] {
@@ -6223,11 +6232,11 @@ void DrumSequencerEditor::setupComponents()
     btn16View.setLookAndFeel(&tinyBtnLNF);
     btn16View.setClickingTogglesState(false);
     btn16View.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
-    btn16View.setTooltip("Switch the channel area between 8 and 16 rows. Either way the sound editor/keys panel "
-                         "hides (16 rows don't fit with it open, and 8-rows-with-editor is just the Show Editor "
-                         "view). Press SHOW SOUND EDITOR/KEYS to bring the editor back (it then shows 8 rows). All "
-                         "16 channels are always active - this only changes how many you SEE; scroll the rest with "
-                         "the yellow bar or the mouse wheel over the strips.");
+    btn16View.setTooltip(
+        "Show 8 or 16 channel rows. Opening 16 hides the sound editor/keys panel (they don't fit "
+        "together); SHOW SOUND EDITOR/KEYS brings it back with 8 rows.\n\n"
+        "All 16 channels are ALWAYS active - this only changes how many you SEE. Scroll the rest with "
+        "the yellow bar or the mouse wheel over the strips.");
     btn16View.onClick = [this] {
         // The view toggle is about SEEING channel rows, so it always hides the sound editor/keys (both
         // 8 and 16 rows show with the editor down). Bringing the editor back is the Show Editor button's
@@ -6290,12 +6299,13 @@ void DrumSequencerEditor::setupComponents()
     content.addChildComponent(keysPanel);   // hidden until KEYS is opened
     keysPanel.onKeyDown = [this](int note, float vel) { proc.pushKeyDown(note, vel); };
     keysPanel.onKeyUp   = [this](int note) { proc.pushKeyUp(note); };
-    keysPanel.btnRec.setTooltip("Record what you play on the keys into the SELECTED channel's steps (per-step pitch). "
-                                "Pick the behaviour in the mode box: record over THIS pattern only or follow the "
-                                "CHAIN, and start with the FIRST KEY you press or after a 3-second COUNT-IN. Each "
-                                "recording becomes a TAKE (up to 20) you can delete from the Takes list. The FIRST "
-                                "key you record sets the REFERENCE (= pitch 0); keys further than +/-24 semitones "
-                                "from it can't be stored in a step and are skipped with a warning.");
+    keysPanel.btnRec.setTooltip(
+        "Record what you play on the keys into the SELECTED channel (as piano-roll notes).\n\n"
+        "- The mode box picks WHERE (this pattern only, or follow the chain) and WHEN (your first key, "
+        "or a 3-second count-in).\n"
+        "- Every pattern loop while recording becomes a TAKE - find them in the Takes list.\n"
+        "- The pitch reference is fixed: C3 = pitch 0.\n\n"
+        "Press again to stop; the last take stays loaded on the channel.");
     keysPanel.btnRec.onClick = [this] {
         if (proc.keysRecording.load() || keysCountdownTicks > 0) keysStopRecord(true);
         else keysStartRecord();
@@ -6367,10 +6377,13 @@ void DrumSequencerEditor::setupComponents()
         "so the hardest press = this level. Turn down to tame a heavy hand or an aggressive controller. "
         "1 = off (full). Min/Max together map [soft..hard] -> [min..max].");
     keysPanel.maxVelKnob.setColour(juce::Slider::rotarySliderFillColourId, juce::Colour(0xff5ad17a));
-    keysPanel.glideKnob.setTooltip("GLIDE (MONO keyboard only): when up, pressing a new key while you're still "
-        "HOLDING the previous one makes the pitch SLIDE from the old note to the new (portamento, like a Minimoog). "
-        "Play detached (let go before the next key) and there's no slide. 0% = off. Longer = slower glide (up to "
-        "~0.4 s). Live playing only - it isn't baked into recordings (use the piano roll / step Slide for that).");
+    keysPanel.glideKnob.setTooltip(
+        "GLIDE (mono keyboard only): press a new key while still HOLDING the previous one and the pitch "
+        "SLIDES into the new note (portamento).\n\n"
+        "- Play detached = no slide.\n"
+        "- Higher = slower glide (up to ~0.4 s); 0% = off.\n\n"
+        "Live playing only - recorded notes use the piano roll's per-note glide flag instead "
+        "(CMD/CTRL+click a note).");
     keysPanel.glideKnob.setColour(juce::Slider::rotarySliderFillColourId, juce::Colour(0xff35c0ff));   // cyan = pitch/glide
     keysPanel.glideKnob.onValueChange = [this] {
         if (ignoreKnobCallbacks) return;
@@ -6386,12 +6399,12 @@ void DrumSequencerEditor::setupComponents()
         }
     };
     // POLY toggle: held keys stack like a piano; off = mono (a new key cuts the previous one).
-    keysPanel.polySwitch.setTooltip("POLY keys: hold several keys and they all sound (chords by hand, up to 16 "
-        "notes with tails). OFF = MONO: pressing a new key cuts the one before it - the classic lead/bass feel, "
-        "best for slides and basslines. Being in MONO mode doesn't prevent using Chord and Scale modes - one key "
-        "still plays the full chord/voicing; Mono only means a NEW key cuts the previous note. Keyboard only; the "
-        "sequencer's per-channel Poly button is separate. While you play, lit keys show what each slot voices: "
-        "yellow = slot 1, pink = slot 2, orange = both.");
+    keysPanel.polySwitch.setTooltip(
+        "POLY: held keys stack like a piano - chords by hand, up to 16 notes with tails.\n\n"
+        "OFF = MONO: a new key cuts the previous one (the classic lead/bass feel, best for slides and "
+        "basslines). Mono does NOT block Chord/Scale - one key still plays its full voicing.\n\n"
+        "Keyboard only; the sequencer's per-channel OV button is separate. Lit keys show each slot's "
+        "voicing: yellow = slot 1, pink = slot 2, orange = both.");
     keysPanel.polySwitch.onClick = [this] {
         if (ignoreKnobCallbacks) return;
         proc.sequencer.channel(selectedChannel).keysPolyMode = keysPanel.polySwitch.getToggleState();
@@ -6401,10 +6414,12 @@ void DrumSequencerEditor::setupComponents()
     keysPanel.btnSlot2.setLookAndFeel(&dropBtnLNF);   // dropdown look (triangle) - it's a popup button now
     keysPanel.btnArp.setLookAndFeel(&dropBtnLNF);     // same: the Arp button opens a dropdown
     keysPanel.btnTakes.setLookAndFeel(&dropBtnLNF);   // proper dropdown look (like the sound bank)
-    keysPanel.btnTakes.setTooltip("Recorded takes for the CURRENT pattern + selected channel (each pattern loop while "
-                                  "recording = one take, up to 20 per pattern+channel; saved with the preset). CLICK a "
-                                  "take to LOAD it (see its pitches + play it). Deletes live in the 'Delete a take' submenu. "
-                                  "Recording pauses when full (max 1000 takes per preset).");
+    keysPanel.btnTakes.setTooltip(
+        "Recorded takes for the CURRENT pattern + selected channel. One pattern loop while recording = "
+        "one take (max 20 per pattern+channel, 1000 per preset; saved with the preset).\n\n"
+        "- CLICK a take to LOAD it onto the channel (see it and play it).\n"
+        "- Deleting lives in the 'Delete a take' submenu.\n"
+        "- Edited a loaded take? 'Save changes' options appear at the top of this menu.");
     keysPanel.btnTakes.onClick = [this] {
         juce::PopupMenu m, delSub;
         int shown = 0;
@@ -7588,6 +7603,7 @@ void DrumSequencerEditor::setupComponents()
     btnSaveMix.setTooltip("Save this channel's current sound as a new, reusable entry in the Sound Bank.");
 
     //-- Beginner-friendly tooltips on hover (a TooltipWindow shows them).
+    tooltipWindow.setLookAndFeel(&tipLNF);   // bigger font + wider wrap + paragraph-friendly
     btnDawSync.setTooltip("When sync is enabled, BPM and time signature are taken from the project. "
                           "And play/stop functions will also be controlled by the DAW.");
     sliderBpm.setTooltip("Tempo in beats per minute. Sets how fast the pattern plays (only editable when DAW Sync is off).");
