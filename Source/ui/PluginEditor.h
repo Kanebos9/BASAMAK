@@ -629,7 +629,7 @@ public:
     juce::TextButton btnArp { "Arp" };                    // opens the ARP editor popup (space-saving)
     juce::TextButton btnGuide { "Guide" };                // KEY GUIDE popup: dim out-of-scale keys (display only)
     ScaleBox         scaleBox;                            // per-slot SCALE harmonizer controls (moved from the sound editor)
-    juce::Label      lblChord;                            // LIVE chord name of whatever is sounding (big text)
+    juce::Label      lblChord[3];                         // LIVE names: [0] slot 1 (yellow), [1] slot 2 (pink), [2] ALL = both combined
     ArpEditor        arpEditor;                            // hold one key -> programmed riff (per-step); hidden until btnArp
     juce::Label      lblRecMode, lblSlot2, lblHuman, lblStrum, lblMinVel, lblMaxVel, lblPoly, lblGlide;
     bool             polyMode = false;                    // mirror of the channel's keysPolyMode (routes note-offs)

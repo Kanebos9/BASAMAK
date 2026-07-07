@@ -4115,8 +4115,9 @@ juce::String ScaleBox::getTooltip()
         return "SCALE (drag): Off, or the scale the slot plays in. With a scale ON, every key you press plays "
                "a full chord built from that key inside the scale; off-scale keys snap to the nearest scale note.";
     return "SCALE harmonizer for the selected channel's sound slots (moved here from the sound editor). One key "
-           "= a full in-scale chord. The UNISON visual in the sound editor still does detune/vibrato; vibrato "
-           "applies to every sounding key.";
+           "= a full in-scale chord.\n\nThe three read-outs above the keys name what is sounding LIVE: yellow = "
+           "slot 1, pink = slot 2, white ALL = every key from both slots combined. Combinations that match no "
+           "chord show the note list instead.";
 }
 
 KeysPanel::KeysPanel()
@@ -4166,11 +4167,16 @@ KeysPanel::KeysPanel()
     addAndMakeVisible(btnGuide);
     btnGuide.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
     addAndMakeVisible(scaleBox);
-    addAndMakeVisible(lblChord);
-    lblChord.setFont(juce::Font(26.0f, juce::Font::bold));
-    lblChord.setColour(juce::Label::textColourId, juce::Colour(0xffd8e0f0));
-    lblChord.setJustificationType(juce::Justification::centredLeft);
-    lblChord.setInterceptsMouseClicks(false, false);
+    { static const juce::Colour cc[3] = { juce::Colour(0xffe8bf4d), juce::Colour(0xffe86aa8), juce::Colour(0xffd8e0f0) };
+      for (int i = 0; i < 3; ++i)
+      {
+          addAndMakeVisible(lblChord[i]);
+          lblChord[i].setFont(juce::Font(21.0f, juce::Font::bold));
+          lblChord[i].setColour(juce::Label::textColourId, cc[i]);
+          lblChord[i].setJustificationType(juce::Justification::centredLeft);
+          lblChord[i].setMinimumHorizontalScale(0.7f);
+          lblChord[i].setInterceptsMouseClicks(false, false);
+      } }
     btnArp.setTooltip("ARP: hold ONE key and it plays a programmed riff, locked to the beat. Click to open "
         "the editor - every control in it has its OWN tooltip. Works stopped or playing; records into the "
         "piano roll; mono, and chord/scale/glide apply per note.");
@@ -4428,14 +4434,18 @@ void KeysPanel::resized()
       polySwitch.setBounds(col.getCentreX() - 16, col.getY() + 1, 32, 16);   // Poly toggle
       btnArp.setBounds  (col.getCentreX() - 27, col.getY() + 20, 54, 16);    // Arp under it
       btnGuide.setBounds(col.getCentreX() - 27, col.getY() + 39, 54, 16); }  // Key guide under that
+    strip.removeFromLeft(8);
+    // SCALE box rides in the SAME strip row (it borrows the knob-cell overhang like the dials do)
+    scaleBox.setBounds(strip.getX(), strip.getY(), juce::jmax(150, strip.getWidth() - 2), 56);
 
     r.removeFromTop(6 + 28);    // push the keyboard down so the taller knob cell clears it
-    { // SCALE box + the live chord-name read-out (big, fills to the right edge)
-        auto row = r.removeFromTop(56);
-        scaleBox.setBounds(row.removeFromLeft(280));
-        row.removeFromLeft(10);
-        lblChord.setBounds(row);
-        r.removeFromTop(4);
+    { // LIVE chord names: slot 1 (yellow) | slot 2 (pink) | ALL = both slots combined (white)
+        auto row = r.removeFromTop(30);
+        const int w = row.getWidth() / 3;
+        lblChord[0].setBounds(row.removeFromLeft(w));
+        lblChord[1].setBounds(row.removeFromLeft(w));
+        lblChord[2].setBounds(row);
+        r.removeFromTop(2);
     }
     kb.setBounds(r);
     // ARP editor = a DROPDOWN under the Arp button: anchored to it (right-aligned so it stays inside
@@ -8518,8 +8528,9 @@ static juce::String chordNameFor(const juce::Array<int>& notes)
                 }
             }
         }
-    juce::String out;   // no dictionary match: just list what's sounding, bass first
-    for (int p : pcs) out << kUiNoteName[p] << " ";
+    juce::String out;   // no dictionary match (fingers everywhere?): list the notes, capped at 6
+    int shown = 0;
+    for (int p : pcs) { if (shown++ == 6) { out << "..."; break; } out << kUiNoteName[p] << " "; }
     return out.trim();
 }
 
@@ -8572,14 +8583,20 @@ void DrumSequencerEditor::updateKeyboardHighlight()
             else if (used[0][m])          keysPanel.setKeyTint(m, y);
             else if (used[1][m])          keysPanel.setKeyTint(m, p);
         keysPanel.applyKeyTints();
-        // LIVE CHORD NAME: name what slot 1 is sounding (slot 2 is usually a transposed double - it
-        // would muddy the name); falls back to slot 2 when slot 1 is silent.
-        juce::Array<int> sounding;
-        for (int m = 0; m < 128; ++m) if (used[0][m]) sounding.add(m);
-        if (sounding.isEmpty()) for (int m = 0; m < 128; ++m) if (used[1][m]) sounding.add(m);
-        keysPanel.lblChord.setText(chordNameFor(sounding), juce::dontSendNotification);
+        // LIVE CHORD NAMES: slot 1, slot 2, and ALL (the UNION of both slots - every key sounding,
+        // whichever slot makes it). Random hand-fulls that match nothing show the note list instead.
+        juce::Array<int> s1, s2, all;
+        for (int m = 0; m < 128; ++m)
+        {
+            if (used[0][m]) s1.add(m);
+            if (used[1][m]) s2.add(m);
+            if (used[0][m] || used[1][m]) all.add(m);
+        }
+        keysPanel.lblChord[0].setText(s1.isEmpty() ? juce::String() : "1: " + chordNameFor(s1), juce::dontSendNotification);
+        keysPanel.lblChord[1].setText(s2.isEmpty() ? juce::String() : "2: " + chordNameFor(s2), juce::dontSendNotification);
+        keysPanel.lblChord[2].setText(all.isEmpty() ? juce::String() : "All: " + chordNameFor(all), juce::dontSendNotification);
     }
-    else keysPanel.lblChord.setText({}, juce::dontSendNotification);
+    else for (auto& l : keysPanel.lblChord) l.setText({}, juce::dontSendNotification);
 }
 
 // KEY GUIDE: dim the keyboard keys OUTSIDE the chosen scale (display only; change-gated).
