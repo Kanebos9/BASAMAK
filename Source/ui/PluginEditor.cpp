@@ -3359,9 +3359,10 @@ juce::String VoiceModDisplay::getTooltip()
         return "Vibrato (pink dot): drag up for more pitch wobble at ~5.5 Hz. Shown in semitones (up to ~1.5 st).";
     if (hover == 3 && uniOn)
         return "Width (teal dot): STEREO spread of the stacked voices - drag up and the unison/chord notes fan "
-               "out across the stereo field (equal-power panning; the voice lines tint BLUE = panned left, "
-               "ORANGE = right). 0% = mono, exactly the old sound. The sub-oscillator always stays centred so "
-               "the bass keeps its punch. Needs more than one voice to hear anything.";
+               "out across the stereo field in ALTERNATING +/- pairs (like the big synths), so both sides get "
+               "sharp AND flat voices and the image never leans. Equal-power panning; the voice lines show "
+               "their real side (BLUE = left, ORANGE = right). 0% = mono, exactly the old sound. The "
+               "sub-oscillator always stays centred so the bass keeps its punch. Needs more than one voice.";
     juce::String s = "Voice controls for the selected slot. Hover the UNISON / CHORD / SCALE chips for what each mode "
                      "does. ";
     if (vibOn) s += "Vibrato = ~5.5 Hz pitch wobble (works on every engine here).";
@@ -3427,7 +3428,8 @@ void VoiceModDisplay::paint(juce::Graphics& g)
         float p = 0.0f;
         juce::Colour vc = juce::Colour(isRoot ? 0xff35c0ff : 0x9935c0ff);
         if (uniWidth > 0.001f && n > 1) {
-            p = sp * uniWidth;   // -1 (hard left) .. +1 (hard right), same sign as the pitch offset
+            const int pairIdx = juce::jmin(k, n - 1 - k);        // alternate +/- pairs across the
+            p = ((pairIdx & 1) ? -sp : sp) * uniWidth;           // sides, exactly like the DSP bake
             vc = vc.interpolatedWith(p < 0.0f ? juce::Colour(0xff4a7fff) : juce::Colour(0xffff9f43),
                                      juce::jlimit(0.0f, 1.0f, std::abs(p)) * 0.7f);
         }

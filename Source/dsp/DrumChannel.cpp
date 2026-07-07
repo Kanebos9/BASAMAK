@@ -1487,15 +1487,19 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 c.fmRatio    = 1.0f + (float) sl.fmSpread * 5.0f;
                 c.fmIndex    = sl.fmDepth * 12.0f;
                 c.uniSpread  = juce::jlimit(0.0f, 1.0f, sl.uniSpread);
-                for (int u = 0; u <= UNI_MAX; ++u)   // per-voice equal-power pan gains (same sp law as detune)
+                for (int u = 0; u <= UNI_MAX; ++u)   // per-voice equal-power pan gains, ALTERNATING pairs
                 {
-                    float sp = 0.0f;
+                    float sp = 0.0f; int pairIdx = 0;
                     if (u < c.uniVoices && c.uniVoices > 1)
                     {
                         const float fr = (float) u / (float)(c.uniVoices - 1);
                         sp = (c.uniMode == 1) ? fr : (c.uniMode == 2) ? -fr : (2.0f * fr - 1.0f);
+                        pairIdx = juce::jmin(u, c.uniVoices - 1 - u);   // 0 = the outermost +/- pair
                     }
-                    const float p = juce::jlimit(-1.0f, 1.0f, sp * c.uniSpread);
+                    // Serum-style: each successive +/- pair lands on the OPPOSITE side, so both ears
+                    // get sharp AND flat voices (a straight sp->pan map leans the whole image sharp-right).
+                    const float sgn = (pairIdx & 1) ? -1.0f : 1.0f;
+                    const float p = juce::jlimit(-1.0f, 1.0f, sgn * sp * c.uniSpread);
                     c.uniPanL[u] = std::sqrt(0.5f * (1.0f - p));
                     c.uniPanR[u] = std::sqrt(0.5f * (1.0f + p));
                 }
