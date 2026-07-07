@@ -4238,9 +4238,10 @@ void KeysPanel::resized()
         l.setBounds(col.removeFromTop(15));
         sw.setBounds(col.getCentreX() - 16, col.getY() + 4, 32, 18);
     };
-    placeTog(polySwitch, lblPoly, 60);
-    strip.removeFromLeft(10);
-    { auto col = strip.removeFromLeft(52); col.removeFromTop(15); btnArp.setBounds(col.reduced(2, 1)); }
+    { auto col = strip.removeFromLeft(60);                                   // Poly + Arp share ONE column
+      lblPoly.setBounds(col.removeFromTop(15));
+      polySwitch.setBounds(col.getCentreX() - 16, col.getY() + 2, 32, 18);   // Poly toggle
+      btnArp.setBounds(col.getCentreX() - 27, col.getY() + 26, 54, 18); }    // Arp right below it, aligned
 
     r.removeFromTop(6 + 28);    // push the keyboard down so the taller knob cell clears it
     kb.setBounds(r);
@@ -8177,6 +8178,11 @@ void DrumSequencerEditor::refreshKeysPanel()
         c.arpOn = keysPanel.arpEditor.on; c.arpLen = keysPanel.arpEditor.len;
         c.arpSync = keysPanel.arpEditor.sync; c.arpRate = keysPanel.arpEditor.rate;
         for (int ai = 0; ai < DrumChannel::ARP_ROWS; ++ai) c.arpOffset[ai] = keysPanel.arpEditor.off[ai];
+        // The Arp button's green face must follow the popup's ON/OFF LIVE (it used to wait for the
+        // next refreshKeysPanel = a key press - "I need to press a key to see if it's on").
+        keysPanel.btnArp.setColour(juce::TextButton::buttonColourId, c.arpOn ? juce::Colour(0xff35b56a) : juce::Colour(0xff20203a));
+        keysPanel.btnArp.setColour(juce::TextButton::textColourOffId, c.arpOn ? juce::Colours::black : juce::Colours::lightgrey);
+        keysPanel.btnArp.repaint();
     };
     keysPanel.polySwitch.setToggleState(kch.keysPolyMode, juce::dontSendNotification);
     keysPanel.polyMode = kch.keysPolyMode;
