@@ -628,7 +628,9 @@ public:
 private:
     int dragBox = -1;                         // 0 = slot 1 (yellow), 1 = slot 2 (pink)
     juce::Rectangle<int> onRect() const  { return { 0, (getHeight() - 22) / 2, 48, 22 }; }
-    juce::Rectangle<int> boxRect(int i) const { return { 54 + i * 160, 2, 154, getHeight() - 4 }; }
+    // STACKED: slot 1 (yellow) on top, slot 2 (pink) below - frees horizontal room for the chord names
+    juce::Rectangle<int> boxRect(int i) const
+    { const int hh = (getHeight() - 2) / 2; return { 54, 1 + i * (hh + 1), 158, hh - 1 }; }
     void dragTo(int i, int x);
 };
 

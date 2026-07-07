@@ -4142,7 +4142,7 @@ void KeySplitBox::paint(juce::Graphics& g)
         juce::Rectangle<float> win(x0, (float) r.getY() + 1.5f, ww, (float) r.getHeight() - 3.0f);
         g.setColour(acc.withAlpha(on ? 0.30f : 0.12f)); g.fillRoundedRectangle(win, 3.0f);
         g.setColour(acc.withAlpha(on ? 0.95f : 0.4f));  g.drawRoundedRectangle(win, 3.0f, 1.2f);
-        g.setColour(on ? juce::Colours::white : juce::Colour(0xff6a7690)); g.setFont(juce::Font(11.5f, juce::Font::bold));
+        g.setColour(on ? juce::Colours::white : juce::Colour(0xff6a7690)); g.setFont(juce::Font(11.0f, juce::Font::bold));
         g.drawFittedText(juce::MidiMessage::getMidiNoteName(ws, true, true, 4) + "-"
                          + juce::MidiMessage::getMidiNoteName(ws + 48, true, true, 4),
                          win.toNearestInt(), juce::Justification::centred, 1, 0.7f);
@@ -4232,7 +4232,7 @@ KeysPanel::KeysPanel()
       for (int i = 0; i < 3; ++i)
       {
           addAndMakeVisible(lblChord[i]);
-          lblChord[i].setFont(juce::Font(12.5f, juce::Font::bold));
+          lblChord[i].setFont(juce::Font(17.0f, juce::Font::bold));
           lblChord[i].setColour(juce::Label::textColourId, cc[i]);
           lblChord[i].setJustificationType(juce::Justification::centredLeft);
           lblChord[i].setMinimumHorizontalScale(0.55f);   // squeeze, never "..." (user)
@@ -4503,11 +4503,12 @@ void KeysPanel::resized()
     { // the BAND under the REC/mode/Takes/Slot2 row: SPLIT control + the three live chord names
       // (the knobs / Poly column / SCALE box overhang into this band further right - widths never collide)
         auto band = r.removeFromTop(44);
-        splitBox.setBounds(band.getX(), band.getY(), 376, 42);
-        auto nb = juce::Rectangle<int>(band.getX() + 382, band.getY() - 1, 118, 44);
-        lblChord[0].setBounds(nb.removeFromTop(14));   // slot 1 (yellow)
-        lblChord[1].setBounds(nb.removeFromTop(14));   // slot 2 (pink)
-        lblChord[2].setBounds(nb);                     // ALL (white)
+        splitBox.setBounds(band.getX(), band.getY(), 216, 42);   // toggle + the two STACKED window boxes
+        // LIVE CHORD NAMES: one big row spread across the rest of the free line (up to the knob columns)
+        auto nb = juce::Rectangle<int>(band.getX() + 224, band.getY(), 500 - 224, 44);
+        lblChord[0].setBounds(nb.removeFromLeft(78));   // slot 1 (yellow)
+        lblChord[1].setBounds(nb.removeFromLeft(78));   // slot 2 (pink)
+        lblChord[2].setBounds(nb);                      // ALL (white, widest - inversions are long)
     }
     r.removeFromTop(2);
     kb.setBounds(r);
@@ -5255,6 +5256,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
     juce::int64 h = 146959810934665603LL;
     h = mix(h, c.keysSlot2Down);   // slot-2 pitch is part of the SOUND now (rides + refreshes with mixes)
     h = mix(h, c.keysPolyMode ? 1 : 0);   // keys Poly/Mono is per-sound too
+    h = mix(h, c.keysSplit ? 1 : 0); h = mix(h, c.keysSplitW1); h = mix(h, c.keysSplitW2);   // SPLIT rides with the sound
     for (int i = 0; i < DrumChannel::NUM_SOURCES; ++i) { h = mix(h, c.srcOn[i] ? 1 : 0); h = mix(h, f(c.srcWeight[i])); }
     h = mix(h, f(c.padX)); h = mix(h, f(c.padY)); h = mix(h, c.padLayoutB ? 1 : 0);
     // Slots are the runtime source of truth (incl. duplicate engines) - hash them too.
@@ -5447,6 +5449,9 @@ void DrumSequencerEditor::writeChannelMix(juce::ValueTree& t, const DrumChannel&
 {
     t.setProperty("sound",    (int) ch.soundType,    nullptr);
     t.setProperty("keysPoly", ch.keysPolyMode, nullptr);
+    t.setProperty("keysSplit", ch.keysSplit, nullptr);
+    t.setProperty("splitW1", ch.keysSplitW1, nullptr);
+    t.setProperty("splitW2", ch.keysSplitW2, nullptr);
     t.setProperty("keys2Dn",  ch.keysSlot2Down,      nullptr);   // slot-2 pitch rides with the sound mix
     t.setProperty("userSample", ch.usingUserSample ? ch.userSampleFile.getFullPathName() : juce::String(), nullptr);
     for (int i = 0; i < DrumChannel::NUM_SOURCES; ++i) { t.setProperty("srcOn" + juce::String(i), ch.srcOn[i], nullptr);
@@ -5522,6 +5527,9 @@ void DrumSequencerEditor::writeChannelMix(juce::ValueTree& t, const DrumChannel&
 void DrumSequencerEditor::readChannelMix(const juce::ValueTree& t, DrumChannel& ch, juce::String& missingSample) const
 {
     ch.keysPolyMode = (bool) t.getProperty("keysPoly", true);
+    ch.keysSplit    = (bool) t.getProperty("keysSplit", false);
+    ch.keysSplitW1  = juce::jlimit(12, 60, (int) t.getProperty("splitW1", 60));
+    ch.keysSplitW2  = juce::jlimit(12, 60, (int) t.getProperty("splitW2", 12));
     ch.keysSlot2Down = juce::jlimit(-24, 24, (int) t.getProperty("keys2Dn", 0));   // slot-2 pitch (0 for old mix files)
     for (int i = 0; i < DrumChannel::NUM_SOURCES; ++i) { ch.srcOn[i]     = (bool)  t.getProperty("srcOn" + juce::String(i), i == 0);
                                   ch.srcWeight[i] = (float) t.getProperty("srcW"  + juce::String(i), i == 0 ? 1.0f : 0.0f); }
