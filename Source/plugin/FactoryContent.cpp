@@ -66,18 +66,6 @@ static void setSteps(DC& c, int n, std::initializer_list<int> on)
 //==============================================================================
 // Sound builders (Osc / Noise / FM only).  Each starts from a clean channel.
 //==============================================================================
-static void mSineKick(DC& c)   // DEEP round kick - low, soft knock, longer body (the "warm" one).
-{
-    // Distinct from 909 (click + tube) and Punch (hard/short): no click layer, slower/rounder
-    // knock, lower fundamental, longer tail, gentle saturation.
-    clearSound(c);
-    c.srcOn[DC::SrcOsc] = true; c.srcWeight[DC::SrcOsc] = 1.0f;
-    c.layerOscShape = DC::OscSine; c.layerSineFreq = 44.0f;
-    c.layerSinePEnvAmt = 22.0f; c.layerSinePEnvTime = 0.055f;
-    c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 0.65f;
-    c.driveType = DC::SoftClip; c.driveAmount = 0.22f;
-    c.volume = 0.95f;
-}
 static void mFMKick(DC& c)     // trap/808-style sub kick: FM knock + heavy sub octave
 {
     clearSound(c);
@@ -143,13 +131,6 @@ static void mFMTom(DC& c)
     c.fmPitch = -7.0f; c.fmSpread = 0.08f; c.fmDepth = 0.30f;
     c.legacyFmEnvFollow = true;   // FM bite on the strike, rounder tom body after
     c.srcDec[DC::SrcFM] = 0.34f; c.volume = 0.82f;
-}
-static void mCowbell(DC& c)    // clangy two-tone FM
-{
-    clearSound(c);
-    c.srcOn[DC::SrcFM] = true; c.srcWeight[DC::SrcFM] = 1.0f;
-    c.fmPitch = 12.0f; c.fmSpread = 0.42f; c.fmDepth = 0.45f;
-    c.srcDec[DC::SrcFM] = 0.22f; c.volume = 0.72f;
 }
 static void mRimshot(DC& c)
 {
@@ -393,12 +374,6 @@ static void m909Rim(DC& c) {
     c.driveType = DC::HardClip; c.driveAmount = 0.2f; c.volume = 0.7f;
 }
 // -- TR-606 --
-static void m606Kick(DC& c) {   // tight boxy 606 thump
-    clearSound(c); c.srcOn[DC::SrcOsc] = true; c.srcWeight[DC::SrcOsc] = 1.0f;
-    c.layerOscShape = DC::OscSine; c.layerSineFreq = 62.0f; c.layerSinePEnvAmt = 18.0f; c.layerSinePEnvTime = 0.028f;
-    c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 0.26f;
-    c.driveType = DC::SoftClip; c.driveAmount = 0.24f; c.volume = 0.93f;
-}
 static void m606Snare(DC& c) {   // 606: short papery snap
     clearSound(c);
     c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 0.62f;
@@ -416,20 +391,6 @@ static void m606ClosedHat(DC& c) {
     clearSound(c); c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 1.0f;
     c.noiseType = 0; c.layerNoiseCenter = 11000.0f; c.layerNoiseWidth = 0.08f; c.srcDec[DC::SrcNoise] = 0.03f; c.volume = 0.58f;
 }
-static void m606OpenHat(DC& c) {
-    clearSound(c); c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 1.0f;
-    c.noiseType = 0; c.layerNoiseCenter = 10000.0f; c.layerNoiseWidth = 0.07f; c.srcDec[DC::SrcNoise] = 0.26f; c.volume = 0.56f;
-}
-static void m606Cymbal(DC& c) {
-    clearSound(c);
-    c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 0.55f;
-    c.srcOn[DC::SrcFM]    = true; c.srcWeight[DC::SrcFM]    = 0.45f;
-    c.padX = 0.14f + 0.45f * 0.72f; c.padY = 0.5f;
-    c.noiseType = 0; c.layerNoiseCenter = 8000.0f; c.layerNoiseWidth = 0.05f; c.srcDec[DC::SrcNoise] = 0.8f;
-    c.fmPitch = 24.0f; c.fmSpread = 0.7f; c.fmDepth = 0.5f; c.srcDec[DC::SrcFM] = 0.8f;
-    c.reverbSend = 0.2f; c.volume = 0.55f;
-}
-// -- Physical-modelled percussion (category "Physical") --
 static void mWoodClave(DC& c) {
     clearSound(c); c.srcOn[DC::SrcPhys] = true; c.srcWeight[DC::SrcPhys] = 1.0f;
     c.physFreq = 800.0f; c.physTone = 0.6f; c.physMaterial = 2.0f; // Wood
@@ -506,13 +467,6 @@ static void mTrapSnare(DC& c) {   // sharp trap crack
     c.eqBand[DC::EQ_HP] = { true, 350.0f, 0.0f, 0.707f };
     c.driveType = DC::Tube; c.driveAmount = 0.15f;
     c.reverbSend = 0.12f; c.volume = 0.86f;
-}
-static void mClapSnare(DC& c) {   // clap/snare hybrid: wide-band snap with an airy tail
-    clearSound(c); c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 1.0f;
-    c.noiseType = 0; c.layerNoiseCenter = 1500.0f; c.layerNoiseWidth = 0.24f;
-    c.srcAtk[DC::SrcNoise] = 0.001f; c.srcDec[DC::SrcNoise] = 0.18f;
-    c.eqBand[DC::EQ_HP] = { true, 450.0f, 0.0f, 0.707f };
-    c.reverbSend = 0.22f; c.volume = 0.84f;
 }
 static void mModSnare(DC& c) {   // realistic snare: Modal membrane body + resonant noise "wires"
     clearSound(c);
@@ -1028,11 +982,11 @@ using Builder = void (*)(DC&);
 
 static const struct { const char* name; Builder build; const char* cat; } kMixes[] = {
     // Categories are by SOUND TYPE (not synthesis source).
-    { "Sine Kick",   mSineKick,   "Kicks" },          { "FM Kick",     mFMKick,    "Kicks" },
+    { "FM Kick",     mFMKick,    "Kicks" },
     { "Sub Bass",    mSubBass,    "Bass" },           { "Noise Snare", mNoiseSnare,"Snares & Claps" },
     { "Clap",        mClap,       "Snares & Claps" }, { "Closed Hat",  mClosedHat, "Hats & Cymbals" },
     { "Open Hat",    mOpenHat,    "Hats & Cymbals" }, { "FM Tom",      mFMTom,     "Toms" },
-               { "Cowbell",     mCowbell,   "Percussion" },
+
     { "Rimshot",     mRimshot,   "Percussion" },
     { "Woodblock",   mWoodblock,  "Percussion" },     { "Zap",         mZap,       "FX & Synth" },
     { "808 Bass",    m808Bass,    "Bass" },           
@@ -1059,15 +1013,15 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "909 Crash",    m909Crash,     "Hats & Cymbals" }, { "909 Low Tom",  m909LowTom,    "Toms" },
     { "909 Mid Tom",  m909MidTom,    "Toms" },           { "909 Hi Tom",   m909HiTom,     "Toms" },
     { "909 Rimshot",  m909Rim,       "Percussion" },
-    { "606 Kick",     m606Kick,      "Kicks" },          { "606 Snare",    m606Snare,     "Snares & Claps" },
-    { "606 CH",       m606ClosedHat, "Hats & Cymbals" }, { "606 OH",       m606OpenHat,   "Hats & Cymbals" },
-    { "606 Cymbal",   m606Cymbal,    "Hats & Cymbals" },
+    { "606 Snare",    m606Snare,     "Snares & Claps" },
+    { "606 CH",       m606ClosedHat, "Hats & Cymbals" },
+
     // Extra mixes (round 8)
     { "Reese Bass",   mReeseBass,   "Bass" },           
     { "Square Bass",  mSquareBass,  "Bass" },           { "FM Bass",      mFMBass,      "Bass" },
     { "Growl Bass",   mGrowlBass,   "Bass" },           { "Acid Bass",    mAcidBass,    "Bass" },
     { "Punch Kick",   mPunchKick,   "Kicks" },          { "Dist Kick",    mDistKick,    "Kicks" },
-    { "Trap Snare",   mTrapSnare,   "Snares & Claps" }, { "Clap Snare",   mClapSnare,   "Snares & Claps" },
+    { "Trap Snare",   mTrapSnare,   "Snares & Claps" },
     { "Mod Snare",    mModSnare,    "Snares & Claps" },
     { "Metal Hat",    mMetalHat,    "Hats & Cymbals" }, { "Tight Hat",    mTightHat,    "Hats & Cymbals" },
     { "Sizzle",       mSizzle,      "Hats & Cymbals" }, 
@@ -1246,7 +1200,7 @@ static void pOdeToJoy(Sequencer& s)
     melody(6, { {0,0},{4,0},{8,2},{12,4} });   // bar 7:  C C D E
     melody(7, { {0,2},{6,0},{8,0} });          // bar 8:  D. C C  (resolves to C)
     // Building beat: soft kick on beats 1 & 3 of every bar; hats join for the second half (bars 5-8).
-    for (int p = 0; p < 8; ++p) buildChP(s, p, 1, mSineKick, 16, { 0, 8 });
+    for (int p = 0; p < 8; ++p) buildChP(s, p, 1, m808Kick, 16, { 0, 8 });   // (Sine Kick removed - 0.995 twin)
     for (int p = 4; p < 8; ++p) buildChP(s, p, 2, mClosedHat, 16, { 0,2,4,6,8,10,12,14 });
     // Chain the eight bars into one continuous, looping playthrough.
     for (int p = 0; p < 8; ++p) {
@@ -1272,7 +1226,7 @@ static void pRiserDrop(Sequencer& s)
     s.patterns[0].repeatTarget = 1;
     // -- Pattern 2 (index 1): the drop / main groove (loops). --
     buildChP(s, 1, 0, mPunchKick,  16, { 0,4,8,12 });
-    buildChP(s, 1, 1, mClapSnare,  16, { 4, 12 });
+    buildChP(s, 1, 1, m909Clap,   16, { 4, 12 });   // (Clap Snare removed - 0.995 twin)
     buildChP(s, 1, 2, mClosedHat,  16, { 0,2,4,6,8,10,12,14 });
     buildChP(s, 1, 3, mReeseBass,  16, { 0,3,6,8,11,14 });
     buildChP(s, 1, 4, mOpenHat,    16, { 2,6,10,14 });
