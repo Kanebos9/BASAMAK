@@ -3285,9 +3285,10 @@ VoiceModDisplay::Geo VoiceModDisplay::geom() const
     q.uniTop = q.top + 8.0f;   // the unison dot (left) tops out a bit LOWER so it clears the chips too
     q.cy = (q.top + q.bottom) * 0.5f; q.hh = (q.bottom - q.top) * 0.5f - 2.0f;
     const float w = q.right - q.left;
-    q.uX = q.left + w * 0.16f;   // Unison handle (left)
-    q.dX = q.left + w * 0.46f;   // Detune handle home X (centre)
-    q.vX = q.left + w * 0.86f;   // Vibrato handle (right)
+    q.uX = q.left + w * 0.12f;   // Unison handle (left)
+    q.dX = q.left + w * 0.38f;   // Detune handle home X
+    q.vX = q.left + w * 0.64f;   // Vibrato handle
+    q.wX = q.left + w * 0.90f;   // WIDTH handle (right; stereo spread of the unison voices)
     q.rangeX = (q.vX - q.dX) * 0.7f;
     q.rangeY = q.hh * 0.85f;
     // In CHORD/SCALE the root line drops LOW so the value dots (chord/scale type) + the vibrato dot start
@@ -3304,13 +3305,14 @@ VoiceModDisplay::Geo VoiceModDisplay::geom() const
 int VoiceModDisplay::nearestHandle(juce::Point<float> p) const
 {
     const Geo q = geom();
-    juce::Point<float> pts[3] = {
+    juce::Point<float> pts[4] = {
         { q.uX, q.bottom - (float)(curUni() - 1) / (float)(juce::jmax(1, maxUni - 1)) * (q.bottom - q.uniTop) },  // 0 Unison
         { q.dPtX, q.dPtY },                                                                 // 1 Detune (mode-aware)
-        { q.vX, q.rootY - vib * q.upRange } };                                              // 2 Vibrato
+        { q.vX, q.rootY - vib * q.upRange },                                                // 2 Vibrato
+        { q.wX, q.rootY - uniWidth * q.upRange } };                                         // 3 Width (stereo)
     int best = -1; float bd = 22.0f * 22.0f;
-    for (int i = 0; i < 3; ++i) {
-        if ((i <= 1 && !uniOn) || (i == 2 && !vibOn)) continue;
+    for (int i = 0; i < 4; ++i) {
+        if (((i == 0 || i == 1 || i == 3) && !uniOn) || (i == 2 && !vibOn)) continue;
         const float dx = p.x - pts[i].x, dy = p.y - pts[i].y, d2 = dx * dx + dy * dy;
         if (d2 < bd) { bd = d2; best = i; }
     }
@@ -3410,15 +3412,6 @@ void VoiceModDisplay::paint(juce::Graphics& g)
     // Mode chips: STD = detuned copies; CHORD = the unison voices become chord notes. When CHORD
     // is on, a third chip cycles the chord TYPE and shows the actual stacked intervals for the
     // current voice count, e.g. "Maj (+4,+3)".
-    if (uniOn) {   // STEREO WIDTH mini-fader (top-left, in the old chip band): drag = widen the voices
-        auto wr = widthRect();
-        g.setColour(juce::Colour(0xff26264a)); g.fillRoundedRectangle(wr, 3.0f);
-        g.setColour(juce::Colour(0xff35c0ff).withAlpha(0.35f));
-        g.fillRoundedRectangle(wr.withWidth(juce::jmax(4.0f, uniWidth * wr.getWidth())), 3.0f);
-        g.setColour(juce::Colour(0xffc8d4ea)); g.setFont(juce::Font(9.5f, juce::Font::bold));
-        g.drawText("Width " + juce::String(juce::roundToInt(uniWidth * 100.0f)) + "%", wr.toNearestInt(),
-                   juce::Justification::centred, false);
-    }
     // (The UNISON/CHORD/SCALE chips are GONE - the visual is UNISON-only; the SCALE harmonizer is
     // edited in the SCALE box above the keyboard. chip[] stay empty so old hit-tests never fire.)
     for (auto& cp : chip) cp = {};
@@ -3464,6 +3457,9 @@ void VoiceModDisplay::paint(juce::Graphics& g)
         // VIBRATO shown as the real peak pitch deviation in semitones (~1.5 st at full).
         const float vibSt = 12.0f * std::log2(1.0f + 0.09f * vib);
         handle(q.vX, q.rootY - vib * q.upRange, juce::Colour(0xffff7ab0), 2, juce::String(vibSt, 2) + "st");
+    if (uniOn)   // WIDTH dot: stereo spread of the unison/chord voices (0 = mono = the old sound)
+        handle(q.wX, q.rootY - uniWidth * q.upRange, juce::Colour(0xff3ec6a8), 3,
+               juce::String(juce::roundToInt(uniWidth * 100.0f)) + "%");
     }
 
     // tiny per-handle captions (which dot is which), since the box title names all three
@@ -3473,6 +3469,7 @@ void VoiceModDisplay::paint(juce::Graphics& g)
         g.drawText(scaleOn ? "scale" : chord > 0 ? "chord" : "detune", juce::Rectangle<float>(q.dX - 24, q.bottom - 1, 48, 9), juce::Justification::centred, false);
     }
     if (vibOn) g.drawText("vib", juce::Rectangle<float>(q.vX - 18, q.bottom - 1, 36, 9), juce::Justification::centred, false);
+    if (uniOn) g.drawText("width", juce::Rectangle<float>(q.wX - 18, q.bottom - 1, 36, 9), juce::Justification::centred, false);
 }
 void VoiceModDisplay::mouseMove(const juce::MouseEvent& e) {
     int h = nearestHandle(e.position);
@@ -3493,17 +3490,11 @@ void VoiceModDisplay::mouseDown(const juce::MouseEvent& e)
             return;
         }
     }
-    if (uniOn && widthRect().expanded(2.0f).contains(e.position)) { drag = 4; mouseDrag(e); return; }
     drag = nearestHandle(e.position); if (drag >= 0) mouseDrag(e);
 }
 void VoiceModDisplay::mouseDrag(const juce::MouseEvent& e)
 {
     if (drag < 0) return;
-    if (drag == 4) {   // WIDTH mini-fader: horizontal drag
-        auto wr = widthRect();
-        uniWidth = juce::jlimit(0.0f, 1.0f, (e.position.x - wr.getX()) / juce::jmax(1.0f, wr.getWidth()));
-        emit(); repaint(); return;
-    }
     const Geo q = geom();
     if (drag == 0) { int& tgt = scaleOn ? uniScale : (chord > 0) ? uniChord : uni; tgt = juce::jlimit(1, maxUni, 1 + juce::roundToInt((q.bottom - e.position.y) / juce::jmax(1.0f, q.bottom - q.uniTop) * (float)(maxUni - 1))); }
     else if (drag == 1) {
@@ -3513,6 +3504,7 @@ void VoiceModDisplay::mouseDrag(const juce::MouseEvent& e)
         else { mode = 0;      det       = t; }                                                                            // STD cents
     }
     else if (drag == 2) vib = juce::jlimit(0.0f, 1.0f, (q.rootY - e.position.y) / juce::jmax(1.0f, q.upRange));
+    else if (drag == 3) uniWidth = juce::jlimit(0.0f, 1.0f, (q.rootY - e.position.y) / juce::jmax(1.0f, q.upRange));
     emit();
     repaint();
 }

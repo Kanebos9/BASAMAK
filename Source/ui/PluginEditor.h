@@ -986,11 +986,10 @@ private:
     juce::String reason;
     int   drag = -1, hover = -1;   // 0 = Unison, 1 = Detune, 2 = Vibrato
     int   chipHover = -1;          // which mode chip the mouse is over (0=UNISON 1=CHORD 2=SCALE 3=KEY) for per-chip tooltips
-    struct Geo { float left, right, top, bottom, cy, hh, uX, dX, vX;
+    struct Geo { float left, right, top, bottom, cy, hh, uX, dX, vX, wX;
                  float rangeX, rangeY, dPtX, dPtY, rootY, upRange, uniTop; };   // rootY = root line; upRange = room above it; uniTop = unison-dot ceiling (below the chips)
     Geo  geom() const;
     int  nearestHandle(juce::Point<float> p) const;
-    juce::Rectangle<float> widthRect() const { return { 6.0f, 4.0f, 92.0f, 13.0f }; }   // TOP-left (the old chip band - empty now)
     void emit() { if (onChange) onChange(curUni(), det, vib, centre, mode, emitChord, emitScaleOn, emitScaleType, emitScaleKey, uniWidth); }
 };
 
