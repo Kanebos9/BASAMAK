@@ -4942,23 +4942,26 @@ static constexpr int ID_INIT_MIX      = 9996;
 static constexpr int ID_REFRESH_SAMPLES = 9990;  // rescan the Samples folder so newly-added files appear in the dropdown
 static constexpr int ID_SHOW_SAMPLES    = 9989;  // reveal the Samples folder in Finder/Explorer
 static constexpr int ID_REFRESH_BANK    = 9995;  // rescan the Sound Bank folder
-static constexpr int ID_SEARCH_MIX      = 9992;  // type-to-find across sound names + categories
 static constexpr int ID_SHOW_BANK       = 9993;  // reveal the Sound Bank folder
 static constexpr int ID_BROWSE        = 10001;   // open the sound-browser window (outside the sample-id range)
 
-// LIVE sound search (user spec: type IN the box, results filter WHILE TYPING, one popup, magnifier
-// icon). Shown in a CallOutBox anchored at the strip's Sound Bank combo; result ids are the combo's
-// own item ids, so picking routes through the normal handleSoundMixChange apply path.
-class SoundSearchBox : public juce::Component,
-                       private juce::TextEditor::Listener, private juce::ListBoxModel
+
+// THE Sound Bank dropdown (user spec, round-3: ONE dropdown, no extra pop-ups - a search field
+// with a magnifier lives at its top and the list below filters LIVE while typing). Shown as a
+// child of the editor content (like the Arp dropdown - no OS popup window, so the unfocused-menu
+// watchdog can never kill it); clicking anywhere outside closes it. Rows carry the SAME ids the
+// combo used, dispatched through DrumSequencerEditor::applySoundPickId.
+class SoundPickerPanel : public juce::Component,
+                         private juce::TextEditor::Listener, private juce::ListBoxModel
 {
 public:
-    std::function<void(int comboId)> onPick;
-    SoundSearchBox(const juce::Array<juce::File>& userFiles)
-        : names(Factory::mixNames()), cats(Factory::mixCategories()), files(userFiles)
+    std::function<void(int id)> onPick;
+    juce::Component* clickIgnore = nullptr;   // the combo that opened us (its click toggles)
+
+    SoundPickerPanel()
     {
         addAndMakeVisible(ed);
-        ed.setTextToShowWhenEmpty("Type to search names + categories...", juce::Colour(0xff7d86a0));
+        ed.setTextToShowWhenEmpty("Search names + categories...", juce::Colour(0xff7d86a0));
         ed.setFont(juce::Font(14.0f));
         ed.setColour(juce::TextEditor::backgroundColourId, juce::Colour(0xff17172c));
         ed.addListener(this);
@@ -4966,9 +4969,20 @@ public:
         list.setModel(this);
         list.setRowHeight(20);
         list.setColour(juce::ListBox::backgroundColourId, juce::Colour(0xff101020));
-        setSize(300, 360);
-        rebuild();
     }
+    ~SoundPickerPanel() override { juce::Desktop::getInstance().removeGlobalMouseListener(&closer); }
+
+    void openWith(const juce::Array<juce::File>& userFiles, const juce::File& userRoot)
+    {
+        files = userFiles; root = userRoot;
+        ed.setText({}, juce::dontSendNotification);
+        rebuild();
+        setVisible(true);
+        toFront(false);
+        ed.grabKeyboardFocus();
+    }
+    void close() { setVisible(false); giveAwayKeyboardFocus(); }
+
     void resized() override
     {
         auto b = getLocalBounds().reduced(6);
@@ -4981,25 +4995,48 @@ public:
     void paint(juce::Graphics& g) override
     {
         g.fillAll(juce::Colour(0xff181830));
-        g.setColour(juce::Colour(0xffaebada));                       // the magnifier glyph, drawn (no
-        const float cx = 16.0f, cy = 17.0f;                          // unicode - mojibake rule)
+        g.setColour(juce::Colour(0xff777fa8)); g.drawRect(getLocalBounds(), 1);
+        g.setColour(juce::Colour(0xffaebada));                       // the magnifier glyph, drawn
+        const float cx = 16.0f, cy = 17.0f;                          // (no unicode - mojibake rule)
         g.drawEllipse(cx - 9.0f, cy - 9.0f, 11.0f, 11.0f, 1.8f);
         g.drawLine(cx + 1.5f, cy + 1.5f, cx + 6.5f, cy + 6.5f, 2.2f);
     }
-    void parentHierarchyChanged() override { if (isShowing()) ed.grabKeyboardFocus(); }
+    void visibilityChanged() override
+    {
+        auto& d = juce::Desktop::getInstance();
+        if (isVisible()) d.addGlobalMouseListener(&closer);
+        else             d.removeGlobalMouseListener(&closer);
+    }
 
 private:
     struct Row { juce::String text; int id; bool header; };
-    juce::StringArray names, cats;
-    juce::Array<juce::File> files;
     juce::Array<Row> rows;
+    juce::Array<juce::File> files;
+    juce::File root;
     juce::TextEditor ed;
     juce::ListBox list;
+
+    struct Closer : juce::MouseListener   // click anywhere OUTSIDE = close, like a real dropdown
+    {
+        SoundPickerPanel& p; explicit Closer(SoundPickerPanel& pp) : p(pp) {}
+        void mouseDown(const juce::MouseEvent& e) override
+        {
+            if (! p.isVisible()) return;
+            const auto sp = e.getScreenPosition();
+            if (p.getScreenBounds().contains(sp)) return;
+            if (p.clickIgnore != nullptr && p.clickIgnore->getScreenBounds().contains(sp)) return;
+            p.close();
+        }
+    };
+    Closer closer { *this };
 
     void rebuild()
     {
         rows.clear();
         const juce::String q = ed.getText().trim();
+        auto names = Factory::mixNames();
+        auto cats  = Factory::mixCategories();
+        if (q.isEmpty()) rows.add({ "Initialize new sound mix", ID_INIT_MIX, false });
         for (auto* cat : kSoundCatOrder)
         {
             auto idx = factoryIndicesFor(cat, names, cats, q);
@@ -5010,28 +5047,36 @@ private:
         }
         bool hdr = false;
         for (int i = 0; i < files.size(); ++i)
-            if (q.isEmpty() || files[i].getFileNameWithoutExtension().containsIgnoreCase(q)
-                || files[i].getParentDirectory().getFileName().containsIgnoreCase(q))
-            {
-                if (! hdr) { rows.add({ "Your Sound Bank", 0, true }); hdr = true; }
-                rows.add({ files[i].getFileNameWithoutExtension(), i + 1, false });
-            }
-        if (rows.isEmpty()) rows.add({ "(no sounds match)", 0, true });
+        {
+            const bool inRoot = files[i].getParentDirectory() == root;
+            const juce::String label = inRoot ? files[i].getFileNameWithoutExtension()
+                : files[i].getParentDirectory().getFileName() + " / " + files[i].getFileNameWithoutExtension();
+            if (! q.isEmpty() && ! label.containsIgnoreCase(q)) continue;
+            if (! hdr) { rows.add({ "Your Sound Bank", 0, true }); hdr = true; }
+            rows.add({ label, i + 1, false });
+        }
+        if (q.isEmpty())
+        {
+            rows.add({ "", 0, true });
+            rows.add({ "Refresh sound bank folder", ID_REFRESH_BANK, false });
+            rows.add({ "Show Folder", ID_SHOW_BANK, false });
+        }
+        else if (rows.isEmpty()) rows.add({ "(no sounds match)", 0, true });
         list.updateContent();
         list.repaint();
     }
     void pick(int row)
     {
         if (row < 0 || row >= rows.size() || rows[row].header) return;
-        if (onPick) onPick(rows[row].id);
-        if (auto* box = findParentComponentOfClass<juce::CallOutBox>()) box->dismiss();
+        const int id = rows[row].id;
+        close();
+        if (onPick) onPick(id);
     }
     // TextEditor::Listener
     void textEditorTextChanged(juce::TextEditor&) override { rebuild(); }
     void textEditorReturnKeyPressed(juce::TextEditor&) override
     { for (int r = 0; r < rows.size(); ++r) if (! rows[r].header) { pick(r); return; } }
-    void textEditorEscapeKeyPressed(juce::TextEditor&) override
-    { if (auto* box = findParentComponentOfClass<juce::CallOutBox>()) box->dismiss(); }
+    void textEditorEscapeKeyPressed(juce::TextEditor&) override { close(); }
     // ListBoxModel
     int getNumRows() override { return rows.size(); }
     void paintListBoxItem(int row, juce::Graphics& g, int w, int h, bool over) override
@@ -5364,7 +5409,6 @@ void DrumSequencerEditor::rebuildSoundMixMenu(int ch)
     auto* root = combo.getRootMenu();
     root->clear();
     root->addItem(ID_INIT_MIX, "Initialize new sound mix");
-    root->addItem(ID_SEARCH_MIX, "Search sounds...");
     // Built-in factory sounds (read-only). Categories are SECTION HEADERS in one
     // flat list (no nested submenus); when the list is taller than the screen JUCE
     // automatically flows it into extra columns to the side. ALPHABETICAL inside
@@ -5398,7 +5442,32 @@ void DrumSequencerEditor::rebuildSoundMixMenu(int ch)
 
 void DrumSequencerEditor::handleSoundMixChange(int ch)
 {
-    int id = strips[ch].comboSound.getSelectedId();
+    applySoundPickId(ch, strips[ch].comboSound.getSelectedId());
+}
+
+void DrumSequencerEditor::openSoundPicker(int ch)
+{
+    if (soundPicker == nullptr)
+    {
+        soundPicker = std::make_unique<SoundPickerPanel>();
+        content.addChildComponent(*soundPicker);
+    }
+    auto& panel = static_cast<SoundPickerPanel&>(*soundPicker);
+    auto& combo = strips[ch].comboSound;
+    if (panel.isVisible() && panel.clickIgnore == &combo) { panel.close(); return; }   // toggle
+    panel.clickIgnore = &combo;
+    panel.onPick = [this, ch](int id) { applySoundPickId(ch, id); selectChannel(ch); };
+    const auto r = content.getLocalArea(&combo, combo.getLocalBounds());
+    int y = r.getBottom() + 2;
+    int h = content.getHeight() - y - 6;
+    if (h < 300) { h = juce::jmin(620, content.getHeight() - 12); y = content.getHeight() - h - 6; }
+    h = juce::jmin(h, 620);
+    panel.setBounds(juce::jlimit(2, juce::jmax(2, content.getWidth() - 382), r.getX()), y, 380, h);
+    panel.openWith(soundMixFiles, getSoundMixFolder());
+}
+
+void DrumSequencerEditor::applySoundPickId(int ch, int id)
+{
     auto& c = proc.sequencer.channel(ch);
     if (id == ID_REFRESH_BANK)      // re-scan so sounds saved on disk appear in every channel's dropdown
     {
@@ -5409,15 +5478,6 @@ void DrumSequencerEditor::handleSoundMixChange(int ch)
     {
         getSoundMixFolder().revealToUser();
         strips[ch].comboSound.setSelectedId(0, juce::dontSendNotification);
-    }
-    else if (id == ID_SEARCH_MIX)   // LIVE search: type in the box, the list filters as you type
-    {
-        strips[ch].comboSound.setSelectedId(0, juce::dontSendNotification);
-        auto box = std::make_unique<SoundSearchBox>(soundMixFiles);
-        box->onPick = [this, ch](int pick)
-        { if (pick > 0) strips[ch].comboSound.setSelectedId(pick, juce::sendNotificationSync); };
-        juce::CallOutBox::launchAsynchronously(std::move(box),
-            strips[ch].comboSound.getScreenBounds(), nullptr);
     }
     else if (id == ID_INIT_MIX)
     {
@@ -7241,6 +7301,7 @@ void DrumSequencerEditor::setupComponents()
         content.addAndMakeVisible(strip.comboSound);  // now the "Sound Bank" selector
         strip.comboSound.setLookAndFeel(&wideMenuLNF); // 3-column popup (no tall scroll)
         strip.comboSound.onChange = [this, ci] { handleSoundMixChange(ci); selectChannel(ci); };
+        strip.comboSound.onOpen   = [this, ci] { openSoundPicker(ci); };   // the searchable dropdown
 
         content.addAndMakeVisible(strip.btnTest);
         strip.btnTest.onClick = [this, ci] { selectChannel(ci); proc.requestTestTrigger(ci); };
@@ -9860,10 +9921,18 @@ void DrumSequencerEditor::timerCallback()
                     if (auto* peer = dc->getPeer())
                         if (peer->isFocused()) anyFocused = true;
         }
+        // GRACE on menu TRANSITIONS: when one menu closes and another opens in the same gesture
+        // (the step-count -> quantize-confirm chain), OS focus is briefly nowhere - without this
+        // the fresh menu was dismissed ~100 ms in ("clicks don't register" on step counts).
+        auto* mm = juce::ModalComponentManager::getInstance();
+        const int mc = mm->getNumModalComponents();
+        auto* mtop = mm->getModalComponent(0);   // identity only - a swapped menu can keep count 1
+        if (mc != lastModalCount || mtop != lastModalComp)
+        { lastModalCount = mc; lastModalComp = mtop; outsideFocusTicks = -30; }   // ~0.5 s grace
         if (! anyFocused && ++outsideFocusTicks >= 6) { outsideFocusTicks = 0; juce::PopupMenu::dismissAllActiveMenus(); }   // ~100ms at 60Hz (was 2 = 33ms, dismissed dropdowns as they opened)
         else if (anyFocused) outsideFocusTicks = 0;
     }
-    else outsideFocusTicks = 0;
+    else { outsideFocusTicks = 0; lastModalCount = 0; lastModalComp = nullptr; }
 
     // The playing pattern auto-advanced (or a MIDI CC switched it). Follow it only if
     // "Follow" is on; otherwise just keep the green playing-marker in sync.

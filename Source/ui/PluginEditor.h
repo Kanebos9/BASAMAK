@@ -1711,12 +1711,20 @@ private:
     };
 
     //-- Channel strips (left column)
+    // The Sound Bank combo does NOT open a JUCE PopupMenu: clicking it opens the editor's
+    // SoundPickerPanel (one dropdown with a LIVE search field - user spec). ComboBox is kept
+    // for the display text + the id-based apply plumbing.
+    struct PickerCombo : juce::ComboBox
+    {
+        std::function<void()> onOpen;
+        void showPopup() override { if (onOpen) onOpen(); else juce::ComboBox::showPopup(); }
+    };
     struct ChannelStrip
     {
         NumDragButton numBtn;
         std::unique_ptr<LearnableButton> btnMute;
         std::unique_ptr<LearnableButton> btnSolo;
-        juce::ComboBox   comboSound;     // the "Sound Bank" selector
+        PickerCombo      comboSound;     // the "Sound Bank" selector
         juce::TextButton btnTest { "TEST" };
         LearnableButton btnPoly { "OV" }; // overlap / polyphony (MIDI-learnable)
         LearnableButton btnInfluence { "I" }; // arm step-influence for this channel (MIDI-learnable)
@@ -1972,6 +1980,9 @@ private:
     void addSoundFolderToMenu(juce::PopupMenu& menu, const juce::File& folder);   // Sound Bank subfolders -> submenus
     void rebuildSoundMixMenu(int channel);   // populate strips[ch].comboSound with mix names
     void handleSoundMixChange(int channel);  // load a saved mix onto that channel
+    void applySoundPickId(int channel, int id);   // the one dispatch behind combo ids + the picker panel
+    void openSoundPicker(int channel);            // the searchable Sound Bank dropdown (SoundPickerPanel)
+    std::unique_ptr<juce::Component> soundPicker; // created on first open; child of `content`
     void initChannelMix(int channel);        // reset channel to a clean default mix
     void resetChannelToDefault(DrumChannel& c, int channel); // param reset (no UI/steps)
     void loadSoundMix(int channel, const juce::File& file);
@@ -2027,6 +2038,9 @@ private:
     // Ticks in a row that a popup menu has been open while NO window of ours has OS focus
     // (= the user clicked outside the plugin). Debounces the auto-dismiss of open dropdowns.
     int          outsideFocusTicks = 0;
+    int          lastModalCount = 0;      // menu-transition grace: a JUST-opened menu must not be
+    juce::Component* lastModalComp = nullptr;   // dismissed by the focus hand-off from the one
+                                          // closing (identity compared only, never dereferenced)
     juce::String stripMixShown[Sequencer::NUM_CHANNELS]; // last text drawn (avoid per-tick repaint)
     juce::String presetShown;
 
