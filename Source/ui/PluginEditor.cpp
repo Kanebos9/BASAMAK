@@ -5425,6 +5425,8 @@ void DrumSequencerEditor::resetChannelToDefault(DrumChannel& c, int ch)
     c.usingUserSample = false;
     c.soundType = DrumSoundGenerator::Type::Kick808;
     c.sampleStart = 0.0f; c.sampleEnd = 1.0f; c.useRegion = false; c.playSpeed = 1.0f;
+    c.sliceCount = 1; c.stretchAmt = 1.0f;   // (were missing - stale slices/stretch survived Init)
+    c.phaseInvert = false;                   // AUDIT FIX: live DSP + MIDI-learnable but was reset NOWHERE
     c.allowOverlap = false;
     c.mixName = juce::String(); c.mixModified = false;   // no sound mix selected
     c.loadDefaultSound();
@@ -5924,6 +5926,7 @@ void DrumSequencerEditor::initPreset()
             auto& ch = P.channels[c];
             resetChannelToDefault(ch, c);
             ch.chokeGroup = 0; ch.outputBus = 0; ch.midiOut = false; ch.midiOutChannel = 1;   // routing is preset-level -> reset on Init too
+            ch.mute = false; ch.solo = false; ch.phaseInvert = false;   // mixer state resets with the preset too (audit)
             ch.duckBy = -1; ch.duckAmt = 0.5f;
             ch.numSteps = 8;
             // Wipe EVERY per-step value too (not just on/off) so a fresh init really starts clean - matches the
@@ -8594,13 +8597,33 @@ static juce::String chordNameFor(const juce::Array<int>& notes)
     bool pcSet[12] = {}; for (int n : notes) pcSet[n % 12] = true;
     juce::Array<int> pcs; for (int i = 0; i < 12; ++i) if (pcSet[i]) pcs.add(i);
     const int bassPC = notes[0] % 12;
-    struct ChordDef { const char* name; int n; int iv[4]; };
+    if (pcs.size() == 1)   // octave doublings of one pitch class = just the note
+        return juce::MidiMessage::getMidiNoteName(notes[0], true, true, 4);
+    struct ChordDef { const char* name; int n; int iv[7]; };
     static const ChordDef tab[] = {
-        { "maj", 3, {0,4,7,0} },  { "min", 3, {0,3,7,0} },  { "dim", 3, {0,3,6,0} },  { "aug", 3, {0,4,8,0} },
-        { "sus2", 3, {0,2,7,0} }, { "sus4", 3, {0,5,7,0} },
-        { "7", 4, {0,4,7,10} },   { "maj7", 4, {0,4,7,11} },{ "min7", 4, {0,3,7,10} },{ "minMaj7", 4, {0,3,7,11} },
-        { "m7b5", 4, {0,3,6,10} },{ "dim7", 4, {0,3,6,9} }, { "6", 4, {0,4,7,9} },    { "min6", 4, {0,3,7,9} },
-        { "add9", 4, {0,2,4,7} }, { "5", 2, {0,7,0,0} }
+        // -- intervals (2 notes; standard names: m/M 2nd 3rd 6th 7th, P4, tritone, P5) --
+        { "m2", 2, {0,1} },  { "M2", 2, {0,2} },  { "m3", 2, {0,3} },  { "M3", 2, {0,4} },
+        { "P4", 2, {0,5} },  { "TT", 2, {0,6} },  { "5", 2, {0,7} },   { "m6", 2, {0,8} },
+        { "M6", 2, {0,9} },  { "m7", 2, {0,10} }, { "M7", 2, {0,11} },
+        // -- triads --
+        { "maj", 3, {0,4,7} },  { "min", 3, {0,3,7} },  { "dim", 3, {0,3,6} },  { "aug", 3, {0,4,8} },
+        { "sus2", 3, {0,2,7} }, { "sus4", 3, {0,5,7} },
+        // -- 7th family (4 notes) --
+        { "7", 4, {0,4,7,10} },    { "maj7", 4, {0,4,7,11} }, { "min7", 4, {0,3,7,10} },
+        { "minMaj7", 4, {0,3,7,11} }, { "m7b5", 4, {0,3,6,10} }, { "dim7", 4, {0,3,6,9} },
+        { "6", 4, {0,4,7,9} },     { "min6", 4, {0,3,7,9} },  { "add9", 4, {0,2,4,7} },
+        { "minAdd9", 4, {0,2,3,7} }, { "7sus4", 4, {0,5,7,10} }, { "7b5", 4, {0,4,6,10} },
+        { "aug7", 4, {0,4,8,10} }, { "augMaj7", 4, {0,4,8,11} },
+        // -- 9th family (5 notes; a 5-note SCALE stack lands here, e.g. Notes x5 Major = maj9) --
+        { "9", 5, {0,2,4,7,10} },     { "maj9", 5, {0,2,4,7,11} },  { "min9", 5, {0,2,3,7,10} },
+        { "minMaj9", 5, {0,2,3,7,11} }, { "6/9", 5, {0,2,4,7,9} },  { "min6/9", 5, {0,2,3,7,9} },
+        { "7b9", 5, {0,1,4,7,10} },   { "7#9", 5, {0,3,4,7,10} },   { "min7b9", 5, {0,1,3,7,10} },
+        { "m7b5(b9)", 5, {0,1,3,6,10} }, { "9sus4", 5, {0,2,5,7,10} },
+        // -- 11th family (6 notes) --
+        { "11", 6, {0,2,4,5,7,10} },  { "maj11", 6, {0,2,4,5,7,11} }, { "min11", 6, {0,2,3,5,7,10} },
+        { "maj9#11", 6, {0,2,4,6,7,11} },
+        // -- 13th family (7 notes = a full scale stacked) --
+        { "13", 7, {0,2,4,5,7,9,10} }, { "maj13", 7, {0,2,4,5,7,9,11} }, { "min13", 7, {0,2,3,5,7,9,10} }
     };
     for (int pass = 0; pass < 2; ++pass)
         for (int root : pcs)

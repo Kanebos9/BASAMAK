@@ -43,6 +43,10 @@ static void clearSound(DC& c)
     c.driveType = DC::DriveOff; c.driveAmount = 0.0f;
     c.reverbSend = 0.0f; c.delaySend = 0.0f;
     c.allowOverlap = false;
+    // legacy channel-level SAMPLE fields (they feed buildSlotsFromLegacy for OLD projects - a stale
+    // value must not leak into the next legacy-authored sound)
+    c.sampleStart = 0.0f; c.sampleEnd = 1.0f; c.useRegion = false; c.playSpeed = 1.0f;
+    c.sliceCount = 1; c.stretchAmt = 1.0f;
     c.keysSlot2Down = 0;   // slot-2 pitch is TIED TO THE SOUND now: each sound sets its own (default 0),
                            // so picking a new sound refreshes it instead of leaking the previous value.
     c.markDspDirty();
