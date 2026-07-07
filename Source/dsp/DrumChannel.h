@@ -114,6 +114,9 @@ class DrumChannel
 {
 public:
     static constexpr int MAX_STEPS = 64;
+    // Pitch grid range: +-48 st around C3 = C-1..C7 - SYMMETRIC (same distance up and down, user rule)
+    // and fully containing an 88-key piano (A-1..C7). C3 = pitch 0 stays THE reference everywhere.
+    static constexpr int PITCH_RANGE = 48;
     static const int VALID_STEP_COUNTS[];
     static constexpr int NUM_VALID_STEP_COUNTS = 20;
 
@@ -150,7 +153,7 @@ public:
         // sustaining into the following bars (its voice lives in the bar it started in).
         drawNotes[i] = { (int16_t) juce::jlimit(0, DRAW_RES - 1, start),
                          (int16_t) juce::jlimit(1, DRAW_RES * 8, len),
-                         (int8_t)  juce::jlimit(-36, 36, semi),
+                         (int8_t)  juce::jlimit(-PITCH_RANGE, PITCH_RANGE, semi),
                          (uint8_t) juce::jlimit(0, 255, vel),
                          (uint8_t) juce::jlimit(0, 2, slot),
                          (uint8_t) (glide ? 1 : 0) };

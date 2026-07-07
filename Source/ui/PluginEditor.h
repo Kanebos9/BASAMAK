@@ -107,7 +107,7 @@ private:
     bool   drawErase = false;                          // right-drag erases (removes notes under the stroke)
     float  playBarFrac = 0.0f;                         // current bar position 0..1 (piano-roll playhead)
     int    drawMagCh = -1;                             // channel whose BIG piano-roll OVERLAY is open (-1 = none)
-    int    drawRange = 36;                             // overlay visible +/- range (36 / 24 / 12 / 6 semitones)
+    int    drawRange = 48;                             // overlay visible +/- range (48 / 24 / 12 / 6 semitones)
     int    drawReadSemi = -128;                        // live read-out semitone (-128 = none) shown top-right
     int    drawGridDiv = 16;                            // overlay SNAP grid: divisions of the bar (0 = free)
     int    prTargetSlot = 0;                            // DRAW TARGET: 0 = both slots (orange), 1 = slot 1 (yellow), 2 = slot 2 (pink)
@@ -125,7 +125,7 @@ private:
     int32_t prOrigStart[MIR_MAX] = {};                  // originals for the group move (concat columns)
     int8_t  prOrigSemi[MIR_MAX]  = {};
     void   prClearSel() { if (prSelCount > 0) { for (auto& b : prSel) b = false; prSelCount = 0; } }
-    int    prViewClamp() const { return 36 - drawRange; }   // |center| max so the window stays inside +-36
+    int    prViewClamp() const { return DrumChannel::PITCH_RANGE - drawRange; }   // |center| max: window stays inside +-48
     float  dVel[NCH] = {}, dPan[NCH] = {};             // piano-roll whole-channel default Vel / Pan mirror
     void   setDrawVelPan(int ch, int x);               // Pan mode: drag sets the one channel value
     void   setDrawColVel(int ch, juce::Point<int> pos); // Vel mode: drag a note's velocity (Y = level)

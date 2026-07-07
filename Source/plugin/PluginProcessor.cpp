@@ -430,7 +430,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             arpNoteAge = 0;                                            // fresh note: the Gate countdown restarts
             arpSoundingUi.store(note, std::memory_order_relaxed);      // the keyboard highlight follows this live
             if (rec && drawRec && (sequencer.isCurrentlyPlaying || arpKicked)
-                && std::abs(note - 60) <= 36)                          // arp notes beyond the roll's range: skip
+                && std::abs(note - 60) <= DrumChannel::PITCH_RANGE)    // arp notes beyond the roll's range: skip
             {
                 const int colLen = juce::jmax(1, (int) ((double) DrumChannel::DRAW_RES
                                                         / ((double) juce::jmax(1, arpKc.arpSync) * DrumChannel::arpRateMul(arpKc.arpRate))));
@@ -496,7 +496,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                 { sequencer.startStandalone(); kicked = true; }
                 const int pat = sequencer.playPattern;
                 if (! drawRec && (chain || pat == keysArmedPattern.load(std::memory_order_relaxed))
-                    && std::abs(note - 60) <= 36)   // out-of-range (88-key extremes): play live, SKIP recording
+                    && std::abs(note - 60) <= DrumChannel::PITCH_RANGE)   // out of the +-48 grid: play live, SKIP recording
                 {
                     const int semis = note - 60;   // FIXED reference: C3 = 0 (piano range = +/-36)
                     auto& pch = sequencer.patterns[pat].channels[chIdx];
@@ -526,7 +526,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                 // just started the transport, so it opens at column 0 (the bar is about to begin).
                 int openIdx = -1, openPat = -1;
                 if (rec && drawRec && (sequencer.isCurrentlyPlaying || kicked)
-                    && std::abs(note - 60) <= 36)   // beyond the roll's +-36: play live, don't record a wrong pitch
+                    && std::abs(note - 60) <= DrumChannel::PITCH_RANGE)   // beyond the roll's grid: play live, don't record a wrong pitch
                 {
                     openPat = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, sequencer.playPattern);
                     auto& pch = sequencer.patterns[openPat].channels[chIdx];
@@ -1772,7 +1772,7 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
                 {
                     const int cch = (int) ds[i];
                     if (cch == 33) { ++i; continue; }               // gap
-                    const int semi = juce::jlimit(-36, 36, cch - 70);
+                    const int semi = juce::jlimit(-DrumChannel::PITCH_RANGE, DrumChannel::PITCH_RANGE, cch - 70);
                     int e = i + 1;
                     while (e < ds.length() && e < DrumChannel::DRAW_RES && (int) ds[e] == cch) ++e;
                     const int vc = (i < vs.length()) ? juce::jlimit(0, 127, (int) vs[i] - 35) : 127;
@@ -2014,7 +2014,7 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
                         if (f.size() >= 4 && (int) t.drawNotes.size() < DRAW_TAKE_MAX)   // group takes = concat columns
                             t.drawNotes.push_back({ (int16_t) juce::jlimit(0, DrumChannel::DRAW_RES * 8 - 1, f[0].getIntValue()),
                                                     (int16_t) juce::jlimit(1, DrumChannel::DRAW_RES * 8, f[1].getIntValue()),
-                                                    (int8_t)  juce::jlimit(-36, 36, f[2].getIntValue()),
+                                                    (int8_t)  juce::jlimit(-DrumChannel::PITCH_RANGE, DrumChannel::PITCH_RANGE, f[2].getIntValue()),
                                                     (uint8_t) juce::jlimit(0, 255, f[3].getIntValue()),
                                                     (uint8_t) juce::jlimit(0, 2, f.size() >= 5 ? f[4].getIntValue() : 0),
                                                     (uint8_t) (f.size() >= 6 && f[5].getIntValue() ? 1 : 0) });
@@ -2034,7 +2034,7 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
                         const int vc = (i < vs.length()) ? juce::jlimit(0, 127, (int) vs[i] - 35) : 127;
                         if ((int) t.drawNotes.size() < DrumChannel::DRAW_MAX_NOTES)
                             t.drawNotes.push_back({ (int16_t) i, (int16_t) (e - i),
-                                                    (int8_t) juce::jlimit(-36, 36, cch - 70), (uint8_t) (vc << 1) });
+                                                    (int8_t) juce::jlimit(-DrumChannel::PITCH_RANGE, DrumChannel::PITCH_RANGE, cch - 70), (uint8_t) (vc << 1) });
                         i = e;
                     }
                 }

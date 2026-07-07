@@ -1286,9 +1286,9 @@ void StepGridComponent::paintValueCell(juce::Graphics& g, int ch, int step, juce
                 }
                 else if (editMode == ModePitch)
                 {
-                    const float semis = juce::jlimit(-36.0f, 36.0f, pit[ch][step]);
+                    const float semis = juce::jlimit(-(float) DrumChannel::PITCH_RANGE, (float) DrumChannel::PITCH_RANGE, pit[ch][step]);
                     const float midY = r.getCentreY();
-                    const float frac = semis / 36.0f;                 // -1..1 (+/-36 st = the KEYS piano range around C3)
+                    const float frac = semis / (float) DrumChannel::PITCH_RANGE;   // -1..1 (+/-48 st = C-1..C7 around C3)
                     const float h = std::abs(frac) * (r.getHeight() * 0.5f);
                     juce::Rectangle<float> bar = frac >= 0
                         ? juce::Rectangle<float>(r.getX(), midY - h, r.getWidth(), h)
@@ -1483,7 +1483,7 @@ int StepGridComponent::yToDrawSemi(juce::Rectangle<int> rect, int y, int range, 
 {
     const float half = juce::jmax(1.0f, rect.getHeight() * 0.5f - 4.0f);
     const float frac = ((float) rect.getCentreY() - (float) y) / half;   // +1 top .. -1 bottom
-    return juce::jlimit(-36, 36, centre + juce::jlimit(-range, range, (int) std::lround(frac * (float) range)));
+    return juce::jlimit(-DrumChannel::PITCH_RANGE, DrumChannel::PITCH_RANGE, centre + juce::jlimit(-range, range, (int) std::lround(frac * (float) range)));
 }
 
 // Topmost note covering (col, semi) - semi tolerance +-1 so thin bars are grabbable. -1 = none.
@@ -1679,7 +1679,7 @@ void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle
         if (ch == selectedRow) { g.setColour(juce::Colour(0xffff3b30)); g.drawRect(rect.reduced(1), 2); }
         return;
     }
-    const int range = overlay ? drawRange : 36;
+    const int range = overlay ? drawRange : DrumChannel::PITCH_RANGE;
     const int ctr   = overlay ? juce::jlimit(-prViewClamp(), prViewClamp(), drawViewCenter) : 0;
     juce::Rectangle<int> lane = overlay ? prLane(rect) : rect;
     g.setColour(juce::Colour(overlay ? 0xff1c1c34 : 0xff141426)); g.fillRect(rect);
@@ -1699,7 +1699,7 @@ void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle
         const bool nameAll = rowH2 >= 9.0f;                   // enough height to label every semitone
         for (int s = ctr - range; s <= ctr + range; ++s)
         {
-            if (s < -36 || s > 36) continue;
+            if (s < -DrumChannel::PITCH_RANGE || s > DrumChannel::PITCH_RANGE) continue;
             const float y = yFor(s);
             const int pc = ((s % 12) + 12) % 12;
             if (blackPc[pc])
@@ -1839,7 +1839,7 @@ void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle
     {
         // header: range radios | snap-grid selector | title | close (right)
         g.setColour(juce::Colour(0xff262646)); g.fillRect(rect.getX(), rect.getY(), rect.getWidth(), PR_HEAD);
-        static const int ranges[4] = { 6, 12, 24, 36 };
+        static const int ranges[4] = { 6, 12, 24, 48 };
         for (int i = 0; i < 4; ++i) {
             const auto rr = prHdrRange(rect, i);
             const bool on = (drawRange == ranges[i]);
@@ -2080,7 +2080,7 @@ void StepGridComponent::handleValueDrag(juce::Point<int> pos)
     auto r = activeStepRect(ch, step);             // the magnified rect while held = finer value travel
     const float v01 = juce::jlimit(0.0f, 1.0f, 1.0f - (float)(pos.y - r.getY()) / (float) juce::jmax(1, r.getHeight()));
     float value = v01;                                   // Velocity / Probability
-    if (editMode == ModePitch)     value = (v01 * 2.0f - 1.0f) * 36.0f;     // -36..+36 semis (matches the KEYS range)
+    if (editMode == ModePitch)     value = (v01 * 2.0f - 1.0f) * (float) DrumChannel::PITCH_RANGE;   // +-48 semis (C-1..C7, matches the keys)
     else if (editMode == ModeRoll) value = (float)(1 + juce::roundToInt(v01 * 5.0f)); // 1..6
     else if (editMode == ModeNudge) { const float xn = (float)(pos.x - r.getX()) / (float) juce::jmax(1, r.getWidth());
         value = juce::jlimit(-1.0f, 1.0f, xn * 2.0f - 1.0f);
@@ -2220,7 +2220,7 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
             if (prHdrClose(ov).contains(p)) { drawMagCh = -1; drawReadSemi = -128; drawReadVel = -1; prMode = 0; repaint(); return; }  // close (both modes)
             if (editMode == ModeVel)   // VELOCITY overlay: drag a note up/down
             { if (p.y > hy + PR_HEAD) { drawDragCh = drawMagCh; setDrawColVel(drawMagCh, p); } return; }
-            static const int ranges[4] = { 6, 12, 24, 36 };
+            static const int ranges[4] = { 6, 12, 24, 48 };
             for (int i = 0; i < 4; ++i)
                 if (prHdrRange(ov, i).contains(p))
                 { drawRange = ranges[i];
@@ -2306,7 +2306,7 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
                 const int cw = drawGridDiv > 0 ? DrumChannel::DRAW_RES / drawGridDiv : 12;
                 const int barEnd = (start / DrumChannel::DRAW_RES + 1) * DrumChannel::DRAW_RES;
                 drawNotes[ch2][drawNoteCount[ch2]] = { (int16_t) start, (int16_t) juce::jmax(1, juce::jmin(cw, barEnd - start)),
-                                                       (int8_t) juce::jlimit(-36, 36, semi),
+                                                       (int8_t) juce::jlimit(-DrumChannel::PITCH_RANGE, DrumChannel::PITCH_RANGE, semi),
                                                        (uint8_t) juce::jlimit(0, 255, (int) std::lround(dVel[ch2] * 255.0f)),
                                                        (uint8_t) prTargetSlot };
                 prIdx = drawNoteCount[ch2]++; prMode = 3; prGrabDCol = 0; prGrabDSemi = 0;
@@ -2443,7 +2443,7 @@ void StepGridComponent::mouseDrag(const juce::MouseEvent& e)
             {
                 auto& n = drawNotes[ch2][i];
                 n.start = (int16_t) juce::jlimit(0, totalCols() - 1, (int) prOrigStart[i] + dCol);
-                n.semi  = (int8_t)  juce::jlimit(-36, 36, (int) prOrigSemi[i] + dSemi);
+                n.semi  = (int8_t)  juce::jlimit(-DrumChannel::PITCH_RANGE, DrumChannel::PITCH_RANGE, (int) prOrigSemi[i] + dSemi);
             }
         if (prIdx >= 0 && prIdx < drawNoteCount[ch2]) { drawReadSemi = drawNotes[ch2][prIdx].semi;
                                                         if (onRollPreview) onRollPreview((int) drawReadSemi); }
@@ -2462,7 +2462,7 @@ void StepGridComponent::mouseDrag(const juce::MouseEvent& e)
         if (prMode == 1)   // MOVE: pitch + time (start snaps to the grid; length may cross bar lines)
         {
             n.start = (int16_t) juce::jlimit(0, totalCols() - 1, prSnap(juce::jmax(0, col - prGrabDCol)));
-            n.semi  = (int8_t) juce::jlimit(-36, 36, yToDrawSemi(lane, e.getPosition().y, drawRange, drawViewCenter) - prGrabDSemi);
+            n.semi  = (int8_t) juce::jlimit(-DrumChannel::PITCH_RANGE, DrumChannel::PITCH_RANGE, yToDrawSemi(lane, e.getPosition().y, drawRange, drawViewCenter) - prGrabDSemi);
             drawReadSemi = n.semi;
             if (onRollPreview) onRollPreview((int) n.semi);   // hear the pitch as you drag
         }
@@ -4125,7 +4125,7 @@ KeysPanel::KeysPanel()
 {
     kbState.addListener(this);
     addAndMakeVisible(kb);
-    kb.setAvailableRange(24, 96);                       // C1..C7
+    kb.setAvailableRange(12, 108);                      // C-1..C7 = +-48 st around C3 (contains a full 88-key piano)
     kb.setLowestVisibleKey(36);                         // open around C2 (bass-friendly)
     kb.setColour(juce::MidiKeyboardComponent::keyDownOverlayColourId, juce::Colour(0xaae8bf4d));
     kb.setColour(juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, juce::Colour(0x44e8bf4d));
@@ -4455,8 +4455,8 @@ void KeysPanel::resized()
       const int px = juce::jlimit(8, getWidth() - pw - 8, btnArp.getRight() - pw);
       const int py = btnArp.getBottom() + 4;
       arpEditor.setBounds(px, py, pw, juce::jmax(120, getHeight() - py - 10)); }
-    // white-key width so the full C1..C7 range fits the panel (43 white keys in 6 octaves)
-    kb.setKeyWidth(juce::jmax(8.0f, (float) r.getWidth() / 43.0f));
+    // white-key width so the full C-1..C7 range fits the panel (57 white keys in 8 octaves)
+    kb.setKeyWidth(juce::jmax(7.0f, (float) r.getWidth() / 57.0f));
 }
 
 void KeysPanel::paint(juce::Graphics& g)
