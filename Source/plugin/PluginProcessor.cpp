@@ -418,6 +418,16 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         // and glide/chord/scale apply since it's the normal key path). While recording a piano-roll
         // channel it also stamps the note so the arp is captured.
         auto& arpKc = sequencer.patterns[keyPat].channels[chIdx];
+        // SPLIT KEYBOARD mapping: physical note -> (played note, slot mask, roll slot tag). Left of
+        // middle C = SLOT 2 only, right = SLOT 1 only; each 4-octave half maps onto its slot's chosen
+        // 4-octave window (keysSplitW1/W2). Split off = identity/both slots.
+        auto splitMap = [&](int n, int& mask, int& tag) {
+            const auto& kc0 = sequencer.patterns[keyPat].channels[chIdx];
+            mask = 0; tag = 0;
+            if (! kc0.keysSplit) return n;
+            if (n < 60) { mask = 0b10; tag = 2; return juce::jlimit(0, 127, kc0.keysSplitW2 + (n - 12)); }
+            mask = 0b01; tag = 1; return juce::jlimit(0, 127, kc0.keysSplitW1 + (n - 60));
+        };
         bool arpKicked = false;   // this key just STARTED the transport (isCurrentlyPlaying turns true next block)
         auto fireArp = [&](int step)
         {
@@ -495,10 +505,11 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                 if (! sequencer.isCurrentlyPlaying && ! sequencer.dawSync)
                 { sequencer.startStandalone(); kicked = true; }
                 const int pat = sequencer.playPattern;
+                int rMask = 0, rTag = 0; const int recNote = splitMap(note, rMask, rTag);
                 if (! drawRec && (chain || pat == keysArmedPattern.load(std::memory_order_relaxed))
-                    && std::abs(note - 60) <= DrumChannel::PITCH_RANGE)   // out of the +-48 grid: play live, SKIP recording
+                    && std::abs(recNote - 60) <= DrumChannel::PITCH_RANGE)   // out of the +-48 grid: play live, SKIP recording
                 {
-                    const int semis = note - 60;   // FIXED reference: middle C (C4) = 0
+                    const int semis = recNote - 60;   // FIXED reference: middle C (C4) = 0 (split: the MAPPED pitch)
                     auto& pch = sequencer.patterns[pat].channels[chIdx];
                     const int n  = juce::jmax(1, pch.numSteps);
                     const int st = ((int) std::lround(sequencer.barPos() * n)) % n;
@@ -512,7 +523,10 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             const float mv = juce::jlimit(0.0f, 1.0f, kc.keysMinVel);
             const float xv = juce::jmax(mv, juce::jlimit(0.0f, 1.0f, kc.keysMaxVel));
             const float kvel = juce::jlimit(0.05f, 1.0f, mv + vel * (xv - mv));
-            kc.keyDown(note, kvel, kc.keysSlot2Down, kc.keysPolyMode);   // poly = stack; mono = cut (as before)
+            int splitMask = 0, splitTag = 0;
+            const int playNote = splitMap(note, splitMask, splitTag);
+            // Split ignores the Slot-2 pitch (the two would fight - the UI greys the dropdown too).
+            kc.keyDown(playNote, kvel, kc.keysSplit ? 0 : kc.keysSlot2Down, kc.keysPolyMode, splitMask);
             // Held stack: a re-press moves the note to the top (most recent). openIdx/Pat ride along.
             for (int i = 0; i < keysHeldCount; ++i)
                 if (keysHeldStack[i] == note)
@@ -525,14 +539,15 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                 // block below, closed at release) - POLY records real chords now. `kicked` = this key
                 // just started the transport, so it opens at column 0 (the bar is about to begin).
                 int openIdx = -1, openPat = -1;
+                int oMask = 0, oTag = 0; const int recNote2 = splitMap(note, oMask, oTag);
                 if (rec && drawRec && (sequencer.isCurrentlyPlaying || kicked)
-                    && std::abs(note - 60) <= DrumChannel::PITCH_RANGE)   // beyond the roll's grid: play live, don't record a wrong pitch
+                    && std::abs(recNote2 - 60) <= DrumChannel::PITCH_RANGE)   // beyond the roll's grid: play live, don't record
                 {
                     openPat = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, sequencer.playPattern);
                     auto& pch = sequencer.patterns[openPat].channels[chIdx];
                     const int cur = kicked ? 0 : juce::jlimit(0, DrumChannel::DRAW_RES - 1,
                                                               (int) (sequencer.barPos() * DrumChannel::DRAW_RES));
-                    openIdx = pch.addDrawNote(cur, 1, note - 60, (int) std::lround(kvel * 255.0f));
+                    openIdx = pch.addDrawNote(cur, 1, recNote2 - 60, (int) std::lround(kvel * 255.0f), oTag);   // split: slot-tagged
                     // Legato + mono + Glide up: mark this note to SLIDE from the note already held (so a
                     // recorded portamento performance reproduces; editable by hand in the piano roll).
                     if (openIdx >= 0 && keysHeldCount > 0 && ! pch.keysPolyMode && pch.keysGlide > 0.0001f)
@@ -615,7 +630,12 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             // Release this note's voices WHEREVER they live: the voice was created on the channel of
             // the bar that was playing AT PRESS TIME - if the bar advanced mid-hold, releasing only
             // the current bar's channel left the old voice keyed-on forever ("sound after I lift").
-            // keyUp(note) is a cheap 16-voice scan, so sweep every pattern's channel.
+            // keyUp(note) is a cheap 16-voice scan, so sweep every pattern's channel. With SPLIT on the
+            // voice was created under the MAPPED note - release that one (the raw sweep stays as a
+            // fallback for a split toggled mid-hold).
+            { int uMask = 0, uTag = 0; const int mapped = splitMap(note, uMask, uTag);
+              if (mapped != note)
+                  for (auto& patU : sequencer.patterns) patU.channels[chIdx].keyUp(mapped); }
             for (auto& pat2 : sequencer.patterns)
                 pat2.channels[chIdx].keyUp(note);
         };
@@ -675,10 +695,11 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                 const int n    = juce::jmax(1, pch.numSteps);
                 const int cur  = ((int)(sequencer.barPos() * n)) % n;   // the step we're IN (floor)
                 const int last = keysLastStampStep.load(std::memory_order_relaxed);
+                int hMask = 0, hTag = 0; const int heldMapped = splitMap(held, hMask, hTag);
                 if (last >= 0 && cur != last && cur == (last + 1) % n && cur != 0)   // no wrap-merge across the loop
                 {
-                    logEvt(pat, cur, held - 60, 1);                     // flags bit0 = merge
-                    pch.steps[cur] = true; pch.stepPitch[cur] = (float)(held - 60); pch.stepMerge[cur] = true;
+                    logEvt(pat, cur, heldMapped - 60, 1);               // flags bit0 = merge (split: mapped pitch)
+                    pch.steps[cur] = true; pch.stepPitch[cur] = (float)(heldMapped - 60); pch.stepMerge[cur] = true;
                     keysLastStampStep.store(cur, std::memory_order_relaxed);
                 }
             }
@@ -1515,6 +1536,9 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
     chState.setProperty("keysMinVel", ch.keysMinVel,   nullptr);   // KEYS: minimum played velocity floor
     chState.setProperty("keysMaxVel", ch.keysMaxVel,   nullptr);   // KEYS: maximum played velocity ceiling
     chState.setProperty("keysGlide",  ch.keysGlide,    nullptr);   // KEYS: mono legato glide (portamento) time
+    chState.setProperty("keysSplit",  ch.keysSplit,    nullptr);   // KEYS: split keyboard (L = slot 2, R = slot 1)
+    chState.setProperty("splitW1",    ch.keysSplitW1,  nullptr);   // KEYS: slot-1 window start (MIDI)
+    chState.setProperty("splitW2",    ch.keysSplitW2,  nullptr);   // KEYS: slot-2 window start (MIDI)
     chState.setProperty("arpOn",   ch.arpOn,   nullptr);            // ARP: on/off
     chState.setProperty("arpLen",  ch.arpLen,  nullptr);            // ARP: pattern length incl. root
     chState.setProperty("arpSync", ch.arpSync, nullptr);            // ARP: base notes-per-bar (fader 7..13)
@@ -1678,6 +1702,9 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
     ch.keysMinVel  = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("keysMinVel", 0.0f)); // KEYS min velocity
     ch.keysMaxVel  = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("keysMaxVel", 1.0f)); // KEYS max velocity
     ch.keysGlide   = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("keysGlide",  0.0f)); // KEYS mono glide
+    ch.keysSplit   = (bool) child.getProperty("keysSplit", false);
+    ch.keysSplitW1 = juce::jlimit(12, 60, (int) child.getProperty("splitW1", 60));
+    ch.keysSplitW2 = juce::jlimit(12, 60, (int) child.getProperty("splitW2", 12));
     ch.arpOn   = (bool) child.getProperty("arpOn", false);
     ch.arpLen  = juce::jlimit(1, 1 + DrumChannel::ARP_ROWS, (int) child.getProperty("arpLen", 2));
     ch.arpSync = DrumChannel::arpSnapSync((int) child.getProperty("arpSync", 8));

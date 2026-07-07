@@ -608,8 +608,28 @@ private:
     bool dragNotes = false, dragScale = false;
     juce::Rectangle<int> chipRect(int i) const { return { 52 + i * 22, 1, 20, 14 }; }
     juce::Rectangle<int> keyRect()   const { return { getWidth() - 58, 1, 54, 14 }; }
-    juce::Rectangle<int> notesRect() const { return { 4, 18, getWidth() - 8, 17 }; }
-    juce::Rectangle<int> scaleRect() const { return { 4, 37, getWidth() - 8, 17 }; }
+    juce::Rectangle<int> notesRect() const { return { 4, 19, getWidth() - 8, 25 }; }
+    juce::Rectangle<int> scaleRect() const { return { 4, 47, getWidth() - 8, 25 }; }
+};
+
+// SPLIT KEYBOARD control: a toggle + two Arp-style boxes. Each box = the full C0..C8 range; the
+// INNER box = that slot's 4-OCTAVE WINDOW (drag it; octave-snapped; label = "C1-C5"). With Split ON,
+// keys LEFT of middle C play SLOT 2 only (mapped into its window), keys RIGHT of it SLOT 1 only.
+class KeySplitBox : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    bool on = false;
+    int  w1 = 60, w2 = 12;                    // window starts (MIDI, 12..60, octave-snapped)
+    std::function<void()> onChange;
+    void paint(juce::Graphics&) override;
+    void mouseDown(const juce::MouseEvent&) override;
+    void mouseDrag(const juce::MouseEvent&) override;
+    juce::String getTooltip() override;
+private:
+    int dragBox = -1;                         // 0 = slot 1 (yellow), 1 = slot 2 (pink)
+    juce::Rectangle<int> onRect() const  { return { 0, (getHeight() - 22) / 2, 48, 22 }; }
+    juce::Rectangle<int> boxRect(int i) const { return { 54 + i * 160, 2, 154, getHeight() - 4 }; }
+    void dragTo(int i, int x);
 };
 
 class KeysPanel : public juce::Component, private juce::MidiKeyboardState::Listener
@@ -629,6 +649,7 @@ public:
     juce::TextButton btnArp { "Arp" };                    // opens the ARP editor popup (space-saving)
     juce::TextButton btnGuide { "Guide" };                // KEY GUIDE popup: dim out-of-scale keys (display only)
     ScaleBox         scaleBox;                            // per-slot SCALE harmonizer controls (moved from the sound editor)
+    KeySplitBox      splitBox;                            // SPLIT keyboard: L half = slot 2, R half = slot 1 (windowed)
     juce::Label      lblChord[3];                         // LIVE names: [0] slot 1 (yellow), [1] slot 2 (pink), [2] ALL = both combined
     ArpEditor        arpEditor;                            // hold one key -> programmed riff (per-step); hidden until btnArp
     juce::Label      lblRecMode, lblSlot2, lblHuman, lblStrum, lblMinVel, lblMaxVel, lblPoly, lblGlide;

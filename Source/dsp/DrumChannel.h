@@ -610,6 +610,12 @@ public:
     //     previous one, the new note SLIDES from the old pitch to the new over keysGlide*0.4 s. Live keys
     //     only (mono); 0 = off = instant (bit-identical). Poly never glides. Per pattern/channel, keys only.
     float keysGlide   = 0.0f;   // 0..1  (glide time = keysGlide * 400 ms)
+    //   SPLIT KEYBOARD: left half (below middle C) plays SLOT 2 only, right half SLOT 1 only. Each half
+    //   (4 octaves physically) is MAPPED onto its slot's 4-octave WINDOW inside C0..C8 (start MIDI,
+    //   octave-snapped 12..60). Slot-2 pitch is ignored while split is on (UI greys it). Keys-feel field.
+    bool  keysSplit   = false;
+    int   keysSplitW1 = 60;     // slot 1 (RIGHT half) window start = C4 by default (identity mapping)
+    int   keysSplitW2 = 12;     // slot 2 (LEFT half) window start = C0 by default (identity mapping)
     //   ARP = a keyboard RIFF generator: hold ONE key -> it plays the root (the pressed key) then a
     //     programmed list of semitone OFFSETS, ONE PER STEP of this channel's grid (rate-scaled), looping
     //     while held. Each row can be a REST (ARP_REST = empty). The clock is COMPUTED from bpm/time-sig/
@@ -717,7 +723,7 @@ public:
     // ringing first - a new key CUTS the old (classic lead feel, bit-identical to the old keyboard);
     // poly=true stacks held notes like a piano (each voice tagged with its keyNote).
     // keyUp(note) releases ONLY that note's voices into the slot release; keyUp() releases all.
-    int  keyDown(int midiNote, float velocity, int slot2Down, bool poly = false);
+    int  keyDown(int midiNote, float velocity, int slot2Down, bool poly = false, int slotMask = 0);
     void keyUp(int midiNote);
     void keyUp();
     static float physDecayScale(int material);   // material ring-length multiplier (for the UI's tail read-out)

@@ -4122,6 +4122,64 @@ juce::String ScaleBox::getTooltip()
            "chord show the note list instead.";
 }
 
+//==============================================================================
+// KeySplitBox
+void KeySplitBox::paint(juce::Graphics& g)
+{
+    auto ob = onRect().toFloat();
+    g.setColour(on ? juce::Colour(0xff35b56a) : juce::Colour(0xff33335a)); g.fillRoundedRectangle(ob, 4.0f);
+    g.setColour(on ? juce::Colours::black : juce::Colour(0xffb8b8d0)); g.setFont(juce::Font(11.5f, juce::Font::bold));
+    g.drawText("Split", onRect(), juce::Justification::centred, false);
+    for (int i = 0; i < 2; ++i)
+    {
+        const int  ws  = (i == 0) ? w1 : w2;
+        const auto acc = kSlotCols[i];
+        auto r = boxRect(i);
+        g.setColour(juce::Colour(0xff26264a)); g.fillRoundedRectangle(r.toFloat(), 4.0f);
+        // the 4-octave WINDOW inside the C0..C8 span (96 semis wide)
+        const float x0 = (float) r.getX() + (float)(ws - 12) / 96.0f * (float) r.getWidth();
+        const float ww = 48.0f / 96.0f * (float) r.getWidth();
+        juce::Rectangle<float> win(x0, (float) r.getY() + 1.5f, ww, (float) r.getHeight() - 3.0f);
+        g.setColour(acc.withAlpha(on ? 0.30f : 0.12f)); g.fillRoundedRectangle(win, 3.0f);
+        g.setColour(acc.withAlpha(on ? 0.95f : 0.4f));  g.drawRoundedRectangle(win, 3.0f, 1.2f);
+        g.setColour(on ? juce::Colours::white : juce::Colour(0xff6a7690)); g.setFont(juce::Font(11.5f, juce::Font::bold));
+        g.drawFittedText(juce::MidiMessage::getMidiNoteName(ws, true, true, 4) + "-"
+                         + juce::MidiMessage::getMidiNoteName(ws + 48, true, true, 4),
+                         win.toNearestInt(), juce::Justification::centred, 1, 0.7f);
+        g.setColour(acc.withAlpha(0.9f)); g.setFont(juce::Font(9.0f, juce::Font::bold));
+        g.drawText(i == 0 ? "1" : "2", r.getX() + 3, r.getY() + 1, 10, 10, juce::Justification::topLeft, false);
+    }
+}
+void KeySplitBox::dragTo(int i, int x)
+{
+    auto r = boxRect(i);
+    const float frac = juce::jlimit(0.0f, 1.0f, (float)(x - r.getX()) / (float) juce::jmax(1, r.getWidth()));
+    const int start = juce::jlimit(12, 60, 12 + 12 * (int) std::lround((frac * 96.0f - 24.0f) / 12.0f));   // octave snap
+    int& tgt = (i == 0) ? w1 : w2;
+    if (start != tgt) { tgt = start; if (onChange) onChange(); repaint(); }
+}
+void KeySplitBox::mouseDown(const juce::MouseEvent& e)
+{
+    dragBox = -1;
+    if (onRect().contains(e.getPosition())) { on = ! on; if (onChange) onChange(); repaint(); return; }
+    for (int i = 0; i < 2; ++i)
+        if (boxRect(i).contains(e.getPosition())) { dragBox = i; dragTo(i, e.getPosition().x); return; }
+}
+void KeySplitBox::mouseDrag(const juce::MouseEvent& e) { if (dragBox >= 0) dragTo(dragBox, e.getPosition().x); }
+juce::String KeySplitBox::getTooltip()
+{
+    const auto p = getMouseXYRelative();
+    if (onRect().contains(p))
+        return "SPLIT KEYBOARD: keys LEFT of middle C play SLOT 2 only, keys RIGHT of it SLOT 1 only - "
+               "bass with one hand, lead with the other.\n\nWhile split is ON the Slot-2 pitch dropdown is "
+               "disabled (the two would fight). The arp is not split (it owns the whole keyboard).";
+    if (boxRect(0).contains(p) || boxRect(1).contains(p))
+        return "This slot's 4-OCTAVE WINDOW (drag; snaps to octaves). The whole box = C0..C8; the coloured "
+               "window = the pitches this half of the keyboard actually plays. Example: slot 1 window C1-C5 "
+               "means the RIGHT half of the keys is remapped to sound C1..C5.";
+    return "Split keyboard: left half = slot 2 (pink window), right half = slot 1 (yellow window).";
+}
+
 KeysPanel::KeysPanel()
 {
     kbState.addListener(this);
@@ -4169,14 +4227,15 @@ KeysPanel::KeysPanel()
     addAndMakeVisible(btnGuide);
     btnGuide.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
     addAndMakeVisible(scaleBox);
+    addAndMakeVisible(splitBox);
     { static const juce::Colour cc[3] = { juce::Colour(0xffe8bf4d), juce::Colour(0xffe86aa8), juce::Colour(0xffd8e0f0) };
       for (int i = 0; i < 3; ++i)
       {
           addAndMakeVisible(lblChord[i]);
-          lblChord[i].setFont(juce::Font(21.0f, juce::Font::bold));
+          lblChord[i].setFont(juce::Font(12.5f, juce::Font::bold));
           lblChord[i].setColour(juce::Label::textColourId, cc[i]);
           lblChord[i].setJustificationType(juce::Justification::centredLeft);
-          lblChord[i].setMinimumHorizontalScale(0.7f);
+          lblChord[i].setMinimumHorizontalScale(0.55f);   // squeeze, never "..." (user)
           lblChord[i].setInterceptsMouseClicks(false, false);
       } }
     btnArp.setTooltip("ARP: hold ONE key and it plays a programmed riff, locked to the beat. Click to open "
@@ -4418,7 +4477,7 @@ void KeysPanel::resized()
         s.setBounds(cell.reduced(3, 0));
     };
     auto knobArea = strip.removeFromLeft(5 * 62);
-    knobArea.setBottom(knobArea.getBottom() + 28);          // taller cell: big dial (~50 px) + the % read-out under it
+    knobArea.setBottom(knobArea.getBottom() + 42);          // taller cell (uses the free band below): bigger dial + read-out
     placeKnob(humanKnob,  lblHuman,  knobArea.removeFromLeft(62));
     placeKnob(strumKnob,  lblStrum,  knobArea.removeFromLeft(62));
     placeKnob(minVelKnob, lblMinVel, knobArea.removeFromLeft(62));
@@ -4433,22 +4492,24 @@ void KeysPanel::resized()
     };
     { auto col = strip.removeFromLeft(60);                                   // Poly / Arp / Guide: ONE column
       lblPoly.setBounds(col.removeFromTop(15));
-      polySwitch.setBounds(col.getCentreX() - 16, col.getY() + 1, 32, 16);   // Poly toggle
-      btnArp.setBounds  (col.getCentreX() - 27, col.getY() + 20, 54, 16);    // Arp under it
-      btnGuide.setBounds(col.getCentreX() - 27, col.getY() + 39, 54, 16); }  // Key guide under that
+      polySwitch.setBounds(col.getCentreX() - 16, col.getY() + 1, 32, 18);   // Poly toggle
+      btnArp.setBounds  (col.getCentreX() - 27, col.getY() + 24, 54, 18);    // Arp under it
+      btnGuide.setBounds(col.getCentreX() - 27, col.getY() + 47, 54, 18); }  // Key guide under that
     strip.removeFromLeft(8);
-    // SCALE box rides in the SAME strip row (it borrows the knob-cell overhang like the dials do)
-    scaleBox.setBounds(strip.getX(), strip.getY(), juce::jmax(150, strip.getWidth() - 2), 56);
+    // SCALE box rides in the SAME strip row, now FULL-HEIGHT down to the band bottom (user: use the space)
+    scaleBox.setBounds(strip.getX(), strip.getY(), juce::jmax(150, strip.getWidth() - 2), 76);
 
-    r.removeFromTop(6 + 28);    // push the keyboard down so the taller knob cell clears it
-    { // LIVE chord names: slot 1 (yellow) | slot 2 (pink) | ALL = both slots combined (white)
-        auto row = r.removeFromTop(30);
-        const int w = row.getWidth() / 3;
-        lblChord[0].setBounds(row.removeFromLeft(w));
-        lblChord[1].setBounds(row.removeFromLeft(w));
-        lblChord[2].setBounds(row);
-        r.removeFromTop(2);
+    r.removeFromTop(4);
+    { // the BAND under the REC/mode/Takes/Slot2 row: SPLIT control + the three live chord names
+      // (the knobs / Poly column / SCALE box overhang into this band further right - widths never collide)
+        auto band = r.removeFromTop(44);
+        splitBox.setBounds(band.getX(), band.getY(), 376, 42);
+        auto nb = juce::Rectangle<int>(band.getX() + 382, band.getY() - 1, 118, 44);
+        lblChord[0].setBounds(nb.removeFromTop(14));   // slot 1 (yellow)
+        lblChord[1].setBounds(nb.removeFromTop(14));   // slot 2 (pink)
+        lblChord[2].setBounds(nb);                     // ALL (white)
     }
+    r.removeFromTop(2);
     kb.setBounds(r);
     // ARP editor = a DROPDOWN under the Arp button: anchored to it (right-aligned so it stays inside
     // the panel), as tall as the keyboard area allows (2x the first version - the cells are big now).
@@ -5268,6 +5329,7 @@ juce::int64 DrumSequencerEditor::stateHash() const
             h = mix(h, channelSoundHash(ch));
             h = mix(h, ch.numSteps);
             h = mix(h, f(ch.humanizeAmt)); h = mix(h, f(ch.strumAmt)); h = mix(h, f(ch.keysMinVel)); h = mix(h, f(ch.keysMaxVel)); h = mix(h, f(ch.keysGlide));   // HUMANIZE / STRUM / min+max-vel / GLIDE (undoable)
+            h = mix(h, ch.keysSplit ? 1 : 0); h = mix(h, ch.keysSplitW1); h = mix(h, ch.keysSplitW2);   // SPLIT keyboard
             h = mix(h, ch.arpOn ? 1 : 0); h = mix(h, ch.arpLen); h = mix(h, ch.arpSync); h = mix(h, ch.arpRate);
             h = mix(h, ch.arpAlign ? 1 : 0); h = mix(h, ch.arpHold ? 1 : 0); h = mix(h, f(ch.arpGate));
             for (int ai = 0; ai < DrumChannel::ARP_ROWS; ++ai) h = mix(h, (int) ch.arpOffset[ai] + 128);   // ARP (undoable)
@@ -5333,6 +5395,7 @@ void DrumSequencerEditor::resetChannelToDefault(DrumChannel& c, int ch)
     c.drawMode = false; c.drawVel = 1.0f; c.drawPan = 0.0f;   // fresh channel = step mode
     c.keysSlot2Down = 0;                                      // KEYS slot-2 transpose (channel-wide) resets too
     c.humanizeAmt = 0.0f; c.strumAmt = 0.0f; c.keysMinVel = 0.0f; c.keysMaxVel = 1.0f; c.keysGlide = 0.0f;   // HUMANIZE / STRUM / vel range / GLIDE default
+    c.keysSplit = false; c.keysSplitW1 = 60; c.keysSplitW2 = 12;   // SPLIT keyboard default off/identity
     { DrumChannel d; c.arpOn = d.arpOn; c.arpLen = d.arpLen; c.arpSync = d.arpSync; c.arpRate = d.arpRate;
       c.arpAlign = d.arpAlign; c.arpHold = d.arpHold; c.arpGate = d.arpGate;   // ARP defaults
       for (int ai = 0; ai < DrumChannel::ARP_ROWS; ++ai) c.arpOffset[ai] = d.arpOffset[ai]; }
@@ -6789,6 +6852,16 @@ void DrumSequencerEditor::setupComponents()
     };
     stepGrid.onRollPreviewEnd = [this] {
         if (rollPreviewNote >= 0) { proc.pushKeyUp(rollPreviewNote); rollPreviewNote = -1; }
+    };
+    // SPLIT box: write the toggle + the two 4-octave windows onto the channel (keys-feel, undoable).
+    keysPanel.splitBox.onChange = [this] {
+        if (ignoreKnobCallbacks) return;
+        auto& c = proc.sequencer.channel(selectedChannel);
+        c.keysSplit   = keysPanel.splitBox.on;
+        c.keysSplitW1 = juce::jlimit(12, 60, keysPanel.splitBox.w1);
+        c.keysSplitW2 = juce::jlimit(12, 60, keysPanel.splitBox.w2);
+        keysHighlightMaskLo = keysHighlightMaskHi = ~0ULL;   // routing changed -> recompute highlight/names
+        refreshKeysPanel();                                   // greys/ungreys the Slot-2 pitch dropdown
     };
     // SCALE box: write the edited slot's harmonizer fields straight onto the channel (they're part of
     // the SOUND - channelSoundHash picks them up), then refresh so the guide/highlight/detail follow.
@@ -8450,6 +8523,13 @@ void DrumSequencerEditor::refreshKeysPanel()
                                      ((sl.scaleKey % 12) + 12) % 12, juce::jlimit(1, 7, sl.scaleUnison) };
     }
     keysPanel.scaleBox.repaint();
+    keysPanel.splitBox.on = kch.keysSplit;
+    keysPanel.splitBox.w1 = kch.keysSplitW1;
+    keysPanel.splitBox.w2 = kch.keysSplitW2;
+    keysPanel.splitBox.repaint();
+    keysPanel.btnSlot2.setEnabled(! kch.keysSplit);            // split owns the slot routing - Slot-2 pitch would fight it
+    keysPanel.btnSlot2.setAlpha(kch.keysSplit ? 0.4f : 1.0f);
+    keysPanel.lblSlot2.setAlpha(kch.keysSplit ? 0.4f : 1.0f);
     keysPanel.arpEditor.on   = kch.arpOn;
     keysPanel.arpEditor.len  = kch.arpLen;
     keysPanel.arpEditor.sync = kch.arpSync;
@@ -8580,7 +8660,15 @@ void DrumSequencerEditor::updateKeyboardHighlight()
         for (int held = 0; held < 128; ++held)
         {
             if (! ((held < 64 ? mLo : mHi) & (1ULL << (held & 63)))) continue;   // not held
-            for (int s = 0; s < DrumChannel::NUM_SLOTS; ++s) lightNote(held, s);
+            if (c.keysSplit)
+            {   // SPLIT: the pressed half decides the slot; light the MAPPED pitch on that slot only
+                const bool left = held < 60;
+                const int mapped = juce::jlimit(0, 127, left ? c.keysSplitW2 + (held - 12)
+                                                             : c.keysSplitW1 + (held - 60));
+                lightNote(mapped, left ? 1 : 0);
+            }
+            else
+                for (int s = 0; s < DrumChannel::NUM_SLOTS; ++s) lightNote(held, s);
         }
         const juce::Colour y(0xffe8bf4d), p(0xffe86aa8);   // slot 1 yellow / slot 2 pink (match the sound editor)
         for (int m = 0; m < 128; ++m)

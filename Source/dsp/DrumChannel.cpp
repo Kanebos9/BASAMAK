@@ -1262,7 +1262,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
 // slot is re-tuned from its OWN base Freq to the pressed note (so both slots sound the same
 // musical pitch regardless of their Freq knobs); slot 2 can be transposed DOWN by slot2Down
 // semitones (sub-oscillator style). Ineligible slots (Sample/Noise/legacy) stay silent.
-int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly)
+int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly, int slotMask)
 {
     // MONO LEGATO GLIDE (portamento): if a key is still HELD when this new one is pressed and Glide > 0,
     // the new note SLIDES from the held note's pitch to the new pitch. Poly never glides. Glide 0 = the
@@ -1302,7 +1302,7 @@ int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly)
             default: break;
         }
     }
-    const int vi = trigger(velocity, glideFrom, 0.0f, 0, /*glideTo*/ 0.0f, glideSamp, /*forceOverlap*/ true);
+    const int vi = trigger(velocity, glideFrom, 0.0f, 0, /*glideTo*/ 0.0f, glideSamp, /*forceOverlap*/ true, slotMask);
     Voice& v = voices[vi];
     v.isKey = true; v.keyOff = -1; v.keyNote = midiNote;   // tag: keyUp(note) releases only this note's voices
     const double targetHz = 440.0 * std::pow(2.0, (double)(midiNote - 69) / 12.0);
