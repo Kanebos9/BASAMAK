@@ -95,6 +95,9 @@ public:
     bool followPlayback = false;   // global (whole-instrument): editor view follows the playing pattern
     int  visibleChannels = 8;      // how many channel rows the editor shows (4/8/12/16); UI-only
     int  visiblePatterns = 32;     // always 32 now (kept persisted for old files); UI-only
+    // Keyboard KEY GUIDE (display only): dims out-of-scale keys on the KEYS piano.
+    int  kbGuideMode = 0;          // 0 = off, 1 = follow the selected channel's slot SCALE, 2 = custom key+scale
+    int  kbGuideKey = 0, kbGuideScale = 0;
 
     // A fresh STANDALONE must open at FACTORY DEFAULTS, not restore its last session (the JUCE
     // standalone auto-persists + reloads state on launch). We skip that ONE startup restore - it

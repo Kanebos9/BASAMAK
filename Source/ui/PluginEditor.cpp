@@ -4002,6 +4002,9 @@ void TintKeyboard::drawWhiteNote(int n, juce::Graphics& g, juce::Rectangle<float
         g.fillRect(area.reduced(0.5f));
         g.setColour(c.darker(0.4f)); g.drawRect(area, 1.0f);
     }
+    else if (dim[n]) {                                   // KEY GUIDE: out-of-scale white key = dark wash
+        g.setColour(juce::Colour(0x63131320)); g.fillRect(area.reduced(0.5f));
+    }
 }
 void TintKeyboard::drawBlackNote(int n, juce::Graphics& g, juce::Rectangle<float> area,
                                  bool isDown, bool isOver, juce::Colour fill)
@@ -4010,7 +4013,9 @@ void TintKeyboard::drawBlackNote(int n, juce::Graphics& g, juce::Rectangle<float
     // A translucent wash vanishes on black - fill the black key OPAQUE with a brightened tint instead,
     // keep a dark border so it still reads as a raised black key.
     juce::MidiKeyboardComponent::drawBlackNote(n, g, area, isDown, isOver,
-                                               c.getAlpha() != 0 ? c.darker(0.15f) : fill);
+                                               c.getAlpha() != 0 ? c.darker(0.15f)
+                                             : dim[n]            ? juce::Colour(0xff3a4052)   // guide: dimmed = grey, not black
+                                                                 : fill);
     if (c.getAlpha() != 0) { g.setColour(juce::Colour(0xff101018)); g.drawRect(area, 1.0f); }
 }
 
@@ -4058,6 +4063,8 @@ KeysPanel::KeysPanel()
     addAndMakeVisible(polySwitch);
     addAndMakeVisible(btnArp);
     btnArp.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
+    addAndMakeVisible(btnGuide);
+    btnGuide.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
     btnArp.setTooltip("ARP: hold ONE key and it plays a programmed riff, locked to the beat. Click to open "
         "the editor - every control in it has its OWN tooltip. Works stopped or playing; records into the "
         "piano roll; mono, and chord/scale/glide apply per note.");
@@ -4310,10 +4317,11 @@ void KeysPanel::resized()
         l.setBounds(col.removeFromTop(15));
         sw.setBounds(col.getCentreX() - 16, col.getY() + 4, 32, 18);
     };
-    { auto col = strip.removeFromLeft(60);                                   // Poly + Arp share ONE column
+    { auto col = strip.removeFromLeft(60);                                   // Poly / Arp / Guide: ONE column
       lblPoly.setBounds(col.removeFromTop(15));
-      polySwitch.setBounds(col.getCentreX() - 16, col.getY() + 2, 32, 18);   // Poly toggle
-      btnArp.setBounds(col.getCentreX() - 27, col.getY() + 26, 54, 18); }    // Arp right below it, aligned
+      polySwitch.setBounds(col.getCentreX() - 16, col.getY() + 1, 32, 16);   // Poly toggle
+      btnArp.setBounds  (col.getCentreX() - 27, col.getY() + 20, 54, 16);    // Arp under it
+      btnGuide.setBounds(col.getCentreX() - 27, col.getY() + 39, 54, 16); }  // Key guide under that
 
     r.removeFromTop(6 + 28);    // push the keyboard down so the taller knob cell clears it
     kb.setBounds(r);
@@ -4767,6 +4775,7 @@ DrumSequencerEditor::~DrumSequencerEditor()
                              (juce::Button*)&btn16View }) b->setLookAndFeel(nullptr);
     keysPanel.btnSlot2.setLookAndFeel(nullptr);   // dropBtnLNF
     keysPanel.btnArp.setLookAndFeel(nullptr);     // dropBtnLNF
+    keysPanel.btnGuide.setLookAndFeel(nullptr);   // dropBtnLNF
     tooltipWindow.setLookAndFeel(nullptr);        // tipLNF
     keysPanel.btnTakes.setLookAndFeel(nullptr);   // dropBtnLNF
     for (auto& s : strips)
@@ -6421,6 +6430,36 @@ void DrumSequencerEditor::setupComponents()
     };
     keysPanel.btnSlot2.setLookAndFeel(&dropBtnLNF);   // dropdown look (triangle) - it's a popup button now
     keysPanel.btnArp.setLookAndFeel(&dropBtnLNF);     // same: the Arp button opens a dropdown
+    keysPanel.btnGuide.setLookAndFeel(&dropBtnLNF);   // Key-guide popup button
+    keysPanel.btnGuide.setTooltip("KEY GUIDE (display only): dims the keys OUTSIDE a scale so you can stay in key "
+        "while jamming.\n\n"
+        "- Follow sound = use the SCALE already set on the selected channel's sound slot (nothing dims if its "
+        "Scale mode is off).\n"
+        "- Or pick any key + scale here, independent of the sound.\n\n"
+        "Purely visual - it never changes what plays. The AUTO-VOICING itself (one key playing chords / scale "
+        "harmonies) lives in the sound editor's UNISON / CHORD / SCALE selector.");
+    keysPanel.btnGuide.onClick = [this] {
+        juce::PopupMenu m;
+        m.addItem(1, "Off",                        true, proc.kbGuideMode == 0);
+        m.addItem(2, "Follow sound (slot SCALE)",  true, proc.kbGuideMode == 1);
+        m.addSeparator();
+        for (int k = 0; k < 12; ++k)
+        {
+            juce::PopupMenu sub;
+            for (int t = 0; t < kNumScales; ++t)
+                sub.addItem(1000 + k * 16 + t, kUiScaleName[t], true,
+                            proc.kbGuideMode == 2 && proc.kbGuideKey == k && proc.kbGuideScale == t);
+            m.addSubMenu(juce::String(kUiNoteName[k]) + " ...", sub);
+        }
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&keysPanel.btnGuide),
+            [this](int r) {
+                if (r == 0) return;
+                if (r == 1)      proc.kbGuideMode = 0;
+                else if (r == 2) proc.kbGuideMode = 1;
+                else { proc.kbGuideMode = 2; proc.kbGuideKey = (r - 1000) / 16; proc.kbGuideScale = (r - 1000) % 16; }
+                updateKeyboardGuide();
+            });
+    };
     keysPanel.btnTakes.setLookAndFeel(&dropBtnLNF);   // proper dropdown look (like the sound bank)
     keysPanel.btnTakes.setTooltip(
         "Recorded takes for the CURRENT pattern + selected channel. One pattern loop while recording = "
@@ -8273,6 +8312,8 @@ void DrumSequencerEditor::refreshKeysPanel()
     keysPanel.arpEditor.gate  = kch.arpGate;
     for (int ai = 0; ai < DrumChannel::ARP_ROWS; ++ai) keysPanel.arpEditor.off[ai] = kch.arpOffset[ai];
     keysPanel.arpEditor.repaint();
+    kbGuideApplied = -1;        // channel/slot scale may have changed -> re-evaluate the key guide
+    updateKeyboardGuide();
     keysPanel.btnArp.setColour(juce::TextButton::buttonColourId, kch.arpOn ? juce::Colour(0xff35b56a) : juce::Colour(0xff20203a));
     keysPanel.btnArp.setColour(juce::TextButton::textColourOffId, kch.arpOn ? juce::Colours::black : juce::Colours::lightgrey);
     keysPanel.btnArp.repaint();
@@ -8359,6 +8400,31 @@ void DrumSequencerEditor::updateKeyboardHighlight()
             else if (used[1][m])          keysPanel.setKeyTint(m, p);
         keysPanel.applyKeyTints();
     }
+}
+
+// KEY GUIDE: dim the keyboard keys OUTSIDE the chosen scale (display only; change-gated).
+void DrumSequencerEditor::updateKeyboardGuide()
+{
+    int mode = proc.kbGuideMode, key = proc.kbGuideKey, type = proc.kbGuideScale;
+    if (mode == 1)   // follow the sound: the selected channel's first audible slot with SCALE on
+    {
+        const auto& c = proc.sequencer.channel(selectedChannel);
+        mode = 0;
+        for (const auto& sl : c.slots)
+            if (sl.scaleOn && sl.engine >= 0 && sl.weight > 0.001f) { key = sl.scaleKey; type = sl.scaleType; mode = 2; break; }
+    }
+    const int state = (mode == 2) ? ((2 << 8) | (key << 4) | type) : mode;
+    if (state == kbGuideApplied) return;
+    kbGuideApplied = state;
+    keysPanel.clearKeyDims();
+    if (mode == 2)
+    {
+        bool in[12] = {};
+        for (int k = 0; k < kUiScaleLen[juce::jlimit(0, 9, type)]; ++k)
+            in[(key + kUiScaleTab[juce::jlimit(0, 9, type)][k]) % 12] = true;
+        for (int m = 0; m < 128; ++m) if (! in[m % 12]) keysPanel.setKeyDim(m, true);
+    }
+    keysPanel.applyKeyTints();   // repaint
 }
 
 // Show the selected slot's amp envelope in the graph.

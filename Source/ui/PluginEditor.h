@@ -503,8 +503,12 @@ public:
     TintKeyboard(juce::MidiKeyboardState& s, Orientation o) : juce::MidiKeyboardComponent(s, o) {}
     juce::Colour tint[128] = {};                          // transparent (alpha 0) = no highlight
     bool anyTint = false;
+    bool dim[128] = {};                                   // KEY GUIDE: true = out-of-scale key, drawn dimmed
+    bool anyDim = false;
     void clearTints() { if (! anyTint) return; for (auto& c : tint) c = juce::Colour(0u); anyTint = false; repaint(); }
     void setTint(int midi, juce::Colour c) { if (midi >= 0 && midi < 128) { tint[midi] = c; anyTint = true; } }
+    void clearDims() { if (! anyDim) return; for (auto& d : dim) d = false; anyDim = false; repaint(); }
+    void setDim(int midi, bool d) { if (midi >= 0 && midi < 128) { dim[midi] = d; anyDim |= d; } }
 protected:
     void drawWhiteNote(int n, juce::Graphics& g, juce::Rectangle<float> area,
                        bool isDown, bool isOver, juce::Colour line, juce::Colour text) override;
@@ -600,6 +604,7 @@ public:
     juce::Slider     humanKnob, strumKnob, minVelKnob, maxVelKnob, glideKnob;   // HUMANIZE / STRUM / min+max vel / GLIDE
     ToggleSwitch     polySwitch;                          // keys POLY (chords stack like a piano)
     juce::TextButton btnArp { "Arp" };                    // opens the ARP editor popup (space-saving)
+    juce::TextButton btnGuide { "Guide" };                // KEY GUIDE popup: dim out-of-scale keys (display only)
     ArpEditor        arpEditor;                            // hold one key -> programmed riff (per-step); hidden until btnArp
     juce::Label      lblRecMode, lblSlot2, lblHuman, lblStrum, lblMinVel, lblMaxVel, lblPoly, lblGlide;
     bool             polyMode = false;                    // mirror of the channel's keysPolyMode (routes note-offs)
@@ -609,6 +614,8 @@ public:
     void clearKeyTints()               { kb.clearTints(); }
     void setKeyTint(int midi, juce::Colour c) { kb.setTint(midi, c); }
     void applyKeyTints()               { kb.repaint(); }
+    void clearKeyDims()                { kb.clearDims(); }
+    void setKeyDim(int midi, bool d)   { kb.setDim(midi, d); }
 
     void paint(juce::Graphics&) override;
     void resized() override;
@@ -1594,6 +1601,8 @@ private:
     uint64_t keysHighlightMaskLo = ~0ULL, keysHighlightMaskHi = ~0ULL;   // last held-note mask tinted for (~0 = force first update)
     int keysHighlightArpNote = -2;   // last arp note tinted for (the highlight FOLLOWS the arp live; -2 = force)
     int rollPreviewNote = -1;        // drawing-audition note currently held via pushKeyDown (-1 = none)
+    int kbGuideApplied = -1;         // last applied guide state (mode<<8|key<<4|scale; -1 = force recompute)
+    void updateKeyboardGuide();      // dim the out-of-scale keys per the KEY GUIDE setting
     // Host-frozen detector: if processHeartbeat stops moving (~1 s), the host isn't sending us
     // audio - the Play tooltip flips to a "Not playing?" explanation (see timerCallback).
     uint32_t lastHeartbeat = 0; int heartbeatStaleTicks = 0; bool hostFrozen = false;

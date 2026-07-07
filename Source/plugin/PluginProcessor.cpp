@@ -1868,6 +1868,9 @@ juce::ValueTree DrumSequencerProcessor::captureStateTree()
     state.setProperty("curPattern", sequencer.currentPattern, nullptr);
     state.setProperty("followPlay", followPlayback, nullptr);
     state.setProperty("visChans",   visibleChannels, nullptr);
+    state.setProperty("kbGuideMode",  kbGuideMode,  nullptr);
+    state.setProperty("kbGuideKey",   kbGuideKey,   nullptr);
+    state.setProperty("kbGuideScale", kbGuideScale, nullptr);
     state.setProperty("visPats",    visiblePatterns, nullptr);
     state.setProperty("audEdit",    auditionOnEdit.load(), nullptr);
     state.setProperty("keys2Down",  keysSlot2Down.load(), nullptr);   // KEYS: slot-2 transpose (semitones down)
@@ -1980,6 +1983,9 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
     sequencer.playPattern = sequencer.currentPattern;   // start playback from the restored pattern
     followPlayback = (bool) state.getProperty("followPlay", false);
     visibleChannels = (int) state.getProperty("visChans", 8);
+    kbGuideMode  = juce::jlimit(0, 2,  (int) state.getProperty("kbGuideMode", 0));
+    kbGuideKey   = juce::jlimit(0, 11, (int) state.getProperty("kbGuideKey", 0));
+    kbGuideScale = juce::jlimit(0, 9,  (int) state.getProperty("kbGuideScale", 0));
     visiblePatterns = Sequencer::NUM_PATTERNS;   // always 32 (old files' 16 is ignored)
     auditionOnEdit.store((bool) state.getProperty("audEdit", true));   // default ON (matches a fresh instance)
     keysSlot2Down.store(juce::jlimit(-24, 24, (int) state.getProperty("keys2Down", 0)));
