@@ -439,6 +439,9 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         {
             arpRoot = note; arpVel = vel; arpChan = chIdx; arpStep = 0; arpAcc = 0.0; arpSounding = -1;
             keysHeldNote.store(note, std::memory_order_relaxed); keysHeldVel.store(vel, std::memory_order_relaxed);
+            const int n = note & 0x7f;   // light the root in the held mask so the keyboard highlight shows the arp keys
+            keysHeldMaskLo.store(n < 64 ? (1ULL << (n & 63)) : 0ULL, std::memory_order_relaxed);
+            keysHeldMaskHi.store(n >= 64 ? (1ULL << (n & 63)) : 0ULL, std::memory_order_relaxed);
             fireArp(0);
         };
         auto stopArp = [&]()
@@ -446,6 +449,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             if (arpSounding >= 0 && arpChan >= 0) sequencer.patterns[keyPat].channels[arpChan].keyUp(arpSounding);
             arpRoot = -1; arpSounding = -1; arpChan = -1;
             keysHeldNote.store(-1, std::memory_order_relaxed);
+            keysHeldMaskLo.store(0, std::memory_order_relaxed); keysHeldMaskHi.store(0, std::memory_order_relaxed);
         };
 
         auto handleKeyDown = [&](int note, float vel)

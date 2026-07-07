@@ -510,10 +510,11 @@ protected:
                        bool isDown, bool isOver, juce::Colour fill) override;
 };
 
-// ARP EDITOR: hold one key -> the arp plays root + these programmable semitone offsets, ONE PER STEP
-// of the channel's grid (rate-scaled), looping. Left panel = On + Rate; then 12 offset columns (notes
-// 2..13): DRAG a column up/down = its offset (-24..+24, auto-extends the pattern to include it);
-// DOUBLE-CLICK a column = toggle REST; CLICK a column's number (bottom) = make it the LAST note.
+// ARP EDITOR: a COMPACT popup (hidden until you click the "Arp" button, so it costs no permanent
+// space). Top bar = On + Rate + Notes(length). Below = a 2 x 6 grid of the 12 offset rows (notes
+// 2..13). Each cell: click the UP/DOWN arrow (or wheel) = +/-1 semitone (-24..+24, 0 = unison);
+// DRAG = fast set; DOUBLE-CLICK = toggle REST (a gap, distinct from 0). A cell edit extends the
+// length to include it. Chord/scale/glide apply per arp note.
 class ArpEditor : public juce::Component, public juce::SettableTooltipClient
 {
 public:
@@ -527,23 +528,28 @@ public:
     void mouseDown(const juce::MouseEvent&) override;
     void mouseDrag(const juce::MouseEvent&) override;
     void mouseDoubleClick(const juce::MouseEvent&) override;
+    void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+    static constexpr int UI_COLS = 6, UI_ROWS = 2, TOPH = 26;
 private:
-    int dragCol = -1;
-    static constexpr int LW = 96, LBL_H = 13, VAL_H = 12;
-    juce::Rectangle<int> gridArea() const { return { LW, 0, juce::jmax(1, getWidth() - LW - 2), getHeight() }; }
-    juce::Rectangle<int> onRect()   const { return { 6, 20, LW - 14, 20 }; }
-    juce::Rectangle<int> rateRect() const { return { 6, 46, LW - 14, 18 }; }
-    juce::Rectangle<int> colRect(int i) const
-    { auto g = gridArea(); const float cw = (float) g.getWidth() / (float) DrumChannel::ARP_ROWS;
-      return { g.getX() + (int) (i * cw), g.getY(), (int) cw + 1, g.getHeight() }; }
-    int  colAt(juce::Point<int> p) const
-    { auto g = gridArea(); if (! g.contains(p)) return -1;
-      const float cw = (float) g.getWidth() / (float) DrumChannel::ARP_ROWS;
-      return juce::jlimit(0, DrumChannel::ARP_ROWS - 1, (int) ((p.x - g.getX()) / cw)); }
-    int  yToOffset(int y) const   // map Y in the bar area to -24..+24 (centre = 0)
-    { auto g = gridArea(); const int top = g.getY() + VAL_H, bot = g.getBottom() - LBL_H;
-      const float f = 1.0f - 2.0f * (float) (y - top) / (float) juce::jmax(1, bot - top);
-      return juce::jlimit(-24, 24, (int) std::lround(f * 24.0f)); }
+    int dragCell = -1;
+    void bump(int i, int d)   // nudge row i by d semitones (a REST cell lands on 0 first), extend length
+    { if (i < 0) return; int v = (off[i] == DrumChannel::ARP_REST) ? 0 : (int) off[i] + d;
+      off[i] = (int8_t) juce::jlimit(-24, 24, v); if (i + 2 > len) len = i + 2; if (onChange) onChange(); repaint(); }
+    juce::Rectangle<int> onRect()   const { return { 6, 4, 46, TOPH - 8 }; }
+    juce::Rectangle<int> rateRect() const { return { 56, 4, 74, TOPH - 8 }; }
+    juce::Rectangle<int> lenDnRect() const { return { getWidth() - 108, 4, 22, TOPH - 8 }; }
+    juce::Rectangle<int> lenValRect() const { return { getWidth() - 86, 4, 56, TOPH - 8 }; }
+    juce::Rectangle<int> lenUpRect() const { return { getWidth() - 30, 4, 22, TOPH - 8 }; }
+    juce::Rectangle<int> cellRect(int i) const
+    { const int r = i / UI_COLS, c = i % UI_COLS;
+      const int gw = getWidth(), gh = getHeight() - TOPH;
+      const int cw = gw / UI_COLS, ch = gh / UI_ROWS;
+      return { c * cw, TOPH + r * ch, cw, ch }; }
+    int cellAt(juce::Point<int> p) const
+    { if (p.y < TOPH) return -1; const int cw = getWidth() / UI_COLS, ch = (getHeight() - TOPH) / UI_ROWS;
+      const int c = juce::jlimit(0, UI_COLS - 1, p.x / juce::jmax(1, cw));
+      const int r = juce::jlimit(0, UI_ROWS - 1, (p.y - TOPH) / juce::jmax(1, ch));
+      return r * UI_COLS + c; }
 };
 
 class KeysPanel : public juce::Component, private juce::MidiKeyboardState::Listener
@@ -560,7 +566,8 @@ public:
     juce::TextButton btnTakes { "Takes (0)" };
     juce::Slider     humanKnob, strumKnob, minVelKnob, maxVelKnob, glideKnob;   // HUMANIZE / STRUM / min+max vel / GLIDE
     ToggleSwitch     polySwitch;                          // keys POLY (chords stack like a piano)
-    ArpEditor        arpEditor;                            // hold one key -> programmed riff (per-step)
+    juce::TextButton btnArp { "Arp" };                    // opens the ARP editor popup (space-saving)
+    ArpEditor        arpEditor;                            // hold one key -> programmed riff (per-step); hidden until btnArp
     juce::Label      lblRecMode, lblSlot2, lblHuman, lblStrum, lblMinVel, lblMaxVel, lblPoly, lblGlide;
     bool             polyMode = false;                    // mirror of the channel's keysPolyMode (routes note-offs)
     int countdown = 0;                                    // count-in ticks left (drawn as a big 3-2-1)
