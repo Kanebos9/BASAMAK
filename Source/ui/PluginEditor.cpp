@@ -4020,6 +4020,12 @@ void TintKeyboard::drawWhiteNote(int n, juce::Graphics& g, juce::Rectangle<float
                                  bool isDown, bool isOver, juce::Colour line, juce::Colour text)
 {
     juce::MidiKeyboardComponent::drawWhiteNote(n, g, area, isDown, isOver, line, text);
+    if (splitMark && n == 60) {   // MERGE&SPLIT boundary: C4 = first key of the RIGHT half. Teal|orange
+        const auto r = area.reduced(0.5f);                     // divider at its left edge (the pair colours)
+        g.setColour(juce::Colour(0x2eff9f43)); g.fillRect(r);  // soft orange wash over the whole C4 key
+        g.setColour(juce::Colour(0xff3ec6a8)); g.fillRect(r.getX(),        r.getY(), 2.0f, r.getHeight());
+        g.setColour(juce::Colour(0xffff9f43)); g.fillRect(r.getX() + 2.0f, r.getY(), 2.0f, r.getHeight());
+    }
     const auto c = tint[n];
     if (c.getAlpha() != 0) {                             // near-solid wash reads clearly on the white key
         g.setColour(c.withMultipliedAlpha(0.62f));
@@ -9677,6 +9683,8 @@ void DrumSequencerEditor::timerCallback()
             if (countdownOverlay.label != cd) { countdownOverlay.label = cd; countdownOverlay.repaint(); }
         }
         updateKeyboardHighlight();   // light up the chord/scale/slot notes of the held key (cheap: change-gated)
+        keysPanel.setSplitMark(keysView && detailShown
+                               && proc.sequencer.channel(selectedChannel).mergeWith >= 0);
         if (proc.keysRecording.load())
         {
             parseKeysEvents();   // live: each finished loop becomes a take while you keep playing

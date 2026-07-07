@@ -505,6 +505,7 @@ public:
     bool anyTint = false;
     bool dim[128] = {};                                   // KEY GUIDE: true = out-of-scale key, drawn dimmed
     bool anyDim = false;
+    bool splitMark = false;                               // MERGE&SPLIT on: mark C4 = the split boundary
     void clearTints() { if (! anyTint) return; for (auto& c : tint) c = juce::Colour(0u); anyTint = false; repaint(); }
     void setTint(int midi, juce::Colour c) { if (midi >= 0 && midi < 128) { tint[midi] = c; anyTint = true; } }
     void clearDims() { if (! anyDim) return; for (auto& d : dim) d = false; anyDim = false; repaint(); }
@@ -669,6 +670,7 @@ public:
     void applyKeyTints()               { kb.repaint(); }
     void clearKeyDims()                { kb.clearDims(); }
     void setKeyDim(int midi, bool d)   { kb.setDim(midi, d); }
+    void setSplitMark(bool on)         { if (kb.splitMark != on) { kb.splitMark = on; kb.repaint(); } }
 
     void paint(juce::Graphics&) override;
     void resized() override;
