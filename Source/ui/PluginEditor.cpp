@@ -134,7 +134,7 @@ juce::Array<SlotParam> slotParamsFor(int engine)
         case DrumChannel::SrcPhys:
             // Position + Tone are edited on the interactive STRING visual (drag the dot: X = Position,
             // Y = Tone) - they're no longer knobs here.
-            p.add(F ("Freq", 20, 2093, &S::physFreq, "nHz", false,
+            p.add(F ("Freq", 20, 4186, &S::physFreq, "nHz", false,
                      "Base pitch of the plucked/struck string. CLICK the value read-out to switch Hz <-> NOTE mode "
                      "(shows A1/C2...; dragging snaps to semitones, SHIFT = free). Also follows per-step pitch. "
                      "KEYS: touching the piano snaps this to C3 so recordings play back as performed - transpose "
@@ -194,7 +194,7 @@ juce::Array<SlotParam> slotParamsFor(int engine)
         case DrumChannel::SrcModal: {
             juce::StringArray mats;
             for (int i = 0; i < DrumChannel::modalMaterialCount(); ++i) mats.add(DrumChannel::modalMaterialName(i));
-            p.add(F ("Freq", 20, 2093, &S::oscFreq, "nHz", false, "Base pitch of the struck body. CLICK the value read-out to switch Hz <-> NOTE mode (snaps to semitones there, SHIFT = free). Follows per-step pitch + the pitch envelope. KEYS: touching the piano snaps this to C3 so recordings play back as performed - transpose with it afterwards."));
+            p.add(F ("Freq", 20, 4186, &S::oscFreq, "nHz", false, "Base pitch of the struck body. CLICK the value read-out to switch Hz <-> NOTE mode (snaps to semitones there, SHIFT = free). Follows per-step pitch + the pitch envelope. KEYS: touching the piano snaps this to C3 so recordings play back as performed - transpose with it afterwards."));
             p.add(Ic("Material", 0, juce::jmax(0, DrumChannel::modalMaterialCount() - 1), &S::modalMaterial, mats,
                      "The struck body - sets each mode's frequency, gain + decay (Marimba/Tubular Bell/Glass/Membrane/"
                      "Metal Plate/Wood Block/Kalimba/Cowbell). The starting point Decay/Tone/Struct then shape."));
@@ -650,7 +650,7 @@ void SlotEditor::init(int idx, MidiLearnManager& mlm, juce::LookAndFeel* knobLNF
     { DrumChannel::Slot d;
       freqFader->setDoubleClickReturnValue (true, d.oscFreq);
       depthFader->setDoubleClickReturnValue(true, d.fmDepth); }
-    freqFader->setRange(20.0, 2093.0, 0.0);   // reach +36 st above C3 (MIDI 96 = 2093 Hz), the KEYS/Draw top
+    freqFader->setRange(20.0, 4186.0, 0.0);   // reach C7 (MIDI 108 = 4186 Hz) - covers an 88-key top octave for sound design
     freqFader->setSkewFactorFromMidPoint(500.0);   // middle of the fader ~= 500 Hz (gently slow, not too slow)
     freqFader->textFromValueFunction = [](double v) {   // Hz by default; the NOTE in note mode (click the read-out)
         return gFreqNotesMode ? noteNameFor(v) : juce::String(juce::roundToInt(v)) + " Hz";
@@ -665,7 +665,7 @@ void SlotEditor::init(int idx, MidiLearnManager& mlm, juce::LookAndFeel* knobLNF
             double v = freqFader->getValue();
             if (gFreqNotesMode && ! juce::ModifierKeys::getCurrentModifiers().isShiftDown()) {   // note mode: park on a semitone
                 const double midi = std::round(69.0 + 12.0 * std::log2(juce::jmax(1.0, v) / 440.0));
-                v = juce::jlimit(20.0, 2093.0, 440.0 * std::pow(2.0, (midi - 69.0) / 12.0));
+                v = juce::jlimit(20.0, 4186.0, 440.0 * std::pow(2.0, (midi - 69.0) / 12.0));
                 freqFader->setValue(v, juce::dontSendNotification);
             }
             s->oscFreq = (float) v; if (onEdit) onEdit(); morphView.repaint();
@@ -4071,7 +4071,8 @@ void ScaleBox::mouseDown(const juce::MouseEvent& e)
     {
         juce::PopupMenu m;
         for (int k = 0; k < 12; ++k) m.addItem(k + 1, kUiNoteName[k], true, v[slot].key == k);
-        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this),
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this)
+                            .withTargetScreenArea(localAreaToGlobal(keyRect())),   // drop from the Key button itself
             [this](int r) { if (r >= 1) { v[slot].key = r - 1; if (onChange) onChange(slot); repaint(); } });
         return;
     }

@@ -57,6 +57,25 @@ int main() {
                CHK(note==72 && hi>0.1 && hi>lo*4) ? "plays root+octave (OK)" : "FAIL");
     }
 
+    {   // [4] SCALE THEORY (teaching-tool accuracy): diatonic triads on every C-major degree,
+        //     the raised-leading-tone DOMINANT in harmonic minor, off-scale snapping, and a min7.
+        auto iv = [](int type, int key, int midi, int k){ return DrumChannel::scaleNoteOffset(type, key, midi, k); };
+        bool ok = true;
+        const int wantQ[7][3] = { {0,4,7},{0,3,7},{0,3,7},{0,4,7},{0,4,7},{0,3,7},{0,3,6} };   // I ii iii IV V vi vii(dim)
+        const int degMidi[7] = { 60,62,64,65,67,69,71 };
+        for (int d = 0; d < 7 && ok; ++d)
+            for (int k = 0; k < 3 && ok; ++k)
+                ok = (iv(0, 0, degMidi[d], k) == wantQ[d][k]);
+        printf("[4a] C-major degree triads (maj/min/min/maj/maj/min/dim) -> %s\n", CHK(ok) ? "OK" : "FAIL");
+        const bool dom = (iv(2, 9, 64, 0) == 0 && iv(2, 9, 64, 1) == 4 && iv(2, 9, 64, 2) == 7);
+        printf("[4b] A harmonic minor, played E = E MAJOR (raised G#): {%d,%d,%d} -> %s\n",
+               iv(2,9,64,0), iv(2,9,64,1), iv(2,9,64,2), CHK(dom) ? "OK" : "FAIL");
+        const bool snap = (iv(0, 0, 61, 0) == -1);
+        printf("[4c] C# in C major snaps DOWN to C (voice0 = -1) -> %s\n", CHK(snap) ? "OK" : "FAIL");
+        const bool m7 = (iv(1, 0, 60, 3) == 10);
+        printf("[4d] C natural minor, 4th chord tone = Bb (min7) -> %s\n", CHK(m7) ? "OK" : "FAIL");
+    }
+
     printf(fails ? "\n>>> ARP FAILURES\n" : "\n>>> ArpTest PASS\n");
     return fails;
 }

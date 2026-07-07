@@ -947,24 +947,26 @@ static void kSynthPluck(DC& c) {    // bright synth pluck: fast resonant filter 
 // -- CHORD / SCALE keyboard sounds (v1.2.3): both slots active, one slot voiced as a chord or diatonic
 //    scale so one finger plays a full harmony. "Power Keys" + "Octave Bells" also use the SLOT-2 PITCH
 //    transpose (keysSlot2Down) to stack the second slot an octave below / above the key. --
-static void kPowerKeys(DC& c) {     // power-chord synth: root+5th saw lead over a clean sub an OCTAVE DOWN (slot-2 pitch)
+static void kPowerKeys(DC& c) {     // power-chord synth: the FIFTH is now slot 2 (a saw a 4th below = the
+    // inverted power dyad) - VISIBLE in the Slot-2 pitch control, no hidden chord mode (chord UI removed).
     auto& s = mkSlot(c, DC::SrcOsc);
     s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
-    s.chordMode = 2; s.chordUnison = 2; s.oscDetune = 0.08f;         // 5th = root + fifth (power chord)
+    s.oscUnison = 2; s.oscDetune = 0.08f;                            // slight width on the root saw
     s.atk = 0.004f; s.dec = 0.6f; s.sustain = 0.82f; s.release = 0.14f;
     s.filterType = DC::LowPass; s.filterCutoff = 2400.0f; s.filterReso = 1.4f; s.filterEnvAmt = 0.3f;
     s.fxDriveType = DC::Tube; s.fxDrive = 0.12f;
     auto& b = mkSlot2(c, DC::SrcOsc, 0.62f);
-    b.oscShape = b.oscShapeB = DC::WvSine; b.oscFreq = 261.63f;      // pure sub, dropped an octave by the slot-2 pitch
+    b.oscShape = b.oscShapeB = DC::WvSaw; b.oscFreq = 261.63f;       // the power FIFTH (4th below = inverted 5th)
+    b.filterType = DC::LowPass; b.filterCutoff = 2000.0f; b.filterReso = 0.8f;
     b.atk = 0.004f; b.dec = 0.6f; b.sustain = 0.85f; b.release = 0.12f;
-    c.keysSlot2Down = 12;                                            // SLOT-2 PITCH: sub an octave below the key
+    c.keysSlot2Down = 5;                                             // SLOT-2 PITCH: a fourth below = power-chord dyad
     c.volume = 0.72f;
 }
 static void kOctaveBells(DC& c) {   // major-triad bells with an OCTAVE-UP glass sparkle layer (slot-2 pitch)
     auto& s = mkSlot(c, DC::SrcOsc);
     s.oscShape = s.oscShapeB = 10; s.oscFreq = 261.63f;             // Bell (inharmonic partials)
     s.fmDepth = 0.2f; s.fmPitch = 0.8f; s.fmEnvFollow = true;
-    s.chordMode = 3; s.chordUnison = 3;                             // Major triad
+    s.scaleOn = true; s.scaleType = 0; s.scaleUnison = 3; s.scaleKey = 0;   // Major-scale triads (was fixed Maj chord; C plays C-E-G identically, now editable in the SCALE box)
     s.atk = 0.002f; s.dec = 2.0f; s.sustain = 0.16f; s.release = 0.9f;
     auto& b = mkSlot2(c, DC::SrcOsc, 0.7f);
     b.oscShape = b.oscShapeB = 11; b.oscFreq = 261.63f;            // Glass shimmer, an octave up (slot-2 pitch)
@@ -999,7 +1001,7 @@ static void kMinorRhodes(DC& c) {   // moody Rhodes-style EP voiced as a MIN7 ch
     auto& s = mkSlot(c, DC::SrcOsc);
     s.oscShape = s.oscShapeB = DC::WvSine; s.oscFreq = 261.63f;
     s.fmDepth = 0.32f; s.fmPitch = 0.5f; s.fmEnvFollow = true;      // tine bark
-    s.chordMode = 7; s.chordUnison = 4;                            // Min7 = 4-note chord
+    s.scaleOn = true; s.scaleType = 1; s.scaleUnison = 4; s.scaleKey = 0;   // C natural-minor 7ths (C plays C-Eb-G-Bb = Cmin7 identically, now editable in the SCALE box)
     s.atk = 0.003f; s.dec = 1.4f; s.sustain = 0.45f; s.release = 0.35f;
     auto& b = mkSlot2(c, DC::SrcOsc, 0.6f);
     b.oscShape = b.oscShapeB = DC::WvTri; b.oscFreq = 261.63f;      // soft body under the tines

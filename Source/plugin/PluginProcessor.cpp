@@ -429,7 +429,8 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             arpSounding = note;
             arpNoteAge = 0;                                            // fresh note: the Gate countdown restarts
             arpSoundingUi.store(note, std::memory_order_relaxed);      // the keyboard highlight follows this live
-            if (rec && drawRec && (sequencer.isCurrentlyPlaying || arpKicked))   // capture the arp into the piano roll
+            if (rec && drawRec && (sequencer.isCurrentlyPlaying || arpKicked)
+                && std::abs(note - 60) <= 36)                          // arp notes beyond the roll's range: skip
             {
                 const int colLen = juce::jmax(1, (int) ((double) DrumChannel::DRAW_RES
                                                         / ((double) juce::jmax(1, arpKc.arpSync) * DrumChannel::arpRateMul(arpKc.arpRate))));
@@ -494,7 +495,8 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                 if (! sequencer.isCurrentlyPlaying && ! sequencer.dawSync)
                 { sequencer.startStandalone(); kicked = true; }
                 const int pat = sequencer.playPattern;
-                if (! drawRec && (chain || pat == keysArmedPattern.load(std::memory_order_relaxed)))
+                if (! drawRec && (chain || pat == keysArmedPattern.load(std::memory_order_relaxed))
+                    && std::abs(note - 60) <= 36)   // out-of-range (88-key extremes): play live, SKIP recording
                 {
                     const int semis = note - 60;   // FIXED reference: C3 = 0 (piano range = +/-36)
                     auto& pch = sequencer.patterns[pat].channels[chIdx];
@@ -523,7 +525,8 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                 // block below, closed at release) - POLY records real chords now. `kicked` = this key
                 // just started the transport, so it opens at column 0 (the bar is about to begin).
                 int openIdx = -1, openPat = -1;
-                if (rec && drawRec && (sequencer.isCurrentlyPlaying || kicked))
+                if (rec && drawRec && (sequencer.isCurrentlyPlaying || kicked)
+                    && std::abs(note - 60) <= 36)   // beyond the roll's +-36: play live, don't record a wrong pitch
                 {
                     openPat = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, sequencer.playPattern);
                     auto& pch = sequencer.patterns[openPat].channels[chIdx];
