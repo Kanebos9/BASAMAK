@@ -3259,10 +3259,14 @@ void VoiceModDisplay::setValues(int unison, int chordUnison, int scaleUnison, fl
     vib = juce::jlimit(0.0f, 1.0f, vibrato);
     centre = centreOn;
     mode = juce::jlimit(0, 2, detuneMode);
-    chord = juce::jlimit(0, 7, chordMode);
-    scaleOn = scaleOnIn;
-    scaleType = juce::jlimit(0, kNumScales - 1, scaleTypeIn);
-    scaleKey = ((scaleKeyIn % 12) + 12) % 12;
+    // The visual is UNISON-only now (chord/scale editing moved to the SCALE box above the keyboard).
+    // Chord/scale values are STASHED for emit() pass-through so editing detune never clobbers them.
+    emitChord = juce::jlimit(0, 7, chordMode);
+    emitScaleOn = scaleOnIn;
+    emitScaleType = juce::jlimit(0, kNumScales - 1, scaleTypeIn);
+    emitScaleKey = ((scaleKeyIn % 12) + 12) % 12;
+    chord = 0; scaleOn = false;
+    scaleType = emitScaleType; scaleKey = emitScaleKey;
     repaint();
 }
 void VoiceModDisplay::setSupport(bool uniSupported, bool vibSupported, juce::String naReason)
@@ -3405,23 +3409,9 @@ void VoiceModDisplay::paint(juce::Graphics& g)
     // Mode chips: STD = detuned copies; CHORD = the unison voices become chord notes. When CHORD
     // is on, a third chip cycles the chord TYPE and shows the actual stacked intervals for the
     // current voice count, e.g. "Maj (+4,+3)".
-    if (uniOn) {
-        auto drawChip = [&](juce::Rectangle<float> r, const juce::String& t, bool on, juce::Colour onCol) {
-            g.setColour(on ? onCol.withAlpha(0.85f) : juce::Colour(0xff26264a)); g.fillRoundedRectangle(r, 3.0f);
-            g.setColour(on ? juce::Colours::black : juce::Colour(0xff9a9ac0));
-            g.setFont(juce::Font(8.5f, juce::Font::bold)); g.drawText(t, r, juce::Justification::centred, false);
-        };
-        chip[0] = juce::Rectangle<float>(b.getX() + 5.0f,  b.getY() + 3.0f, 46.0f, 13.0f);
-        chip[1] = juce::Rectangle<float>(b.getX() + 53.0f, b.getY() + 3.0f, 42.0f, 13.0f);
-        chip[2] = juce::Rectangle<float>(b.getX() + 97.0f, b.getY() + 3.0f, 42.0f, 13.0f);
-        drawChip(chip[0], "UNISON", ! scaleOn && chord == 0, juce::Colour(0xff35c0ff));
-        drawChip(chip[1], "CHORD",  ! scaleOn && chord >  0, juce::Colour(0xffb98cff));
-        drawChip(chip[2], "SCALE",  scaleOn,                 juce::Colour(0xff5ad17a));
-        // In SCALE mode a KEY chip on the right picks the root (the chord TYPE / scale is the detune dot).
-        if (scaleOn) { chip[3] = juce::Rectangle<float>(b.getRight() - 52.0f, b.getY() + 3.0f, 48.0f, 13.0f);
-                       drawChip(chip[3], juce::String("Key ") + kUiNoteName[scaleKey], true, juce::Colour(0xffffc23a)); }
-        else chip[3] = {};
-    }
+    // (The UNISON/CHORD/SCALE chips are GONE - the visual is UNISON-only; the SCALE harmonizer is
+    // edited in the SCALE box above the keyboard. chip[] stay empty so old hit-tests never fire.)
+    for (auto& cp : chip) cp = {};
     if (uniOn && centre)   // the extra DRY/original voice (double-click Detune) - drawn white so it stands out
         drawVoice(0.0f, juce::Colour(0xffffffff).withMultipliedAlpha(0.95f), 1.8f);
 
@@ -4035,6 +4025,100 @@ void TintKeyboard::drawBlackNote(int n, juce::Graphics& g, juce::Rectangle<float
     }
 }
 
+//==============================================================================
+// ScaleBox
+static const juce::Colour kSlotCols[2] = { juce::Colour(0xffe8bf4d), juce::Colour(0xffe86aa8) };
+
+void ScaleBox::paint(juce::Graphics& g)
+{
+    g.fillAll(juce::Colour(0xff16162a));
+    g.setColour(juce::Colour(0xff33335a)); g.drawRect(getLocalBounds(), 1);
+    const auto& s = v[juce::jlimit(0, 1, slot)];
+    const auto acc = kSlotCols[juce::jlimit(0, 1, slot)];
+    g.setColour(juce::Colour(0xff9aa4c0)); g.setFont(juce::Font(11.5f, juce::Font::bold));
+    g.drawText("SCALE", 6, 1, 44, 14, juce::Justification::centredLeft, false);
+    for (int i = 0; i < 2; ++i)   // slot chips (1 yellow / 2 pink, like the sound editor)
+    {
+        auto r = chipRect(i).toFloat();
+        g.setColour(i == slot ? kSlotCols[i] : juce::Colour(0xff26264a)); g.fillRoundedRectangle(r, 3.0f);
+        g.setColour(i == slot ? juce::Colours::black : kSlotCols[i]); g.setFont(juce::Font(10.0f, juce::Font::bold));
+        g.drawText(juce::String(i + 1), chipRect(i), juce::Justification::centred, false);
+    }
+    { // KEY button (popup C..B)
+        auto r = keyRect().toFloat();
+        g.setColour(juce::Colour(0xff26264a)); g.fillRoundedRectangle(r, 3.0f);
+        g.setColour(s.on ? juce::Colour(0xffd8e0f0) : juce::Colour(0xff6a7690)); g.setFont(juce::Font(10.5f, juce::Font::bold));
+        g.drawText(juce::String("Key ") + kUiNoteName[juce::jlimit(0, 11, s.key)], keyRect(), juce::Justification::centred, false);
+    }
+    auto fader = [&](juce::Rectangle<int> r, float pos, const juce::String& t, bool active) {
+        g.setColour(juce::Colour(0xff26264a)); g.fillRoundedRectangle(r.toFloat(), 4.0f);
+        g.setColour(acc.withAlpha(active ? 0.28f : 0.10f));
+        g.fillRoundedRectangle(r.toFloat().withWidth(juce::jmax(6.0f, pos * (float) r.getWidth())), 4.0f);
+        g.setColour(juce::Colour(0xffd8e0f0).withAlpha(active ? 0.9f : 0.55f)); g.setFont(juce::Font(12.0f, juce::Font::bold));
+        g.drawText(t, r, juce::Justification::centred, false);
+    };
+    fader(notesRect(), (float) s.count / 7.0f, "Notes x" + juce::String(s.count), s.on);
+    fader(scaleRect(), s.on ? (float)(s.type + 2) / 11.0f : 1.0f / 11.0f,
+          s.on ? juce::String(kUiScaleName[juce::jlimit(0, 9, s.type)]) : juce::String("Off"), true);
+}
+
+void ScaleBox::mouseDown(const juce::MouseEvent& e)
+{
+    dragNotes = dragScale = false;
+    const auto p = e.getPosition();
+    for (int i = 0; i < 2; ++i) if (chipRect(i).contains(p)) { if (slot != i) { slot = i; repaint(); } return; }
+    if (keyRect().contains(p))
+    {
+        juce::PopupMenu m;
+        for (int k = 0; k < 12; ++k) m.addItem(k + 1, kUiNoteName[k], true, v[slot].key == k);
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this),
+            [this](int r) { if (r >= 1) { v[slot].key = r - 1; if (onChange) onChange(slot); repaint(); } });
+        return;
+    }
+    if (notesRect().contains(p)) { dragNotes = true; mouseDrag(e); return; }
+    if (scaleRect().contains(p)) { dragScale = true; mouseDrag(e); return; }
+}
+
+void ScaleBox::mouseDrag(const juce::MouseEvent& e)
+{
+    auto& s = v[juce::jlimit(0, 1, slot)];
+    if (dragNotes)
+    {
+        auto r = notesRect();
+        const float f = juce::jlimit(0.0f, 1.0f, (float)(e.getPosition().x - r.getX()) / (float) juce::jmax(1, r.getWidth()));
+        const int c = juce::jlimit(1, 7, 1 + (int) (f * 7.0f));
+        if (c != s.count) { s.count = c; if (onChange) onChange(slot); repaint(); }
+        return;
+    }
+    if (dragScale)
+    {   // 11 positions: Off + the 10 scales
+        auto r = scaleRect();
+        const float f = juce::jlimit(0.0f, 1.0f, (float)(e.getPosition().x - r.getX()) / (float) juce::jmax(1, r.getWidth()));
+        const int pos = juce::jlimit(0, 10, (int) (f * 11.0f));
+        const bool nOn = pos > 0; const int nType = juce::jmax(0, pos - 1);
+        if (nOn != s.on || (nOn && nType != s.type)) { s.on = nOn; if (nOn) s.type = nType; if (onChange) onChange(slot); repaint(); }
+        return;
+    }
+}
+
+juce::String ScaleBox::getTooltip()
+{
+    const auto p = getMouseXYRelative();
+    if (chipRect(0).contains(p) || chipRect(1).contains(p))
+        return "Which SOUND SLOT these scale controls edit: 1 = yellow, 2 = pink (each slot has its own scale).";
+    if (keyRect().contains(p))
+        return "KEY: the scale's root note (C..B).";
+    if (notesRect().contains(p))
+        return "NOTES (drag): the chord size the harmonizer plays per key - x1 = just the (snapped) note, "
+               "x3 = triads, x4 = 7th chords.";
+    if (scaleRect().contains(p))
+        return "SCALE (drag): Off, or the scale the slot plays in. With a scale ON, every key you press plays "
+               "a full chord built from that key inside the scale; off-scale keys snap to the nearest scale note.";
+    return "SCALE harmonizer for the selected channel's sound slots (moved here from the sound editor). One key "
+           "= a full in-scale chord. The UNISON visual in the sound editor still does detune/vibrato; vibrato "
+           "applies to every sounding key.";
+}
+
 KeysPanel::KeysPanel()
 {
     kbState.addListener(this);
@@ -4081,6 +4165,12 @@ KeysPanel::KeysPanel()
     btnArp.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
     addAndMakeVisible(btnGuide);
     btnGuide.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
+    addAndMakeVisible(scaleBox);
+    addAndMakeVisible(lblChord);
+    lblChord.setFont(juce::Font(26.0f, juce::Font::bold));
+    lblChord.setColour(juce::Label::textColourId, juce::Colour(0xffd8e0f0));
+    lblChord.setJustificationType(juce::Justification::centredLeft);
+    lblChord.setInterceptsMouseClicks(false, false);
     btnArp.setTooltip("ARP: hold ONE key and it plays a programmed riff, locked to the beat. Click to open "
         "the editor - every control in it has its OWN tooltip. Works stopped or playing; records into the "
         "piano roll; mono, and chord/scale/glide apply per note.");
@@ -4340,6 +4430,13 @@ void KeysPanel::resized()
       btnGuide.setBounds(col.getCentreX() - 27, col.getY() + 39, 54, 16); }  // Key guide under that
 
     r.removeFromTop(6 + 28);    // push the keyboard down so the taller knob cell clears it
+    { // SCALE box + the live chord-name read-out (big, fills to the right edge)
+        auto row = r.removeFromTop(56);
+        scaleBox.setBounds(row.removeFromLeft(280));
+        row.removeFromLeft(10);
+        lblChord.setBounds(row);
+        r.removeFromTop(4);
+    }
     kb.setBounds(r);
     // ARP editor = a DROPDOWN under the Arp button: anchored to it (right-aligned so it stays inside
     // the panel), as tall as the keyboard area allows (2x the first version - the cells are big now).
@@ -6453,15 +6550,11 @@ void DrumSequencerEditor::setupComponents()
         "- CHORDS BY HAND (Poly on): press several lit keys together. Classic recipe: press a lit key, SKIP "
         "the next lit one, press the one after, skip, press again - root / third / fifth, that key's chord "
         "in the scale.\n"
-        "- If the sound's own CHORD/SCALE mode is on (sound editor, UNISON / CHORD / SCALE), one key already "
-        "plays a full chord automatically - the lit keys are then the valid ROOTS, and a dimmed key snaps to "
-        "the nearest lit one.\n"
-        "- Follow sound reads the scale from the selected channel's slots (two slots with DIFFERENT scales: "
-        "only keys in BOTH stay lit).");
+        "- If a slot's SCALE (the box above the keys) is on, one key already plays a full chord - the lit "
+        "keys are then the valid ROOTS, and a dimmed key snaps to the nearest lit one.");
     keysPanel.btnGuide.onClick = [this] {
         juce::PopupMenu m;
         m.addItem(1, "Off",                        true, proc.kbGuideMode == 0);
-        m.addItem(2, "Follow sound (slot SCALE)",  true, proc.kbGuideMode == 1);
         m.addSeparator();
         for (int k = 0; k < 12; ++k)
         {
@@ -6475,7 +6568,6 @@ void DrumSequencerEditor::setupComponents()
             [this](int r) {
                 if (r == 0) return;
                 if (r == 1)      proc.kbGuideMode = 0;
-                else if (r == 2) proc.kbGuideMode = 1;
                 else { proc.kbGuideMode = 2; proc.kbGuideKey = (r - 1000) / 16; proc.kbGuideScale = (r - 1000) % 16; }
                 updateKeyboardGuide();
             });
@@ -6682,6 +6774,19 @@ void DrumSequencerEditor::setupComponents()
     };
     stepGrid.onRollPreviewEnd = [this] {
         if (rollPreviewNote >= 0) { proc.pushKeyUp(rollPreviewNote); rollPreviewNote = -1; }
+    };
+    // SCALE box: write the edited slot's harmonizer fields straight onto the channel (they're part of
+    // the SOUND - channelSoundHash picks them up), then refresh so the guide/highlight/detail follow.
+    keysPanel.scaleBox.onChange = [this](int si) {
+        if (ignoreKnobCallbacks) return;
+        auto& ch = proc.sequencer.channel(selectedChannel);
+        auto& sl = ch.slots[juce::jlimit(0, 1, si)];
+        const auto& nv = keysPanel.scaleBox.v[juce::jlimit(0, 1, si)];
+        sl.scaleOn = nv.on; sl.scaleType = nv.type; sl.scaleKey = nv.key; sl.scaleUnison = nv.count;
+        ch.markDspDirty();
+        kbGuideApplied = -1;
+        keysHighlightMaskLo = keysHighlightMaskHi = ~0ULL;   // voicing changed -> recompute highlight + chord name
+        refreshDetailPanel();                                 // re-syncs the UNISON visual's pass-through stash too
     };
     stepGrid.onGridDivEdit = [this] {
         auto* aw = new juce::AlertWindow("Piano-roll grid", "Snap to 1/N of the bar (1-64, or 0 for off):",
@@ -7343,7 +7448,7 @@ void DrumSequencerEditor::setupComponents()
     content.addAndMakeVisible(slotSelVoice); slotSelVoice.onSelect = pickSlot;   // under UNISON/DETUNE/VIBRATO
     content.addAndMakeVisible(slotSelFx);    slotSelFx.onSelect    = pickSlot;
     setupGroupHeader(hdrPitch, "PITCH ENVELOPE");
-    setupGroupHeader(hdrVoice, "UNISON / CHORD / SCALE");   // sub-title above the voice visual (mode chips + detune/vibrato)
+    setupGroupHeader(hdrVoice, "UNISON");   // sub-title above the voice visual (detune/vibrato; SCALE moved above the keyboard)
     setupGroupHeader(hdrAmpEnv, "AMP ENVELOPE");
     setupGroupHeader(hdrEqBox,  "EQ");
     // === PER-SLOT EQ (begin) - target picker (All / 1 / 2 / 3) ===
@@ -7358,7 +7463,7 @@ void DrumSequencerEditor::setupComponents()
     voiceMod.onChange = [this](int u, float d, float v, bool centre, int detuneMode, int chordMode, bool scaleOn, int scaleType, int scaleKey) {
         if (ignoreKnobCallbacks) return;
         auto& sl = proc.sequencer.channel(selectedChannel).slots[envTargetSlot()];
-        if (scaleOn) sl.scaleUnison = u; else if (chordMode > 0) sl.chordUnison = u; else sl.oscUnison = u;   // STD/CHORD/SCALE keep SEPARATE counts
+        sl.oscUnison = u;   // the visual edits the STD count only now (the Scale count lives in the SCALE box)
         sl.oscDetune = d; sl.vibrato = v; sl.oscUniCenter = centre; sl.oscDetuneMode = detuneMode;
         sl.chordMode = chordMode;
         sl.scaleOn = scaleOn; sl.scaleType = scaleType; sl.scaleKey = scaleKey;   // SCALE (diatonic harmonizer)
@@ -8323,6 +8428,13 @@ void DrumSequencerEditor::refreshKeysPanel()
     const bool glideOk = ! kch.keysPolyMode;   // glide is mono-only (poly never glides)
     keysPanel.glideKnob.setEnabled(glideOk); keysPanel.glideKnob.setAlpha(glideOk ? 1.0f : 0.4f);
     // ARP editor: mirror the channel's arp state in, and push edits back out (+ mark modified / undoable).
+    for (int si = 0; si < 2; ++si)
+    {
+        const auto& sl = kch.slots[si];
+        keysPanel.scaleBox.v[si] = { sl.scaleOn, juce::jlimit(0, 9, sl.scaleType),
+                                     ((sl.scaleKey % 12) + 12) % 12, juce::jlimit(1, 7, sl.scaleUnison) };
+    }
+    keysPanel.scaleBox.repaint();
     keysPanel.arpEditor.on   = kch.arpOn;
     keysPanel.arpEditor.len  = kch.arpLen;
     keysPanel.arpEditor.sync = kch.arpSync;
@@ -8370,6 +8482,47 @@ void DrumSequencerEditor::refreshKeysPanel()
 // scale notes (from its own settings + slot-2 transpose) - slot 1 keys yellow, slot 2 keys pink,
 // keys used by BOTH a yellow-pink blend. Cleared when no key is held. Driven by the editor timer so
 // it works for the on-screen keyboard AND external MIDI (both set proc.keysHeldNote).
+// Name the chord formed by a set of MIDI notes (lowest note first). Root candidates: the BASS first,
+// then the other pitch classes (a non-bass match shows as a slash chord, e.g. "A min / C").
+static juce::String chordNameFor(const juce::Array<int>& notes)
+{
+    if (notes.isEmpty()) return {};
+    if (notes.size() == 1) return juce::MidiMessage::getMidiNoteName(notes[0], true, true, 3);
+    bool pcSet[12] = {}; for (int n : notes) pcSet[n % 12] = true;
+    juce::Array<int> pcs; for (int i = 0; i < 12; ++i) if (pcSet[i]) pcs.add(i);
+    const int bassPC = notes[0] % 12;
+    struct ChordDef { const char* name; int n; int iv[4]; };
+    static const ChordDef tab[] = {
+        { "maj", 3, {0,4,7,0} },  { "min", 3, {0,3,7,0} },  { "dim", 3, {0,3,6,0} },  { "aug", 3, {0,4,8,0} },
+        { "sus2", 3, {0,2,7,0} }, { "sus4", 3, {0,5,7,0} },
+        { "7", 4, {0,4,7,10} },   { "maj7", 4, {0,4,7,11} },{ "min7", 4, {0,3,7,10} },{ "minMaj7", 4, {0,3,7,11} },
+        { "m7b5", 4, {0,3,6,10} },{ "dim7", 4, {0,3,6,9} }, { "6", 4, {0,4,7,9} },    { "min6", 4, {0,3,7,9} },
+        { "add9", 4, {0,2,4,7} }, { "5", 2, {0,7,0,0} }
+    };
+    for (int pass = 0; pass < 2; ++pass)
+        for (int root : pcs)
+        {
+            if ((pass == 0) != (root == bassPC)) continue;
+            bool rel[12] = {};
+            for (int p : pcs) rel[(p - root + 12) % 12] = true;
+            for (const auto& cd : tab)
+            {
+                if (cd.n != pcs.size()) continue;
+                bool ok = true;
+                for (int k = 0; k < cd.n && ok; ++k) ok = rel[cd.iv[k]];
+                if (ok)
+                {
+                    juce::String out = juce::String(kUiNoteName[root]) + " " + cd.name;
+                    if (root != bassPC) out << " / " << kUiNoteName[bassPC];
+                    return out;
+                }
+            }
+        }
+    juce::String out;   // no dictionary match: just list what's sounding, bass first
+    for (int p : pcs) out << kUiNoteName[p] << " ";
+    return out.trim();
+}
+
 void DrumSequencerEditor::updateKeyboardHighlight()
 {
     // POLY: light the UNION of every held note's voicing. Change-gated on the held-note MASK
@@ -8419,7 +8572,14 @@ void DrumSequencerEditor::updateKeyboardHighlight()
             else if (used[0][m])          keysPanel.setKeyTint(m, y);
             else if (used[1][m])          keysPanel.setKeyTint(m, p);
         keysPanel.applyKeyTints();
+        // LIVE CHORD NAME: name what slot 1 is sounding (slot 2 is usually a transposed double - it
+        // would muddy the name); falls back to slot 2 when slot 1 is silent.
+        juce::Array<int> sounding;
+        for (int m = 0; m < 128; ++m) if (used[0][m]) sounding.add(m);
+        if (sounding.isEmpty()) for (int m = 0; m < 128; ++m) if (used[1][m]) sounding.add(m);
+        keysPanel.lblChord.setText(chordNameFor(sounding), juce::dontSendNotification);
     }
+    else keysPanel.lblChord.setText({}, juce::dontSendNotification);
 }
 
 // KEY GUIDE: dim the keyboard keys OUTSIDE the chosen scale (display only; change-gated).
@@ -8431,18 +8591,8 @@ void DrumSequencerEditor::updateKeyboardGuide()
         for (int k = 0; k < kUiScaleLen[type]; ++k) m |= 1 << ((key + kUiScaleTab[type][k]) % 12);
         return m;
     };
-    int mask = -1;
+    int mask = -1;   // ("Follow sound" was removed - it just complicated things; pick a key+scale directly)
     if (proc.kbGuideMode == 2) mask = scaleMask(proc.kbGuideKey, proc.kbGuideScale);
-    else if (proc.kbGuideMode == 1)
-    {   // FOLLOW SOUND: the slots can carry DIFFERENT scales - only keys that are members of EVERY
-        // audible scale-on slot stay lit (a key outside one slot's scale gets snapped by that slot).
-        const auto& c = proc.sequencer.channel(selectedChannel);
-        int m = 0xFFF; bool any = false;
-        for (const auto& sl : c.slots)
-            if (sl.scaleOn && sl.engine >= 0 && sl.weight > 0.001f)
-            { any = true; m &= scaleMask(sl.scaleKey, sl.scaleType); }
-        if (any) mask = m;
-    }
     if (mask == kbGuideApplied) return;
     kbGuideApplied = mask;
     keysPanel.clearKeyDims();

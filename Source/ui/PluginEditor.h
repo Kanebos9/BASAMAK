@@ -590,6 +590,28 @@ private:
       return r * UI_COLS + c; }
 };
 
+// SCALE box (above the keyboard): the diatonic-harmonizer controls moved here from the sound editor.
+// Per SLOT (1 = yellow / 2 = pink chips): a Key button + two Arp-style DRAG-FADERS - "Notes xN" (chord
+// size) and the scale itself ("Off / Major / ..."). Editing writes straight onto the slot's scale fields.
+class ScaleBox : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    struct V { bool on = false; int type = 0, key = 0, count = 3; };
+    V   v[2];
+    int slot = 0;                                  // which slot the faders edit (chip-selected)
+    std::function<void(int slot)> onChange;        // editor writes v[slot] back onto the channel slot
+    void paint(juce::Graphics&) override;
+    void mouseDown(const juce::MouseEvent&) override;
+    void mouseDrag(const juce::MouseEvent&) override;
+    juce::String getTooltip() override;
+private:
+    bool dragNotes = false, dragScale = false;
+    juce::Rectangle<int> chipRect(int i) const { return { 52 + i * 22, 1, 20, 14 }; }
+    juce::Rectangle<int> keyRect()   const { return { getWidth() - 58, 1, 54, 14 }; }
+    juce::Rectangle<int> notesRect() const { return { 4, 18, getWidth() - 8, 17 }; }
+    juce::Rectangle<int> scaleRect() const { return { 4, 37, getWidth() - 8, 17 }; }
+};
+
 class KeysPanel : public juce::Component, private juce::MidiKeyboardState::Listener
 {
 public:
@@ -606,6 +628,8 @@ public:
     ToggleSwitch     polySwitch;                          // keys POLY (chords stack like a piano)
     juce::TextButton btnArp { "Arp" };                    // opens the ARP editor popup (space-saving)
     juce::TextButton btnGuide { "Guide" };                // KEY GUIDE popup: dim out-of-scale keys (display only)
+    ScaleBox         scaleBox;                            // per-slot SCALE harmonizer controls (moved from the sound editor)
+    juce::Label      lblChord;                            // LIVE chord name of whatever is sounding (big text)
     ArpEditor        arpEditor;                            // hold one key -> programmed riff (per-step); hidden until btnArp
     juce::Label      lblRecMode, lblSlot2, lblHuman, lblStrum, lblMinVel, lblMaxVel, lblPoly, lblGlide;
     bool             polyMode = false;                    // mirror of the channel's keysPolyMode (routes note-offs)
@@ -924,7 +948,8 @@ private:
     int   mode = 0;                // detune direction: 0 = symmetric (drag right), 1 = up (drag up), 2 = down (drag down)
     bool  uniOn = true, vibOn = true;
     int   maxUni = 7;              // per-engine unison cap (Osc 7 / Modal 4 / Physical 3)
-    int   chord = 0;               // 0 = STD (detuned copies); 1-7 = chord types (in CHORD mode the detune dot picks the type)
+    int   chord = 0;               // display copy - FORCED 0 now (the visual is STD/UNISON-only; Scale moved above the keyboard)
+    int   emitChord = 0; bool emitScaleOn = false; int emitScaleType = 0, emitScaleKey = 0;   // pass-through for emit()
     bool  scaleOn = false;         // SCALE (diatonic harmonizer) mode; the detune dot picks the scale type
     int   scaleType = 0;           // 0-9 which scale (Major, Minor, ...)
     int   scaleKey = 0;            // 0-11 key root pitch class (C = 0)
@@ -936,7 +961,7 @@ private:
                  float rangeX, rangeY, dPtX, dPtY, rootY, upRange, uniTop; };   // rootY = root line; upRange = room above it; uniTop = unison-dot ceiling (below the chips)
     Geo  geom() const;
     int  nearestHandle(juce::Point<float> p) const;
-    void emit() { if (onChange) onChange(curUni(), det, vib, centre, mode, chord, scaleOn, scaleType, scaleKey); }
+    void emit() { if (onChange) onChange(curUni(), det, vib, centre, mode, emitChord, emitScaleOn, emitScaleType, emitScaleKey); }
 };
 
 //==============================================================================
