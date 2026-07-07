@@ -1032,6 +1032,419 @@ static void mCelesta(DC& c)    { clearSound(c); c.srcOn[DC::SrcPhys] = true; c.s
 
 using Builder = void (*)(DC&);
 
+
+//==============================================================================
+// 2026-07 CONTENT FILL (batches 2-12, one overnight pass; see docs/FEATURES.md plan).
+// Every category authored to its target; BankAudit-checked before shipping to the user.
+//==============================================================================
+// ---- Snares (+4) ----
+static void mBrushSnare(DC& c) {   // soft brush hit: PINK noise, slow-ish attack, NO tonal body
+    clearSound(c); c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 1.0f;
+    c.noiseType = 1; c.layerNoiseCenter = 2400.0f; c.layerNoiseWidth = 0.35f;
+    c.srcAtk[DC::SrcNoise] = 0.006f; c.srcDec[DC::SrcNoise] = 0.28f;
+    c.eqBand[DC::EQ_HP] = { true, 300.0f, 0.0f, 0.707f };
+    c.reverbSend = 0.06f; c.volume = 0.8f;
+}
+static void mSnapSnare(DC& c) {    // ultra-tight snap: bright white crack + a whisper of 240 Hz body
+    clearSound(c);
+    c.srcOn[DC::SrcOsc]   = true; c.srcWeight[DC::SrcOsc]   = 0.2f;
+    c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 0.8f;
+    c.padX = 0.14f + 0.82f * 0.8f; c.padY = 0.5f;
+    c.layerOscShape = DC::OscSine; c.layerSineFreq = 240.0f;
+    c.layerSinePEnvAmt = 5.0f; c.layerSinePEnvTime = 0.015f;
+    c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 0.06f;
+    c.noiseType = 0; c.layerNoiseCenter = 3800.0f; c.layerNoiseWidth = 0.3f;
+    c.srcAtk[DC::SrcNoise] = 0.0005f; c.srcDec[DC::SrcNoise] = 0.09f;
+    c.eqBand[DC::EQ_HP] = { true, 350.0f, 0.0f, 0.707f };
+    c.volume = 0.9f;
+}
+static void mRoomSnare(DC& c) {    // big wet room: mid body + darker noise, heavy reverb send
+    clearSound(c);
+    c.srcOn[DC::SrcOsc]   = true; c.srcWeight[DC::SrcOsc]   = 0.35f;
+    c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 0.65f;
+    c.padX = 0.14f + 0.82f * 0.65f; c.padY = 0.5f;
+    c.layerOscShape = DC::OscSine; c.layerSineFreq = 190.0f;
+    c.layerSinePEnvAmt = 6.0f; c.layerSinePEnvTime = 0.02f;
+    c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 0.2f;
+    c.noiseType = 0; c.layerNoiseCenter = 1700.0f; c.layerNoiseWidth = 0.3f;
+    c.srcAtk[DC::SrcNoise] = 0.001f; c.srcDec[DC::SrcNoise] = 0.3f;
+    c.eqBand[DC::EQ_HP] = { true, 140.0f, 0.0f, 0.707f };
+    c.driveType = DC::Tube; c.driveAmount = 0.15f;
+    c.reverbSend = 0.45f; c.volume = 0.85f;
+}
+static void mClackSnare(DC& c) {   // woody clack: HIGH-tuned membrane + a pinch of noise (timbale-ish snare)
+    clearSound(c);
+    DC::Slot& b = c.slots[0]; b.engine = DC::SrcModal; b.weight = 0.8f;
+    b.modalMaterial = 3; b.oscFreq = 330.0f; b.modalDecay = 0.12f; b.modalTone = 0.7f; b.modalHit = 0.5f;
+    b.atk = 0.001f;
+    DC::Slot& n = c.slots[1]; n.engine = DC::SrcNoise; n.weight = 0.2f;
+    n.noiseType = 0; n.noiseCenter = 3200.0f; n.noiseWidth = 0.2f;
+    n.atk = 0.0005f; n.dec = 0.05f;
+    c.padX = 0.2f; c.padY = 0.5f;
+    c.eqBand[DC::EQ_HP] = { true, 200.0f, 0.0f, 0.707f };
+    c.volume = 0.88f;
+}
+// ---- Claps (+4) ----
+static void mSnapClap(DC& c) {     // shortest clap in the family: one bright crack, bone dry
+    clearSound(c); c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 1.0f;
+    c.noiseType = 0; c.layerNoiseCenter = 2600.0f; c.layerNoiseWidth = 0.18f;
+    c.srcAtk[DC::SrcNoise] = 0.0005f; c.srcDec[DC::SrcNoise] = 0.07f;
+    c.eqBand[DC::EQ_HP] = { true, 600.0f, 0.0f, 0.707f };
+    c.volume = 0.9f;
+}
+static void mBigClap(DC& c) {      // stadium clap: long, very wet, darker centre than the 909
+    clearSound(c); c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 1.0f;
+    c.noiseType = 1; c.layerNoiseCenter = 1100.0f; c.layerNoiseWidth = 0.32f;
+    c.srcAtk[DC::SrcNoise] = 0.002f; c.srcDec[DC::SrcNoise] = 0.38f;
+    c.eqBand[DC::EQ_HP] = { true, 400.0f, 0.0f, 0.707f };
+    c.reverbSend = 0.5f; c.volume = 0.82f;
+}
+static void mLofiClap(DC& c) {     // crushed clap: Bitcrush grit (the only crushed clap)
+    clearSound(c); c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 1.0f;
+    c.noiseType = 0; c.layerNoiseCenter = 2400.0f; c.layerNoiseWidth = 0.12f;
+    c.srcAtk[DC::SrcNoise] = 0.001f; c.srcDec[DC::SrcNoise] = 0.09f;
+    c.eqBand[DC::EQ_HP] = { true, 700.0f, 0.0f, 0.707f };
+    c.driveType = DC::Bitcrush; c.driveAmount = 0.7f; c.volume = 0.85f;
+}
+static void mAnalogClap(DC& c) {   // purple-noise clap: airier top than the white/pink family
+    clearSound(c); c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 1.0f;
+    c.noiseType = 4; c.layerNoiseCenter = 3400.0f; c.layerNoiseWidth = 0.25f;
+    c.srcAtk[DC::SrcNoise] = 0.001f; c.srcDec[DC::SrcNoise] = 0.16f;
+    c.eqBand[DC::EQ_HP] = { true, 500.0f, 0.0f, 0.707f };
+    c.reverbSend = 0.12f; c.volume = 0.85f;
+}
+// ---- Hi-Hats (+1) ----
+static void mFootHat(DC& c) {      // pedal "chick": the shortest, dullest hat (foot close)
+    clearSound(c); c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 1.0f;
+    c.noiseType = 0; c.layerNoiseCenter = 6500.0f; c.layerNoiseWidth = 0.15f;
+    c.srcAtk[DC::SrcNoise] = 0.0005f; c.srcDec[DC::SrcNoise] = 0.012f;
+    c.eqBand[DC::EQ_HP] = { true, 400.0f, 0.0f, 0.707f };
+    c.volume = 0.6f;
+}
+// ---- Cymbals (+2) ----
+static void mChina(DC& c) {        // trashy china: wide fuzzy purple noise, explosive then gone
+    clearSound(c); c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 1.0f;
+    c.noiseType = 4; c.layerNoiseCenter = 8800.0f; c.layerNoiseWidth = 0.5f;
+    c.srcAtk[DC::SrcNoise] = 0.0005f; c.srcDec[DC::SrcNoise] = 0.85f;
+    c.eqBand[DC::EQ_HP] = { true, 800.0f, 0.0f, 0.707f };
+    c.driveType = DC::Fuzz; c.driveAmount = 0.22f; c.volume = 0.62f;
+}
+static void mBellRide(DC& c) {     // ride BELL ping: inharmonic struck metal, none of the noise wash
+    auto& s = mkModal(c);
+    s.modalMaterial = 1; s.oscFreq = 1320.0f; s.modalDecay = 0.45f;
+    s.modalTone = 0.75f; s.modalStruct = 0.7f; s.modalHit = 0.3f;
+    c.volume = 0.62f;
+}
+// ---- Electro Perc (+6) ----
+static void mBlip(DC& c) {         // tiny sonar blip: pure high sine dot
+    clearSound(c); c.srcOn[DC::SrcOsc] = true; c.srcWeight[DC::SrcOsc] = 1.0f;
+    c.layerOscShape = DC::OscSine; c.layerSineFreq = 1400.0f;
+    c.layerSinePEnvAmt = 6.0f; c.layerSinePEnvTime = 0.01f;
+    c.srcAtk[DC::SrcOsc] = 0.0005f; c.srcDec[DC::SrcOsc] = 0.05f;
+    c.volume = 0.7f;
+}
+static void mLaserZap(DC& c) {     // long TONAL laser fall (Zap stays the short noisy one)
+    clearSound(c); c.srcOn[DC::SrcOsc] = true; c.srcWeight[DC::SrcOsc] = 1.0f;
+    c.layerOscShape = DC::OscSquare; c.layerSineFreq = 180.0f;
+    c.layerSinePEnvAmt = 42.0f; c.layerSinePEnvTime = 0.16f;
+    c.srcAtk[DC::SrcOsc] = 0.0005f; c.srcDec[DC::SrcOsc] = 0.3f;
+    c.delaySend = 0.18f; c.volume = 0.7f;
+}
+static void mChirp(DC& c) {        // fast UP-chirp (negative env = rises into the note)
+    clearSound(c); c.srcOn[DC::SrcOsc] = true; c.srcWeight[DC::SrcOsc] = 1.0f;
+    c.layerOscShape = DC::OscSine; c.layerSineFreq = 900.0f;
+    c.layerSinePEnvAmt = -30.0f; c.layerSinePEnvTime = 0.05f;
+    c.srcAtk[DC::SrcOsc] = 0.0005f; c.srcDec[DC::SrcOsc] = 0.08f;
+    c.volume = 0.72f;
+}
+static void mStaticHit(DC& c) {    // burst of crackle static (slot noise: crackle needs the slot engine)
+    clearSound(c);
+    DC::Slot& n = c.slots[0]; n.engine = DC::SrcNoise; n.weight = 1.0f;
+    n.noiseType = 0; n.noiseCenter = 3000.0f; n.noiseWidth = 0.4f;
+    n.noiseCrackle = 0.85f; n.noiseDrive = 0.3f;
+    n.atk = 0.0005f; n.dec = 0.12f;
+    c.volume = 0.78f;
+}
+static void mBuzzHit(DC& c) {      // 8-bit buzz stab: low square driven hard, no pitch motion
+    clearSound(c); c.srcOn[DC::SrcOsc] = true; c.srcWeight[DC::SrcOsc] = 1.0f;
+    c.layerOscShape = DC::OscSquare; c.layerSineFreq = 110.0f;
+    c.srcAtk[DC::SrcOsc] = 0.0005f; c.srcDec[DC::SrcOsc] = 0.1f;
+    c.driveType = DC::HardClip; c.driveAmount = 0.45f; c.volume = 0.78f;
+}
+static void mGlitchTick(DC& c) {   // 4 ms digital tick (way shorter + lower than Tight Hat)
+    clearSound(c); c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 1.0f;
+    c.noiseType = 0; c.layerNoiseCenter = 5200.0f; c.layerNoiseWidth = 0.12f;
+    c.srcAtk[DC::SrcNoise] = 0.0002f; c.srcDec[DC::SrcNoise] = 0.004f;
+    c.driveType = DC::Bitcrush; c.driveAmount = 0.35f; c.volume = 0.75f;
+}
+// ---- Keys (+5) ----
+static void kToyPiano(DC& c) {     // short dark toy piano: dull glass strike, fast die-away
+    auto& s = mkModal(c);
+    s.modalMaterial = 2; s.oscFreq = 523.25f; s.modalDecay = 0.32f;
+    s.modalTone = 0.35f; s.modalStruct = 0.4f; s.modalHit = 0.3f;
+    s.atk = 0.001f;
+    c.volume = 0.8f;
+}
+static void kHarpsichord(DC& c) {  // plucked quill: bright stiff string, no sustain (true to the instrument)
+    auto& s = mkSlot(c, DC::SrcPhys);
+    s.physFreq = 261.63f; s.physMaterial = 1.0f;
+    s.physTone = 0.85f; s.physPosition = 0.12f; s.physStiff = 0.08f;
+    s.atk = 0.001f; s.dec = 0.8f; s.sustain = 0.0f; s.release = 0.1f;
+    c.volume = 0.8f;
+}
+static void kPipeOrgan(DC& c) {    // church organ: octave stack + a 16-foot sub rank, wet stone room
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = 9; s.oscFreq = 261.63f;               // Organ additive stack
+    s.atk = 0.03f; s.dec = 0.3f; s.sustain = 1.0f; s.release = 0.35f;
+    auto& b = mkSlot2(c, DC::SrcOsc, 0.66f);
+    b.oscShape = b.oscShapeB = DC::WvSine; b.oscFreq = 261.63f;      // the sub rank (dropped an octave below)
+    b.atk = 0.05f; b.dec = 0.3f; b.sustain = 1.0f; b.release = 0.4f;
+    c.keysSlot2Down = 12;
+    c.reverbSend = 0.35f; c.volume = 0.66f;
+}
+static void kAccordion(DC& c) {    // musette accordion: detuned reed pair, breath attack, slight wobble
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = 12; s.oscFreq = 261.63f;              // Reed
+    s.oscUnison = 2; s.oscDetune = 0.3f;                             // the musette detune IS the sound
+    s.vibrato = 0.12f;
+    s.atk = 0.06f; s.dec = 0.4f; s.sustain = 1.0f; s.release = 0.12f;
+    c.volume = 0.7f;
+}
+static void kHonkyTonk(DC& c) {    // saloon piano: two piano voices a few cents apart (barroom shimmer)
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = 10; s.oscFreq = 261.63f;              // Bell-ish hammer tone
+    s.fmDepth = 0.12f; s.fmPitch = 0.5f; s.fmEnvFollow = true;
+    s.atk = 0.002f; s.dec = 1.3f; s.sustain = 0.2f; s.release = 0.25f;
+    auto& b = mkSlot2(c, DC::SrcOsc, 0.5f);
+    b.oscShape = b.oscShapeB = 10; b.oscFreq = 263.4f;               // ~12 cents sharp = the honky-tonk beat
+    b.fmDepth = 0.12f; b.fmPitch = 0.5f; b.fmEnvFollow = true;
+    b.atk = 0.002f; b.dec = 1.3f; b.sustain = 0.2f; b.release = 0.25f;
+    c.volume = 0.72f;
+}
+// ---- Pads & Choirs (+5) ----
+static void kChoirOoh(DC& c) {     // darker "ooh" choir (Vowel O vs Choir Aah's bright A)
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = 7; s.oscFreq = 261.63f;               // Vowel O
+    s.oscUnison = 3; s.oscDetune = 0.14f; s.oscUniCenter = true;
+    s.atk = 0.22f; s.dec = 1.6f; s.sustain = 0.85f; s.release = 0.9f;
+    c.reverbSend = 0.3f; c.volume = 0.66f;
+}
+static void kDarkPad(DC& c) {      // subterranean pad: low square through a nearly-shut filter
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSquare; s.oscFreq = 130.81f;    // C3
+    s.oscUnison = 2; s.oscDetune = 0.18f;
+    s.atk = 0.5f; s.dec = 2.2f; s.sustain = 0.9f; s.release = 1.4f;
+    s.filterType = DC::LowPass; s.filterCutoff = 420.0f; s.filterReso = 1.1f;
+    c.reverbSend = 0.25f; c.volume = 0.7f;
+}
+static void kShimmerPad(DC& c) {   // airy glass shimmer an octave up, drowned in reverb
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = 11; s.oscFreq = 523.25f;              // Glass, C5
+    s.oscUnison = 3; s.oscDetune = 0.2f; s.uniSpread = 0.6f;         // wide stereo sparkle
+    s.atk = 0.35f; s.dec = 2.5f; s.sustain = 0.75f; s.release = 1.8f;
+    c.reverbSend = 0.5f; c.volume = 0.6f;
+}
+static void kMotionPad(DC& c) {    // slow filter-breathing pad (the LFO IS the character)
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 196.0f;        // G3
+    s.oscUnison = 3; s.oscDetune = 0.24f; s.oscUniCenter = true;
+    s.atk = 0.3f; s.dec = 2.0f; s.sustain = 0.85f; s.release = 1.0f;
+    s.filterType = DC::LowPass; s.filterCutoff = 900.0f; s.filterReso = 1.3f;
+    s.lfoRate[0] = 0.3f; s.lfoAmt[0] = 0.55f;                        // ~3 s filter breathing
+    c.reverbSend = 0.2f; c.volume = 0.66f;
+}
+static void kBrassPad(DC& c) {     // soft brass-section swell (slow vs Synth Brass's stab attack)
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = 13; s.oscFreq = 349.23f;              // Brass, F4 register
+    s.oscUnison = 2; s.oscDetune = 0.12f;
+    s.atk = 0.25f; s.dec = 1.8f; s.sustain = 0.85f; s.release = 0.6f;
+    s.filterType = DC::LowPass; s.filterCutoff = 2600.0f; s.filterReso = 0.7f;
+    c.reverbSend = 0.22f; c.volume = 0.66f;
+}
+// ---- Leads (+2) ----
+static void kPulseLead(DC& c) {    // hollow pulse lead: thin PWM-flavoured pair
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvPulse; s.oscFreq = 261.63f;
+    s.oscUnison = 2; s.oscDetune = 0.16f;
+    s.atk = 0.004f; s.dec = 0.5f; s.sustain = 0.85f; s.release = 0.1f;
+    s.filterType = DC::LowPass; s.filterCutoff = 3200.0f; s.filterReso = 1.0f;
+    c.volume = 0.72f;
+}
+static void kFMLead(DC& c) {       // glassy FM lead: 2x modulator that mellows as the note fades
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSine; s.oscFreq = 261.63f;
+    s.fmDepth = 0.5f; s.fmPitch = 0.2f; s.fmEnvFollow = true;        // ratio snaps 2x
+    s.atk = 0.003f; s.dec = 0.7f; s.sustain = 0.8f; s.release = 0.12f;
+    c.delaySend = 0.12f; c.volume = 0.7f;
+}
+// ---- Bells & Mallets (+2) ----
+static void moSteelDrum(DC& c) {   // Trinidad steel pan: tuned metal with the "bloom" wobble
+    auto& s = mkModal(c);
+    s.modalMaterial = 1; s.oscFreq = 349.23f; s.modalDecay = 0.5f;
+    s.modalTone = 0.7f; s.modalStruct = 0.3f; s.modalHit = 0.55f;
+    s.vibrato = 0.16f;                                               // the pan's pitch bloom
+    c.reverbSend = 0.15f; c.volume = 0.78f;
+}
+static void moHandBell(DC& c) {    // small hand bell: quick bright ding (vs Tubular's long toll)
+    auto& s = mkModal(c);
+    s.modalMaterial = 1; s.oscFreq = 880.0f; s.modalDecay = 0.5f;
+    s.modalTone = 0.5f; s.modalStruct = 0.42f; s.modalHit = 0.25f;
+    c.reverbSend = 0.2f; c.volume = 0.7f;
+}
+// ---- Chords & Arps (+5): every one SHIPS voiced or with a dedicated arp ----
+static void kHouseStab(DC& c) {    // classic house piano-organ stab: Min7 voicing baked in
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = 9; s.oscFreq = 261.63f;               // Organ
+    s.chordMode = 7; s.chordUnison = 4;                              // Min7, four notes per key
+    s.atk = 0.002f; s.dec = 0.4f; s.sustain = 0.0f; s.release = 0.08f;
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.1f;
+    c.eqBand[DC::EQ_HP] = { true, 160.0f, 0.0f, 0.707f };
+    c.reverbSend = 0.15f; c.volume = 0.78f;
+}
+static void kRaveStab(DC& c) {     // hoover-adjacent rave stab: detuned saws voiced as a MAJOR triad
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
+    s.chordMode = 3; s.chordUnison = 3;                              // Maj triad
+    s.oscDetune = 0.2f; s.uniSpread = 0.4f;
+    s.atk = 0.002f; s.dec = 0.5f; s.sustain = 0.0f; s.release = 0.1f;
+    s.fxDriveType = DC::Foldback; s.fxDrive = 0.25f;
+    c.eqBand[DC::EQ_HP] = { true, 120.0f, 0.0f, 0.707f };
+    c.volume = 0.72f;
+}
+static void kTranceArp(DC& c) {    // DEDICATED ARP: octave-bounce 16ths on a bright pluck
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
+    s.atk = 0.001f; s.dec = 0.22f; s.sustain = 0.0f; s.release = 0.06f;
+    s.filterType = DC::LowPass; s.filterCutoff = 2600.0f; s.filterReso = 1.5f; s.filterEnvAmt = 0.45f;
+    c.arpOn = true; c.arpLen = 4; c.arpSync = 8; c.arpRate = 8;      // 8 x2 = 16ths
+    c.arpOffset[0] = 12; c.arpOffset[1] = 0; c.arpOffset[2] = 12;    // root/+oct/root/+oct
+    c.arpGate = 0.75f;
+    c.delaySend = 0.2f; c.volume = 0.74f;
+}
+static void kAcidArp(DC& c) {      // DEDICATED ARP: mono acid line hopping octaves, squelchy filter
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 130.81f;       // C3 bass register
+    s.atk = 0.001f; s.dec = 0.3f; s.sustain = 0.0f; s.release = 0.05f;
+    s.filterType = DC::LowPass; s.filterCutoff = 700.0f; s.filterReso = 2.6f; s.filterEnvAmt = 0.6f;
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.2f;
+    c.keysPolyMode = false;                                          // acid is a MONO instrument
+    c.arpOn = true; c.arpLen = 4; c.arpSync = 8; c.arpRate = 8;
+    c.arpOffset[0] = 0; c.arpOffset[1] = 12; c.arpOffset[2] = -12;   // root/root/+oct/-oct
+    c.arpGate = 0.55f;                                               // staccato squelch
+    c.volume = 0.8f;
+}
+static void kDreamArp(DC& c) {     // DEDICATED ARP: slow broken major chord on a glass pluck
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = 11; s.oscFreq = 261.63f;              // Glass
+    s.atk = 0.002f; s.dec = 0.6f; s.sustain = 0.0f; s.release = 0.3f;
+    c.arpOn = true; c.arpLen = 6; c.arpSync = 8; c.arpRate = 4;      // 8 x1 = 8ths, unhurried
+    c.arpOffset[0] = 4; c.arpOffset[1] = 7; c.arpOffset[2] = 12;     // root-3rd-5th-oct-5th-3rd
+    c.arpOffset[3] = 7; c.arpOffset[4] = 4;
+    c.arpGate = 1.0f;                                                // notes ring into each other
+    c.reverbSend = 0.35f; c.delaySend = 0.15f; c.volume = 0.7f;
+}
+// ---- Risers & Falls (+4) ----
+static void mUplifter(DC& c) {     // trance uplifter: noise swell + a tone RISING two octaves under it
+    clearSound(c);
+    c.srcOn[DC::SrcOsc]   = true; c.srcWeight[DC::SrcOsc]   = 0.45f;
+    c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 0.55f;
+    c.padX = 0.14f + 0.82f * 0.55f; c.padY = 0.5f;
+    c.layerOscShape = DC::OscSaw; c.layerSineFreq = 220.0f;
+    c.layerSinePEnvAmt = -24.0f; c.layerSinePEnvTime = 1.4f;         // negative = rises INTO the note
+    c.srcAtk[DC::SrcOsc] = 0.6f; c.srcDec[DC::SrcOsc] = 1.0f;
+    c.noiseType = 0; c.layerNoiseCenter = 5000.0f; c.layerNoiseWidth = 0.35f;
+    c.srcAtk[DC::SrcNoise] = 1.2f; c.srcDec[DC::SrcNoise] = 0.3f;
+    c.reverbSend = 0.4f; c.volume = 0.6f;
+}
+static void mTapeStop(DC& c) {     // tape-stop fall: a held tone that suddenly winds down
+    clearSound(c); c.srcOn[DC::SrcOsc] = true; c.srcWeight[DC::SrcOsc] = 1.0f;
+    c.layerOscShape = DC::OscSaw; c.layerSineFreq = 330.0f;
+    c.layerSinePEnvAmt = 36.0f; c.layerSinePEnvTime = 0.4f; c.layerSinePOffset = 0.08f;
+    c.srcAtk[DC::SrcOsc] = 0.002f; c.srcDec[DC::SrcOsc] = 0.55f;
+    c.driveType = DC::Tube; c.driveAmount = 0.18f; c.volume = 0.72f;
+}
+static void mDive(DC& c) {         // long whistling dive-bomb: high square falling for a full second
+    clearSound(c); c.srcOn[DC::SrcOsc] = true; c.srcWeight[DC::SrcOsc] = 1.0f;
+    c.layerOscShape = DC::OscSquare; c.layerSineFreq = 880.0f;
+    c.layerSinePEnvAmt = 24.0f; c.layerSinePEnvTime = 0.9f;
+    c.srcAtk[DC::SrcOsc] = 0.005f; c.srcDec[DC::SrcOsc] = 1.1f;
+    c.reverbSend = 0.2f; c.delaySend = 0.15f; c.volume = 0.62f;
+}
+static void mSubRise(DC& c) {      // felt-not-heard sub swell rising an octave (transition weight)
+    clearSound(c); c.srcOn[DC::SrcOsc] = true; c.srcWeight[DC::SrcOsc] = 1.0f;
+    c.layerOscShape = DC::OscSine; c.layerSineFreq = 40.0f;
+    c.layerSinePEnvAmt = -12.0f; c.layerSinePEnvTime = 1.3f;
+    c.srcAtk[DC::SrcOsc] = 0.4f; c.srcDec[DC::SrcOsc] = 1.3f;
+    c.driveType = DC::SoftClip; c.driveAmount = 0.1f; c.volume = 0.85f;
+}
+// ---- Impacts & Booms (+5) ----
+static void mBoom(DC& c) {         // cinematic boom: deep hit blooming into a wet tail
+    clearSound(c); c.srcOn[DC::SrcOsc] = true; c.srcWeight[DC::SrcOsc] = 1.0f;
+    c.layerOscShape = DC::OscSine; c.layerSineFreq = 42.0f;
+    c.layerSinePEnvAmt = 10.0f; c.layerSinePEnvTime = 0.06f;
+    c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 1.2f;
+    c.driveType = DC::SoftClip; c.driveAmount = 0.2f;
+    c.reverbSend = 0.5f; c.volume = 0.9f;
+}
+static void mSlam(DC& c) {         // door slam: broadband smack + a low thump, clipped
+    clearSound(c);
+    c.srcOn[DC::SrcOsc]   = true; c.srcWeight[DC::SrcOsc]   = 0.45f;
+    c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 0.55f;
+    c.padX = 0.14f + 0.82f * 0.55f; c.padY = 0.5f;
+    c.layerOscShape = DC::OscSine; c.layerSineFreq = 60.0f;
+    c.layerSinePEnvAmt = 30.0f; c.layerSinePEnvTime = 0.02f;
+    c.srcAtk[DC::SrcOsc] = 0.0005f; c.srcDec[DC::SrcOsc] = 0.3f;
+    c.noiseType = 0; c.layerNoiseCenter = 900.0f; c.layerNoiseWidth = 0.45f;
+    c.srcAtk[DC::SrcNoise] = 0.0005f; c.srcDec[DC::SrcNoise] = 0.25f;
+    c.driveType = DC::HardClip; c.driveAmount = 0.35f;
+    c.reverbSend = 0.3f; c.volume = 0.85f;
+}
+static void mThud(DC& c) {         // dead body-blow thud: low knock, zero ring, bone dry
+    clearSound(c);
+    c.srcOn[DC::SrcOsc]   = true; c.srcWeight[DC::SrcOsc]   = 0.9f;
+    c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 0.1f;
+    c.padX = 0.14f + 0.82f * 0.1f; c.padY = 0.5f;
+    c.layerOscShape = DC::OscSine; c.layerSineFreq = 55.0f;
+    c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 0.12f;
+    c.noiseType = 1; c.layerNoiseCenter = 500.0f; c.layerNoiseWidth = 0.2f;
+    c.srcAtk[DC::SrcNoise] = 0.0005f; c.srcDec[DC::SrcNoise] = 0.03f;
+    c.volume = 0.9f;
+}
+static void mBlast(DC& c) {        // distorted FM blast: mid-band explosion, fuzz all over
+    clearSound(c); c.srcOn[DC::SrcFM] = true; c.srcWeight[DC::SrcFM] = 1.0f;
+    c.fmPitch = -12.0f; c.fmSpread = 0.3f; c.fmDepth = 0.7f; c.fmSub = 0.3f;
+    c.fmPitchEnvAmt = 26.0f; c.fmPitchEnvTime = 0.05f;
+    c.srcDec[DC::SrcFM] = 0.6f;
+    c.driveType = DC::Fuzz; c.driveAmount = 0.5f;
+    c.reverbSend = 0.25f; c.volume = 0.8f;
+}
+static void mBraam(DC& c) {        // trailer BRAAM: detuned saw wall, foldback, slow bloom
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 65.41f;        // C2
+    s.oscUnison = 5; s.oscDetune = 0.5f; s.oscUniCenter = true; s.uniSpread = 0.5f;
+    s.atk = 0.02f; s.dec = 1.6f; s.sustain = 0.0f; s.release = 0.4f;
+    s.filterType = DC::LowPass; s.filterCutoff = 950.0f; s.filterReso = 1.2f;
+    s.fxDriveType = DC::Foldback; s.fxDrive = 0.4f;
+    c.reverbSend = 0.35f; c.volume = 0.72f;
+}
+// ---- Noise & Texture (+2) ----
+static void mRain(DC& c) {         // steady rain bed: pink noise + dense crackle droplets
+    clearSound(c);
+    DC::Slot& n = c.slots[0]; n.engine = DC::SrcNoise; n.weight = 1.0f;
+    n.noiseType = 1; n.noiseCenter = 4500.0f; n.noiseWidth = 0.4f;
+    n.noiseCrackle = 0.55f;
+    n.atk = 0.3f; n.dec = 3.0f;
+    c.volume = 0.5f;
+}
+static void mOcean(DC& c) {        // ocean swell: brown noise breathing at wave speed (vol LFO)
+    clearSound(c);
+    DC::Slot& n = c.slots[0]; n.engine = DC::SrcNoise; n.weight = 1.0f;
+    n.noiseType = 2; n.noiseCenter = 420.0f; n.noiseWidth = 0.6f;
+    n.lfoRate[2] = 0.16f; n.lfoAmt[2] = 0.9f;                        // ~6 s near-full wave swell
+    n.atk = 0.4f; n.dec = 3.5f;
+    c.volume = 0.6f;
+}
+
 static const struct { const char* name; Builder build; const char* cat; } kMixes[] = {
     // Categories are by INSTRUMENT (never by engine). Grouped + ordered like catOrder[] in
     // rebuildSoundMixMenu() - a category missing there is silently dropped from the menu.
@@ -1053,10 +1466,18 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "606 Snare", m606Snare, "Snares" },
     { "Trap Snare", mTrapSnare, "Snares" },
     { "Mod Snare", mModSnare, "Snares" },
+    { "Brush Snare", mBrushSnare, "Snares" },
+    { "Snap Snare", mSnapSnare, "Snares" },
+    { "Room Snare", mRoomSnare, "Snares" },
+    { "Clack Snare", mClackSnare, "Snares" },
     // ---- Claps ----
     { "Clap", mClap, "Claps" },
     { "808 Clap", m808Clap, "Claps" },
     { "909 Clap", m909Clap, "Claps" },
+    { "Snap Clap", mSnapClap, "Claps" },
+    { "Big Clap", mBigClap, "Claps" },
+    { "Lofi Clap", mLofiClap, "Claps" },
+    { "Analog Clap", mAnalogClap, "Claps" },
     // ---- Hi-Hats ----
     { "Closed Hat", mClosedHat, "Hi-Hats" },
     { "Open Hat", mOpenHat, "Hi-Hats" },
@@ -1067,12 +1488,15 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "606 CH", m606ClosedHat, "Hi-Hats" },
     { "Metal Hat", mMetalHat, "Hi-Hats" },
     { "Tight Hat", mTightHat, "Hi-Hats" },
+    { "Foot Hat", mFootHat, "Hi-Hats" },
     // ---- Cymbals ----
     { "Crash", mCrash, "Cymbals" },
     { "909 Ride", m909Ride, "Cymbals" },
     { "909 Crash", m909Crash, "Cymbals" },
     { "Sizzle", mSizzle, "Cymbals" },
     { "Mod Gong", moGong, "Cymbals" },
+    { "China", mChina, "Cymbals" },
+    { "Bell Ride", mBellRide, "Cymbals" },
     // ---- Toms ----
     { "FM Tom", mFMTom, "Toms" },
     { "808 Low Tom", m808LowTom, "Toms" },
@@ -1103,6 +1527,12 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     // ---- Electro Perc ----
     { "Zap", mZap, "Electro Perc" },
     { "Filter Zap", eFilterZap, "Electro Perc" },
+    { "Blip", mBlip, "Electro Perc" },
+    { "Laser Zap", mLaserZap, "Electro Perc" },
+    { "Chirp", mChirp, "Electro Perc" },
+    { "Static Hit", mStaticHit, "Electro Perc" },
+    { "Buzz Hit", mBuzzHit, "Electro Perc" },
+    { "Glitch Tick", mGlitchTick, "Electro Perc" },
     // ---- Bass ----
     { "Sub Bass", mSubBass, "Bass" },
     { "808 Bass", m808Bass, "Bass" },
@@ -1126,6 +1556,11 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "E-Piano", kEPiano, "Keys" },
     { "Organ", kOrgan, "Keys" },
     { "String Keys", kStringKeys, "Keys" },
+    { "Toy Piano", kToyPiano, "Keys" },
+    { "Harpsichord", kHarpsichord, "Keys" },
+    { "Pipe Organ", kPipeOrgan, "Keys" },
+    { "Accordion", kAccordion, "Keys" },
+    { "Honky Tonk", kHonkyTonk, "Keys" },
     { "Grand Piano", kGrandPiano, "Keys" },
     { "Wurli", kWurli, "Keys" },
     { "Clavinet", kClav, "Keys" },
@@ -1133,10 +1568,17 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Soft Pad", kSoftPad, "Pads & Choirs" },
     { "Choir Aah", kChoir, "Pads & Choirs" },
     { "Warm Pad", kWarmPad, "Pads & Choirs" },
+    { "Choir Ooh", kChoirOoh, "Pads & Choirs" },
+    { "Dark Pad", kDarkPad, "Pads & Choirs" },
+    { "Shimmer Pad", kShimmerPad, "Pads & Choirs" },
+    { "Motion Pad", kMotionPad, "Pads & Choirs" },
+    { "Brass Pad", kBrassPad, "Pads & Choirs" },
     // ---- Leads ----
     { "Vox", mVox, "Leads" },
     { "Talkbox", mTalkbox, "Leads" },
     { "Whistle", mWhistle, "Leads" },
+    { "Pulse Lead", kPulseLead, "Leads" },
+    { "FM Lead", kFMLead, "Leads" },
     { "Square Lead", kSquareLead, "Leads" },
     { "Synth Brass", kSynthBrass, "Leads" },
     { "Saw Lead", kSawLead, "Leads" },
@@ -1158,6 +1600,8 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Glass Bells", kGlassBells, "Bells & Mallets" },
     { "Vibes", kVibes, "Bells & Mallets" },
     { "Marimba Keys", kMarimbaKeys, "Bells & Mallets" },
+    { "Steel Drum", moSteelDrum, "Bells & Mallets" },
+    { "Hand Bell", moHandBell, "Bells & Mallets" },
     { "Mod Marimba", moMarimba, "Bells & Mallets" },
     { "Mod Tubular Bell", moTubular, "Bells & Mallets" },
     { "Mod Glass", moGlass, "Bells & Mallets" },
@@ -1171,17 +1615,33 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Dorian Pad", kDorianPad, "Chords & Arps" },
     { "Major Choir", kMajorChoir, "Chords & Arps" },
     { "Minor Rhodes", kMinorRhodes, "Chords & Arps" },
+    { "House Stab", kHouseStab, "Chords & Arps" },
+    { "Rave Stab", kRaveStab, "Chords & Arps" },
+    { "Trance Arp", kTranceArp, "Chords & Arps" },
+    { "Acid Arp", kAcidArp, "Chords & Arps" },
+    { "Dream Arp", kDreamArp, "Chords & Arps" },
     // ---- Risers & Falls ----
     { "Noise Sweep", mNoiseSweep, "Risers & Falls" },
+    { "Uplifter", mUplifter, "Risers & Falls" },
+    { "Tape Stop", mTapeStop, "Risers & Falls" },
+    { "Dive", mDive, "Risers & Falls" },
+    { "Sub Rise", mSubRise, "Risers & Falls" },
     { "Riser", mRiser, "Risers & Falls" },
     { "Big Riser", mBigRiser, "Risers & Falls" },
     // ---- Impacts & Booms ----
     { "Sub Drop", mSubDrop, "Impacts & Booms" },
+    { "Boom", mBoom, "Impacts & Booms" },
+    { "Slam", mSlam, "Impacts & Booms" },
+    { "Thud", mThud, "Impacts & Booms" },
+    { "Blast", mBlast, "Impacts & Booms" },
+    { "Braam", mBraam, "Impacts & Booms" },
     // ---- Noise & Texture ----
     { "Wind", mWind, "Noise & Texture" },
     { "Vinyl", mVinyl, "Noise & Texture" },
     { "Siren", eSiren, "Noise & Texture" },
     { "Chopper", eChopper, "Noise & Texture" },
+    { "Rain", mRain, "Noise & Texture" },
+    { "Ocean", mOcean, "Noise & Texture" },
 };
 static constexpr int kNumMixes = (int) (sizeof(kMixes) / sizeof(kMixes[0]));
 
