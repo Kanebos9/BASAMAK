@@ -536,7 +536,8 @@ public:
     void mouseDoubleClick(const juce::MouseEvent&) override;
     void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
     void visibilityChanged() override;        // (un)hooks the click-outside closer
-    static constexpr int UI_COLS = 6, UI_ROWS = 2, TOPH = 92;   // TWO header rows: main clock row + Align/Hold/Gate row
+    juce::String getTooltip() override;       // PER-CONTROL tooltips (varies with the hovered region)
+    static constexpr int UI_COLS = 6, UI_ROWS = 2, TOPH = 40;   // ONE compact header row (popup got wider instead)
 private:
     // Clicking ANYWHERE outside the popup closes it, like a real dropdown (global mouse listener,
     // hooked only while visible; the Arp button is exempt - its own click toggles).
@@ -559,16 +560,17 @@ private:
     void bump(int i, int d)   // nudge row i by d semitones (a REST cell lands on 0 first), extend length
     { if (i < 0) return; int v = (off[i] == DrumChannel::ARP_REST) ? 0 : (int) off[i] + d;
       off[i] = (int8_t) juce::jlimit(-24, 24, v); if (i + 2 > len) len = i + 2; if (onChange) onChange(); repaint(); }
-    juce::Rectangle<int> onRect()    const { return { 6, 8, 46, 28 }; }
-    juce::Rectangle<int> rateRect()  const { return { 58, 8, 116, 28 }; }                             // drag-fader
-    juce::Rectangle<int> faderRect() const { return { 180, 4, getWidth() - 180 - 164, 54 }; }         // Notes/bar (track + caption)
-    // second header row: Align + Hold toggles, then the Gate drag-fader
-    juce::Rectangle<int> alignRect() const { return { 6, 62, 92, 24 }; }
-    juce::Rectangle<int> holdRect()  const { return { 104, 62, 70, 24 }; }
-    juce::Rectangle<int> gateRect()  const { return { 180, 62, 146, 24 }; }
-    juce::Rectangle<int> lenDnRect() const { return { getWidth() - 156, 8, 24, 28 }; }
-    juce::Rectangle<int> lenValRect()const { return { getWidth() - 130, 8, 94, 28 }; }
-    juce::Rectangle<int> lenUpRect() const { return { getWidth() - 34, 8, 26, 28 }; }
+    // ONE header row, left group absolute + right group anchored to the right edge (all 26px tall):
+    // ON | Rate x2 | Notes/bar x8 | Align bar | Hold | Gate 100% | < Last note N >
+    juce::Rectangle<int> onRect()    const { return { 6, 7, 40, 26 }; }
+    juce::Rectangle<int> rateRect()  const { return { 52, 7, 92, 26 }; }                    // drag-fader
+    juce::Rectangle<int> faderRect() const { return { 150, 7, 112, 26 }; }                  // Notes/bar drag-fader (same style)
+    juce::Rectangle<int> alignRect() const { return { getWidth() - 392, 7, 78, 26 }; }
+    juce::Rectangle<int> holdRect()  const { return { getWidth() - 308, 7, 52, 26 }; }
+    juce::Rectangle<int> gateRect()  const { return { getWidth() - 250, 7, 92, 26 }; }
+    juce::Rectangle<int> lenDnRect() const { return { getWidth() - 152, 7, 20, 26 }; }
+    juce::Rectangle<int> lenValRect()const { return { getWidth() - 130, 7, 100, 26 }; }
+    juce::Rectangle<int> lenUpRect() const { return { getWidth() - 28, 7, 20, 26 }; }
     juce::Rectangle<int> cellRect(int i) const
     { const int r = i / UI_COLS, c = i % UI_COLS;
       const int gw = getWidth(), gh = getHeight() - TOPH;

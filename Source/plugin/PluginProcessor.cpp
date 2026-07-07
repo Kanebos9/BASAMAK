@@ -709,9 +709,18 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
 
     //-- Stop pressed: cut any ringing tails on every channel of every pattern.
     if (silenceRequest.exchange(false))
+    {
         for (auto& pat : sequencer.patterns)
             for (auto& ch : pat.channels)
                 ch.silenceAllVoices();
+        if (arpRoot >= 0 && ! arpRootHeld)   // STOP ends a LATCHED (Hold) arp; a key physically held keeps playing
+        {
+            arpRoot = -1; arpChan = -1; arpSounding = -1;
+            arpSoundingUi.store(-1, std::memory_order_relaxed);
+            keysHeldNote.store(-1, std::memory_order_relaxed);
+            keysHeldMaskLo.store(0, std::memory_order_relaxed); keysHeldMaskHi.store(0, std::memory_order_relaxed);
+        }
+    }
 
     //-- Run sequencer at the OVERSAMPLED rate, then down-sample. The engine renders into the
     //   oversampler's up-block (kEngineOS x); channels route to Main or an aux bus inside it.

@@ -4047,16 +4047,9 @@ KeysPanel::KeysPanel()
     addAndMakeVisible(polySwitch);
     addAndMakeVisible(btnArp);
     btnArp.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
-    btnArp.setTooltip("ARP (opens a dropdown): hold ONE key and it plays the root then your programmed notes, "
-        "looping while held. The NOTES/BAR fader (7-13) is the base grid and RATE multiplies it - e.g. 8 x 2 = "
-        "16 notes per bar (classic 16ths), 8 x 1.5 = 12, odd values = polyrhythms. Notes = pattern length "
-        "(incl. the root). Each cell = one note: + / - or scroll = a semitone (-24..+24 st, 0 st = the root "
-        "again); DRAG = fast; DOUBLE-CLICK = REST (a gap); click a cell's 'Note N' header = make it the last. "
-        "Works stopped or playing; recorded into the piano roll while playing. The keyboard lights each key AS "
-        "it plays. ALIGN BAR = while the beat plays, the riff locks onto the bar grid (press mid-cell and the "
-        "next notes land ON the groove). HOLD = latch: release the key and it keeps looping - same key again "
-        "stops it, another key re-roots it. GATE = each note's length as %% of its step: 100%% rings into the "
-        "next note, lower = staccato. Mono; chord/scale/glide apply per note. Click outside to close.");
+    btnArp.setTooltip("ARP: hold ONE key and it plays a programmed riff, locked to the beat. Click to open "
+        "the editor - every control in it has its OWN tooltip. Works stopped or playing; records into the "
+        "piano roll; mono, and chord/scale/glide apply per note.");
     btnArp.onClick = [this] { arpEditor.setVisible(! arpEditor.isVisible()); arpEditor.toFront(false); };
     arpEditor.clickIgnore = &btnArp;   // the button's own click toggles; anything else outside closes
     addChildComponent(arpEditor);      // hidden until the Arp button (costs no permanent space)
@@ -4088,7 +4081,7 @@ void ArpEditor::paint(juce::Graphics& g)
     // --- top bar: On | Rate | Notes/bar FADER | Notes(length) ---
     auto ob = onRect().toFloat();
     g.setColour(on ? juce::Colour(0xff35b56a) : juce::Colour(0xff33335a)); g.fillRoundedRectangle(ob, 4.0f);
-    g.setColour(on ? juce::Colours::black : juce::Colour(0xffb8b8d0)); g.setFont(juce::Font(13.0f, juce::Font::bold));
+    g.setColour(on ? juce::Colours::black : juce::Colour(0xffb8b8d0)); g.setFont(juce::Font(12.5f, juce::Font::bold));
     g.drawText(on ? "ON" : "OFF", onRect(), juce::Justification::centred, false);
     { // RATE: a click-and-drag FADER inside the button shape (subtle fill = position; label semi-transparent)
         auto rr = rateRect();
@@ -4096,34 +4089,24 @@ void ArpEditor::paint(juce::Graphics& g)
         const float pos = (float)(rate + 1) / (float) DrumChannel::ARP_RATES;
         g.setColour(juce::Colour(0xff35c0ff).withAlpha(0.22f));
         g.fillRoundedRectangle(rr.toFloat().withWidth(juce::jmax(6.0f, pos * (float) rr.getWidth())), 4.0f);
-        g.setColour(juce::Colour(0xffc8d0e0).withAlpha(0.75f)); g.setFont(juce::Font(13.0f, juce::Font::bold));
+        g.setColour(juce::Colour(0xffc8d0e0).withAlpha(0.85f)); g.setFont(juce::Font(12.0f, juce::Font::bold));
         g.drawText(juce::String("Rate ") + kArpRateName11(rate), rr, juce::Justification::centred, false);
     }
-    { // NOTES/BAR fader: 6 detents (7 8 9 10 11 13) - a clean track; the caption UNDER it names the
-      // control AND shows the pick ("Notes per bar x8"), big enough to read (the tiny tick numbers went).
+    { // NOTES/BAR: a drag-fader box like Rate ("Notes/bar x8"; fill = position among the 6 detents)
         auto f = faderRect();
-        auto tr = f.removeFromTop(24).reduced(8, 0);
-        const int track = tr.getCentreY();
-        g.setColour(juce::Colour(0xff33335a)); g.fillRoundedRectangle((float) tr.getX(), track - 2.5f, (float) tr.getWidth(), 5.0f, 2.5f);
-        int selIdx = 0;
-        for (int i = 0; i < 6; ++i)
-        {
-            const float x = tr.getX() + (float) i / 5.0f * (float) tr.getWidth();
-            if (DrumChannel::ARP_SYNCS[i] == sync) selIdx = i;
-            g.setColour(juce::Colour(0xff53607a)); g.fillRect(juce::Rectangle<float>(x - 1.0f, track - 6.0f, 2.0f, 12.0f));
-        }
-        const float hx = tr.getX() + (float) selIdx / 5.0f * (float) tr.getWidth();
-        g.setColour(juce::Colour(0xffe8bf4d));
-        g.fillEllipse(hx - 7.0f, track - 7.0f, 14.0f, 14.0f);
-        g.setColour(juce::Colour(0xffd8e0f0)); g.setFont(juce::Font(13.5f, juce::Font::bold));
-        g.drawText("Notes per bar  x" + juce::String(sync), f, juce::Justification::centred, false);
+        g.setColour(juce::Colour(0xff26264a)); g.fillRoundedRectangle(f.toFloat(), 4.0f);
+        int selIdx = 0; for (int i = 0; i < 6; ++i) if (DrumChannel::ARP_SYNCS[i] == sync) selIdx = i;
+        g.setColour(juce::Colour(0xffe8bf4d).withAlpha(0.22f));
+        g.fillRoundedRectangle(f.toFloat().withWidth(juce::jmax(6.0f, (float)(selIdx + 1) / 6.0f * (float) f.getWidth())), 4.0f);
+        g.setColour(juce::Colour(0xffd8e0f0).withAlpha(0.85f)); g.setFont(juce::Font(12.0f, juce::Font::bold));
+        g.drawText("Notes/bar x" + juce::String(sync), f, juce::Justification::centred, false);
     }
     auto stepBtn = [&](juce::Rectangle<int> rr, const juce::String& t) {
         g.setColour(juce::Colour(0xff26264a)); g.fillRoundedRectangle(rr.toFloat(), 4.0f);
         g.setColour(juce::Colour(0xffc8d0e0)); g.setFont(juce::Font(13.0f, juce::Font::bold));
         g.drawText(t, rr, juce::Justification::centred, false); };
     stepBtn(lenDnRect(), "<");
-    g.setColour(juce::Colour(0xffc8d0e0)); g.setFont(juce::Font(13.0f, juce::Font::bold));
+    g.setColour(juce::Colour(0xffc8d0e0)); g.setFont(juce::Font(12.5f, juce::Font::bold));
     g.drawText("Last note " + juce::String(len), lenValRect(), juce::Justification::centred, false);   // = the note ordinal the pattern ends on
     stepBtn(lenUpRect(), ">");
     // --- row 2: Align / Hold toggles + the Gate drag-fader ---
@@ -4169,6 +4152,39 @@ void ArpEditor::paint(juce::Graphics& g)
     }
 }
 
+juce::String ArpEditor::getTooltip()
+{
+    const auto p = getMouseXYRelative();
+    if (onRect().contains(p))
+        return "Arp ON/OFF for this channel. Hold ONE key on the keyboard and it plays your programmed riff, "
+               "looping while held.";
+    if (rateRect().contains(p))
+        return "RATE (drag inside the box, x0.25..x3): multiplies Notes/bar. Example: Notes/bar 8 x Rate 2 = "
+               "16 notes per bar (classic 16ths).";
+    if (faderRect().contains(p))
+        return "NOTES/BAR (drag, 7-13): the arp's base grid - how many notes fill one bar at Rate x1. "
+               "Odd values (7/9/11/13) give polyrhythms; get 12/16/24 via Rate (8 x 1.5 = 12, 8 x 2 = 16).";
+    if (alignRect().contains(p))
+        return "ALIGN BAR: while the beat plays, the riff locks onto the bar grid - press a key mid-cell and "
+               "the following notes still land ON the groove. When the transport is stopped it free-runs from "
+               "your keypress.";
+    if (holdRect().contains(p))
+        return "HOLD (latch): release the key and the arp keeps looping on its own. Press the SAME key again "
+               "to stop it; a DIFFERENT key re-roots the riff. The plugin's STOP button also ends it.";
+    if (gateRect().contains(p))
+        return "GATE (drag, 10-100%): each note's length as a fraction of its step. 100% = a note rings until "
+               "the next one (legato). Lower = staccato: the note is released early with the sound's own "
+               "release fade. The keyboard highlight follows it.";
+    if (lenDnRect().contains(p) || lenValRect().contains(p) || lenUpRect().contains(p))
+        return "LAST NOTE: where the pattern ends before looping, counting the root as note 1. 'Last note 4' = "
+               "root + notes 2-4, then back to the root. Clicking a cell's 'Note N' header sets this too.";
+    if (p.y >= TOPH)
+        return "One riff note (offset from the pressed key). Click the top/bottom strip or SCROLL = one "
+               "semitone (-24..+24 st; 0 st = the root pitch again). DRAG the middle = fast set. DOUBLE-CLICK "
+               "= REST (a silent step). Click the 'Note N' header = make it the LAST note.";
+    return {};
+}
+
 void ArpEditor::mouseDown(const juce::MouseEvent& e)
 {
     dragCell = -1; dragFader = false; dragRate = false; dragGate = false;
@@ -4211,10 +4227,10 @@ void ArpEditor::mouseDrag(const juce::MouseEvent& e)
         return;
     }
     if (dragFader)
-    {   // fader: snap to the nearest of the 6 detents
-        auto tr = faderRect().withHeight(24).reduced(8, 0);
+    {   // Notes/bar box: absolute position picks one of the 6 detents
+        auto tr = faderRect();
         const float f = juce::jlimit(0.0f, 1.0f, (float) (e.getPosition().x - tr.getX()) / (float) juce::jmax(1, tr.getWidth()));
-        const int idx = juce::jlimit(0, 5, (int) std::lround(f * 5.0f));
+        const int idx = juce::jlimit(0, 5, (int) (f * 6.0f));
         if (DrumChannel::ARP_SYNCS[idx] != sync) { sync = DrumChannel::ARP_SYNCS[idx]; if (onChange) onChange(); repaint(); }
         return;
     }
@@ -4291,7 +4307,7 @@ void KeysPanel::resized()
     kb.setBounds(r);
     // ARP editor = a DROPDOWN under the Arp button: anchored to it (right-aligned so it stays inside
     // the panel), as tall as the keyboard area allows (2x the first version - the cells are big now).
-    { const int pw = juce::jmin(520, getWidth() - 16);
+    { const int pw = juce::jmin(680, getWidth() - 16);   // wider: the whole header is ONE row now
       const int px = juce::jlimit(8, getWidth() - pw - 8, btnArp.getRight() - pw);
       const int py = btnArp.getBottom() + 4;
       arpEditor.setBounds(px, py, pw, juce::jmax(120, getHeight() - py - 10)); }
