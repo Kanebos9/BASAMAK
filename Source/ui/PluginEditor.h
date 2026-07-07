@@ -523,6 +523,9 @@ public:
     int    len  = 2;     // pattern length INCLUDING the root (1 + rows)
     int    sync = 8;     // the Notes/bar fader (7/8/9/10/11/13) - the BASE grid
     int    rate = 8;     // Rate multiplier index (11 decimal rates x0.25..x3); 8 = x2
+    bool   align = true; // phase-lock to the bar grid while the transport plays
+    bool   hold  = false;// latch: keep looping after the key is released (same key again = stop)
+    float  gate  = 1.0f; // note length as a fraction of one arp step (1 = ring into the next note)
     juce::Component* clickIgnore = nullptr;   // the Arp button: its own click toggles the popup
     std::function<void()> onChange;    // push these back onto the channel (+ mark modified)
     ArpEditor() { for (auto& o : off) o = DrumChannel::ARP_REST; }
@@ -533,7 +536,7 @@ public:
     void mouseDoubleClick(const juce::MouseEvent&) override;
     void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
     void visibilityChanged() override;        // (un)hooks the click-outside closer
-    static constexpr int UI_COLS = 6, UI_ROWS = 2, TOPH = 58;   // tall top bar: fader + a readable caption under it
+    static constexpr int UI_COLS = 6, UI_ROWS = 2, TOPH = 92;   // TWO header rows: main clock row + Align/Hold/Gate row
 private:
     // Clicking ANYWHERE outside the popup closes it, like a real dropdown (global mouse listener,
     // hooked only while visible; the Arp button is exempt - its own click toggles).
@@ -552,13 +555,17 @@ private:
     Closer closer { *this };
     bool closerHooked = false;
     int  dragCell = -1;
-    bool dragFader = false, dragRate = false;
+    bool dragFader = false, dragRate = false, dragGate = false;
     void bump(int i, int d)   // nudge row i by d semitones (a REST cell lands on 0 first), extend length
     { if (i < 0) return; int v = (off[i] == DrumChannel::ARP_REST) ? 0 : (int) off[i] + d;
       off[i] = (int8_t) juce::jlimit(-24, 24, v); if (i + 2 > len) len = i + 2; if (onChange) onChange(); repaint(); }
     juce::Rectangle<int> onRect()    const { return { 6, 8, 46, 28 }; }
-    juce::Rectangle<int> rateRect()  const { return { 58, 8, 146, 28 }; }                             // drag-fader (same width as Notes/bar)
-    juce::Rectangle<int> faderRect() const { return { 210, 4, getWidth() - 210 - 164, TOPH - 8 }; }   // ~146 at the popup's width
+    juce::Rectangle<int> rateRect()  const { return { 58, 8, 116, 28 }; }                             // drag-fader
+    juce::Rectangle<int> faderRect() const { return { 180, 4, getWidth() - 180 - 164, 54 }; }         // Notes/bar (track + caption)
+    // second header row: Align + Hold toggles, then the Gate drag-fader
+    juce::Rectangle<int> alignRect() const { return { 6, 62, 92, 24 }; }
+    juce::Rectangle<int> holdRect()  const { return { 104, 62, 70, 24 }; }
+    juce::Rectangle<int> gateRect()  const { return { 180, 62, 146, 24 }; }
     juce::Rectangle<int> lenDnRect() const { return { getWidth() - 156, 8, 24, 28 }; }
     juce::Rectangle<int> lenValRect()const { return { getWidth() - 130, 8, 94, 28 }; }
     juce::Rectangle<int> lenUpRect() const { return { getWidth() - 34, 8, 26, 28 }; }

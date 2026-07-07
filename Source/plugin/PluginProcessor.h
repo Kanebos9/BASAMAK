@@ -206,6 +206,8 @@ public:
     double arpAcc  = 0.0;      // host samples accumulated since the last arp note
     int    arpSounding = -1;   // MIDI note currently sounding (-1 = none / rest)
     std::atomic<int> arpSoundingUi { -1 };   // UI mirror: the keyboard highlight lights THIS note as it fires
+    bool   arpRootHeld = false;  // the root key is PHYSICALLY down (Hold keeps the arp running after release)
+    long   arpNoteAge  = 0;      // samples since the last arp fire (drives the Gate cut)
     // Recorded TAKES (message thread only; PERSISTED in the plugin state, so presets keep them).
     // A take = the events of one loop pass (or one whole chain-mode session). Loading = clear the
     // channel in every pattern the take touches, then replay its events.

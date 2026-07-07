@@ -624,6 +624,15 @@ public:
     //   arpRate multiplies it: {1/3, 1/2, 1, 1.5, 2, 3}. Default 8 x 2 = classic 16ths.
     int    arpSync = 8;
     int    arpRate = 8;                       // index into the multiplier table; 8 = x2
+    //   arpAlign = while the TRANSPORT plays, phase-lock the arp's steps to the bar grid (press mid-cell
+    //   and the next notes land ON the groove); stopped = free-run from the keypress. Default ON.
+    //   arpHold  = LATCH: releasing the key keeps the arp looping; press the same key again (or turn
+    //   Hold/Arp off) to stop; a different key re-roots it live.
+    //   arpGate  = note length as a fraction of one arp step (0.1..1): 1 = ring until the next note
+    //   (the old behaviour, bit-identical); lower = staccato (key-up after that fraction, authored release).
+    bool   arpAlign = true;
+    bool   arpHold  = false;
+    float  arpGate  = 1.0f;
     static constexpr int ARP_SYNCS[6] = { 7, 8, 9, 10, 11, 13 };   // the fader's detents
     static int arpSnapSync(int v)             // snap to the nearest fader detent (tie -> lower)
     {

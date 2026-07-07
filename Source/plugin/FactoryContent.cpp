@@ -1311,6 +1311,7 @@ static void resetAll(Sequencer& s)
             ch.keysSlot2Down = 0;   // KEYS slot-2 transpose (channel-wide) is preset-level too
             ch.humanizeAmt = 0.0f; ch.strumAmt = 0.0f; ch.keysMinVel = 0.0f; ch.keysMaxVel = 1.0f; ch.keysGlide = 0.0f;   // HUMANIZE / STRUM / vel range / GLIDE reset
             { DC d; ch.arpOn = d.arpOn; ch.arpLen = d.arpLen; ch.arpSync = d.arpSync; ch.arpRate = d.arpRate;
+              ch.arpAlign = d.arpAlign; ch.arpHold = d.arpHold; ch.arpGate = d.arpGate;
               for (int ai = 0; ai < DC::ARP_ROWS; ++ai) ch.arpOffset[ai] = d.arpOffset[ai]; }   // ARP reset
             ch.keysPolyMode = true;    // keys POLY by default
             ch.mixName = {}; ch.mixModified = false;

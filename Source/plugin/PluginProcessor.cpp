@@ -427,6 +427,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
               arpSoundingUi.store(-1, std::memory_order_relaxed); return; }
             arpKc.keyDown(note, arpVel, arpKc.keysSlot2Down, false);   // mono arp note
             arpSounding = note;
+            arpNoteAge = 0;                                            // fresh note: the Gate countdown restarts
             arpSoundingUi.store(note, std::memory_order_relaxed);      // the keyboard highlight follows this live
             if (rec && drawRec && (sequencer.isCurrentlyPlaying || arpKicked))   // capture the arp into the piano roll
             {
@@ -440,6 +441,19 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         auto startArp = [&](int note, float vel)
         {
             arpRoot = note; arpVel = vel; arpChan = chIdx; arpStep = 0; arpAcc = 0.0; arpSounding = -1;
+            arpRootHeld = true;
+            // ALIGN: while the transport plays, phase the accumulator so the NEXT note lands exactly on
+            // the next bar-grid boundary (press mid-cell -> the riff locks onto the groove; the root
+            // still fires immediately). Both clocks advance by the same sample count = no drift.
+            if (arpKc.arpAlign && sequencer.isCurrentlyPlaying)
+            {
+                const double npb = (double) juce::jmax(1, arpKc.arpSync) * DrumChannel::arpRateMul(arpKc.arpRate);
+                const double barSec = (60.0 / juce::jmax(1.0, currentBpm)) * juce::jmax(1, currentTimeSigNum)
+                                      * (4.0 / juce::jmax(1, currentTimeSigDen));
+                const double noteSamp = juce::jmax(1.0, barSec / npb * currentSampleRate);
+                const double pos = sequencer.barPos() * npb;
+                arpAcc = (pos - std::floor(pos)) * noteSamp;   // already this far INTO the current grid cell
+            }
             keysHeldNote.store(note, std::memory_order_relaxed); keysHeldVel.store(vel, std::memory_order_relaxed);
             const int n = note & 0x7f;   // light the root in the held mask so the keyboard highlight shows the arp keys
             keysHeldMaskLo.store(n < 64 ? (1ULL << (n & 63)) : 0ULL, std::memory_order_relaxed);
@@ -459,6 +473,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         {
             if (arpKc.arpOn)   // ARP owns the note: it generates the riff from this root
             {
+                if (arpKc.arpHold && ! arpRootHeld && note == arpRoot) { stopArp(); return; }   // latched: same key again = stop
                 // "First key starts recording" works for the arp too: kick the transport (own transport
                 // only), and let fireArp stamp the kicked note at column 0 (isCurrentlyPlaying only turns
                 // true NEXT block - same regression the normal path fixed with its `kicked` flag).
@@ -530,7 +545,11 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         };
         auto handleKeyUp = [&](int note)
         {
-            if (arpKc.arpOn) { if (note == arpRoot) stopArp(); return; }   // release the root -> stop the arp
+            if (arpKc.arpOn)
+            {   // release the root: stop - unless HOLD latches the arp (it keeps looping; re-press stops it)
+                if (note == arpRoot) { arpRootHeld = false; if (! arpKc.arpHold) stopArp(); }
+                return;
+            }
             auto& kc = sequencer.patterns[keyPat].channels[chIdx];
             // Remove from the held stack wherever it sits (poly releases arrive in any order),
             // capturing this key's OPEN piano-roll note (if recording) to close it below.
@@ -616,18 +635,27 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         // runs whether the transport plays or not); the phase started at the keypress ("from the top").
         if (arpRoot >= 0 && arpChan == chIdx && arpKc.arpOn)
         {
-            const double barSec = (60.0 / juce::jmax(1.0, currentBpm)) * juce::jmax(1, currentTimeSigNum)
-                                  * (4.0 / juce::jmax(1, currentTimeSigDen));
-            const double noteSec = barSec / ((double) juce::jmax(1, arpKc.arpSync)   // the arp's OWN grid (Notes/bar fader)
-                                             * DrumChannel::arpRateMul(arpKc.arpRate));   // x the Rate multiplier
-            const double noteSamp = juce::jmax(1.0, noteSec * currentSampleRate);
-            arpAcc += (double) numSamples;
-            int guard = 0;
-            while (arpAcc >= noteSamp && guard++ < 128)
+            if (! arpKc.arpHold && ! arpRootHeld) stopArp();   // Hold was switched OFF while latched
+            else
             {
-                arpAcc -= noteSamp;
-                arpStep = (arpStep + 1) % juce::jmax(1, arpKc.arpLen);
-                fireArp(arpStep);
+                const double barSec = (60.0 / juce::jmax(1.0, currentBpm)) * juce::jmax(1, currentTimeSigNum)
+                                      * (4.0 / juce::jmax(1, currentTimeSigDen));
+                const double noteSec = barSec / ((double) juce::jmax(1, arpKc.arpSync)   // the arp's OWN grid (Notes/bar fader)
+                                                 * DrumChannel::arpRateMul(arpKc.arpRate));   // x the Rate multiplier
+                const double noteSamp = juce::jmax(1.0, noteSec * currentSampleRate);
+                // GATE: cut the ringing note after that fraction of the step (1.0 = never = old behaviour)
+                if (arpSounding >= 0 && arpKc.arpGate < 0.999f
+                    && (double) (arpNoteAge + numSamples) >= noteSamp * (double) juce::jlimit(0.1f, 1.0f, arpKc.arpGate))
+                { arpKc.keyUp(arpSounding); arpSounding = -1; arpSoundingUi.store(-1, std::memory_order_relaxed); }
+                arpNoteAge += numSamples;
+                arpAcc += (double) numSamples;
+                int guard = 0;
+                while (arpAcc >= noteSamp && guard++ < 128)
+                {
+                    arpAcc -= noteSamp;
+                    arpStep = (arpStep + 1) % juce::jmax(1, arpKc.arpLen);
+                    fireArp(arpStep);
+                }
             }
         }
         else if (arpRoot >= 0 && ! arpKc.arpOn) stopArp();   // arp switched off while a key was held
@@ -1478,7 +1506,10 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
     chState.setProperty("arpOn",   ch.arpOn,   nullptr);            // ARP: on/off
     chState.setProperty("arpLen",  ch.arpLen,  nullptr);            // ARP: pattern length incl. root
     chState.setProperty("arpSync", ch.arpSync, nullptr);            // ARP: base notes-per-bar (fader 7..13)
-    chState.setProperty("arpRate", ch.arpRate, nullptr);            // ARP: rate multiplier index (1/3..3)
+    chState.setProperty("arpRate", ch.arpRate, nullptr);            // ARP: rate multiplier index
+    chState.setProperty("arpAlign", ch.arpAlign, nullptr);          // ARP: phase-lock to the bar while playing
+    chState.setProperty("arpHold",  ch.arpHold,  nullptr);          // ARP: latch after key release
+    chState.setProperty("arpGate",  ch.arpGate,  nullptr);          // ARP: note length fraction of a step
     { juce::String ao; for (int i = 0; i < DrumChannel::ARP_ROWS; ++i) ao << (int) ch.arpOffset[i] << ',';
       chState.setProperty("arpOff", ao, nullptr); }                 // ARP: 12 row offsets (ARP_REST = rest)
     chState.setProperty("keysPoly",   ch.keysPolyMode, nullptr);   // KEYS: poly (held keys stack) vs mono (new key cuts)
@@ -1639,6 +1670,9 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
     ch.arpLen  = juce::jlimit(1, 1 + DrumChannel::ARP_ROWS, (int) child.getProperty("arpLen", 2));
     ch.arpSync = DrumChannel::arpSnapSync((int) child.getProperty("arpSync", 8));
     ch.arpRate = juce::jlimit(0, DrumChannel::ARP_RATES - 1, (int) child.getProperty("arpRate", 8));
+    ch.arpAlign = (bool) child.getProperty("arpAlign", true);
+    ch.arpHold  = (bool) child.getProperty("arpHold", false);
+    ch.arpGate  = juce::jlimit(0.1f, 1.0f, (float) child.getProperty("arpGate", 1.0f));
     { const juce::String ao = child.getProperty("arpOff", "").toString();
       if (ao.isNotEmpty()) { auto f = juce::StringArray::fromTokens(ao, ",", "");
         for (int i = 0; i < DrumChannel::ARP_ROWS && i < f.size(); ++i)
