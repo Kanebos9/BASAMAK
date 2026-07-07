@@ -3389,7 +3389,6 @@ void VoiceModDisplay::paint(juce::Graphics& g)
     const int n = uniOn ? curUni() : 1;
     const float spread  = uniOn ? det * q.hh * 0.85f : 0.0f;
     const float vibAmp  = vibOn ? vib * q.hh * 0.30f : 0.0f;
-    const int   W = juce::jmax(2, (int) (q.right - q.left));
     // pan: -1 (hard left) .. +1 (hard right). The line's HORIZONTAL SPAN moves with it: a panned
     // voice occupies only its side of the box (full width at pan 0 = the old look), so at high Width
     // the lines visibly FAN out across the stereo field instead of just changing colour.
@@ -3413,7 +3412,12 @@ void VoiceModDisplay::paint(juce::Graphics& g)
     if (stacked) for (int k = 0; k < n; ++k) maxSemi = juce::jmax(maxSemi, scaleOn ? uiScaleSemis(scaleType, k) : uiChordSemis(chord, k));
     const float availUp = q.upRange;
     for (int k = 0; k < n; ++k) {
-        float off = (n > 1) ? (-spread + 2.0f * spread * (float) k / (float)(n - 1)) : 0.0f;
+        // sp = this voice's REAL detune position (the DSP's law: 0 = symmetric, 1 = all sharp,
+        // 2 = all flat). It drives BOTH the line height (up = sharper) and the stereo pan below,
+        // so the picture matches the sound: flat voices sit low-LEFT, sharp voices high-RIGHT.
+        const float fr = (n > 1) ? (float) k / (float)(n - 1) : 0.0f;
+        const float sp = (n > 1) ? ((mode == 1) ? fr : (mode == 2) ? -fr : (2.0f * fr - 1.0f)) : 0.0f;
+        float off = -sp * spread;
         const int voiceSemi = scaleOn ? uiScaleSemis(scaleType, k) : (chord > 0 ? uiChordSemis(chord, k) : 0);
         if (stacked)   // chord/scale: the lines sit at their chord notes (root on the low line, going up)
             off = -(float) voiceSemi / (float) maxSemi * availUp + off * 0.15f;
@@ -3423,7 +3427,7 @@ void VoiceModDisplay::paint(juce::Graphics& g)
         float p = 0.0f;
         juce::Colour vc = juce::Colour(isRoot ? 0xff35c0ff : 0x9935c0ff);
         if (uniWidth > 0.001f && n > 1) {
-            p = (2.0f * (float) k / (float)(n - 1) - 1.0f) * uniWidth;   // -1 (L) .. +1 (R)
+            p = sp * uniWidth;   // -1 (hard left) .. +1 (hard right), same sign as the pitch offset
             vc = vc.interpolatedWith(p < 0.0f ? juce::Colour(0xff4a7fff) : juce::Colour(0xffff9f43),
                                      juce::jlimit(0.0f, 1.0f, std::abs(p)) * 0.7f);
         }
