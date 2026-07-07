@@ -422,14 +422,15 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         {
             const int note = DrumChannel::arpNoteAt(arpKc.arpOffset, arpKc.arpLen, arpRoot, step);
             if (note < 0)   // rest row: silence whatever is ringing, play nothing
-            { if (arpSounding >= 0) { arpKc.keyUp(arpSounding); arpSounding = -1; } return; }
+            { if (arpSounding >= 0) { arpKc.keyUp(arpSounding); arpSounding = -1; }
+              arpSoundingUi.store(-1, std::memory_order_relaxed); return; }
             arpKc.keyDown(note, arpVel, arpKc.keysSlot2Down, false);   // mono arp note
             arpSounding = note;
+            arpSoundingUi.store(note, std::memory_order_relaxed);      // the keyboard highlight follows this live
             if (rec && drawRec && sequencer.isCurrentlyPlaying)        // capture the arp into the piano roll
             {
-                const int nSt = juce::jmax(1, arpKc.numSteps);
-                const double rm = DrumChannel::arpRateMul(arpKc.arpRate);
-                const int colLen = juce::jmax(1, (int) ((double) DrumChannel::DRAW_RES / (double) nSt / rm));
+                const int colLen = juce::jmax(1, (int) ((double) DrumChannel::DRAW_RES
+                                                        / ((double) juce::jmax(1, arpKc.arpSync) * DrumChannel::arpRateMul(arpKc.arpRate))));
                 const int col = juce::jlimit(0, DrumChannel::DRAW_RES - 1, (int) (sequencer.barPos() * DrumChannel::DRAW_RES));
                 sequencer.patterns[sequencer.playPattern].channels[chIdx].addDrawNote(col, colLen, note - 60,
                                                                                       (int) std::lround(arpVel * 255.0f));
@@ -448,6 +449,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         {
             if (arpSounding >= 0 && arpChan >= 0) sequencer.patterns[keyPat].channels[arpChan].keyUp(arpSounding);
             arpRoot = -1; arpSounding = -1; arpChan = -1;
+            arpSoundingUi.store(-1, std::memory_order_relaxed);
             keysHeldNote.store(-1, std::memory_order_relaxed);
             keysHeldMaskLo.store(0, std::memory_order_relaxed); keysHeldMaskHi.store(0, std::memory_order_relaxed);
         };
@@ -607,10 +609,10 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         // runs whether the transport plays or not); the phase started at the keypress ("from the top").
         if (arpRoot >= 0 && arpChan == chIdx && arpKc.arpOn)
         {
-            const int nSteps = juce::jmax(1, arpKc.numSteps);
             const double barSec = (60.0 / juce::jmax(1.0, currentBpm)) * juce::jmax(1, currentTimeSigNum)
                                   * (4.0 / juce::jmax(1, currentTimeSigDen));
-            const double noteSec = (barSec / (double) nSteps) / DrumChannel::arpRateMul(arpKc.arpRate);
+            const double noteSec = barSec / ((double) juce::jmax(1, arpKc.arpSync)   // the arp's OWN grid (Notes/bar fader)
+                                             * DrumChannel::arpRateMul(arpKc.arpRate));   // x the Rate multiplier
             const double noteSamp = juce::jmax(1.0, noteSec * currentSampleRate);
             arpAcc += (double) numSamples;
             int guard = 0;
@@ -1468,7 +1470,8 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
     chState.setProperty("keysGlide",  ch.keysGlide,    nullptr);   // KEYS: mono legato glide (portamento) time
     chState.setProperty("arpOn",   ch.arpOn,   nullptr);            // ARP: on/off
     chState.setProperty("arpLen",  ch.arpLen,  nullptr);            // ARP: pattern length incl. root
-    chState.setProperty("arpRate", ch.arpRate, nullptr);            // ARP: rate index (1/3..3)
+    chState.setProperty("arpSync", ch.arpSync, nullptr);            // ARP: base notes-per-bar (fader 7..13)
+    chState.setProperty("arpRate", ch.arpRate, nullptr);            // ARP: rate multiplier index (1/3..3)
     { juce::String ao; for (int i = 0; i < DrumChannel::ARP_ROWS; ++i) ao << (int) ch.arpOffset[i] << ',';
       chState.setProperty("arpOff", ao, nullptr); }                 // ARP: 12 row offsets (ARP_REST = rest)
     chState.setProperty("keysPoly",   ch.keysPolyMode, nullptr);   // KEYS: poly (held keys stack) vs mono (new key cuts)
@@ -1627,7 +1630,8 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
     ch.keysGlide   = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("keysGlide",  0.0f)); // KEYS mono glide
     ch.arpOn   = (bool) child.getProperty("arpOn", false);
     ch.arpLen  = juce::jlimit(1, 1 + DrumChannel::ARP_ROWS, (int) child.getProperty("arpLen", 2));
-    ch.arpRate = juce::jlimit(0, 4, (int) child.getProperty("arpRate", 2));
+    ch.arpSync = DrumChannel::arpSnapSync((int) child.getProperty("arpSync", 8));
+    ch.arpRate = juce::jlimit(0, 5, (int) child.getProperty("arpRate", 4));
     { const juce::String ao = child.getProperty("arpOff", "").toString();
       if (ao.isNotEmpty()) { auto f = juce::StringArray::fromTokens(ao, ",", "");
         for (int i = 0; i < DrumChannel::ARP_ROWS && i < f.size(); ++i)

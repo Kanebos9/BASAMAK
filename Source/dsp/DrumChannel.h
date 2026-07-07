@@ -618,9 +618,21 @@ public:
     int8_t arpOffset[ARP_ROWS] = { 12, ARP_REST, ARP_REST, ARP_REST, ARP_REST, ARP_REST,
                                    ARP_REST, ARP_REST, ARP_REST, ARP_REST, ARP_REST, ARP_REST };  // default: root + octave
     int    arpLen  = 2;         // pattern length INCLUDING the root (1..1+ARP_ROWS); default root + row 1
-    int    arpRate = 2;         // index into the rate table {1/3,1/2,1,2,3}; 2 = x1 (one note per step)
-    static double arpRateMul(int idx)         // notes-per-step multiplier
-    { static const double t[5] = { 1.0/3.0, 1.0/2.0, 1.0, 2.0, 3.0 }; return t[juce::jlimit(0, 4, idx)]; }
+    //   arpSync = the arp's BASE grid (the "Notes/bar" fader): how many notes fill one bar at Rate x1.
+    //   Its OWN value (not the channel's numSteps) so it stays meaningful in Piano Roll mode. The odd
+    //   entries (7/9/11/13) give polyrhythmic grids; 12/16/24 are reached via Rate (e.g. 8 x 2 = 16).
+    //   arpRate multiplies it: {1/3, 1/2, 1, 1.5, 2, 3}. Default 8 x 2 = classic 16ths.
+    int    arpSync = 8;
+    int    arpRate = 4;                       // index into the multiplier table; 4 = x2
+    static constexpr int ARP_SYNCS[6] = { 7, 8, 9, 10, 11, 13 };   // the fader's detents
+    static int arpSnapSync(int v)             // snap to the nearest fader detent (tie -> lower)
+    {
+        int best = 8, bd = 1 << 30;
+        for (int c : ARP_SYNCS) { const int d = std::abs(c - v); if (d < bd) { bd = d; best = c; } }
+        return best;
+    }
+    static double arpRateMul(int idx)         // the Rate button's multiplier
+    { static const double t[6] = { 1.0/3.0, 1.0/2.0, 1.0, 1.5, 2.0, 3.0 }; return t[juce::jlimit(0, 5, idx)]; }
     // The MIDI note for arp step `step` (0 = root, 1.. = the offset rows), looping within `len`.
     // Returns -1 for a REST row. Shared by the engine (processor) and the offline test.
     static int arpNoteAt(const int8_t* offsets, int len, int root, int step)

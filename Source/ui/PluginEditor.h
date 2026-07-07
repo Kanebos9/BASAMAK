@@ -521,25 +521,47 @@ public:
     bool   on   = false;
     int8_t off[DrumChannel::ARP_ROWS];
     int    len  = 2;     // pattern length INCLUDING the root (1 + rows)
-    int    rate = 2;     // index into {1/3,1/2,1,2,3}; 2 = x1
+    int    sync = 8;     // the Notes/bar fader (7/8/9/10/11/13) - the BASE grid
+    int    rate = 4;     // Rate multiplier index {x1/3, x1/2, x1, x1.5, x2, x3}; 4 = x2
+    juce::Component* clickIgnore = nullptr;   // the Arp button: its own click toggles the popup
     std::function<void()> onChange;    // push these back onto the channel (+ mark modified)
     ArpEditor() { for (auto& o : off) o = DrumChannel::ARP_REST; }
+    ~ArpEditor() override;
     void paint(juce::Graphics&) override;
     void mouseDown(const juce::MouseEvent&) override;
     void mouseDrag(const juce::MouseEvent&) override;
     void mouseDoubleClick(const juce::MouseEvent&) override;
     void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
-    static constexpr int UI_COLS = 6, UI_ROWS = 2, TOPH = 26;
+    void visibilityChanged() override;        // (un)hooks the click-outside closer
+    static constexpr int UI_COLS = 6, UI_ROWS = 2, TOPH = 36;
 private:
-    int dragCell = -1;
+    // Clicking ANYWHERE outside the popup closes it, like a real dropdown (global mouse listener,
+    // hooked only while visible; the Arp button is exempt - its own click toggles).
+    struct Closer : juce::MouseListener
+    {
+        ArpEditor& ed; explicit Closer(ArpEditor& e) : ed(e) {}
+        void mouseDown(const juce::MouseEvent& e) override
+        {
+            if (! ed.isVisible()) return;
+            const auto p = e.getScreenPosition();
+            if (ed.getScreenBounds().contains(p)) return;
+            if (ed.clickIgnore != nullptr && ed.clickIgnore->getScreenBounds().contains(p)) return;
+            ed.setVisible(false);
+        }
+    };
+    Closer closer { *this };
+    bool closerHooked = false;
+    int  dragCell = -1;
+    bool dragFader = false;
     void bump(int i, int d)   // nudge row i by d semitones (a REST cell lands on 0 first), extend length
     { if (i < 0) return; int v = (off[i] == DrumChannel::ARP_REST) ? 0 : (int) off[i] + d;
       off[i] = (int8_t) juce::jlimit(-24, 24, v); if (i + 2 > len) len = i + 2; if (onChange) onChange(); repaint(); }
-    juce::Rectangle<int> onRect()   const { return { 6, 4, 46, TOPH - 8 }; }
-    juce::Rectangle<int> rateRect() const { return { 56, 4, 74, TOPH - 8 }; }
-    juce::Rectangle<int> lenDnRect() const { return { getWidth() - 108, 4, 22, TOPH - 8 }; }
-    juce::Rectangle<int> lenValRect() const { return { getWidth() - 86, 4, 56, TOPH - 8 }; }
-    juce::Rectangle<int> lenUpRect() const { return { getWidth() - 30, 4, 22, TOPH - 8 }; }
+    juce::Rectangle<int> onRect()    const { return { 6, 6, 46, TOPH - 12 }; }
+    juce::Rectangle<int> rateRect()  const { return { 58, 6, 66, TOPH - 12 }; }
+    juce::Rectangle<int> faderRect() const { return { 130, 4, getWidth() - 130 - 136, TOPH - 8 }; }
+    juce::Rectangle<int> lenDnRect() const { return { getWidth() - 130, 6, 22, TOPH - 12 }; }
+    juce::Rectangle<int> lenValRect()const { return { getWidth() - 106, 6, 70, TOPH - 12 }; }
+    juce::Rectangle<int> lenUpRect() const { return { getWidth() - 34, 6, 22, TOPH - 12 }; }
     juce::Rectangle<int> cellRect(int i) const
     { const int r = i / UI_COLS, c = i % UI_COLS;
       const int gw = getWidth(), gh = getHeight() - TOPH;
@@ -1531,6 +1553,7 @@ private:
     void refreshKeysPanel();
     void updateKeyboardHighlight();   // light up the keys the held note voices (slot 1 yellow / slot 2 pink)
     uint64_t keysHighlightMaskLo = ~0ULL, keysHighlightMaskHi = ~0ULL;   // last held-note mask tinted for (~0 = force first update)
+    int keysHighlightArpNote = -2;   // last arp note tinted for (the highlight FOLLOWS the arp live; -2 = force)
     // Host-frozen detector: if processHeartbeat stops moving (~1 s), the host isn't sending us
     // audio - the Play tooltip flips to a "Not playing?" explanation (see timerCallback).
     uint32_t lastHeartbeat = 0; int heartbeatStaleTicks = 0; bool hostFrozen = false;

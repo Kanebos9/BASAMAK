@@ -31,11 +31,11 @@ int main() {
         printf("[1] steps: %d %d %d %d (wrap %d) -> %s\n", s0, s1, s2, s3, s4,
                CHK(s0==60 && s1==67 && s2==-1 && s3==72 && s4==60) ? "root/offset/REST/wrap OK" : "FAIL");
     }
-    {   // [2] rate table 1/3, 1/2, 1, 2, 3
-        printf("[2] rates: %.3f %.3f %.1f %.1f %.1f -> %s\n",
-               DC::arpRateMul(0), DC::arpRateMul(1), DC::arpRateMul(2), DC::arpRateMul(3), DC::arpRateMul(4),
-               CHK(std::abs(DC::arpRateMul(0)-1.0/3)<1e-6 && DC::arpRateMul(2)==1.0 && DC::arpRateMul(4)==3.0)
-               ? "OK" : "FAIL");
+    {   // [2] Notes/bar fader snap onto {7,8,9,10,11,13} (nearest; tie -> lower) + the Rate table
+        printf("[2] snap: 8->%d 12->%d 6->%d 100->%d | rate x1.5=%.1f -> %s\n",
+               DC::arpSnapSync(8), DC::arpSnapSync(12), DC::arpSnapSync(6), DC::arpSnapSync(100), DC::arpRateMul(3),
+               CHK(DC::arpSnapSync(8)==8 && DC::arpSnapSync(12)==11 && DC::arpSnapSync(6)==7
+                   && DC::arpSnapSync(100)==13 && std::abs(DC::arpRateMul(3)-1.5)<1e-9) ? "OK" : "FAIL");
     }
     {   // [3] an arp note (root + offset) rendered via keyDown plays the right pitch: root C3 + 7 = G3
         DrumChannel ch;
