@@ -407,6 +407,7 @@ public:
         float oscWarp = 0.0f;            // wave WARP = one-way wavefold (0 = off/clean, 1 = max fold)
         float oscFreq = 60.0f, oscPEnvAmt = 0.0f, oscPEnvTime = 0.04f, oscPOffset = 0.0f;
         int   oscUnison = 1; float oscDetune = 0.0f; bool oscUniCenter = false;   // dry/centre voice alongside detuned copies
+        float uniSpread = 0.0f;   // STEREO WIDTH: unison/chord voices pan across the field (0 = mono = bit-identical)
         int   oscDetuneMode = 0;         // detune direction: 0 = symmetric (both ways), 1 = up only (sharp), 2 = down only (flat)
         int   chordMode = 0;             // 0 = STD (detuned copies); 1-7 = chord types (Oct/5th/Maj/Min/Sus4/Maj7/Min7) - Osc/Modal/Physical
         int   chordUnison = 3;           // unison count used in CHORD mode (SEPARATE from oscUnison so STD + CHORD don't share)

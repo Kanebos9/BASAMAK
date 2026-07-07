@@ -953,10 +953,10 @@ class VoiceModDisplay : public juce::Component, public juce::SettableTooltipClie
 {
 public:
     static constexpr int kMaxUni = 7;
-    void setValues(int unison, int chordUnison, int scaleUnison, float detune, float vibrato, bool centre, int detuneMode, int chordMode, bool scaleOn, int scaleType, int scaleKey);
+    void setValues(int unison, int chordUnison, int scaleUnison, float detune, float vibrato, bool centre, int detuneMode, int chordMode, bool scaleOn, int scaleType, int scaleKey, float uniSpread = 0.0f);
     void setSupport(bool uniSupported, bool vibSupported, juce::String naReason);
     void setMaxUni(int m) { const int c = juce::jlimit(1, kMaxUni, m); if (c == maxUni) return; maxUni = c; if (uni > maxUni) uni = maxUni; if (uniChord > maxUni) uniChord = maxUni; if (uniScale > maxUni) uniScale = maxUni; repaint(); }  // per-engine unison cap
-    std::function<void(int unison, float detune, float vibrato, bool centre, int detuneMode, int chordMode, bool scaleOn, int scaleType, int scaleKey)> onChange;
+    std::function<void(int unison, float detune, float vibrato, bool centre, int detuneMode, int chordMode, bool scaleOn, int scaleType, int scaleKey, float uniSpread)> onChange;
     std::function<void()> onDragEnd;                              // released after editing (for auto-audition)
     void paint(juce::Graphics& g) override;
     void mouseDown(const juce::MouseEvent& e) override;
@@ -972,6 +972,7 @@ private:
     int   uniScale = 3;   // SCALE-mode voice count (chord size for the diatonic harmonizer)
     int   curUni() const { return scaleOn ? uniScale : chord > 0 ? uniChord : uni; }   // the ACTIVE mode's count
     float det = 0.0f, vib = 0.0f;
+    float spread = 0.0f;   // stereo WIDTH of the unison/chord voices (bottom-left mini bar)
     bool  centre = false;          // also play the original/undetuned pitch (toggled by double-click on Detune)
     int   mode = 0;                // detune direction: 0 = symmetric (drag right), 1 = up (drag up), 2 = down (drag down)
     bool  uniOn = true, vibOn = true;
@@ -989,7 +990,8 @@ private:
                  float rangeX, rangeY, dPtX, dPtY, rootY, upRange, uniTop; };   // rootY = root line; upRange = room above it; uniTop = unison-dot ceiling (below the chips)
     Geo  geom() const;
     int  nearestHandle(juce::Point<float> p) const;
-    void emit() { if (onChange) onChange(curUni(), det, vib, centre, mode, emitChord, emitScaleOn, emitScaleType, emitScaleKey); }
+    juce::Rectangle<float> widthRect() const { return { 6.0f, (float) getHeight() - 15.0f, 86.0f, 11.0f }; }
+    void emit() { if (onChange) onChange(curUni(), det, vib, centre, mode, emitChord, emitScaleOn, emitScaleType, emitScaleKey, spread); }
 };
 
 //==============================================================================

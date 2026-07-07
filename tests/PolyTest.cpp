@@ -62,5 +62,26 @@ int main() {
         printf("[3] mono handover: C=%.3f G=%.3f -> %s\n", c3, g3,
                CHK(g3 > 0.05 && c3 < g3 * 0.15) ? "old note cut (MONO OK)" : "FAIL");
     }
+    {   // [4] UNISON STEREO WIDTH: spread 1 -> L and R differ; spread 0 -> mono (identical sides)
+        auto sideRms = [&](DrumChannel& ch) {
+            juce::AudioBuffer<float> buf(2, bs);
+            double e = 0; int n = 0;
+            for (int b = 0; b < (int)(0.3*SR/bs)+1; ++b) {
+                buf.clear(); ch.renderInto(buf, 0, bs, false);
+                for (int i = 0; i < bs; ++i) { const double d = buf.getSample(0,i) - buf.getSample(1,i); e += d*d; ++n; }
+            }
+            return std::sqrt(e / juce::jmax(1, n));
+        };
+        DrumChannel chW; setupKeys(chW);
+        chW.slots[0].oscUnison = 5; chW.slots[0].oscDetune = 0.4f; chW.slots[0].uniSpread = 1.0f;
+        chW.prepareToPlay(SR, bs); chW.keyDown(60, 1.0f, 0, false);
+        const double wide = sideRms(chW);
+        DrumChannel chM; setupKeys(chM);
+        chM.slots[0].oscUnison = 5; chM.slots[0].oscDetune = 0.4f; chM.slots[0].uniSpread = 0.0f;
+        chM.prepareToPlay(SR, bs); chM.keyDown(60, 1.0f, 0, false);
+        const double mono = sideRms(chM);
+        printf("[4] unison width: side RMS spread1=%.4f spread0=%.6f -> %s\n", wide, mono,
+               CHK(wide > 0.01 && mono < 1e-6) ? "WIDE vs MONO (OK)" : "FAIL");
+    }
     return fails;
 }

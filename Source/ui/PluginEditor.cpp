@@ -3250,12 +3250,13 @@ static inline int uiScaleSemis(int scaleType, int k) {
     return (int) S[idx] + 12 * oct;
 }
 
-void VoiceModDisplay::setValues(int unison, int chordUnison, int scaleUnison, float detune, float vibrato, bool centreOn, int detuneMode, int chordMode, bool scaleOnIn, int scaleTypeIn, int scaleKeyIn)
+void VoiceModDisplay::setValues(int unison, int chordUnison, int scaleUnison, float detune, float vibrato, bool centreOn, int detuneMode, int chordMode, bool scaleOnIn, int scaleTypeIn, int scaleKeyIn, float uniSpreadIn)
 {
     uni = juce::jlimit(1, maxUni, unison);
     uniChord = juce::jlimit(1, maxUni, chordUnison);
     uniScale = juce::jlimit(1, maxUni, scaleUnison);
     det = juce::jlimit(0.0f, 1.0f, detune);
+    spread = juce::jlimit(0.0f, 1.0f, uniSpreadIn);
     vib = juce::jlimit(0.0f, 1.0f, vibrato);
     centre = centreOn;
     mode = juce::jlimit(0, 2, detuneMode);
@@ -3409,6 +3410,15 @@ void VoiceModDisplay::paint(juce::Graphics& g)
     // Mode chips: STD = detuned copies; CHORD = the unison voices become chord notes. When CHORD
     // is on, a third chip cycles the chord TYPE and shows the actual stacked intervals for the
     // current voice count, e.g. "Maj (+4,+3)".
+    if (uniOn) {   // STEREO WIDTH mini-fader (bottom-left): unison/chord voices fan across the field
+        auto wr = widthRect();
+        g.setColour(juce::Colour(0xff26264a)); g.fillRoundedRectangle(wr, 3.0f);
+        g.setColour(juce::Colour(0xff35c0ff).withAlpha(0.30f));
+        g.fillRoundedRectangle(wr.withWidth(juce::jmax(4.0f, spread * wr.getWidth())), 3.0f);
+        g.setColour(juce::Colour(0xffb8c4dc)); g.setFont(juce::Font(8.5f, juce::Font::bold));
+        g.drawText("Width " + juce::String(juce::roundToInt(spread * 100.0f)) + "%", wr.toNearestInt(),
+                   juce::Justification::centred, false);
+    }
     // (The UNISON/CHORD/SCALE chips are GONE - the visual is UNISON-only; the SCALE harmonizer is
     // edited in the SCALE box above the keyboard. chip[] stay empty so old hit-tests never fire.)
     for (auto& cp : chip) cp = {};
@@ -3483,11 +3493,17 @@ void VoiceModDisplay::mouseDown(const juce::MouseEvent& e)
             return;
         }
     }
+    if (uniOn && widthRect().expanded(2.0f).contains(e.position)) { drag = 4; mouseDrag(e); return; }
     drag = nearestHandle(e.position); if (drag >= 0) mouseDrag(e);
 }
 void VoiceModDisplay::mouseDrag(const juce::MouseEvent& e)
 {
     if (drag < 0) return;
+    if (drag == 4) {   // WIDTH mini-fader: horizontal drag
+        auto wr = widthRect();
+        spread = juce::jlimit(0.0f, 1.0f, (e.position.x - wr.getX()) / juce::jmax(1.0f, wr.getWidth()));
+        emit(); repaint(); return;
+    }
     const Geo q = geom();
     if (drag == 0) { int& tgt = scaleOn ? uniScale : (chord > 0) ? uniChord : uni; tgt = juce::jlimit(1, maxUni, 1 + juce::roundToInt((q.bottom - e.position.y) / juce::jmax(1.0f, q.bottom - q.uniTop) * (float)(maxUni - 1))); }
     else if (drag == 1) {
@@ -5283,7 +5299,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         h = mix(h, sl.engine); h = mix(h, f(sl.weight));
         h = mix(h, f(sl.atk)); h = mix(h, f(sl.hold)); h = mix(h, f(sl.dec)); h = mix(h, f(sl.sustain)); h = mix(h, f(sl.release)); h = mix(h, f(sl.vibrato));
         h = mix(h, sl.oscShape); h = mix(h, sl.oscShapeB); h = mix(h, f(sl.oscFreq)); h = mix(h, f(sl.oscPEnvAmt)); h = mix(h, f(sl.oscPEnvTime)); h = mix(h, f(sl.oscPOffset));
-        h = mix(h, sl.oscUnison); h = mix(h, f(sl.oscDetune)); h = mix(h, sl.oscUniCenter ? 1 : 0); h = mix(h, sl.oscDetuneMode); h = mix(h, sl.chordMode); h = mix(h, sl.chordUnison);
+        h = mix(h, sl.oscUnison); h = mix(h, f(sl.oscDetune)); h = mix(h, f(sl.uniSpread)); h = mix(h, sl.oscUniCenter ? 1 : 0); h = mix(h, sl.oscDetuneMode); h = mix(h, sl.chordMode); h = mix(h, sl.chordUnison);
         h = mix(h, sl.scaleOn ? 1 : 0); h = mix(h, sl.scaleType); h = mix(h, sl.scaleUnison); h = mix(h, sl.scaleKey);   // SCALE mode
         h = mix(h, sl.fxDriveType); h = mix(h, f(sl.fxDrive)); h = mix(h, f(sl.fxReverbSend)); h = mix(h, f(sl.fxDelaySend));
         h = mix(h, sl.noiseType); h = mix(h, f(sl.noiseCenter)); h = mix(h, f(sl.noiseWidth)); h = mix(h, f(sl.noiseRes)); h = mix(h, f(sl.noiseDrive)); h = mix(h, f(sl.noiseCrackle));
@@ -7636,11 +7652,12 @@ void DrumSequencerEditor::setupComponents()
     // Unison / Detune / Vibrato as an interactive VISUAL (like the amp/pitch env editors), editing the
     // selected slot. The 1/2/3 selector (slotSelPitch) above it chooses which slot.
     content.addAndMakeVisible(voiceMod);
-    voiceMod.onChange = [this](int u, float d, float v, bool centre, int detuneMode, int chordMode, bool scaleOn, int scaleType, int scaleKey) {
+    voiceMod.onChange = [this](int u, float d, float v, bool centre, int detuneMode, int chordMode, bool scaleOn, int scaleType, int scaleKey, float uniSpread) {
         if (ignoreKnobCallbacks) return;
         auto& sl = proc.sequencer.channel(selectedChannel).slots[envTargetSlot()];
         sl.oscUnison = u;   // the visual edits the STD count only now (the Scale count lives in the SCALE box)
         sl.oscDetune = d; sl.vibrato = v; sl.oscUniCenter = centre; sl.oscDetuneMode = detuneMode;
+        sl.uniSpread = uniSpread;   // STEREO WIDTH (0 = mono, bit-identical)
         sl.chordMode = chordMode;
         sl.scaleOn = scaleOn; sl.scaleType = scaleType; sl.scaleKey = scaleKey;   // SCALE (diatonic harmonizer)
         proc.sequencer.channel(selectedChannel).markDspDirty();
@@ -8932,7 +8949,7 @@ void DrumSequencerEditor::loadPitchAndVoice()
     // real strings, Modal = 4 banks, Oscillator = 7. (User: "up to 3 for physical but I can select
     // more" - now the handle stops at the real max.)
     voiceMod.setMaxUni((e == DrumChannel::SrcPhys || e == DrumChannel::SrcModal) ? 3 : 7);
-    voiceMod.setValues((int) sl.oscUnison, sl.chordUnison, sl.scaleUnison, sl.oscDetune, sl.vibrato, sl.oscUniCenter, sl.oscDetuneMode, sl.chordMode, sl.scaleOn, sl.scaleType, sl.scaleKey);
+    voiceMod.setValues((int) sl.oscUnison, sl.chordUnison, sl.scaleUnison, sl.oscDetune, sl.vibrato, sl.oscUniCenter, sl.oscDetuneMode, sl.chordMode, sl.scaleOn, sl.scaleType, sl.scaleKey, sl.uniSpread);
     voiceMod.setSupport(uniOn, vibOn, naReason);
 }
 

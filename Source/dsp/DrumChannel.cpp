@@ -551,6 +551,7 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("oSh", s.oscShape, nullptr); st.setProperty("oSB", s.oscShapeB, nullptr); st.setProperty("oFr", s.oscFreq, nullptr);
         st.setProperty("oEA", s.oscPEnvAmt, nullptr); st.setProperty("oET", s.oscPEnvTime, nullptr); st.setProperty("oOf", s.oscPOffset, nullptr);
         st.setProperty("oUn", s.oscUnison, nullptr); st.setProperty("oDt", s.oscDetune, nullptr);
+        st.setProperty("uniSp", s.uniSpread, nullptr);
         st.setProperty("chd", s.chordMode, nullptr); st.setProperty("chdU", s.chordUnison, nullptr);
         st.setProperty("scOn", s.scaleOn, nullptr); st.setProperty("scTy", s.scaleType, nullptr);
         st.setProperty("scUn", s.scaleUnison, nullptr); st.setProperty("scKy", s.scaleKey, nullptr);   // SCALE mode
@@ -630,6 +631,7 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         else if (! st.hasProperty("v5")) { s.oscShape = remapV4Shape(s.oscShape);    s.oscShapeB = remapV4Shape(s.oscShapeB); }     // brief 13-shape list
         s.oscPEnvAmt = (float)st.getProperty("oEA", d.oscPEnvAmt); s.oscPEnvTime = (float)st.getProperty("oET", d.oscPEnvTime); s.oscPOffset = (float)st.getProperty("oOf", d.oscPOffset);
         s.oscUnison = (int)st.getProperty("oUn", d.oscUnison); s.oscDetune = (float)st.getProperty("oDt", d.oscDetune);
+        s.uniSpread = (float)st.getProperty("uniSp", d.uniSpread);
         s.chordMode = (int) st.getProperty("chd", d.chordMode); s.chordUnison = (int) st.getProperty("chdU", d.chordUnison);
         s.scaleOn = (bool) st.getProperty("scOn", d.scaleOn); s.scaleType = (int) st.getProperty("scTy", d.scaleType);
         s.scaleUnison = (int) st.getProperty("scUn", d.scaleUnison); s.scaleKey = (int) st.getProperty("scKy", d.scaleKey);
@@ -1435,6 +1437,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         // === PER-SLOT EQ (end) ===
         // === PER-SLOT FILTER (begin) - resonant LP; raw params here, coeffs recomputed per BLOCK
         //     (env-follow) into 'filt' just before the voice loop; state lives per-voice ===
+        float  uniSpread = 0.0f; float uniPanL[UNI_MAX + 1] = {}, uniPanR[UNI_MAX + 1] = {};   // stereo WIDTH per voice (equal power)
         bool   filtOn = false; double filtCutoff = 1000; float filtReso = 0.707f, filtEnvAmt = 0;
         double filtG = 0.1, filtK = 1.414;   // TPT SVF targets: g = tan(pi*fc/sr), k = 1/Q
         // === PER-SLOT FILTER (end) ===
@@ -1483,6 +1486,19 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 c.oscWarp    = sl.oscWarp;
                 c.fmRatio    = 1.0f + (float) sl.fmSpread * 5.0f;
                 c.fmIndex    = sl.fmDepth * 12.0f;
+                c.uniSpread  = juce::jlimit(0.0f, 1.0f, sl.uniSpread);
+                for (int u = 0; u <= UNI_MAX; ++u)   // per-voice equal-power pan gains (same sp law as detune)
+                {
+                    float sp = 0.0f;
+                    if (u < c.uniVoices && c.uniVoices > 1)
+                    {
+                        const float fr = (float) u / (float)(c.uniVoices - 1);
+                        sp = (c.uniMode == 1) ? fr : (c.uniMode == 2) ? -fr : (2.0f * fr - 1.0f);
+                    }
+                    const float p = juce::jlimit(-1.0f, 1.0f, sp * c.uniSpread);
+                    c.uniPanL[u] = std::sqrt(0.5f * (1.0f - p));
+                    c.uniPanR[u] = std::sqrt(0.5f * (1.0f + p));
+                }
                 c.fmFeedback = sl.fmFeedback; c.fmSub = sl.fmSub;
                 c.fmEnvF     = sl.fmEnvFollow;
                 c.reson = false;   // resonator REMOVED from Analog+FM (use the standalone Physical engine instead)
@@ -1928,7 +1944,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             if (sv.fmMod > 2.0 * kPi) sv.fmMod -= 2.0 * kPi;
                         }
                         const bool fmActive = c.fmIndex > 0.0001f;
-                        float wsum = 0.0f;
+                        float wsum = 0.0f, wL = 0.0f, wR = 0.0f;
+                        const bool sprd = c.uniSpread > 0.001f && c.uniVoices > 1;   // STEREO WIDTH active
                         const int totalV = c.uniVoices + (c.uniCenter ? 1 : 0);   // +1 dry/centre voice
                         const float strumFade = juce::jmax(1.0f, 0.002f * (float) sr);   // 2 ms click-free fade-in per strummed note
                         for (int u = 0; u < totalV; ++u) {
@@ -1952,22 +1969,32 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             // FM active -> plain morphWave (matches the old FM engine exactly, no BLEP under
                             // phase modulation); FM off -> band-limited morphWaveBL (the clean analog path).
                             const double wph = sv.uniPhase[u];   // (Warp is now an output wavefold, applied below)
-                            wsum += gU * (fmActive ? morphWave(wph + fmAdd, pos)
-                                                   : morphWaveBL(wph, pos, dt));
+                            const float vout = gU * (fmActive ? morphWave(wph + fmAdd, pos)
+                                                              : morphWaveBL(wph, pos, dt));
+                            wsum += vout;
+                            if (sprd) { const int pu = juce::jmin(u, UNI_MAX);
+                                        wL += vout * c.uniPanL[pu]; wR += vout * c.uniPanR[pu]; }
                             sv.uniPhase[u] += 2.0 * kPi * freq * det / sr;
                             if (sv.uniPhase[u] > 2.0 * kPi) sv.uniPhase[u] -= 2.0 * kPi;
                         }
                         float oo = wsum * c.uniGain;
+                        float ooL = sprd ? wL * c.uniGain : 0.0f, ooR = sprd ? wR * c.uniGain : 0.0f;
+                        auto fold1 = [&](float x) { const float fd = std::sin(x * (1.0f + c.oscWarp * 4.0f) * 1.5707963f);
+                                                    return x + c.oscWarp * (fd - x); };
                         if (c.oscWarp > 0.001f) {                       // WARP = one-way wavefold (adds harmonics/grit)
-                            const float folded = std::sin(oo * (1.0f + c.oscWarp * 4.0f) * 1.5707963f);
-                            oo += c.oscWarp * (folded - oo);
+                            oo = fold1(oo);
+                            if (sprd) { ooL = fold1(ooL); ooR = fold1(ooR); }
                         }
-                        if (c.fmSub > 0.001f) {                         // sub-oscillator an octave down
-                            oo = oo * (1.0f - 0.4f * c.fmSub) + (float) std::sin(sv.fmSubPhase) * c.fmSub;
+                        if (c.fmSub > 0.001f) {                         // sub-oscillator an octave down (stays CENTRED)
+                            const float sub = (float) std::sin(sv.fmSubPhase) * c.fmSub;
+                            oo = oo * (1.0f - 0.4f * c.fmSub) + sub;
+                            if (sprd) { ooL = ooL * (1.0f - 0.4f * c.fmSub) + sub * 0.7071f;
+                                        ooR = ooR * (1.0f - 0.4f * c.fmSub) + sub * 0.7071f; }
                             sv.fmSubPhase += 2.0 * kPi * freq * fmRootMul * 0.5 / sr;
                             if (sv.fmSubPhase > 2.0 * kPi) sv.fmSubPhase -= 2.0 * kPi;
                         }
-                        sig = oo * env;   // Analog + FM only (the resonator was removed from this engine -> use Physical)
+                        sig = oo * env;   // Analog + FM only (mono path; Width builds sL/sR alongside)
+                        if (sprd) { sL = ooL * env; sR = ooR * env; stereo = true; }   // STEREO WIDTH
                         sv.sinePhase = sv.uniPhase[0];
                         break; }
                     case SrcNoise: {
