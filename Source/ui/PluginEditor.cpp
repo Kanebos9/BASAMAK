@@ -4020,13 +4020,12 @@ void TintKeyboard::drawWhiteNote(int n, juce::Graphics& g, juce::Rectangle<float
                                  bool isDown, bool isOver, juce::Colour line, juce::Colour text)
 {
     juce::MidiKeyboardComponent::drawWhiteNote(n, g, area, isDown, isOver, line, text);
-    if (splitMark && n == 60) {   // MERGE&SPLIT boundary: C4 = first key of the RIGHT half. Teal|orange
-        const auto r = area.reduced(0.5f);                     // divider at its left edge (the pair colours)
-        g.setColour(juce::Colour(0x2eff9f43)); g.fillRect(r);  // soft orange wash over the whole C4 key
-        g.setColour(juce::Colour(0xff3ec6a8)); g.fillRect(r.getX(),        r.getY(), 2.0f, r.getHeight());
-        g.setColour(juce::Colour(0xffff9f43)); g.fillRect(r.getX() + 2.0f, r.getY(), 2.0f, r.getHeight());
-    }
     const auto c = tint[n];
+    if (splitMark && n == 60 && c.getAlpha() == 0) {   // MERGE&SPLIT boundary: the WHOLE C4 key gets a
+        const auto r = area.reduced(0.5f);             // VIOLET shade (the merge colour - reddish is taken
+        g.setColour(juce::Colour(0x8ab46bff)); g.fillRect(r);   // by the C landmarks, tints by held keys)
+        g.setColour(juce::Colour(0xffb46bff)); g.drawRect(area, 1.5f);
+    }
     if (c.getAlpha() != 0) {                             // near-solid wash reads clearly on the white key
         g.setColour(c.withMultipliedAlpha(0.62f));
         g.fillRect(area.reduced(0.5f));
@@ -4037,7 +4036,7 @@ void TintKeyboard::drawWhiteNote(int n, juce::Graphics& g, juce::Rectangle<float
     }
     { // EVERY key gets its note name: BLACK on white keys (C keys bold as landmarks); faded when dimmed
         const bool isC = (n % 12) == 0;
-        if (isC && c.getAlpha() == 0)   // shade the whole C key softly (the common octave-landmark look);
+        if (isC && c.getAlpha() == 0 && ! (splitMark && n == 60))   // shade C keys softly (octave landmarks);
         {                               // tinted/held keys keep their highlight colour instead
             g.setColour(juce::Colour(dim[n] ? 0x0fb02020 : 0x1ab02020));
             g.fillRect(area.reduced(0.5f));
@@ -4284,6 +4283,12 @@ KeysPanel::KeysPanel()
     addAndMakeVisible(btnArp);
     btnArp.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
     addAndMakeVisible(btnGuide);
+    addAndMakeVisible(lblGuideCur);
+    lblGuideCur.setJustificationType(juce::Justification::centred);
+    lblGuideCur.setFont(juce::Font(11.0f, juce::Font::bold));
+    lblGuideCur.setMinimumHorizontalScale(0.6f);
+    lblGuideCur.setColour(juce::Label::textColourId, juce::Colour(0xffaebada));
+    lblGuideCur.setInterceptsMouseClicks(false, false);
     btnGuide.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
     addAndMakeVisible(scaleBox);
     addAndMakeVisible(splitBox);
@@ -4550,10 +4555,11 @@ void KeysPanel::resized()
         sw.setBounds(col.getCentreX() - 16, col.getY() + 4, 32, 18);
     };
     { auto col = strip.removeFromLeft(60);                                   // Poly / Arp / Guide: ONE column
-      lblPoly.setBounds(col.removeFromTop(15));
-      polySwitch.setBounds(col.getCentreX() - 16, col.getY() + 1, 32, 18);   // Poly toggle
-      btnArp.setBounds  (col.getCentreX() - 27, col.getY() + 24, 54, 18);    // Arp under it
-      btnGuide.setBounds(col.getCentreX() - 27, col.getY() + 47, 54, 18); }  // Key guide under that
+      lblPoly.setBounds(col.removeFromTop(13));
+      polySwitch.setBounds(col.getCentreX() - 16, col.getY(),      32, 16);  // Poly toggle
+      btnArp.setBounds  (col.getCentreX() - 27, col.getY() + 19, 54, 16);    // Arp under it
+      btnGuide.setBounds(col.getCentreX() - 27, col.getY() + 38, 54, 16);    // Key guide under that
+      lblGuideCur.setBounds(col.getX() - 3, col.getY() + 55, col.getWidth() + 6, 15); }   // its key+scale
     strip.removeFromLeft(8);
     // SCALE box rides in the SAME strip row, now FULL-HEIGHT down to the band bottom (user: use the space)
     scaleBox.setBounds(strip.getX(), strip.getY(), juce::jmax(150, strip.getWidth() - 2), 76);
@@ -4940,6 +4946,106 @@ static constexpr int ID_SEARCH_MIX      = 9992;  // type-to-find across sound na
 static constexpr int ID_SHOW_BANK       = 9993;  // reveal the Sound Bank folder
 static constexpr int ID_BROWSE        = 10001;   // open the sound-browser window (outside the sample-id range)
 
+// LIVE sound search (user spec: type IN the box, results filter WHILE TYPING, one popup, magnifier
+// icon). Shown in a CallOutBox anchored at the strip's Sound Bank combo; result ids are the combo's
+// own item ids, so picking routes through the normal handleSoundMixChange apply path.
+class SoundSearchBox : public juce::Component,
+                       private juce::TextEditor::Listener, private juce::ListBoxModel
+{
+public:
+    std::function<void(int comboId)> onPick;
+    SoundSearchBox(const juce::Array<juce::File>& userFiles)
+        : names(Factory::mixNames()), cats(Factory::mixCategories()), files(userFiles)
+    {
+        addAndMakeVisible(ed);
+        ed.setTextToShowWhenEmpty("Type to search names + categories...", juce::Colour(0xff7d86a0));
+        ed.setFont(juce::Font(14.0f));
+        ed.setColour(juce::TextEditor::backgroundColourId, juce::Colour(0xff17172c));
+        ed.addListener(this);
+        addAndMakeVisible(list);
+        list.setModel(this);
+        list.setRowHeight(20);
+        list.setColour(juce::ListBox::backgroundColourId, juce::Colour(0xff101020));
+        setSize(300, 360);
+        rebuild();
+    }
+    void resized() override
+    {
+        auto b = getLocalBounds().reduced(6);
+        auto top = b.removeFromTop(24);
+        top.removeFromLeft(24);              // the drawn magnifier's spot
+        ed.setBounds(top);
+        b.removeFromTop(5);
+        list.setBounds(b);
+    }
+    void paint(juce::Graphics& g) override
+    {
+        g.fillAll(juce::Colour(0xff181830));
+        g.setColour(juce::Colour(0xffaebada));                       // the magnifier glyph, drawn (no
+        const float cx = 16.0f, cy = 17.0f;                          // unicode - mojibake rule)
+        g.drawEllipse(cx - 9.0f, cy - 9.0f, 11.0f, 11.0f, 1.8f);
+        g.drawLine(cx + 1.5f, cy + 1.5f, cx + 6.5f, cy + 6.5f, 2.2f);
+    }
+    void parentHierarchyChanged() override { if (isShowing()) ed.grabKeyboardFocus(); }
+
+private:
+    struct Row { juce::String text; int id; bool header; };
+    juce::StringArray names, cats;
+    juce::Array<juce::File> files;
+    juce::Array<Row> rows;
+    juce::TextEditor ed;
+    juce::ListBox list;
+
+    void rebuild()
+    {
+        rows.clear();
+        const juce::String q = ed.getText().trim();
+        for (auto* cat : kSoundCatOrder)
+        {
+            auto idx = factoryIndicesFor(cat, names, cats, q);
+            if (idx.isEmpty()) continue;
+            rows.add({ cat, 0, true });
+            for (int i : idx)
+                rows.add({ names[i] + "  (" + Factory::mixSourceTag(i) + ")", FACTORY_MIX_BASE + i, false });
+        }
+        bool hdr = false;
+        for (int i = 0; i < files.size(); ++i)
+            if (q.isEmpty() || files[i].getFileNameWithoutExtension().containsIgnoreCase(q)
+                || files[i].getParentDirectory().getFileName().containsIgnoreCase(q))
+            {
+                if (! hdr) { rows.add({ "Your Sound Bank", 0, true }); hdr = true; }
+                rows.add({ files[i].getFileNameWithoutExtension(), i + 1, false });
+            }
+        if (rows.isEmpty()) rows.add({ "(no sounds match)", 0, true });
+        list.updateContent();
+        list.repaint();
+    }
+    void pick(int row)
+    {
+        if (row < 0 || row >= rows.size() || rows[row].header) return;
+        if (onPick) onPick(rows[row].id);
+        if (auto* box = findParentComponentOfClass<juce::CallOutBox>()) box->dismiss();
+    }
+    // TextEditor::Listener
+    void textEditorTextChanged(juce::TextEditor&) override { rebuild(); }
+    void textEditorReturnKeyPressed(juce::TextEditor&) override
+    { for (int r = 0; r < rows.size(); ++r) if (! rows[r].header) { pick(r); return; } }
+    void textEditorEscapeKeyPressed(juce::TextEditor&) override
+    { if (auto* box = findParentComponentOfClass<juce::CallOutBox>()) box->dismiss(); }
+    // ListBoxModel
+    int getNumRows() override { return rows.size(); }
+    void paintListBoxItem(int row, juce::Graphics& g, int w, int h, bool over) override
+    {
+        if (row < 0 || row >= rows.size()) return;
+        const auto& r = rows[row];
+        if (! r.header && over) { g.setColour(juce::Colour(0xff2a2a4a)); g.fillRect(0, 0, w, h); }
+        g.setColour(r.header ? juce::Colour(0xffcf9a2a) : juce::Colours::white);
+        g.setFont(juce::Font(r.header ? 11.5f : 13.5f, r.header ? juce::Font::bold : juce::Font::plain));
+        g.drawFittedText(r.text, r.header ? 4 : 14, 0, w - 8, h, juce::Justification::centredLeft, 1, 0.8f);
+    }
+    void listBoxItemClicked(int row, const juce::MouseEvent&) override { pick(row); }
+};
+
 // On-brand extension for a saved per-pattern note grid (the "MIDI pattern" menu).
 static const juce::String kPatternExt  = "basamakpattern";
 static const juce::String kPatternWild = "*.basamakpattern";
@@ -5304,44 +5410,14 @@ void DrumSequencerEditor::handleSoundMixChange(int ch)
         getSoundMixFolder().revealToUser();
         strips[ch].comboSound.setSelectedId(0, juce::dontSendNotification);
     }
-    else if (id == ID_SEARCH_MIX)   // type-to-find: matches sound NAMES and the category titles
+    else if (id == ID_SEARCH_MIX)   // LIVE search: type in the box, the list filters as you type
     {
         strips[ch].comboSound.setSelectedId(0, juce::dontSendNotification);
-        auto* aw = new juce::AlertWindow("Search sounds",
-                                         "Type part of a name or category (e.g. \"kick\", \"bells\"):",
-                                         juce::AlertWindow::NoIcon);
-        aw->addTextEditor("q", "");
-        aw->addButton("Search", 1, juce::KeyPress(juce::KeyPress::returnKey));
-        aw->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
-        aw->enterModalState(true, juce::ModalCallbackFunction::create([this, aw, ch](int r)
-        {
-            const juce::String q = aw->getTextEditorContents("q").trim();
-            delete aw;
-            if (r != 1 || q.isEmpty()) return;
-            juce::PopupMenu m;                        // results reuse the combo's own item ids, so
-            auto names = Factory::mixNames();         // picking one routes through the normal apply
-            auto cats  = Factory::mixCategories();
-            int found = 0;
-            for (auto* cat : kSoundCatOrder)
-            {
-                auto idx = factoryIndicesFor(cat, names, cats, q);
-                if (idx.isEmpty()) continue;
-                m.addSectionHeader(cat);
-                for (int i : idx) { m.addItem(FACTORY_MIX_BASE + i, names[i] + "  (" + Factory::mixSourceTag(i) + ")"); ++found; }
-            }
-            bool userHdr = false;                     // saved sounds match on file name or folder name
-            for (int i = 0; i < soundMixFiles.size(); ++i)
-                if (soundMixFiles[i].getFileNameWithoutExtension().containsIgnoreCase(q)
-                    || soundMixFiles[i].getParentDirectory().getFileName().containsIgnoreCase(q))
-                {
-                    if (! userHdr) { m.addSectionHeader("Your Sound Bank"); userHdr = true; }
-                    m.addItem(i + 1, soundMixFiles[i].getFileNameWithoutExtension()); ++found;
-                }
-            if (found == 0) m.addItem(-1, "(no sounds match \"" + q + "\")", false, false);
-            m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(strips[ch].comboSound),
-                            [this, ch](int pick)
-                            { if (pick > 0) strips[ch].comboSound.setSelectedId(pick, juce::sendNotificationSync); });
-        }), false);
+        auto box = std::make_unique<SoundSearchBox>(soundMixFiles);
+        box->onPick = [this, ch](int pick)
+        { if (pick > 0) strips[ch].comboSound.setSelectedId(pick, juce::sendNotificationSync); };
+        juce::CallOutBox::launchAsynchronously(std::move(box),
+            strips[ch].comboSound.getScreenBounds(), nullptr);
     }
     else if (id == ID_INIT_MIX)
     {
@@ -6800,7 +6876,7 @@ void DrumSequencerEditor::setupComponents()
             for (int t = 0; t < kNumScales; ++t)
                 sub.addItem(1000 + k * 16 + t, kUiScaleName[t], true,
                             proc.kbGuideMode == 2 && proc.kbGuideKey == k && proc.kbGuideScale == t);
-            m.addSubMenu(juce::String(kUiNoteName[k]) + " ...", sub);
+            m.addSubMenu(juce::String(kUiNoteName[k]), sub);   // (the "..." suffix confused users)
         }
         m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&keysPanel.btnGuide),
             [this](int r) {
@@ -8954,6 +9030,9 @@ void DrumSequencerEditor::updateKeyboardGuide()
     };
     int mask = -1;   // ("Follow sound" was removed - it just complicated things; pick a key+scale directly)
     if (proc.kbGuideMode == 2) mask = scaleMask(proc.kbGuideKey, proc.kbGuideScale);
+    keysPanel.lblGuideCur.setText(proc.kbGuideMode == 2                       // caption under the button;
+        ? juce::String(kUiNoteName[proc.kbGuideKey]) + " " + kUiScaleName[proc.kbGuideScale]
+        : juce::String("Off"), juce::dontSendNotification);                   // setText no-ops if unchanged
     if (mask == kbGuideApplied) return;
     kbGuideApplied = mask;
     keysPanel.clearKeyDims();

@@ -656,6 +656,7 @@ public:
     ToggleSwitch     polySwitch;                          // keys POLY (chords stack like a piano)
     juce::TextButton btnArp { "Arp" };                    // opens the ARP editor popup (space-saving)
     juce::TextButton btnGuide { "Guide" };                // KEY GUIDE popup: dim out-of-scale keys (display only)
+    juce::Label      lblGuideCur;                         // caption under it: the active key + scale ("Off")
     ScaleBox         scaleBox;                            // per-slot SCALE harmonizer controls (moved from the sound editor)
     KeySplitBox      splitBox;                            // SPLIT keyboard: L half = slot 2, R half = slot 1 (windowed)
     juce::Label      lblChord[3];                         // LIVE names: [0] slot 1 (yellow), [1] slot 2 (pink), [2] ALL = both combined
