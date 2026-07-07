@@ -1806,10 +1806,158 @@ static void pRiserDrop(Sequencer& s)
     s.current().master.reverbWet = 0.18f;
 }
 
+
+
+//==============================================================================
+// PUBLIC-DOMAIN SONG PRESETS (2026-07-08, user order: "at least 5", multi-pattern chains).
+// Same recipe as Ode to Joy: one pattern = ONE BAR, per-step PITCH = semitones from the
+// sound's BASE (keys/bells sounds sit on a clean C; "Deep Sub" sits on A1 = 55 Hz, so its
+// offsets are computed FROM A). Chained 0->1->...->last->0 = a looping playthrough.
+// SUSTAINED sounds (EP/brass/pads/sub, sustain > 0) need a GATE to hold their written note
+// length: each note's `len` (in steps) becomes a STEP-MERGE run - the head fires, the merged
+// steps hold the gate, then the authored release. len 1 = a plain step (percussive sounds).
+//==============================================================================
+struct SongNote { int step, semi, len; };
+static void songNotes(Sequencer& s, int pat, int ch, Builder snd, int n, std::initializer_list<SongNote> notes)
+{
+    auto& c = s.patterns[pat].channels[ch];
+    if (c.mixName.isEmpty()) buildChP(s, pat, ch, snd, n, {});
+    for (auto nn : notes)
+    {
+        c.steps[nn.step] = true; c.stepPitch[nn.step] = (float) nn.semi;
+        for (int i = nn.step + 1; i < nn.step + nn.len && i < n; ++i) c.stepMerge[i] = true;
+    }
+}
+static void songChain(Sequencer& s, int bars, float verb)
+{
+    for (int p = 0; p < bars; ++p)
+    {
+        auto& P = s.patterns[p];
+        P.playMode = Sequencer::Chain;
+        P.chainLen = 1; P.chainSeq[0] = (p + 1) % bars; P.chainLoops[0] = 1;
+        P.master.reverbWet = verb;                    // every CHAINED bar gets the room (not just bar 1)
+    }
+}
+
+// "Twinkle Twinkle Little Star" (trad.) - 12 bars: A A B B A A form on a high glockenspiel
+// (sustain-0 bell = natural ring, no gates needed).
+static void pTwinkle(Sequencer& s)
+{
+    s.standaloneBpm = 100.0f; s.timeSigNum = 4; s.timeSigDen = 4;
+    auto A1 = { SongNote{0,0,1},{4,0,1},{8,7,1},{12,7,1} };   // C C G G
+    auto A2 = { SongNote{0,9,1},{4,9,1},{8,7,1} };            // A A G .
+    auto A3 = { SongNote{0,5,1},{4,5,1},{8,4,1},{12,4,1} };   // F F E E
+    auto A4 = { SongNote{0,2,1},{4,2,1},{8,0,1} };            // D D C .
+    auto B1 = { SongNote{0,7,1},{4,7,1},{8,5,1},{12,5,1} };   // G G F F
+    auto B2 = { SongNote{0,4,1},{4,4,1},{8,2,1} };            // E E D .
+    const std::initializer_list<SongNote> bars[12] = { A1,A2,A3,A4, B1,B2, B1,B2, A1,A2,A3,A4 };
+    for (int p = 0; p < 12; ++p) songNotes(s, p, 0, mGlockenspiel, 16, bars[p]);
+    for (int p = 0; p < 12; ++p) buildChP(s, p, 1, m808Kick, 16, { 0, 8 });
+    for (int p = 4; p < 12; ++p) buildChP(s, p, 2, mShaker, 16, { 0,2,4,6,8,10,12,14 });
+    songChain(s, 12, 0.24f);
+}
+
+// "Fur Elise" (Beethoven) - the famous A section as a music box. 3/4, 12 steps = a 16th grid;
+// melody offsets from the Toy Piano's C5 base; the left-hand broken chords ride the A1 sub.
+static void pFurElise(Sequencer& s)
+{
+    s.standaloneBpm = 72.0f; s.timeSigNum = 3; s.timeSigDen = 4;
+    // bar 1: the E-D#-E-D#-E-B-D-C run (16ths, natural toy-piano ring)
+    songNotes(s, 0, 0, kToyPiano, 12, { {0,4,1},{1,3,1},{2,4,1},{3,3,1},{4,4,1},{5,-1,1},{6,2,1},{7,0,1} });
+    // bar 2: lands on A4; pickup C4-E4-A4 climbs back in
+    songNotes(s, 1, 0, kToyPiano, 12, { {0,-3,1},{9,-12,1},{10,-8,1},{11,-3,1} });
+    // bar 3: B4; pickup E4-G#4-B4
+    songNotes(s, 2, 0, kToyPiano, 12, { {0,-1,1},{9,-8,1},{10,-4,1},{11,-1,1} });
+    // bar 4: C5; pickup E4 into the repeat
+    songNotes(s, 3, 0, kToyPiano, 12, { {0,0,1},{10,-8,1} });
+    // left hand: A-minor / E-major broken chords on the sub (offsets FROM ITS A1 base; the last
+    // note of each figure holds to the bar's end)
+    buildChP(s, 0, 1, kSubBass, 12, {});                              // bar 1 = right hand alone
+    songNotes(s, 1, 1, kSubBass, 12, { {0,12,2},{2,19,2},{4,24,5} }); // A2 E3 A3---
+    songNotes(s, 2, 1, kSubBass, 12, { {0,7,2},{2,19,2},{4,23,5} });  // E2 E3 G#3--
+    songNotes(s, 3, 1, kSubBass, 12, { {0,12,2},{2,19,2},{4,24,5} });
+    songChain(s, 4, 0.3f);
+}
+
+// "Amazing Grace" (trad. 1779) - 3/4 hymn: gated e-piano melody, bar-long merged pad chords,
+// sub roots. Quarter = 4 steps, half = 8, dotted half = the whole 12-step bar.
+static void pAmazingGrace(Sequencer& s)
+{
+    s.standaloneBpm = 84.0f; s.timeSigNum = 3; s.timeSigDen = 4;
+    songNotes(s, 0, 0, kEPiano, 12, { {8,-5,4} });                    // pickup: "A-" (G3)
+    songNotes(s, 1, 0, kEPiano, 12, { {0,0,8},{8,4,2},{10,0,2} });    // "MA-"(C4) + zing (E-C)
+    songNotes(s, 2, 0, kEPiano, 12, { {0,4,8},{8,2,4} });             // "grace"(E) "how"(D)
+    songNotes(s, 3, 0, kEPiano, 12, { {0,0,8},{8,-3,4} });            // "sweet"(C) "the"(A3)
+    songNotes(s, 4, 0, kEPiano, 12, { {0,-5,8},{8,-5,4} });           // "sound"(G3) + pickup "that"
+    songNotes(s, 5, 0, kEPiano, 12, { {0,0,8},{8,4,2},{10,0,2} });    // "saved a"
+    songNotes(s, 6, 0, kEPiano, 12, { {0,4,8},{8,2,4} });             // "wretch like"
+    songNotes(s, 7, 0, kEPiano, 12, { {0,7,12} });                    // "me"(G4 rings the bar)
+    static const int pad[8]  = { 0, 0, 0, -7, 0, 0, 0, -5 };          // C C C F C | C C G
+    static const int root[8] = { 3, 3, 3, 8, 3, 3, 3, 10 };           // sub roots (from A1): C2 F2 G2
+    for (int p = 0; p < 8; ++p)
+    {
+        songNotes(s, p, 1, kWarmPad, 12, { {0, pad[p], 12} });        // whole-bar merged pad note
+        songNotes(s, p, 2, kSubBass, 12, { {0, root[p], 12} });
+    }
+    songChain(s, 8, 0.32f);
+}
+
+// "When the Saints Go Marching In" (trad.) - gated brass lead, marching kit, two-beat bass,
+// light swing. Ends on the half cadence (D over G) so the loop pulls back to the top.
+static void pSaints(Sequencer& s)
+{
+    s.standaloneBpm = 112.0f; s.timeSigNum = 4; s.timeSigDen = 4;
+    songNotes(s, 0, 0, kSynthBrass, 16, { {4,0,4},{8,4,4},{12,5,4} });   // "oh when the" C E F
+    songNotes(s, 1, 0, kSynthBrass, 16, { {0,7,16} });                   // "saints" G (whole)
+    songNotes(s, 2, 0, kSynthBrass, 16, { {4,0,4},{8,4,4},{12,5,4} });
+    songNotes(s, 3, 0, kSynthBrass, 16, { {0,7,16} });
+    songNotes(s, 4, 0, kSynthBrass, 16, { {4,0,4},{8,4,4},{12,5,4} });
+    songNotes(s, 5, 0, kSynthBrass, 16, { {0,7,8},{8,4,8} });            // "saints(G) go(E)"
+    songNotes(s, 6, 0, kSynthBrass, 16, { {0,0,8},{8,4,8} });            // "march(C)-ing(E)"
+    songNotes(s, 7, 0, kSynthBrass, 16, { {0,2,16} });                   // "in"(D, whole)
+    for (int p = 0; p < 8; ++p)
+    {
+        buildChP(s, p, 1, m909Kick,   16, { 0, 8 });
+        buildChP(s, p, 2, mSnapSnare, 16, { 4, 12 });
+        songNotes(s, p, 3, kSubBass, 16, { {0,3,8},{8,-2,8} });          // two-beat C2 / G1
+        if (p >= 4) buildChP(s, p, 4, mClosedHat, 16, { 0,2,4,6,8,10,12,14 });
+        s.patterns[p].swing = 0.35f;                                     // light dixieland lilt (~59%)
+    }
+    songChain(s, 8, 0.2f);
+}
+
+// "Canon" (Pachelbel, in C) - the ground: sub roots + SCALE-voiced bell triads (Octave Bells
+// harmonizes each root with its correct diatonic chord - the SCALE-mode showcase); the violin
+// descent + shakers join for the second half. Two chords per bar (half notes).
+static void pCanon(Sequencer& s)
+{
+    s.standaloneBpm = 72.0f; s.timeSigNum = 4; s.timeSigDen = 4;
+    static const int roots[8]  = { 0, 7, 9, 4, 5, 0, 5, 7 };       // C G Am Em F C F G (rel C4)
+    static const int subs[8]   = { 3, -2, 0, -5, -4, 3, -4, -2 };  // C2 G1 A1 E1 F1 C2 F1 G1 (rel A1)
+    static const int violin[8] = { 16, 14, 12, 11, 9, 7, 9, 11 };  // E5 D5 C5 B4 A4 G4 A4 B4
+    for (int p = 0; p < 8; ++p)
+    {
+        const int a = (p * 2) % 8, b = (p * 2 + 1) % 8;
+        songNotes(s, p, 0, kSubBass,     16, { {0, subs[a], 8},  {8, subs[b], 8} });
+        songNotes(s, p, 1, kOctaveBells, 16, { {0, roots[a], 8}, {8, roots[b], 8} });
+        if (p >= 4)
+        {
+            songNotes(s, p, 2, kEPiano, 16, { {0, violin[a], 8}, {8, violin[b], 8} });
+            buildChP(s, p, 3, mShaker, 16, { 2,6,10,14 });
+        }
+    }
+    songChain(s, 8, 0.3f);
+}
+
 using PresetFn = void (*)(Sequencer&);
 static const struct { const char* name; PresetFn build; } kPresets[] = {
     { "Riser + Drop",       pRiserDrop },
     { "Ode to Joy (Beethoven)", pOdeToJoy },
+    { "Fur Elise (Beethoven)",  pFurElise },
+    { "Canon (Pachelbel)",      pCanon },
+    { "Twinkle Twinkle (trad.)", pTwinkle },
+    { "Amazing Grace (trad.)",  pAmazingGrace },
+    { "When the Saints (trad.)", pSaints },
 };
 static constexpr int kNumPresets = (int) (sizeof(kPresets) / sizeof(kPresets[0]));
 
