@@ -33,7 +33,7 @@ static juce::String noteNameFor(double hz)
     const int    n     = (int) std::lround(midi);
     const int    cents = (int) std::lround((midi - (double) n) * 100.0);
     static const char* nm[12] = { "C","C#","D","D#","E","F","F#","G","G#","A","A#","B" };
-    juce::String note = juce::String(nm[((n % 12) + 12) % 12]) + juce::String(n / 12 - 2);   // C3 = middle C (MIDI 60), matches the keyboard
+    juce::String note = juce::String(nm[((n % 12) + 12) % 12]) + juce::String(n / 12 - 1);   // SCIENTIFIC pitch: C4 = middle C (MIDI 60)
     if (std::abs(cents) >= 10) note += (cents > 0 ? "+" : "") + juce::String(cents);
     return note;
 }
@@ -137,7 +137,7 @@ juce::Array<SlotParam> slotParamsFor(int engine)
             p.add(F ("Freq", 20, 4186, &S::physFreq, "nHz", false,
                      "Base pitch of the plucked/struck string. CLICK the value read-out to switch Hz <-> NOTE mode "
                      "(shows A1/C2...; dragging snaps to semitones, SHIFT = free). Also follows per-step pitch. "
-                     "KEYS: touching the piano snaps this to C3 so recordings play back as performed - transpose "
+                     "KEYS: touching the piano snaps this to C4 (middle C) so recordings play back as performed - transpose "
                      "with it afterwards."));
             p.add(Fc("Material", 0, 5, &S::physMaterial, { "Nylon","Steel","Wood","Glass","Metal","Skin" },
                      "The string/body material - changes the damping + overtone character (Nylon = soft, Steel/Metal = "
@@ -194,7 +194,7 @@ juce::Array<SlotParam> slotParamsFor(int engine)
         case DrumChannel::SrcModal: {
             juce::StringArray mats;
             for (int i = 0; i < DrumChannel::modalMaterialCount(); ++i) mats.add(DrumChannel::modalMaterialName(i));
-            p.add(F ("Freq", 20, 4186, &S::oscFreq, "nHz", false, "Base pitch of the struck body. CLICK the value read-out to switch Hz <-> NOTE mode (snaps to semitones there, SHIFT = free). Follows per-step pitch + the pitch envelope. KEYS: touching the piano snaps this to C3 so recordings play back as performed - transpose with it afterwards."));
+            p.add(F ("Freq", 20, 4186, &S::oscFreq, "nHz", false, "Base pitch of the struck body. CLICK the value read-out to switch Hz <-> NOTE mode (snaps to semitones there, SHIFT = free). Follows per-step pitch + the pitch envelope. KEYS: touching the piano snaps this to C4 (middle C) so recordings play back as performed - transpose with it afterwards."));
             p.add(Ic("Material", 0, juce::jmax(0, DrumChannel::modalMaterialCount() - 1), &S::modalMaterial, mats,
                      "The struck body - sets each mode's frequency, gain + decay (Marimba/Tubular Bell/Glass/Membrane/"
                      "Metal Plate/Wood Block/Kalimba/Cowbell). The starting point Decay/Tone/Struct then shape."));
@@ -657,8 +657,8 @@ void SlotEditor::init(int idx, MidiLearnManager& mlm, juce::LookAndFeel* knobLNF
     };
     freqFader->setTooltip("Frequency: the oscillator's base pitch (Hz). CLICK the value read-out to switch to NOTE "
                           "mode (shows A1, C2...; dragging snaps to semitones, SHIFT = free). Click again for Hz.\n\n"
-                          "KEYS: the moment you touch the on-screen piano this snaps to C3, so recorded step pitches "
-                          "play back EXACTLY as performed (step pitch 0 = C3). Use this knob AFTERWARDS to transpose "
+                          "KEYS: the moment you touch the on-screen piano this snaps to C4 (middle C), so recorded step pitches "
+                          "play back EXACTLY as performed (step pitch 0 = C4). Use this knob AFTERWARDS to transpose "
                           "the whole sound.");
     freqFader->onValueChange = [this] {
         if (auto* s = getSlot ? getSlot() : nullptr) {
@@ -861,13 +861,13 @@ void SlotEditor::applyFreqLock()
 {
     static const juce::String lockMsg =
         "Frequency is disabled while this channel is in PIANO ROLL: the note grid sets the pitch and "
-        "0 is fixed to C3. Switch the channel back to steps (the step-count dropdown) to use Freq again.";
+        "0 is fixed to C4 (middle C). Switch the channel back to steps (the step-count dropdown) to use Freq again.";
     static const juce::String freqFaderTip =
         "Frequency: the oscillator's base pitch (Hz). CLICK the value read-out to switch to NOTE "
         "mode (shows A1, C2...; dragging snaps to semitones, SHIFT = free). Click again for Hz.\n\n"
-        "KEYS: the moment you touch the on-screen piano this snaps to C3, so recorded step pitches "
-        "play back EXACTLY as performed (step pitch 0 = C3). PIANO ROLL disables this knob and pins "
-        "0 to C3.";
+        "KEYS: the moment you touch the on-screen piano this snaps to C4 (middle C), so recorded step pitches "
+        "play back EXACTLY as performed (step pitch 0 = C4). PIANO ROLL disables this knob and pins "
+        "0 to C4.";
     auto apply = [this](juce::Slider& sl, const juce::String& openTip) {
         sl.setEnabled(! freqDisabled);
         sl.setAlpha(freqDisabled ? 0.45f : 1.0f);
@@ -1716,7 +1716,7 @@ void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle
                 g.setColour(juce::Colour(0x8835c0ff));
                 g.fillRect(juce::Rectangle<float>((float) keys.getX(), y - rowH2 * 0.5f, (float) keys.getWidth(), juce::jmax(3.0f, rowH2)));
             }
-            const int oct = 3 + (int) std::floor((double) s / 12.0);   // semi 0 = C3
+            const int oct = 4 + (int) std::floor((double) s / 12.0);   // semi 0 = middle C = C4 (scientific)
             if (nameAll || pc == 0 || isHover)
             {
                 g.setColour(isHover ? juce::Colours::white : juce::Colour(pc == 0 ? 0xffb8c4dc : 0xff8090b0));
@@ -2002,7 +2002,7 @@ juce::String StepGridComponent::getTooltip()
 {
     const int dch = firstRow + juce::jmax(0, getMouseXYRelative().y) / juce::jmax(1, rowH);
     if (dch >= 0 && dch < NCH && drawMode[dch])
-        return juce::String("PIANO ROLL (free notes; pitch 0 = C3, always).\n\n"
+        return juce::String("PIANO ROLL (free notes; pitch 0 = C4 (middle C), always).\n\n"
                             "- LEFT-drag draws/moves notes; RIGHT-drag erases; the magnifier (top-left) opens the "
                             "BIG editor.\n"
                             "- The colour buttons pick which SOUND SLOT new notes play: orange = both, yellow = "
@@ -3995,11 +3995,12 @@ void TintKeyboard::drawWhiteNote(int n, juce::Graphics& g, juce::Rectangle<float
     else if (dim[n]) {                                   // KEY GUIDE: out-of-scale white key = dark wash
         g.setColour(juce::Colour(0x63131320)); g.fillRect(area.reduced(0.5f));
     }
-    { // EVERY key gets its note name; Cs pop in bold amber (they're the octave landmarks)
+    { // EVERY key gets its note name: BLACK on white keys (C keys bold as landmarks); faded when dimmed
         const bool isC = (n % 12) == 0;
-        g.setColour(isC ? juce::Colour(0xffcf9a2a) : juce::Colour(0x997a86a0));
+        g.setColour(dim[n] && c.getAlpha() == 0 ? juce::Colour(0x59101018)
+                                                : juce::Colour(isC ? 0xff101018 : 0xcc10141c));
         g.setFont(juce::Font(juce::jmin(10.5f, area.getWidth() * 0.5f), isC ? juce::Font::bold : juce::Font::plain));
-        g.drawFittedText(juce::MidiMessage::getMidiNoteName(n, true, true, 3),
+        g.drawFittedText(juce::MidiMessage::getMidiNoteName(n, true, true, 4),
                          area.reduced(1.0f, 2.0f).removeFromBottom(12.0f).toNearestInt(),
                          juce::Justification::centred, 1, 0.7f);
     }
@@ -4016,10 +4017,10 @@ void TintKeyboard::drawBlackNote(int n, juce::Graphics& g, juce::Rectangle<float
                                                                  : fill);
     if (c.getAlpha() != 0) { g.setColour(juce::Colour(0xff101018)); g.drawRect(area, 1.0f); }
     { // black keys get their name too (dark text on a dimmed/tinted key, light on plain black)
-        const bool lightBg = dim[n] || c.getAlpha() != 0;
-        g.setColour(lightBg ? juce::Colour(0xd0181820) : juce::Colour(0xaa9aa4bc));
-        g.setFont(juce::Font(7.5f));
-        g.drawFittedText(juce::MidiMessage::getMidiNoteName(n, true, true, 3),
+        const bool lightBg = dim[n] || c.getAlpha() != 0;   // dimmed = light-grey key, tinted = coloured key
+        g.setColour(lightBg ? juce::Colour(0xdd14161e) : juce::Colour(0xf2ffffff));   // dark on light bg, WHITE on black keys
+        g.setFont(juce::Font(8.0f, juce::Font::bold));
+        g.drawFittedText(juce::MidiMessage::getMidiNoteName(n, true, true, 4),
                          area.reduced(0.5f, 2.0f).removeFromBottom(11.0f).toNearestInt(),
                          juce::Justification::centred, 1, 0.55f);
     }
@@ -4125,7 +4126,7 @@ KeysPanel::KeysPanel()
 {
     kbState.addListener(this);
     addAndMakeVisible(kb);
-    kb.setAvailableRange(12, 108);                      // C-1..C7 = +-48 st around C3 (contains a full 88-key piano)
+    kb.setAvailableRange(12, 108);                      // C0..C8 (scientific) = +-48 st around middle C - contains a full 88-key piano
     kb.setLowestVisibleKey(36);                         // open around C2 (bass-friendly)
     kb.setColour(juce::MidiKeyboardComponent::keyDownOverlayColourId, juce::Colour(0xaae8bf4d));
     kb.setColour(juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, juce::Colour(0x44e8bf4d));
@@ -4455,7 +4456,7 @@ void KeysPanel::resized()
       const int px = juce::jlimit(8, getWidth() - pw - 8, btnArp.getRight() - pw);
       const int py = btnArp.getBottom() + 4;
       arpEditor.setBounds(px, py, pw, juce::jmax(120, getHeight() - py - 10)); }
-    // white-key width so the full C-1..C7 range fits the panel (57 white keys in 8 octaves)
+    // white-key width so the full C0..C8 range fits the panel (57 white keys in 8 octaves)
     kb.setKeyWidth(juce::jmax(7.0f, (float) r.getWidth() / 57.0f));
 }
 
@@ -6110,6 +6111,9 @@ void DrumSequencerEditor::setupComponents()
     sliderSwing.setValue(proc.sequencer.current().swing, juce::dontSendNotification);
     sliderSwing.setSliderStyle(juce::Slider::LinearHorizontal);   // the fader, stacked over its caption
     sliderSwing.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    sliderSwing.setColour(juce::Slider::trackColourId,      juce::Colour(0xff35c0ff));   // filled LEFT of the thumb = blue (was dark-on-dark)
+    sliderSwing.setColour(juce::Slider::thumbColourId,      juce::Colour(0xffd8e0f0));
+    sliderSwing.setColour(juce::Slider::backgroundColourId, juce::Colour(0xff26263c));
     sliderSwing.textFromValueFunction = [](double v){ return v < 0.005 ? juce::String("Off")
                                                              : juce::String(juce::roundToInt(50.0 + v * 25.0)) + "%"; };
     sliderSwing.onValueChange = [this] { proc.sequencer.current().swing = (float)sliderSwing.getValue();
@@ -6213,7 +6217,7 @@ void DrumSequencerEditor::setupComponents()
         "- A channel with only Sample/Noise slots exports its step/draw pitch on the channel's own note.\n"
         "- Merged step chains come out as one long note; rolls and swing are kept.\n\n"
         "MIDI lands transposed? Check the slots' Freq knobs - they set the pitch 0-point (playing the "
-        "keys re-bases them to C3).");
+        "keys re-bases them to C4).");
 
 
     // Preset menu
@@ -6445,7 +6449,7 @@ void DrumSequencerEditor::setupComponents()
         "- The mode box picks WHERE (this pattern only, or follow the chain) and WHEN (your first key, "
         "or a 3-second count-in).\n"
         "- Every pattern loop while recording becomes a TAKE - find them in the Takes list.\n"
-        "- The pitch reference is fixed: C3 = pitch 0.\n\n"
+        "- The pitch reference is fixed: C4 (middle C) = pitch 0.\n\n"
         "Press again to stop; the last take stays loaded on the channel.");
     keysPanel.btnRec.onClick = [this] {
         if (proc.keysRecording.load() || keysCountdownTicks > 0) keysStopRecord(true);
@@ -7169,7 +7173,7 @@ void DrumSequencerEditor::setupComponents()
     lblMidiNote.setFont(juce::Font(9.0f)); lblMidiNote.setJustificationType(juce::Justification::centred);
     lblMidiNote.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
     for (int n = 0; n <= 127; ++n)
-        comboMidiNote.addItem(juce::MidiMessage::getMidiNoteName(n, true, true, 3) + " (" + juce::String(n) + ")", n + 1);
+        comboMidiNote.addItem(juce::MidiMessage::getMidiNoteName(n, true, true, 4) + " (" + juce::String(n) + ")", n + 1);
     comboMidiNote.setTooltip("The MIDI note this channel sends in MIDI Out mode (e.g. C1 = 36). "
                              "Set it to whatever note the target plugin/track expects (a drum pad, or a pitch for a synth). "
                              "Per-step Pitch transposes it, step velocity + Roll set the note's dynamics. Channel-wide (all patterns).");
@@ -7204,12 +7208,12 @@ void DrumSequencerEditor::setupComponents()
             sub.addSeparator();
             // Two MIDI lines: (1) route to MIDI out keeping the current note; (2) change the note.
             sub.addItem(ch * 100 + 50,
-                        "MIDI Out (" + juce::MidiMessage::getMidiNoteName(c.midiNote, true, true, 3) + ")",
+                        "MIDI Out (" + juce::MidiMessage::getMidiNoteName(c.midiNote, true, true, 4) + ")",
                         true, c.midiOut);
             juce::PopupMenu notes;
             for (int n = 0; n <= 127; ++n)
                 notes.addItem(100000 + ch * 200 + n,
-                              juce::MidiMessage::getMidiNoteName(n, true, true, 3) + " (" + juce::String(n) + ")",
+                              juce::MidiMessage::getMidiNoteName(n, true, true, 4) + " (" + juce::String(n) + ")",
                               true, c.midiOut && c.midiNote == n);
             sub.addSubMenu("Change MIDI Out note", notes);
             // MIDI Out channel (1-16) - so different drums can drive different instruments / DAW MIDI tracks.
@@ -7243,7 +7247,7 @@ void DrumSequencerEditor::setupComponents()
             sub.addSubMenu("Duck" + juce::String(c.duckBy >= 0
                                ? " (by ch " + juce::String(c.duckBy + 1) + ", " + juce::String((int) std::lround(c.duckAmt * 100)) + "%)" : ""),
                            duck);
-            const juce::String tag = c.midiOut ? "  [MIDI " + juce::MidiMessage::getMidiNoteName(c.midiNote, true, true, 3) + " ch" + juce::String(c.midiOutChannel) + "]"
+            const juce::String tag = c.midiOut ? "  [MIDI " + juce::MidiMessage::getMidiNoteName(c.midiNote, true, true, 4) + " ch" + juce::String(c.midiOutChannel) + "]"
                                                : (c.outputBus > 0 ? "  [Out " + juce::String(c.outputBus)
                                                      + ": ch " + juce::String(c.outputBus * 2 + 1) + "/" + juce::String(c.outputBus * 2 + 2) + "]" : "");
             menu.addSubMenu("Channel " + juce::String(ch + 1) + tag, sub);
@@ -7609,7 +7613,7 @@ void DrumSequencerEditor::setupComponents()
         swSmpPreserve[b].setTooltip("Keep pitch (ON by default): the NOTE you play - the keyboard AND per-step / "
             "draw pitch - won't transpose this sample, so recording a melody can't detune it. It's applied AFTER "
             "the pitch ENVELOPE, so the pitch envelope, vibrato and pitch LFO still shape the sound normally. "
-            "Turn OFF to play it as a pitched sampler; when off, a note below C3 simply plays slower and now "
+            "Turn OFF to play it as a pitched sampler; when off, a note below C4 (middle C) simply plays slower and now "
             "always finishes the whole sample.");
     }
     // PITCH (semitones) = transpose the WHOLE channel - works for every engine (synth freq + sample
@@ -7819,7 +7823,7 @@ void DrumSequencerEditor::setupComponents()
                         "chord note), and both slots export together. A channel with only Sample/Noise exports its "
                         "step/draw pitch on the channel's own note (no fixed anchor). If your MIDI lands transposed, "
                         "check the Freq knobs on the sound slots: they set the 0-point of the pitch (playing the keys "
-                        "re-bases them to C3 automatically).");
+                        "re-bases them to C4 automatically).");
     patModeBtn.setTooltip("What happens after this pattern finishes: loop forever, stop after N loops, or jump to another pattern.");
 
     freqDisplay.setTooltip("Live spectrum (the frequencies of what's playing) + the EQ/filter curve. The spectrum "
@@ -8498,7 +8502,7 @@ void DrumSequencerEditor::refreshKeysPanel()
 static juce::String chordNameFor(const juce::Array<int>& notes)
 {
     if (notes.isEmpty()) return {};
-    if (notes.size() == 1) return juce::MidiMessage::getMidiNoteName(notes[0], true, true, 3);
+    if (notes.size() == 1) return juce::MidiMessage::getMidiNoteName(notes[0], true, true, 4);
     bool pcSet[12] = {}; for (int n : notes) pcSet[n % 12] = true;
     juce::Array<int> pcs; for (int i = 0; i < 12; ++i) if (pcSet[i]) pcs.add(i);
     const int bassPC = notes[0] % 12;
@@ -9069,13 +9073,13 @@ void DrumSequencerEditor::refreshDetailPanel()
     // Freq is disabled in this mode so it never drifts; the ~0.01 Hz guard avoids re-marking as modified).
     if (ch.drawMode)
     {
-        constexpr float kC3 = 261.6255653f;
+        constexpr float kMidC = 261.6255653f;   // middle C (MIDI 60) - displayed as C4 (scientific)
         for (int s = 0; s < DrumChannel::NUM_SLOTS; ++s)
         {
             auto& sl = ch.slots[s];
             // slot 2 keeps its Slot-2 pitch baked (positive keysSlot2Down = semitones DOWN, like keyDown)
             const float want = (s == 1 && ch.keysSlot2Down != 0)
-                                 ? kC3 * std::pow(2.0f, -(float) ch.keysSlot2Down / 12.0f) : kC3;
+                                 ? kMidC * std::pow(2.0f, -(float) ch.keysSlot2Down / 12.0f) : kMidC;
             if (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal)
             { if (std::abs(sl.oscFreq - want) > 0.01f) { sl.oscFreq = want; ch.markDspDirty(); } }
             else if (sl.engine == DrumChannel::SrcPhys)

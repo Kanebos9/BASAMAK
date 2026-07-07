@@ -114,8 +114,8 @@ class DrumChannel
 {
 public:
     static constexpr int MAX_STEPS = 64;
-    // Pitch grid range: +-48 st around C3 = C-1..C7 - SYMMETRIC (same distance up and down, user rule)
-    // and fully containing an 88-key piano (A-1..C7). C3 = pitch 0 stays THE reference everywhere.
+    // Pitch grid range: +-48 st around MIDDLE C (displayed C4, scientific pitch) = C0..C8 - SYMMETRIC
+    // (same distance up/down, user rule) and fully containing an 88-key piano (A0..C8). MIDI 60 = pitch 0.
     static constexpr int PITCH_RANGE = 48;
     static const int VALID_STEP_COUNTS[];
     static constexpr int NUM_VALID_STEP_COUNTS = 20;

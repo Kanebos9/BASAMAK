@@ -1283,18 +1283,18 @@ int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly)
         }
         fadeOutVoices(0.015f);                         // 15 ms handover (3 ms crackled on slides)
     }
-    // TOUCHING the keyboard RE-BASES every eligible slot's Freq to C3 (261.63 Hz; slot 2 keeps
+    // TOUCHING the keyboard RE-BASES every eligible slot's Freq to middle C (261.63 Hz, displayed C4; slot 2 keeps
     // its transpose baked in). This keeps the SEQUENCER consistent with what you hear: recorded
     // step pitches are relative to C3, and playback re-pitches from the slot Freq - so Freq must
     // BE C3 or the pattern would play at a different pitch than you performed. The Freq knob
     // then works as an overall transpose afterwards.
-    constexpr double kC3 = 261.6255653;
+    constexpr double kMidC = 261.6255653;   // middle C (MIDI 60) - displayed as C4 (scientific)
     for (int s = 0; s < NUM_SLOTS; ++s)
     {
         Slot& sl = slots[s];
         // slot2Down is a SIGNED transpose for slot 2: positive = semitones DOWN (classic sub-osc),
         // negative = UP. 0 / non-slot-2 = the pressed pitch. (Old projects stored 0..24 = down.)
-        const double base = kC3 * ((s == 1 && slot2Down != 0) ? std::pow(2.0, -(double) slot2Down / 12.0) : 1.0);
+        const double base = kMidC * ((s == 1 && slot2Down != 0) ? std::pow(2.0, -(double) slot2Down / 12.0) : 1.0);
         switch (sl.engine)
         {
             case SrcOsc: case SrcModal: sl.oscFreq  = (float) base; break;

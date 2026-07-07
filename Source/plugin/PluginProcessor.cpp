@@ -498,7 +498,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                 if (! drawRec && (chain || pat == keysArmedPattern.load(std::memory_order_relaxed))
                     && std::abs(note - 60) <= DrumChannel::PITCH_RANGE)   // out of the +-48 grid: play live, SKIP recording
                 {
-                    const int semis = note - 60;   // FIXED reference: C3 = 0 (piano range = +/-36)
+                    const int semis = note - 60;   // FIXED reference: middle C (C4) = 0
                     auto& pch = sequencer.patterns[pat].channels[chIdx];
                     const int n  = juce::jmax(1, pch.numSteps);
                     const int st = ((int) std::lround(sequencer.barPos() * n)) % n;
