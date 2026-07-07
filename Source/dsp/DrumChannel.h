@@ -210,7 +210,6 @@ public:
     float  pan     = 0.0f;
     bool   mute    = false;
     bool   solo    = false;
-    bool   phaseInvert = false;
 
     //-- Sound
     DrumSoundGenerator::Type soundType = DrumSoundGenerator::Type::Kick808;

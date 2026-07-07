@@ -2105,7 +2105,6 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             sL = hermite4(fr, at(srcA, -1), at(srcA, 0), at(srcA, 1), at(srcA, 2));
                             sR = hermite4(fr, at(srcB, -1), at(srcB, 0), at(srcB, 1), at(srcB, 2));
                             if (c.crushStep > 0.0f) { sL = std::round(sL / c.crushStep) * c.crushStep; sR = std::round(sR / c.crushStep) * c.crushStep; }
-                            if (phaseInvert) { sL = -sL; sR = -sR; }
                         }
                         sL *= env * c.smpGain; sR *= env * c.smpGain;   // sample output boost
                         // Static pitch (channel + slot) is baked into the buffer (SoundTouch). The pitch

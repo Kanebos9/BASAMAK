@@ -1174,7 +1174,6 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
         else if (param == "mute")    dch.mute       = on;
         else if (param == "solo")    dch.solo       = on;
         else if (param == "overlap") dch.allowOverlap = on;
-        else if (param == "phase")   dch.phaseInvert = on;
         dch.markDspDirty();
     }
 }
@@ -1459,7 +1458,6 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
     chState.setProperty("pan",      ch.pan,            nullptr);
     chState.setProperty("mute",     ch.mute,           nullptr);
     chState.setProperty("solo",     ch.solo,           nullptr);
-    chState.setProperty("phase",    ch.phaseInvert,    nullptr);
     chState.setProperty("pitch",    ch.pitch,          nullptr);
     for (int s = 0; s < DrumChannel::NUM_SOURCES; ++s) {
         chState.setProperty("atk" + juce::String(s), ch.srcAtk[s],  nullptr);
@@ -1621,7 +1619,6 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
     ch.pan         = (float)child.getProperty("pan",      0.0f);
     ch.mute        = (bool)child.getProperty("mute",      false);
     ch.solo        = (bool)child.getProperty("solo",      false);
-    ch.phaseInvert = (bool)child.getProperty("phase",     false);
     ch.pitch       = (float)child.getProperty("pitch",    0.0f);
     {
         // One default per source (Sample/Noise/Osc/FM/Physical) - was 4 entries for 5 sources = OOB read.

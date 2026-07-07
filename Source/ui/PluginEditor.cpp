@@ -4232,7 +4232,7 @@ KeysPanel::KeysPanel()
       for (int i = 0; i < 3; ++i)
       {
           addAndMakeVisible(lblChord[i]);
-          lblChord[i].setFont(juce::Font(17.0f, juce::Font::bold));
+          lblChord[i].setFont(juce::Font(20.0f, juce::Font::bold));
           lblChord[i].setColour(juce::Label::textColourId, cc[i]);
           lblChord[i].setJustificationType(juce::Justification::centredLeft);
           lblChord[i].setMinimumHorizontalScale(0.55f);   // squeeze, never "..." (user)
@@ -5426,7 +5426,6 @@ void DrumSequencerEditor::resetChannelToDefault(DrumChannel& c, int ch)
     c.soundType = DrumSoundGenerator::Type::Kick808;
     c.sampleStart = 0.0f; c.sampleEnd = 1.0f; c.useRegion = false; c.playSpeed = 1.0f;
     c.sliceCount = 1; c.stretchAmt = 1.0f;   // (were missing - stale slices/stretch survived Init)
-    c.phaseInvert = false;                   // AUDIT FIX: live DSP + MIDI-learnable but was reset NOWHERE
     c.allowOverlap = false;
     c.mixName = juce::String(); c.mixModified = false;   // no sound mix selected
     c.loadDefaultSound();
@@ -5451,6 +5450,19 @@ void DrumSequencerEditor::writeChannelMix(juce::ValueTree& t, const DrumChannel&
 {
     t.setProperty("sound",    (int) ch.soundType,    nullptr);
     t.setProperty("keysPoly", ch.keysPolyMode, nullptr);
+    if (ch.arpOn)   // DEDICATED-ARP sounds: the pattern is part of the sound and travels with it.
+    {               // arp OFF = the sound carries NO arp - loading it leaves the channel's arp alone
+                    // (setting an arp up takes long; a plain sound swap must never wipe it - user rule).
+        t.setProperty("arpOn",   true,        nullptr);
+        t.setProperty("arpLen",  ch.arpLen,   nullptr);
+        t.setProperty("arpSync", ch.arpSync,  nullptr);
+        t.setProperty("arpRate", ch.arpRate,  nullptr);
+        t.setProperty("arpAlign", ch.arpAlign, nullptr);
+        t.setProperty("arpHold", ch.arpHold,  nullptr);
+        t.setProperty("arpGate", ch.arpGate,  nullptr);
+        juce::String ao; for (int i = 0; i < DrumChannel::ARP_ROWS; ++i) ao << (int) ch.arpOffset[i] << ',';
+        t.setProperty("arpOff", ao, nullptr);
+    }
     t.setProperty("keysSplit", ch.keysSplit, nullptr);
     t.setProperty("splitW1", ch.keysSplitW1, nullptr);
     t.setProperty("splitW2", ch.keysSplitW2, nullptr);
@@ -5529,6 +5541,20 @@ void DrumSequencerEditor::writeChannelMix(juce::ValueTree& t, const DrumChannel&
 void DrumSequencerEditor::readChannelMix(const juce::ValueTree& t, DrumChannel& ch, juce::String& missingSample) const
 {
     ch.keysPolyMode = (bool) t.getProperty("keysPoly", true);
+    if (t.hasProperty("arpOn") && (bool) t.getProperty("arpOn", false))
+    {   // the sound brings its OWN arp -> apply it; sounds without one keep the channel's arp
+        ch.arpOn   = true;
+        ch.arpLen  = juce::jlimit(1, 1 + DrumChannel::ARP_ROWS, (int) t.getProperty("arpLen", 2));
+        ch.arpSync = DrumChannel::arpSnapSync((int) t.getProperty("arpSync", 8));
+        ch.arpRate = juce::jlimit(0, DrumChannel::ARP_RATES - 1, (int) t.getProperty("arpRate", 8));
+        ch.arpAlign = (bool) t.getProperty("arpAlign", true);
+        ch.arpHold  = (bool) t.getProperty("arpHold", false);
+        ch.arpGate  = juce::jlimit(0.1f, 1.0f, (float) t.getProperty("arpGate", 1.0f));
+        const juce::String ao = t.getProperty("arpOff", "").toString();
+        if (ao.isNotEmpty()) { auto f = juce::StringArray::fromTokens(ao, ",", "");
+            for (int i = 0; i < DrumChannel::ARP_ROWS && i < f.size(); ++i)
+                ch.arpOffset[i] = (int8_t) juce::jlimit(-128, 127, f[i].getIntValue()); }
+    }
     ch.keysSplit    = (bool) t.getProperty("keysSplit", false);
     ch.keysSplitW1  = juce::jlimit(12, 60, (int) t.getProperty("splitW1", 60));
     ch.keysSplitW2  = juce::jlimit(12, 60, (int) t.getProperty("splitW2", 12));
@@ -5926,7 +5952,7 @@ void DrumSequencerEditor::initPreset()
             auto& ch = P.channels[c];
             resetChannelToDefault(ch, c);
             ch.chokeGroup = 0; ch.outputBus = 0; ch.midiOut = false; ch.midiOutChannel = 1;   // routing is preset-level -> reset on Init too
-            ch.mute = false; ch.solo = false; ch.phaseInvert = false;   // mixer state resets with the preset too (audit)
+            ch.mute = false; ch.solo = false;   // mixer state resets with the preset too (audit)
             ch.duckBy = -1; ch.duckAmt = 0.5f;
             ch.numSteps = 8;
             // Wipe EVERY per-step value too (not just on/off) so a fresh init really starts clean - matches the
