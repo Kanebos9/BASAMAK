@@ -810,7 +810,8 @@ private:
         float    eqZ1[7][2] = {}, eqZ2[7][2] = {};
         // === PER-SLOT EQ (end) ===
         // === PER-SLOT FILTER (begin) - resonant LP state (stereo); coeffs live in SC ===
-        float    filtZ1[2] = {}, filtZ2[2] = {};
+        double   filtIc1[2] = {}, filtIc2[2] = {};   // TPT/ZDF SVF integrator states (per stereo side)
+        double   filtGm = -1.0;                       // per-sample smoothed cutoff coefficient (-1 = snap to target)
         // === PER-SLOT FILTER (end) ===
         // Per-step LENGTH: effective decay (seconds) replacing this slot's dec so the note's fall
         // FILLS the note length (attack/hold untouched). 0 = no gate = the authored decay. FROZEN

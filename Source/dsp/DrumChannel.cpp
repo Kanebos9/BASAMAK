@@ -1108,7 +1108,8 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         sv.pinkB[0] = sv.pinkB[1] = sv.pinkB[2] = 0.0f;
         sv.brownState = sv.prevWhite = 0.0f;
         sv.greyZ1 = sv.greyZ2 = 0.0f;
-        sv.filtZ1[0] = sv.filtZ1[1] = sv.filtZ2[0] = sv.filtZ2[1] = 0.0f;   // per-slot filter starts clean each hit (no retrigger click)
+        sv.filtIc1[0] = sv.filtIc1[1] = sv.filtIc2[0] = sv.filtIc2[1] = 0.0;   // SVF starts clean each hit (no retrigger click)
+        sv.filtGm = -1.0;                                                        // snap the smoothed cutoff to the new target
         sv.fmCarrier = sv.fmMod = sv.fmSubPhase = 0.0; sv.fmFbState = 0.0f;
         sv.wtPhase = 0.0; sv.modalInit = false; sv.modalHold = false;   // re-strike the modal bank on this hit
         for (auto& row : sv.modalY1) for (auto& v2 : row) v2 = 0.0f;   // clean resonator state every hit
@@ -1434,7 +1435,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         // === PER-SLOT EQ (end) ===
         // === PER-SLOT FILTER (begin) - resonant LP; raw params here, coeffs recomputed per BLOCK
         //     (env-follow) into 'filt' just before the voice loop; state lives per-voice ===
-        bool   filtOn = false; double filtCutoff = 1000; float filtReso = 0.707f, filtEnvAmt = 0; Biquad filt;
+        bool   filtOn = false; double filtCutoff = 1000; float filtReso = 0.707f, filtEnvAmt = 0;
+        double filtG = 0.1, filtK = 1.414;   // TPT SVF targets: g = tan(pi*fc/sr), k = 1/Q
         // === PER-SLOT FILTER (end) ===
         // Per-slot LFOs (3 independent sines, restart each hit). Index: 0 filter cutoff / 1 pitch / 2 volume.
         float  lfoRate[3] = { 4.0f, 4.0f, 4.0f }, lfoAmt[3] = { 0.0f, 0.0f, 0.0f };
@@ -1754,7 +1756,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 if (nv != nullptr)
                     cutoff *= std::pow(2.0, std::sin(nv->sv[s].lfoPhase[0]) * (double) c.lfoAmt[0] * 3.0);
             }
-            c.filt.lowpass(sr, juce::jlimit(20.0, nyq, cutoff), (double) c.filtReso);
+            c.filtG = std::tan(kPi * juce::jlimit(20.0, nyq, cutoff) / sr);   // ZDF prewarped cutoff target
+            c.filtK = 1.0 / juce::jmax(0.15, (double) c.filtReso);              // damping (higher reso = lower k)
         }
     }
     // === PER-SLOT FILTER (end) ===
@@ -1914,9 +1917,13 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         if (c.fmIndex > 0.0001f) {
                             const float modOut = (float) std::sin(sv.fmMod + c.fmFeedback * 6.0f * sv.fmFbState);
                             sv.fmFbState = 0.5f * (sv.fmFbState + modOut);
+                            // ANTI-ALIAS: FM sidebands ignore Nyquist - roll the index off as the
+                            // effective carrier climbs (1x below ~1.8 kHz = drums/bass untouched;
+                            // C7/C8 leads lose the inharmonic fizz instead of aliasing).
+                            const float fmAtt = (float) juce::jlimit(0.35, 1.0, 1800.0 / juce::jmax(1800.0, freq * fmRootMul));
                             // Env-follow: the FM index rides the amp envelope (classic FM drum -
                             // bright modulated attack that mellows to the plain carrier as it decays).
-                            fmAdd = (c.fmEnvF ? c.fmIndex * env : c.fmIndex) * modOut;
+                            fmAdd = (c.fmEnvF ? c.fmIndex * env : c.fmIndex) * fmAtt * modOut;
                             sv.fmMod += 2.0 * kPi * freq * fmRootMul * (double) c.fmRatio / sr;
                             if (sv.fmMod > 2.0 * kPi) sv.fmMod -= 2.0 * kPi;
                         }
@@ -2238,9 +2245,23 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 // === PER-SLOT FILTER (begin) - resonant LP on THIS slot's source (before its EQ),
                 //     so it never touches the other slot's engine. State is per-voice. ===
                 if (c.filtOn) {
-                    if (stereo) { sL = eqProcess(c.filt, sv.filtZ1, sv.filtZ2, sL, 0);
-                                  sR = eqProcess(c.filt, sv.filtZ1, sv.filtZ2, sR, 1); }
-                    else          sig = eqProcess(c.filt, sv.filtZ1, sv.filtZ2, sig, 0);
+                    // TPT/ZDF state-variable lowpass with the cutoff coefficient smoothed PER SAMPLE
+                    // (~2 ms): env/LFO sweeps glide instead of stepping at block rate, and the
+                    // resonance stays well-behaved right up to self-oscillation territory.
+                    double& gm = sv.filtGm;
+                    if (gm < 0.0) gm = c.filtG;
+                    gm += (c.filtG - gm) * 0.0025;                       // ~2 ms at 2x-OS engine rates
+                    const double a1 = 1.0 / (1.0 + gm * (gm + c.filtK)), a2 = gm * a1, a3 = gm * a2;
+                    auto svf = [&](double in, int lr) {
+                        const double v3 = in - sv.filtIc2[lr];
+                        const double v1 = a1 * sv.filtIc1[lr] + a2 * v3;
+                        const double v2 = sv.filtIc2[lr] + a2 * sv.filtIc1[lr] + a3 * v3;
+                        sv.filtIc1[lr] = 2.0 * v1 - sv.filtIc1[lr];
+                        sv.filtIc2[lr] = 2.0 * v2 - sv.filtIc2[lr];
+                        return v2;
+                    };
+                    if (stereo) { sL = (float) svf(sL, 0); sR = (float) svf(sR, 1); }
+                    else          sig = (float) svf(sig, 0);
                 }
                 // Track this slot's max amp level this block -> next block's env-follow cutoff.
                 blockSlotEnv[s] = juce::jmax(blockSlotEnv[s], env * v.velGain);
