@@ -946,6 +946,9 @@ void SlotEditor::placeGeneric(int boxW)
 
     // 5+ params (Physical / Modal / Noise): stacked FULL-WIDTH faders - readable + uses the height well
     // (a cramped 2-row knob grid was wasting space). Name on the left, value on the right.
+    // Lock Pitch (Osc/KS/Modal) gets a RESERVED right column in either variant - the faders/knobs
+    // shrink to make room, so it can never sit on a control (user round-3).
+    const int reserve = lockPitchSw.isVisible() ? 54 : 0;
     if (n >= 5)
     {
         const int availH = juce::jmax(20, getHeight() - yTop - 2);
@@ -953,29 +956,31 @@ void SlotEditor::placeGeneric(int boxW)
         // Wider name + value columns (so Modal material names etc. are readable) -> the fader track itself is shorter.
         // Same dimensions for Noise/Physical/Modal (they all share this path) so the boxes look consistent.
         const int tag = 62;                          // name column (left)
-        const int valW = juce::jlimit(60, 90, innerW - tag - 60);  // value column (right) - room for long choice names
+        const int valW = juce::jlimit(60, 90, innerW - tag - reserve - 60);  // value column (right) - room for long choice names
         for (int i = 0; i < n; ++i) {
             const int y = yTop + i * rowH;
             knobs[i]->setSliderStyle(juce::Slider::LinearHorizontal);
             knobs[i]->setTextBoxStyle(juce::Slider::TextBoxRight, true, valW, juce::jmax(12, rowH - 4));
-            knobs[i]->setBounds(mL + tag, y, innerW - tag, rowH - 2);
+            knobs[i]->setBounds(mL + tag, y, innerW - tag - reserve, rowH - 2);
             labels[i]->setJustificationType(juce::Justification::centredLeft);
             labels[i]->setBounds(mL, y, tag - 2, rowH - 2);
         }
+        if (reserve > 0)
+            lockPitchSw.setBounds(mL + innerW - 48, yTop + juce::jmax(0, (n * rowH - 30) / 2), 46, 30);
         return;
     }
 
-    // <= 4 params: one row of rotary knobs, as big as fits.
+    // <= 4 params: one row of rotary knobs, as big as fits (inside innerW minus the reserved column).
     const int cols = n;
-    if (lockPitchSw.isVisible())   // KS/Modal: park the Lock Pitch button at the top-right of the
-        lockPitchSw.setBounds(mL + innerW - 48, yTop + 2, 46, 32);   // knob area (rows are centred)
     const int availH = juce::jmax(50, getHeight() - yTop);
-    int KS = juce::jmin((innerW - (cols - 1) * GAP) / cols, availH - 24);
+    int KS = juce::jmin((innerW - reserve - (cols - 1) * GAP) / cols, availH - 24);
     KS = juce::jlimit(30, 64, KS);
     const int kh = KS + 13;
     const int rowW = cols * KS + (cols - 1) * GAP;
-    int kx = mL + (innerW - rowW) / 2;                    // centre the row
+    int kx = mL + (innerW - reserve - rowW) / 2;          // centre the row in the remaining width
     const int yy = yTop + juce::jmax(0, (availH - (kh + 11)) / 2);
+    if (reserve > 0)
+        lockPitchSw.setBounds(mL + innerW - 48, yy + (kh - 30) / 2, 46, 30);
     for (int i = 0; i < n; ++i) {
         knobs[i]->setBounds(kx, yy, KS, kh);
         labels[i]->setJustificationType(juce::Justification::centred);
@@ -1028,15 +1033,15 @@ void SlotEditor::placeOsc(int boxW)
       fmEnvSw.setBounds(mL, y + 18, 26, 13);               // FM Amount follows the amp env (tooltip explains)
       const int fx0 = mL + tag;
       const int nfm = juce::jmin(3, (int) params.size());  // Amount, Ratio, Feedback
-      const int cell = (innerW - tag) / juce::jmax(1, nfm);
+      const int reserve = 54;                              // Lock Pitch gets its OWN right column -
+      const int cell = (innerW - tag - reserve) / juce::jmax(1, nfm);   // the knob cells shrink, nothing overlaps
       for (int gi = 0; gi < nfm; ++gi) {
           const int cellX = fx0 + gi * cell;
           knobs[gi]->setBounds(cellX, y, KS_FM, kh_FM);                          // knob (value read-out below the dial)
           labels[gi]->setJustificationType(juce::Justification::centredLeft);
-          const int shave = (gi == nfm - 1) ? 52 : 0;      // last cell donates room to the Lock Pitch button
-          labels[gi]->setBounds(cellX + KS_FM + 2, y + (kh_FM - 14) / 2, cell - KS_FM - 2 - shave, 14);
+          labels[gi]->setBounds(cellX + KS_FM + 2, y + (kh_FM - 14) / 2, cell - KS_FM - 2, 14);
       }
-      lockPitchSw.setBounds(mL + innerW - 48, y + (kh_FM - 32) / 2, 46, 32);     // the free bottom-right cell
+      lockPitchSw.setBounds(mL + innerW - 48, y + (kh_FM - 30) / 2, 46, 30);     // its own column, mid-row
       y += kh_FM + 2; }
 }
 
