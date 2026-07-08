@@ -44,5 +44,36 @@ int main()
     printf("[2] UNLOCKED +12 vs 0 step pitch: maxdiff=%.3f (expect >0.1)  -> %s\n", dU, CHK(dU > 0.1) ? "OK" : "FAIL");
     const double dK = diff(render(true, 0.0f, 72), render(true, 0.0f, 60));
     printf("[3] LOCKED keys C5 vs C4:        maxdiff=%.6f (expect 0)      -> %s\n", dK, CHK(dK < 1e-6) ? "OK" : "FAIL");
+
+    // [4] ALT STRUM: strumFlip must audibly REVERSE the strum (root-first vs top-first).
+    auto strum = [&](bool flip)
+    {
+        const double SR = 48000.0; const int bs = 512;
+        auto* q = new Sequencer();
+        q->setStandaloneBpm(120.0f);
+        auto& c2 = q->patterns[0].channels[0];
+        for (auto& sl : c2.slots) sl = DrumChannel::Slot();
+        auto& sl = c2.slots[0];
+        sl.engine = DrumChannel::SrcOsc; sl.weight = 1.0f;
+        sl.oscShape = sl.oscShapeB = DrumChannel::WvSaw; sl.oscFreq = 261.6256f;
+        sl.atk = 0.002f; sl.dec = 0.5f;
+        sl.scaleOn = true; sl.scaleType = 0; sl.scaleUnison = 3; sl.scaleKey = 0;
+        c2.strumAmt = 1.0f;
+        c2.strumFlip = flip;
+        for (auto& pp : q->patterns) for (auto& cc : pp.channels) cc.prepareToPlay(SR, bs);
+        c2.trigger(1.0f);
+        std::vector<float> o;
+        juce::AudioBuffer<float> b2(2, bs);
+        for (int b = 0; b < (int)(0.4 * SR / bs); ++b)
+        { b2.clear(); c2.renderInto(b2, 0, bs, false); for (int i = 0; i < bs; ++i) o.push_back(b2.getSample(0, i)); }
+        delete q;
+        return o;
+    };
+    const auto up = strum(false), down = strum(true);
+    const double dS = diff(up, down);
+    // and the flip must NOT change total energy (same notes, opposite order)
+    double eU = 0, eD = 0; for (auto v : up) eU += (double) v * v; for (auto v : down) eD += (double) v * v;
+    printf("[4] ALT STRUM up vs down: maxdiff=%.3f (expect >0.05), energy ratio=%.3f (expect ~1) -> %s\n",
+           dS, eU > 0 ? eD / eU : 0.0, CHK(dS > 0.05 && std::abs(eD / juce::jmax(1e-9, eU) - 1.0) < 0.25) ? "OK" : "FAIL");
     return fails;
 }

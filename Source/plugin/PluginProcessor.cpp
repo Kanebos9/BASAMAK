@@ -444,10 +444,12 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         auto fireArp = [&](int step)
         {
             const int note = DrumChannel::arpNoteAt(arpKc.arpOffset, arpKc.arpLen, arpRoot, step);
-            if (note < 0)   // REST row: at Gate 100% the ringing note KEEPS RINGING through it
-            {               // (user: "it should continue until the next one"); below 100% the
-                            // gate countdown still cuts it, so rests stay usable as silence.
-              if (arpSounding >= 0 && arpKc.arpGate < 0.999f) { arpKc.keyUp(arpSounding); arpSounding = -1; }
+            if (note < 0)   // REST row: release the ringing note (it fades with the sound's own
+            {               // RELEASE - guitars have a musical 0.5 s now, so this reads as rhythm,
+                            // not a chop). Note->NOTE ringing-into-next comes from poly keyDown;
+                            // rests must stay AUDIBLE as silence (they are the riff's rhythm tool -
+                            // letting them ring made every Last-note count sound identical).
+              if (arpSounding >= 0) { arpKc.keyUp(arpSounding); arpSounding = -1; }
               arpSoundingUi.store(-1, std::memory_order_relaxed); return; }
             // Alternate strokes (user: up, down, up... like real strumming) - flip before the trigger.
             arpKc.strumFlip = arpKc.arpAltStrum && ((arpFireCount++ & 1) != 0);
