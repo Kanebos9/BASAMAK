@@ -451,10 +451,14 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                             // letting them ring made every Last-note count sound identical).
               if (arpSounding >= 0) { arpKc.keyUp(arpSounding); arpSounding = -1; }
               arpSoundingUi.store(-1, std::memory_order_relaxed); return; }
+            // GATE 100% = held for exactly ONE CELL, released when the next note fires (user rule -
+            // merge/longer notes are the tool for longer holds). So: at EVERY fire the previous
+            // note is keyUp'd first; on a POLY channel its RELEASE tail rings over the new note
+            // (legato), on mono it cuts - identical to what the recording plays back.
+            if (arpSounding >= 0) { arpKc.keyUp(arpSounding); arpSounding = -1; }
             // Alternate strokes (user: up, down, up... like real strumming) - flip before the trigger.
-            arpKc.strumFlip = arpKc.arpAltStrum && ((arpFireCount++ & 1) != 0);
-            // POLY channels let the previous note RING into the next (gate/mono-cut used to chop
-            // strummed guitar chords ~15 ms after every fire = "sounds TOO SHORT"); mono keeps the cut.
+            const bool upStroke = arpKc.arpAltStrum && ((arpFireCount++ & 1) != 0);
+            arpKc.strumFlip = upStroke;
             arpKc.keyDown(note, arpVel, arpKc.keysSlot2Down, arpKc.keysPolyMode);
             arpSounding = note;
             arpNoteAge = 0;                                            // fresh note: the Gate countdown restarts
@@ -464,18 +468,22 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             {
                 const double gridPerBar = (double) juce::jmax(1, arpKc.arpSync) * DrumChannel::arpRateMul(arpKc.arpRate);
                 const int colLen = juce::jmax(1, (int) ((double) DrumChannel::DRAW_RES / gridPerBar));
-                // FREE (unquantised) stamping - recording must capture what actually played (the
-                // grid snap was rightly cursed out). Overlaps (the false warning) are killed the
-                // honest way instead: the PREVIOUS arp stamp is TRIMMED to end where this one starts.
+                // FREE (unquantised) stamping - recording captures what actually played:
+                // gated notes of len = cell x GATE (exactly when the live keyUp happens), the
+                // UPSTROKE's lighter accent baked into the velocity. The previous stamp is
+                // TRIMMED if block jitter made it poke into this one (no false overlap warnings).
                 const int col = arpKicked ? 0 : juce::jlimit(0, DrumChannel::DRAW_RES - 1,
                                                              (int) (sequencer.barPos() * DrumChannel::DRAW_RES));
+                const int len = juce::jmax(1, (int) std::lround((double) colLen
+                                    * juce::jlimit(0.1f, 1.0f, arpKc.arpGate)));
                 auto& pch = sequencer.patterns[sequencer.playPattern].channels[chIdx];
                 if (arpLastStampIdx >= 0 && arpLastStampIdx < pch.drawNoteCount
                     && arpLastStampPat == sequencer.playPattern
                     && col > pch.drawNotes[arpLastStampIdx].start
                     && pch.drawNotes[arpLastStampIdx].start + pch.drawNotes[arpLastStampIdx].len > col)
                     pch.drawNotes[arpLastStampIdx].len = (int16_t) juce::jmax(1, col - pch.drawNotes[arpLastStampIdx].start);
-                arpLastStampIdx = pch.addDrawNote(col, colLen, note - 60, (int) std::lround(arpVel * 255.0f));
+                arpLastStampIdx = pch.addDrawNote(col, len, note - 60,
+                                    (int) std::lround(arpVel * (upStroke ? 0.82f : 1.0f) * 255.0f));
                 arpLastStampPat = sequencer.playPattern;
             }
         };

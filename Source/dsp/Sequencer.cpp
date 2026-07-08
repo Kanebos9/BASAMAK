@@ -62,7 +62,9 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
                 c.trigger(e.drawVel, e.drawGlideFrom, c.drawPan, g, /*glideTo*/ e.drawPitch, gs,
                           /*forceOverlap*/ true, mask, kg);
             } else
-                c.trigger(e.drawVel, e.drawPitch, c.drawPan, g, 0.0f, 0, e.drawOverlap, mask, kg);
+                // POLY channels: release tails ring over the next note in PLAYBACK exactly as
+                // they do live (mono channels keep the classic mono-cut - also like live).
+                c.trigger(e.drawVel, e.drawPitch, c.drawPan, g, 0.0f, 0, e.drawOverlap || c.keysPolyMode, mask, kg);
             return; }
         // Choke groups: a hit FADES OUT (~3 ms) the ringing tails of other channels in the same
         // group (e.g. a closed hi-hat silencing an open one). A hard cut clicked whenever the

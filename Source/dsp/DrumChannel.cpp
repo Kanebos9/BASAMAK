@@ -1196,6 +1196,8 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
                 if (strumFlip) sv.velScale *= 0.82f;
             }
         }
+        if (s == NUM_SLOTS - 1) strumFlip = false;   // one-shot flag: live sets it per stroke; sequenced
+                                                     // playback must never inherit a stale direction
 
         // Sample slot: this hit plays the NEXT slice of THIS slot's own sample, from its slice start
         // (= region start when slicing is off). Each Sample slot has independent slices/region/buffer.
