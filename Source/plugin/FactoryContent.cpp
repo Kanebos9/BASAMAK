@@ -1309,7 +1309,9 @@ static void moHandBell(DC& c) {    // small hand bell: quick bright ding (vs Tub
 static void kHouseStab(DC& c) {    // classic house piano-organ stab: Min7 voicing baked in
     auto& s = mkSlot(c, DC::SrcOsc);
     s.oscShape = s.oscShapeB = 9; s.oscFreq = 261.63f;               // Organ
-    s.chordMode = 7; s.chordUnison = 4;                              // Min7, four notes per key
+    s.scaleOn = true; s.scaleType = 1; s.scaleUnison = 4; s.scaleKey = 0;   // natural-minor 7ths:
+    // C plays Cm7 exactly like the old fixed Min7 chord - but SCALE mode has UI (chordMode has
+    // none since the redesign), so the voicing is fully user-replicable + editable (user rule).
     s.atk = 0.002f; s.dec = 0.4f; s.sustain = 0.0f; s.release = 0.08f;
     s.fxDriveType = DC::Tube; s.fxDrive = 0.1f;
     c.eqBand[DC::EQ_HP] = { true, 160.0f, 0.0f, 0.707f };
@@ -1318,7 +1320,8 @@ static void kHouseStab(DC& c) {    // classic house piano-organ stab: Min7 voici
 static void kRaveStab(DC& c) {     // hoover-adjacent rave stab: detuned saws voiced as a MAJOR triad
     auto& s = mkSlot(c, DC::SrcOsc);
     s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
-    s.chordMode = 3; s.chordUnison = 3;                              // Maj triad
+    s.scaleOn = true; s.scaleType = 0; s.scaleUnison = 3; s.scaleKey = 0;   // Major triads (C = C-E-G,
+    // same as the old fixed Maj chord on the root; SCALE has UI, chordMode does not - user rule)
     s.oscDetune = 0.2f; s.uniSpread = 0.4f;
     s.atk = 0.002f; s.dec = 0.5f; s.sustain = 0.0f; s.release = 0.1f;
     s.fxDriveType = DC::Foldback; s.fxDrive = 0.25f;
@@ -1718,6 +1721,26 @@ static void finishSound(DC& ch)
     bool authored = false;
     for (auto& s : ch.slots) if (s.engine >= 0) { authored = true; break; }
     if (! authored) ch.buildSlotsFromLegacy();
+    // UI-REPLICABILITY (2026-07-08, user rule: every factory sound must be reproducible from the
+    // UI alone). Channel-level sends and drive have NO UI (the visible Reverb/Delay/Drive
+    // controls are PER-SLOT), so factory sounds may not rely on them: migrate onto every audible
+    // slot. Sends are linear (sum of slot sends == the channel send); drive on separate slots
+    // loses a little inter-slot glue vs driving the mix - accepted, these drives are light.
+    {
+        const bool anyDrive = ch.driveType != DC::DriveOff && ch.driveAmount > 0.001f;
+        if (ch.reverbSend > 0.001f || ch.delaySend > 0.001f || anyDrive)
+        {
+            for (auto& sl : ch.slots)
+            {
+                if (sl.engine < 0 || sl.weight <= 0.001f) continue;
+                if (ch.reverbSend > 0.001f && sl.fxReverbSend <= 0.0001f) sl.fxReverbSend = ch.reverbSend;
+                if (ch.delaySend  > 0.001f && sl.fxDelaySend  <= 0.0001f) sl.fxDelaySend  = ch.delaySend;
+                if (anyDrive && sl.fxDrive <= 0.0001f) { sl.fxDriveType = ch.driveType; sl.fxDrive = ch.driveAmount; }
+            }
+            ch.reverbSend = 0.0f; ch.delaySend = 0.0f;
+            ch.driveType = DC::DriveOff; ch.driveAmount = 0.0f;
+        }
+    }
     // Slot-authored KS sounds (e.g. String Keys = Physical) never hit buildSlotsFromLegacy, so
     // allocate the lazy KS delay lines here too - else the audio thread gates them to SILENCE
     // (ksReady == false) until a later prepareToPlay happens to allocate them.
