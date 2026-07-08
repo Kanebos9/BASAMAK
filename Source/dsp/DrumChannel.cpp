@@ -1185,9 +1185,15 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
                                                     : sl.chordMode > 0 ? sl.chordUnison : sl.oscUnison);
             if (nStr > 1)
             {
-                const double perVoice = strumAmt * 0.180 * (double) sr / (double)(nStr - 1);   // up to ~180 ms spread (user: 100% should be wider)
-                for (int u = 0; u < nStr; ++u)   // strumFlip = a DOWNSTROKE (high string first; the arp alternates it)
+                // The ALTERNATE stroke (strumFlip) is a real UPSTROKE, not just a reversed list:
+                // quicker (x0.7 spread) and LIGHTER (x0.82 level). Order alone was proven
+                // inaudible in a live log session - the accent pattern is what a strumming hand
+                // actually sounds like (down-UP-down-UP = loud-light-loud-light).
+                const double spreadMul = strumFlip ? 0.7 : 1.0;
+                const double perVoice = strumAmt * 0.180 * spreadMul * (double) sr / (double)(nStr - 1);
+                for (int u = 0; u < nStr; ++u)
                     sv.uniDelay[u] = (int) std::lround(perVoice * (double) (strumFlip ? nStr - 1 - u : u));
+                if (strumFlip) sv.velScale *= 0.82f;
             }
         }
 

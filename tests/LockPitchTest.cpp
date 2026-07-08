@@ -71,9 +71,11 @@ int main()
     };
     const auto up = strum(false), down = strum(true);
     const double dS = diff(up, down);
-    // and the flip must NOT change total energy (same notes, opposite order)
+    // the UPSTROKE is deliberately LIGHTER (x0.82 level) + quicker - the accent is what makes
+    // alternation audible (order alone was proven inaudible in a live session)
     double eU = 0, eD = 0; for (auto v : up) eU += (double) v * v; for (auto v : down) eD += (double) v * v;
-    printf("[4] ALT STRUM up vs down: maxdiff=%.3f (expect >0.05), energy ratio=%.3f (expect ~1) -> %s\n",
-           dS, eU > 0 ? eD / eU : 0.0, CHK(dS > 0.05 && std::abs(eD / juce::jmax(1e-9, eU) - 1.0) < 0.25) ? "OK" : "FAIL");
+    const double ratio = eD / juce::jmax(1e-9, eU);
+    printf("[4] ALT STRUM down vs UP: maxdiff=%.3f (expect >0.05), upstroke energy=%.3f (expect ~0.6-0.9 = lighter) -> %s\n",
+           dS, ratio, CHK(dS > 0.05 && ratio > 0.5 && ratio < 0.95) ? "OK" : "FAIL");
     return fails;
 }
