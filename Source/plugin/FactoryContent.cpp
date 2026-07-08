@@ -1704,19 +1704,6 @@ static void finishSound(DC& ch)
     bool authored = false;
     for (auto& s : ch.slots) if (s.engine >= 0) { authored = true; break; }
     if (! authored) ch.buildSlotsFromLegacy();
-    // RELATIVE PITCH CONTRACT (2026-07-08): the Slot-2 transpose is BAKED into slot 2's stored
-    // base at authoring time (keyDown/the roll no longer re-tune sounds). Builders author the
-    // RAW base (e.g. 261.63) + keysSlot2Down; this runs once per apply (builders reset the base,
-    // so it never double-bakes).
-    if (ch.keysSlot2Down != 0)
-    {
-        const float mul = std::pow(2.0f, -(float) ch.keysSlot2Down / 12.0f);
-        auto& s2 = ch.slots[1];
-        if (s2.engine == DC::SrcOsc || s2.engine == DC::SrcModal)
-            s2.oscFreq = juce::jlimit(1.0f, 20000.0f, s2.oscFreq * mul);
-        else if (s2.engine == DC::SrcPhys)
-            s2.physFreq = juce::jlimit(1.0f, 20000.0f, s2.physFreq * mul);
-    }
     // Slot-authored KS sounds (e.g. String Keys = Physical) never hit buildSlotsFromLegacy, so
     // allocate the lazy KS delay lines here too - else the audio thread gates them to SILENCE
     // (ksReady == false) until a later prepareToPlay happens to allocate them.

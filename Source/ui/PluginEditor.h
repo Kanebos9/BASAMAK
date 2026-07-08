@@ -61,8 +61,6 @@ public:
     juce::String getTooltip() override;   // explains edit modes + MERGE (cmd/shift+click) in one place
 
     void update(const Sequencer& seq, bool anySolo);
-    bool  pitchHzMode = false;                 // right-click the Pitch button: roll labels/read-out in Hz
-    float pitchBaseHz[Sequencer::NUM_CHANNELS] = {};   // per channel: first pitched audible slot's base (update())
     // Close the piano-roll editor unless it belongs to `ch` (selecting another channel must not
     // leave a stale editor covering the grid - user report).
     void closeDrawEditorIfNot(int ch)
@@ -319,7 +317,6 @@ public:
     juce::String paramId;
     MidiLearnManager* midiLearn = nullptr; // set later when default-constructed
     std::function<int()> learnChannelProvider;
-    std::function<bool()> rightClickHook;  // returns true = handled (the Pitch button's Hz-display menu)
 };
 
 //==============================================================================
