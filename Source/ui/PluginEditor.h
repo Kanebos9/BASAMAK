@@ -539,7 +539,7 @@ public:
     float  gate  = 1.0f; // note length as a fraction of one arp step (1 = ring into the next note)
     juce::Component* clickIgnore = nullptr;   // the Arp button: its own click toggles the popup
     std::function<void()> onChange;    // push these back onto the channel (+ mark modified)
-    ArpEditor() { for (auto& o : off) o = DrumChannel::ARP_REST; }
+    ArpEditor() { for (auto& o : off) o = 0; off[0] = 12; }   // mirror of the channel defaults (0 st, not REST)
     ~ArpEditor() override;
     void paint(juce::Graphics&) override;
     void mouseDown(const juce::MouseEvent&) override;
@@ -1705,7 +1705,7 @@ private:
     // audio - the Play tooltip flips to a "Not playing?" explanation (see timerCallback).
     uint32_t lastHeartbeat = 0; int heartbeatStaleTicks = 0; bool hostFrozen = false;
     // Step-grid edit-mode radio buttons (none selected = normal on/off steps).
-    LearnableButton btnModeVel { "Vel" }, btnModeLen { "Len" }, btnModePitch { "Pitch" }, btnModeProb { "Loop" }, btnModeRoll { "Roll" }, btnModePan { "Pan" }, btnModeNudge { "Nudge" };
+    LearnableButton btnModeVel { "Vel" }, btnModeLen { "Gate" }, btnModePitch { "Pitch" }, btnModeProb { "Loop" }, btnModeRoll { "Roll" }, btnModePan { "Pan" }, btnModeNudge { "Nudge" };
     juce::Label      lblEditMode;
     void setStepEditMode(int mode);   // 0 normal, 1 vel, 2 pitch, 3 prob
 

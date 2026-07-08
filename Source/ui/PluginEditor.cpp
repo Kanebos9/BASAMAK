@@ -4270,16 +4270,17 @@ void TunerBox::paint(juce::Graphics& g)
     const auto r = getLocalBounds();
     const int cy = r.getCentreY();
     const bool inTune = std::abs(cents) <= 3;
-    const int lit = juce::jlimit(0, 4, (std::abs(cents) + 11) / 12);   // 1 dot per ~12 cents
+    // LED-meter behaviour (user: the growing bar was "just wrong"): ONE dot lights at the
+    // deviation's POSITION - dot i covers ~(i*12..i*12+12) cents on its side, like a clip tuner.
+    const int pos = juce::jlimit(1, 4, (std::abs(cents) + 5) / 12 + (std::abs(cents) > 3 ? 1 : 0));
     for (int i = 0; i < 4; ++i)
     {
-        const int d = 4 - i;   // outermost first
         auto dot = [&](int x, bool on) {
             g.setColour(on ? juce::Colour(0xffffb03a) : juce::Colour(0xff33335a));
             g.fillEllipse((float) x - 2.5f, (float) cy - 2.5f, 5.0f, 5.0f);
         };
-        dot(r.getCentreX() - 40 - i * 12, cents < 0 && lit >= d);
-        dot(r.getCentreX() + 40 + i * 12, cents > 0 && lit >= d);
+        dot(r.getCentreX() - 40 - i * 12, ! inTune && cents < 0 && pos == i + 1);
+        dot(r.getCentreX() + 40 + i * 12, ! inTune && cents > 0 && pos == i + 1);
     }
     g.setColour(inTune ? juce::Colour(0xff2f9e57) : juce::Colour(0xff777fa8));
     g.drawEllipse((float) r.getCentreX() - 28.0f, (float) cy - 4.5f, 9.0f, 9.0f, 1.5f);
@@ -5167,7 +5168,7 @@ public:
         ed.addListener(this);
         addAndMakeVisible(list);
         list.setModel(this);
-        list.setRowHeight(20);
+        list.setRowHeight(25);   // x1.25 with the fonts (user)
         list.setColour(juce::ListBox::backgroundColourId, juce::Colour(0xff101020));
     }
     ~SoundPickerPanel() override { juce::Desktop::getInstance().removeGlobalMouseListener(&closer); }
@@ -5210,7 +5211,7 @@ public:
 
 private:
     struct Entry { juce::String text; int id = 0; bool action = false; };   // action = command row (tinted)
-    struct Row   { juce::String header; Entry a, b; bool isHeader = false; bool hasB = false; };
+    struct Row   { juce::String header; Entry e[3]; int n = 0; bool isHeader = false; };   // 3 columns (user)
     juce::Array<Row> rows;
     juce::Array<juce::File> files;
     juce::File root;
@@ -5232,12 +5233,12 @@ private:
     Closer closer { *this };
 
     void addHeader(const juce::String& text) { Row r; r.header = text; r.isHeader = true; rows.add(r); }
-    void addSection(const juce::Array<Entry>& items)   // pack 2 per row: the section FLOWS across
-    {                                                  // both columns (user spec)
-        for (int i = 0; i < items.size(); i += 2)
+    void addSection(const juce::Array<Entry>& items)   // pack 3 per row: the section FLOWS across
+    {                                                  // the columns (user spec, round-2: 3 cols)
+        for (int i = 0; i < items.size(); i += 3)
         {
-            Row r; r.a = items[i];
-            if (i + 1 < items.size()) { r.b = items[i + 1]; r.hasB = true; }
+            Row r;
+            for (int k = 0; k < 3 && i + k < items.size(); ++k) { r.e[k] = items[i + k]; ++r.n; }
             rows.add(r);
         }
     }
@@ -5292,7 +5293,7 @@ private:
     // TextEditor::Listener
     void textEditorTextChanged(juce::TextEditor&) override { rebuild(); }
     void textEditorReturnKeyPressed(juce::TextEditor&) override
-    { for (const auto& r : rows) if (! r.isHeader) { pick(r.a); return; } }
+    { for (const auto& r : rows) if (! r.isHeader && r.n > 0) { pick(r.e[0]); return; } }
     void textEditorEscapeKeyPressed(juce::TextEditor&) override { close(); }
     // ListBoxModel
     int getNumRows() override { return rows.size(); }
@@ -5303,39 +5304,41 @@ private:
         if (r.isHeader)
         {
             g.setColour(juce::Colour(0xffcf9a2a));
-            g.setFont(juce::Font(11.5f, juce::Font::bold));
+            g.setFont(juce::Font(14.5f, juce::Font::bold));   // x1.25 (user)
             g.drawFittedText(r.header, 4, 0, w - 8, h, juce::Justification::centredLeft, 1, 0.8f);
             return;
         }
-        const int half = w / 2;
-        int mx = -1;   // hover: highlight only the half under the cursor
+        const int colW = juce::jmax(1, w / 3);
+        int mx = -1;   // hover: highlight only the column under the cursor
         if (over) mx = list.getLocalPoint(nullptr, juce::Desktop::getInstance()
                                                        .getMainMouseSource().getScreenPosition().toInt()).x;
-        auto halfCell = [&](const Entry& en, int x0, bool hov)
+        for (int k = 0; k < r.n; ++k)
         {
+            const auto& en = r.e[k];
+            const int x0 = k * colW;
+            const bool hov = over && mx >= x0 && mx < x0 + colW;
             if (en.action)   // command rows (Initialize / Refresh / Show Folder) - tinted so they
             {                // never read as sounds
                 g.setColour(juce::Colour(hov ? 0xff2e4468 : 0xff223046));
-                g.fillRoundedRectangle((float) x0 + 2.0f, 1.0f, (float) half - 6.0f, (float) h - 2.0f, 4.0f);
+                g.fillRoundedRectangle((float) x0 + 2.0f, 1.0f, (float) colW - 6.0f, (float) h - 2.0f, 4.0f);
                 g.setColour(juce::Colour(0xff9fd1ff));
             }
             else
             {
-                if (hov) { g.setColour(juce::Colour(0xff2a2a4a)); g.fillRect(x0, 0, half, h); }
+                if (hov) { g.setColour(juce::Colour(0xff2a2a4a)); g.fillRect(x0, 0, colW, h); }
                 g.setColour(juce::Colours::white);
             }
-            g.setFont(juce::Font(13.5f, en.action ? juce::Font::bold : juce::Font::plain));
-            g.drawFittedText(en.text, x0 + 14, 0, half - 18, h, juce::Justification::centredLeft, 1, 0.8f);
-        };
-        halfCell(r.a, 0, over && mx < half);
-        if (r.hasB) halfCell(r.b, half, over && mx >= half);
+            g.setFont(juce::Font(17.0f, en.action ? juce::Font::bold : juce::Font::plain));   // x1.25 (user)
+            g.drawFittedText(en.text, x0 + 12, 0, colW - 16, h, juce::Justification::centredLeft, 1, 0.75f);
+        }
     }
     void listBoxItemClicked(int row, const juce::MouseEvent& e) override
     {
         if (row < 0 || row >= rows.size() || rows[row].isHeader) return;
         const auto& r = rows[row];
-        const int half = juce::jmax(1, list.getVisibleRowWidth() / 2);
-        pick(r.hasB && e.x >= half ? r.b : r.a);
+        const int colW = juce::jmax(1, list.getVisibleRowWidth() / 3);
+        const int k = juce::jlimit(0, 2, e.x / colW);
+        if (k < r.n) pick(r.e[k]);
     }
 };
 
@@ -5712,7 +5715,7 @@ void DrumSequencerEditor::openSoundPicker(int ch)
     int h = content.getHeight() - y - 6;
     if (h < 300) { h = juce::jmin(620, content.getHeight() - 12); y = content.getHeight() - h - 6; }
     h = juce::jmin(h, 620);
-    panel.setBounds(juce::jlimit(2, juce::jmax(2, content.getWidth() - 602), r.getX()), y, 600, h);
+    panel.setBounds(juce::jlimit(2, juce::jmax(2, content.getWidth() - 902), r.getX()), y, 900, h);   // 3 columns
     panel.openWith(soundMixFiles, getSoundMixFolder());
 }
 
@@ -6765,16 +6768,19 @@ void DrumSequencerEditor::setupComponents()
     btnModeVel.setTooltip("Velocity mode: drag a step UP/DOWN for how HARD that hit plays (0-100%). It's more than "
                           "volume: on sounds with a filter envelope a harder hit sweeps the filter further (303-style "
                           "accent), and MIDI Out channels send it as real MIDI velocity. Click again to leave.");
-    btnModeLen.setTooltip("Length mode: drag a step LEFT/RIGHT to set its NOTE LENGTH.\n\n"
+    btnModeLen.setTooltip("Gate mode (note length): drag a step LEFT/RIGHT to set how long the note is held - "
+                          "the same idea as a piano-roll note's length.\n\n"
                           "- The note keeps its attack/punch, then its DECAY is stretched (or tightened) so the fall "
                           "fills exactly that much of the step - long notes ring down across their whole length (like "
                           "a synth/303 note), short notes get a tight gated feel. On a sound with SUSTAIN up, Length "
                           "HOLDS the note instead (the same gate a held key uses).\n"
                           "- 'Off' (default) = the sound's own natural length; for MIDI Out channels 'Off' = a "
                           "one-step note. Because it's a FRACTION of the step, changing the step count keeps the feel.\n"
-                          "- PIANO ROLL round trips use Length too: switching to the roll turns a Length step into a "
-                          "gated note of that duration, and quantising the roll back to steps writes each GATED "
-                          "note's duration into Length (one-shot notes come back as plain steps).\n\n"
+                          "- MERGE (SHIFT+click a step) = a note LONGER than one step: the merged cells continue "
+                          "the previous step's note (their own on/off state doesn't matter - they never re-fire). "
+                          "A long piano-roll note quantises to exactly this: a head step + merged cells.\n"
+                          "- PIANO ROLL round trips use Gate too: a Gate step becomes a gated note of that length, "
+                          "and a gated note's duration comes back into Gate (one-shot notes = plain steps).\n\n"
                           "Double-click a step resets it to Off.");
     btnModePitch.setTooltip("Pitch edit mode: each step becomes a bipolar bar - centre is +0, drag up for higher / "
                             "down for lower pitch (semitones). Affects the whole sound of that hit. The 'slide' band "
@@ -10939,6 +10945,10 @@ void DrumSequencerEditor::scrollBarMoved(juce::ScrollBar* sb, double newRangeSta
 
 void DrumSequencerEditor::layoutContent()
 {
+    // A view change (KEYS toggle, 8/16 rows, hide editor, resize) must never leave the sound
+    // picker floating over the NEW layout (user screenshot: "it all just scrambled").
+    if (soundPicker != nullptr && soundPicker->isVisible())
+        static_cast<SoundPickerPanel&>(*soundPicker).close();
     const int W = DESIGN_W;
     const int gridLeft = STRIP_W + 4;
     const int gridW = W - gridLeft - 12;            // step grid now spans the full width

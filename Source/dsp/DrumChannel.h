@@ -636,8 +636,8 @@ public:
     static constexpr int  ARP_ROWS = 12;      // programmable rows = notes 2..13 (note 1 = the pressed key/root)
     static constexpr int  ARP_REST = -128;    // a row set to this = a rest (nothing plays that step)
     bool   arpOn = false;
-    int8_t arpOffset[ARP_ROWS] = { 12, ARP_REST, ARP_REST, ARP_REST, ARP_REST, ARP_REST,
-                                   ARP_REST, ARP_REST, ARP_REST, ARP_REST, ARP_REST, ARP_REST };  // default: root + octave
+    int8_t arpOffset[ARP_ROWS] = { 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };   // default: root + octave, then
+                                   // 0 st rows (user: extending Last note must SOUND, not add rests)
     int    arpLen  = 2;         // pattern length INCLUDING the root (1..1+ARP_ROWS); default root + row 1
     //   arpSync = the arp's BASE grid (the "Notes/bar" fader): how many notes fill one bar at Rate x1.
     //   Its OWN value (not the channel's numSteps) so it stays meaningful in Piano Roll mode. The odd

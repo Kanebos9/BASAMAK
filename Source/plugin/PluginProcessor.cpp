@@ -462,9 +462,13 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             if (rec && drawRec && (sequencer.isCurrentlyPlaying || arpKicked)
                 && std::abs(note - 60) <= DrumChannel::PITCH_RANGE)    // arp notes beyond the roll's range: skip
             {
-                const int colLen = juce::jmax(1, (int) ((double) DrumChannel::DRAW_RES
-                                                        / ((double) juce::jmax(1, arpKc.arpSync) * DrumChannel::arpRateMul(arpKc.arpRate))));
-                const int col = arpKicked ? 0 : juce::jlimit(0, DrumChannel::DRAW_RES - 1, (int) (sequencer.barPos() * DrumChannel::DRAW_RES));
+                const double gridPerBar = (double) juce::jmax(1, arpKc.arpSync) * DrumChannel::arpRateMul(arpKc.arpRate);
+                const int colLen = juce::jmax(1, (int) ((double) DrumChannel::DRAW_RES / gridPerBar));
+                // SNAP the stamp to the arp's OWN grid: the raw playhead column is block-quantised,
+                // which made consecutive notes micro-overlap -> the false "overlapping notes"
+                // warning when switching an arp recording to steps (user report).
+                const int cell = arpKicked ? 0 : (int) std::lround(sequencer.barPos() * gridPerBar);
+                const int col  = juce::jlimit(0, DrumChannel::DRAW_RES - 1, cell * colLen);
                 sequencer.patterns[sequencer.playPattern].channels[chIdx].addDrawNote(col, colLen, note - 60,
                                                                                       (int) std::lround(arpVel * 255.0f));
             }
