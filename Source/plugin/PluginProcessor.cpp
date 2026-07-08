@@ -1618,7 +1618,8 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
             ns << (int) ch.drawNotes[i].start << ':' << (int) ch.drawNotes[i].len << ':'
                << (int) ch.drawNotes[i].semi  << ':' << (int) ch.drawNotes[i].vel  << ':'
                << (int) ch.drawNotes[i].slot  << ':'
-               << (int) ch.drawNotes[i].glide << ',';
+               << (int) ch.drawNotes[i].glide << ':'
+               << (int) ch.drawNotes[i].oneShot << ',';
         chState.setProperty("drawNotes", ns, nullptr);
         chState.setProperty("drawVel", ch.drawVel, nullptr);
         chState.setProperty("drawPan", ch.drawPan, nullptr);
@@ -1800,7 +1801,8 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
                     if (f.size() >= 4)
                         ch.addDrawNote(f[0].getIntValue(), f[1].getIntValue(), f[2].getIntValue(), f[3].getIntValue(),
                                        f.size() >= 5 ? f[4].getIntValue() : 0,
-                                       f.size() >= 6 ? f[5].getIntValue() : 0);
+                                       f.size() >= 6 ? f[5].getIntValue() : 0,
+                                       f.size() >= 7 ? f[6].getIntValue() : 0);
                 }
             }
             else   // MIGRATION: old mono column lane ("drawSemi"/"drawVelC") -> same-semi runs become notes
@@ -1936,7 +1938,7 @@ juce::ValueTree DrumSequencerProcessor::captureStateTree()
                 juce::String ns; ns.preallocateBytes(t.drawNotes.size() * 14);
                 for (const auto& nt : t.drawNotes)
                     ns << (int) nt.start << ':' << (int) nt.len << ':' << (int) nt.semi << ':' << (int) nt.vel
-                       << ':' << (int) nt.slot << ':' << (int) nt.glide << ',';
+                       << ':' << (int) nt.slot << ':' << (int) nt.glide << ':' << (int) nt.oneShot << ',';
                 tt.setProperty("notes", ns, nullptr);   // piano-roll take = the note list
             }
             else
@@ -2061,7 +2063,8 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
                                                     (int8_t)  juce::jlimit(-DrumChannel::PITCH_RANGE, DrumChannel::PITCH_RANGE, f[2].getIntValue()),
                                                     (uint8_t) juce::jlimit(0, 255, f[3].getIntValue()),
                                                     (uint8_t) juce::jlimit(0, 2, f.size() >= 5 ? f[4].getIntValue() : 0),
-                                                    (uint8_t) (f.size() >= 6 && f[5].getIntValue() ? 1 : 0) });
+                                                    (uint8_t) (f.size() >= 6 && f[5].getIntValue() ? 1 : 0),
+                                                    (uint8_t) (f.size() >= 7 && f[6].getIntValue() ? 1 : 0) });
                     }
                 }
                 else   // MIGRATION: old lane take -> same-semi runs become notes

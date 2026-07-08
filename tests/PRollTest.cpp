@@ -53,5 +53,35 @@ int main() {
     ch.drawNoteCount = 2;   // keep just the two melody notes
     printf("hasOverlaps=%d (expect 0)  -> %s\n", (int) ch.drawHasOverlaps(), CHK(! ch.drawHasOverlaps()) ? "OK" : "FAIL");
     delete s;
+
+    // [4] ONE-SHOT notes = the STEP contract: on a SUSTAINED sound, a one-shot roll note must
+    // render (near) bit-identical to the same bare step, while a gated note must differ
+    // (sustain holds at 0.9 instead of decaying to zero).
+    auto render = [&](bool draw, int oneShot) {
+        auto* q = new Sequencer();
+        q->setStandaloneBpm(120.0f);
+        auto& c2 = q->patterns[0].channels[0];
+        for (auto& sl : c2.slots) sl = DrumChannel::Slot();
+        { auto& sl = c2.slots[0];
+          sl.engine = DrumChannel::SrcOsc; sl.weight = 1.0f;
+          sl.oscShape = sl.oscShapeB = DrumChannel::WvSaw; sl.oscFreq = 261.6256f;
+          sl.atk = 0.002f; sl.dec = 0.4f; sl.sustain = 0.9f; sl.release = 0.05f; }
+        if (draw) { c2.drawMode = true; c2.addDrawNote(0, 96, 0, 255, 0, 0, oneShot); }
+        else      { c2.numSteps = 16; c2.steps[0] = true; }
+        for (auto& pp : q->patterns) for (auto& cc : pp.channels) cc.prepareToPlay(SR, bs);
+        q->startStandalone();
+        std::vector<float> o;
+        juce::AudioBuffer<float> b2(2, bs);
+        for (int b = 0; b < (int)(1.5 * SR / bs) + 1; ++b)
+        { b2.clear(); q->processBlock(b2, SR, bs, nullptr); for (int i = 0; i < bs; ++i) o.push_back(b2.getSample(0, i)); }
+        delete q;
+        return o;
+    };
+    auto stepO = render(false, 0), oneO = render(true, 1), gateO = render(true, 0);
+    double dOne = 0, dGate = 0;
+    for (size_t i = 0; i < stepO.size() && i < oneO.size(); ++i) dOne  = std::max(dOne,  (double) std::abs(stepO[i] - oneO[i]));
+    for (size_t i = 0; i < stepO.size() && i < gateO.size(); ++i) dGate = std::max(dGate, (double) std::abs(stepO[i] - gateO[i]));
+    printf("[4] one-shot == step: maxdiff=%.6f (expect ~0); gated != step: maxdiff=%.3f (expect >0.05) -> %s\n",
+           dOne, dGate, CHK(dOne < 1e-4 && dGate > 0.05) ? "OK" : "FAIL");
     return fails;
 }

@@ -1796,11 +1796,26 @@ void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle
         if (overlay && ! outOfView)
         {
             juce::Rectangle<float> bar(x1, y - bh * 0.5f, juce::jmax(2.0f, x2 - x1 - 1.0f), bh);
-            g.setColour(col.withAlpha(0.9f)); g.fillRoundedRectangle(bar, 2.0f);
-            g.setColour(juce::Colour(0xff101018)); g.drawRoundedRectangle(bar, 2.0f, 1.0f);
+            if (n.oneShot)
+            {   // ONE-SHOT: the body ends in a fading TAPER (the sound rings past the bar; no gate,
+                // so no square end/resize emphasis). Right-click menu toggles one-shot/gated.
+                const float tw = juce::jmin(10.0f, bar.getWidth() * 0.45f);
+                auto body = bar.withTrimmedRight(tw);
+                g.setColour(col.withAlpha(0.9f)); g.fillRoundedRectangle(body, 2.0f);
+                juce::Path taper;
+                taper.addTriangle(body.getRight(), bar.getY(), body.getRight(), bar.getBottom(),
+                                  bar.getRight(), bar.getCentreY());
+                g.setColour(col.withAlpha(0.45f)); g.fillPath(taper);
+                g.setColour(juce::Colour(0xff101018)); g.drawRoundedRectangle(body, 2.0f, 1.0f);
+            }
+            else
+            {
+                g.setColour(col.withAlpha(0.9f)); g.fillRoundedRectangle(bar, 2.0f);
+                g.setColour(juce::Colour(0xff101018)); g.drawRoundedRectangle(bar, 2.0f, 1.0f);
+            }
             if (prSel[i])   // part of the multi-selection -> amber outline
             { g.setColour(juce::Colour(0xffffc23a)); g.drawRoundedRectangle(bar.expanded(1.0f), 3.0f, 1.6f); }
-            if (bar.getWidth() > 14.0f)   // resize tab on the right edge
+            if (! n.oneShot && bar.getWidth() > 14.0f)   // resize tab on the right edge (gated notes)
             { g.setColour(juce::Colours::white.withAlpha(0.55f));
               g.fillRect(juce::Rectangle<float>(bar.getRight() - 4.0f, bar.getY() + 1.0f, 3.0f, bar.getHeight() - 2.0f)); }
             if (n.glide)   // GLIDE flag: a cyan ramp sliding UP into the note's left edge (portamento)
@@ -2012,8 +2027,12 @@ juce::String StepGridComponent::getTooltip()
                             "- display only.\n"
                             "- CMD/CTRL+click a note = GLIDE (slides in from the previous note; the KEYS Glide "
                             "knob sets the time).\n"
-                            "- SHIFT+drag = SELECT an area: move the selected notes together, right-click or "
-                            "double-click deletes them, a colour button re-slots them.\n\n"
+                            "- RIGHT-CLICK a note = the NOTE MENU: one-shot vs gated, glide, slot, delete. "
+                            "ONE-SHOT (tapered end) = fires like a step and rings naturally; GATED (square end) "
+                            "= holds at sustain for its length, then releases.\n"
+                            "- SHIFT+drag = SELECT an area: move the selected notes together (the note menu "
+                            "then edits all of them), double-click deletes them, a colour button re-slots "
+                            "them.\n\n"
                             "Humanize/Strum apply here too. Pick a step count in the dropdown to QUANTISE the roll "
                             "to steps.");
     return juce::String("STEP GRID. Click = toggle steps; the buttons top-right switch edit modes (Vel/Len/Pitch/"
@@ -2267,11 +2286,46 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
                 return;
             }
             if (e.mods.isRightButtonDown() || e.mods.isPopupMenu())
-            {   // right-click: a SELECTED note deletes the whole selection; else deletes that one note
-                if (idx >= 0 && prSel[idx]) { deleteSelected(); return; }
-                if (idx >= 0) { prClearSel();
-                                for (int j = idx; j < drawNoteCount[ch2] - 1; ++j) drawNotes[ch2][j] = drawNotes[ch2][j + 1];
-                                --drawNoteCount[ch2]; pushNotes(ch2); repaint(); }
+            {   // right-click a note = the NOTE MENU (one-shot/gated, glide, slot, delete). Applies to
+                // the whole SELECTION when the clicked note is part of it. Double-click still deletes.
+                if (idx < 0) return;
+                const bool sel = prSel[idx];
+                const auto& nn = drawNotes[ch2][idx];
+                juce::PopupMenu m;
+                m.addSectionHeader(sel ? "Selected notes" : "Note");
+                m.addItem(1, "One-shot: ring naturally (like a step)", true, nn.oneShot != 0);
+                m.addItem(2, "Gated: hold for the note length",        true, nn.oneShot == 0);
+                m.addSeparator();
+                m.addItem(3, "Glide into this note", true, nn.glide != 0);
+                juce::PopupMenu sm;
+                sm.addItem(10, "Both slots", true, nn.slot == 0);
+                sm.addItem(11, "Slot 1",     true, nn.slot == 1);
+                sm.addItem(12, "Slot 2",     true, nn.slot == 2);
+                m.addSubMenu("Play on", sm);
+                m.addSeparator();
+                m.addItem(4, sel ? "Delete selected notes" : "Delete note");
+                m.showMenuAsync(juce::PopupMenu::Options(),
+                    [this, ch2, idx, sel, deleteSelected](int r)
+                    {
+                        if (r == 0 || idx >= drawNoteCount[ch2]) return;
+                        auto apply = [&](void (*f)(DrumChannel::DrawNote&, int), int arg)
+                        {
+                            for (int i = 0; i < drawNoteCount[ch2]; ++i)
+                                if (i == idx || (sel && prSel[i])) f(drawNotes[ch2][i], arg);
+                            pushNotes(ch2); repaint();
+                        };
+                        if (r == 1)      apply(+[](DrumChannel::DrawNote& n, int){ n.oneShot = 1; }, 0);
+                        else if (r == 2) apply(+[](DrumChannel::DrawNote& n, int){ n.oneShot = 0; }, 0);
+                        else if (r == 3) apply(+[](DrumChannel::DrawNote& n, int){ n.glide = n.glide ? 0 : 1; }, 0);
+                        else if (r >= 10 && r <= 12) apply(+[](DrumChannel::DrawNote& n, int a){ n.slot = (uint8_t) a; }, r - 10);
+                        else if (r == 4)
+                        {
+                            if (sel) { deleteSelected(); return; }
+                            prClearSel();
+                            for (int j = idx; j < drawNoteCount[ch2] - 1; ++j) drawNotes[ch2][j] = drawNotes[ch2][j + 1];
+                            --drawNoteCount[ch2]; pushNotes(ch2); repaint();
+                        }
+                    });
                 return;
             }
             if ((e.mods.isCommandDown() || e.mods.isCtrlDown()) && idx >= 0)
@@ -5647,7 +5701,7 @@ juce::int64 DrumSequencerEditor::stateHash() const
             h = mix(h, ch.drawMode ? 1 : 0);
             if (ch.drawMode) { h = mix(h, f(ch.drawVel)); h = mix(h, f(ch.drawPan));
                 for (int i = 0; i < ch.drawNoteCount; ++i) { const auto& nt = ch.drawNotes[i];
-                    h = mix(h, nt.start); h = mix(h, nt.len); h = mix(h, (int) nt.semi + 128); h = mix(h, (int) nt.vel); h = mix(h, (int) nt.slot); h = mix(h, (int) nt.glide); } }
+                    h = mix(h, nt.start); h = mix(h, nt.len); h = mix(h, (int) nt.semi + 128); h = mix(h, (int) nt.vel); h = mix(h, (int) nt.slot); h = mix(h, (int) nt.glide); h = mix(h, (int) nt.oneShot); } }
         }
     }
     h = mix(h, f(s.standaloneBpm)); h = mix(h, s.timeSigNum); h = mix(h, s.timeSigDen);
@@ -7269,7 +7323,7 @@ void DrumSequencerEditor::setupComponents()
         {
             const auto& nt = notes[i];
             const int b = juce::jlimit(0, bars - 1, (int) nt.start / RES);
-            sq.patterns[head + b].channels[ch].addDrawNote((int) nt.start - b * RES, nt.len, nt.semi, nt.vel, nt.slot, nt.glide);
+            sq.patterns[head + b].channels[ch].addDrawNote((int) nt.start - b * RES, nt.len, nt.semi, nt.vel, nt.slot, nt.glide, nt.oneShot);
         }
     };
     stepGrid.onDrawVelPan = [this](int ch, float vel, float pan) {           // whole-channel Pan (+ default vel)
@@ -7436,10 +7490,13 @@ void DrumSequencerEditor::setupComponents()
                                     const float frac = (float) j / (float) (roll - 1);
                                     velScale = (rr >= 0.0f) ? (1.0f - rr) + rr * frac : 1.0f + rr * frac;
                                 }
+                                // bare steps + ratchet sub-hits were INSTANT TRIGGERS -> one-shot
+                                // notes (bit-identical sound); merge runs + Length steps stay gated.
+                                const int oneShot = (run == 1 && cc.stepNoteLen[st] <= 0.01f) ? 1 : 0;
                                 cc.addDrawNote(start + j * (len / juce::jmax(1, roll)),
                                                juce::jmax(1, len / juce::jmax(1, roll)), semi,
                                                (int) juce::jlimit(1.0f, 255.0f, vel * velScale * 255.0f),
-                                               0, j == 0 ? glide : 0);
+                                               0, j == 0 ? glide : 0, oneShot);
                             }
                             lastHead = st;
                         }
@@ -8824,7 +8881,7 @@ void DrumSequencerEditor::keysLoadTake(int idx)
         {
             const int b = juce::jlimit(0, end - head, (int) nt.start / DrumChannel::DRAW_RES);
             sq.patterns[head + b].channels[t.channel].addDrawNote((int) nt.start - b * DrumChannel::DRAW_RES,
-                                                                  nt.len, nt.semi, nt.vel, nt.slot, nt.glide);
+                                                                  nt.len, nt.semi, nt.vel, nt.slot, nt.glide, nt.oneShot);
         }
         selectChannel(t.channel);
         strips[t.channel].comboSteps.setSelectedId(StepGridComponent::DRAW_ITEM_ID, juce::dontSendNotification);
@@ -8870,7 +8927,7 @@ juce::int64 DrumSequencerEditor::takeDataHash(const DrumSequencerProcessor::Keys
     auto mix = [&](juce::int64 v) { h = h * 33 ^ v; };
     mix(t.channel); mix(t.isDraw ? 1 : 0);
     if (t.isDraw) { mix(t.drawPat); for (const auto& nt : t.drawNotes)
-                    { mix(nt.start); mix(nt.len); mix((int) nt.semi + 128); mix((int) nt.vel); mix((int) nt.slot); mix((int) nt.glide); } }
+                    { mix(nt.start); mix(nt.len); mix((int) nt.semi + 128); mix((int) nt.vel); mix((int) nt.slot); mix((int) nt.glide); mix((int) nt.oneShot); } }
     else for (auto& e : t.evts) { mix(e.pattern); mix(e.step); mix((int) e.semis + 128); mix(e.flags); }
     return h;
 }
@@ -9469,29 +9526,29 @@ void DrumSequencerEditor::quantizeDrawToSteps(DrumChannel& c, int n)
         c.stepVel[i] = 1.0f;     c.stepPan[i] = 0.0f;  c.stepNudge[i] = 0.0f;
     }
     const int R = DrumChannel::DRAW_RES;
-    int prevPitch = -999; bool prevOn = false;
+    int prevIdx = -1;
     for (int s = 0; s < n; ++s)
     {
         const int c0 = s * R / n, c1 = (s + 1) * R / n;
-        // Dominant NOTE of this step span = the note covering the most columns in it (note list; a
-        // non-overlapping melody gives the same result the old column scan did).
-        int cnt[73] = {}; int covered = 0;
+        // Dominant note of this step span = the NOTE (by index, so a re-articulated same pitch is
+        // two notes, not one merged run) covering the most columns in it.
+        int best = -1, bestc = 0, covered = 0;
         for (int i = 0; i < c.drawNoteCount; ++i)
         {
             const auto& nt = c.drawNotes[i];
             const int a = juce::jmax((int) nt.start, c0), b = juce::jmin((int) nt.start + nt.len, c1);
-            if (b > a) { cnt[juce::jlimit(0, 72, (int) nt.semi + 36)] += b - a; covered += b - a; }
+            if (b > a) { covered += b - a; if (b - a > bestc) { bestc = b - a; best = i; } }
         }
         const int gap = (c1 - c0) - juce::jmin(c1 - c0, covered);
-        int best = -1, bestc = 0; for (int k = 0; k < 73; ++k) if (cnt[k] > bestc) { bestc = cnt[k]; best = k; }
         if (best >= 0 && bestc >= gap)   // a note dominates this step
         {
-            const int semi = best - 36;
-            c.steps[s] = true; c.stepPitch[s] = (float) semi;
-            c.stepMerge[s] = (prevOn && s > 0 && semi == prevPitch);   // held note -> merged run
-            prevPitch = semi; prevOn = true;
+            c.stepPitch[s] = (float) c.drawNotes[best].semi;
+            if (best == prevIdx && s > 0)   // the SAME note continues -> a merge CONTINUATION:
+            { c.steps[s] = false; c.stepMerge[s] = true; }   // step OFF (was wrongly enabled - user bug)
+            else { c.steps[s] = true; c.stepMerge[s] = false; }
+            prevIdx = best;
         }
-        else { c.steps[s] = false; c.stepMerge[s] = false; prevOn = false; }
+        else { c.steps[s] = false; c.stepMerge[s] = false; prevIdx = -1; }
     }
     for (int i = n; i < DrumChannel::MAX_STEPS; ++i) { c.steps[i] = false; c.stepMerge[i] = false; }
     c.drawMode = false; c.numSteps = n;
