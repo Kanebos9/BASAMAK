@@ -727,8 +727,24 @@ public:
     StringDisplay    physView;                       // Physical only: interactive string (Position/Tone on the visual)
     ModalDisplay     modalView;                      // Modal only: interactive struck-body (Hit Pos/Damp on the visual)
     ToggleSwitch     fmEnvSw;                        // SrcOsc only: FM Amount follows the amp envelope
-    ToggleSwitch     lockPitchSw;                    // Osc/KS/Modal: LOCK PITCH (ignore note pitch)
-    juce::Label      lockPitchLbl;
+    // Two-line "Lock / Pitch" toggle button (user-specced placement: the free cell at the end
+    // of the knob row, NOT over the engine visual).
+    struct TwoLineToggle : juce::Button
+    {
+        TwoLineToggle() : juce::Button({}) { setClickingTogglesState(true); }
+        void paintButton(juce::Graphics& g, bool over, bool) override
+        {
+            const bool on = getToggleState();
+            g.setColour(on ? juce::Colour(0xff2f9e57) : juce::Colour(0xff26263c));
+            g.fillRoundedRectangle(getLocalBounds().toFloat().reduced(1.0f), 4.0f);
+            g.setColour(juce::Colour(over ? 0xffffffff : (on ? 0xffe9f6ee : 0xffaebada)));
+            g.setFont(juce::Font(10.5f, juce::Font::bold));
+            auto r = getLocalBounds();
+            g.drawText("Lock",  r.removeFromTop(getHeight() / 2), juce::Justification::centredBottom, false);
+            g.drawText("Pitch", r, juce::Justification::centredTop, false);
+        }
+    };
+    TwoLineToggle    lockPitchSw;                    // Osc/KS/Modal: LOCK PITCH (ignore note pitch)
     // Drop an audio file on the box -> the editor switches this slot to Sample + loads it.
     std::function<void(const juce::File&)> onFileDropped;
     bool fileDragOver = false;                       // paint a drop highlight

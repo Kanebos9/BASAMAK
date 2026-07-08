@@ -629,12 +629,6 @@ void SlotEditor::init(int idx, MidiLearnManager& mlm, juce::LookAndFeel* knobLNF
         }
     };
     addChildComponent(lockPitchSw);               // Osc/KS/Modal: LOCK PITCH
-    addChildComponent(lockPitchLbl);
-    lockPitchLbl.setText("Lock Pitch", juce::dontSendNotification);
-    lockPitchLbl.setFont(juce::Font(10.0f, juce::Font::bold));
-    lockPitchLbl.setColour(juce::Label::textColourId, juce::Colour(0xffaebada));
-    lockPitchLbl.setJustificationType(juce::Justification::centredRight);
-    lockPitchLbl.setInterceptsMouseClicks(false, false);
     lockPitchSw.setTooltip("LOCK PITCH: this slot always plays its Base Freq - per-step pitch, piano-roll "
                            "notes, the keyboard and slide are all ignored (the pitch envelope, vibrato and "
                            "the pitch LFO still work).\n\n"
@@ -764,7 +758,7 @@ void SlotEditor::setEngine(int eng)
     modalView.setVisible(eng == DrumChannel::SrcModal); // interactive struck body (Hit Pos/Damp)
     fmEnvSw.setVisible(eng == DrumChannel::SrcOsc);     // FM Amount env-follow (placed by placeOsc)
     const bool lockable = eng == DrumChannel::SrcOsc || eng == DrumChannel::SrcPhys || eng == DrumChannel::SrcModal;
-    lockPitchSw.setVisible(lockable); lockPitchLbl.setVisible(lockable);
+    lockPitchSw.setVisible(lockable);
     morphView.fmMode = morph;   // Analog now does FM too -> show the live FM result for both (Depth 0 = plain carrier)
     oscLayout = (eng == DrumChannel::SrcOsc);   // sectioned Analog/FM/Resonator layout with Freq/Depth/Reson faders
     freqFader->setVisible(oscLayout);
@@ -939,16 +933,12 @@ void SlotEditor::placeGeneric(int boxW)
     if (physView.isVisible()) {                           // Physical: interactive string across the top
         const int mh = 52;
         physView.setBounds(mL, yTop, innerW, mh);
-        lockPitchSw.setBounds(mL + innerW - 28, yTop + 2, 26, 13);
-        lockPitchLbl.setBounds(mL + innerW - 92, yTop + 2, 62, 13);
         physView.repaint();
         yTop += mh + 4;
     }
     if (modalView.isVisible()) {                          // Modal: interactive struck body across the top
         const int mh = 52;
         modalView.setBounds(mL, yTop, innerW, mh);
-        lockPitchSw.setBounds(mL + innerW - 28, yTop + 2, 26, 13);
-        lockPitchLbl.setBounds(mL + innerW - 92, yTop + 2, 62, 13);
         modalView.repaint();
         yTop += mh + 4;
     }
@@ -977,6 +967,8 @@ void SlotEditor::placeGeneric(int boxW)
 
     // <= 4 params: one row of rotary knobs, as big as fits.
     const int cols = n;
+    if (lockPitchSw.isVisible())   // KS/Modal: park the Lock Pitch button at the top-right of the
+        lockPitchSw.setBounds(mL + innerW - 48, yTop + 2, 46, 32);   // knob area (rows are centred)
     const int availH = juce::jmax(50, getHeight() - yTop);
     int KS = juce::jmin((innerW - (cols - 1) * GAP) / cols, availH - 24);
     KS = juce::jlimit(30, 64, KS);
@@ -1018,8 +1010,6 @@ void SlotEditor::placeOsc(int boxW)
         const int mh = juce::jlimit(24, 110, getHeight() - y - reserve);
         morphView.compact = (mh < 50);
         morphView.setBounds(mL, y, innerW, mh);
-        lockPitchSw.setBounds(mL + innerW - 28, y + 2, 26, 13);
-        lockPitchLbl.setBounds(mL + innerW - 92, y + 2, 62, 13);
         morphView.repaint();
         y += mh + 3;
     }
@@ -1043,8 +1033,10 @@ void SlotEditor::placeOsc(int boxW)
           const int cellX = fx0 + gi * cell;
           knobs[gi]->setBounds(cellX, y, KS_FM, kh_FM);                          // knob (value read-out below the dial)
           labels[gi]->setJustificationType(juce::Justification::centredLeft);
-          labels[gi]->setBounds(cellX + KS_FM + 2, y + (kh_FM - 14) / 2, cell - KS_FM - 2, 14);   // NAME beside the knob
+          const int shave = (gi == nfm - 1) ? 52 : 0;      // last cell donates room to the Lock Pitch button
+          labels[gi]->setBounds(cellX + KS_FM + 2, y + (kh_FM - 14) / 2, cell - KS_FM - 2 - shave, 14);
       }
+      lockPitchSw.setBounds(mL + innerW - 48, y + (kh_FM - 32) / 2, 46, 32);     // the free bottom-right cell
       y += kh_FM + 2; }
 }
 
