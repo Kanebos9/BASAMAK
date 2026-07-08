@@ -1401,7 +1401,13 @@ void StepGridComponent::paintValueCell(juce::Graphics& g, int ch, int step, juce
                     // GATE length: a piano-roll-style bar from the left. WIDTH = how long the hit
                     // sounds, as a fraction of THIS step (0 = off = natural ring / one full step
                     // for MIDI-out). Applies to internal sounds AND MIDI-out notes.
-                    const float ln = juce::jlimit(0.0f, 1.0f, noteLen[ch][step]);
+                    // A merged-chain HEAD with value 0 is NOT off - 0 on a chain means "gate the
+                    // WHOLE chain" (the native convention; quantised full-length notes land here).
+                    // Displaying it as "Off" read as ungated (user bug report), so it shows 100%.
+                    const bool chainHead = step + 1 < DrumChannel::MAX_STEPS && merge[ch][step + 1]
+                                           && ! merge[ch][step];
+                    float ln = juce::jlimit(0.0f, 1.0f, noteLen[ch][step]);
+                    if (chainHead && ln <= 0.001f) ln = 1.0f;
                     if (ln > 0.001f)
                     {
                         g.setColour(juce::Colour(0xff8a7adf).withAlpha(alpha));
