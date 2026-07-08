@@ -169,9 +169,10 @@ void Sequencer::advanceStandalone(double sampleRate, int numSamples,
     double newPos = oldPos + numSamples * barsPerSample;
     isCurrentlyPlaying = true;
 
+    const double samplesPerBar = 1.0 / juce::jmax(1.0e-12, barsPerSample);
     if (newPos < 1.0)
     {
-        checkChannelTriggers(oldPos, newPos, numSamples, 0, events);
+        checkChannelTriggers(oldPos, newPos, numSamples, 0, samplesPerBar, events);
         barPosition = newPos;
         return;
     }
@@ -179,17 +180,20 @@ void Sequencer::advanceStandalone(double sampleRate, int numSamples,
     // Ticks in the tail of this bar (oldPos -> 1.0), then decide stop/next BEFORE the new bar.
     const int tailSamples = juce::jlimit(0, numSamples,
                                          (int) std::floor((1.0 - oldPos) / juce::jmax(1.0e-12, barsPerSample)));
-    checkChannelTriggers(oldPos, 1.0, juce::jmax(1, tailSamples), 0, events);
+    checkChannelTriggers(oldPos, 1.0, juce::jmax(1, tailSamples), 0, samplesPerBar, events);
 
     onBarComplete();
     if (finished) { playing = false; barPosition = 0.0; isCurrentlyPlaying = false; return; }
 
     double rem = newPos - 1.0;
     while (rem >= 1.0) rem -= 1.0;   // pathological giant-buffer safety
-    // rem == 0 -> the bar boundary is exactly the block end; the next block (oldPos == 0)
-    // fires step 0 itself - calling here too would double-fire it.
+    // Floating-point DUST remainder: the bar boundary IS the block end (at 120 BPM the bar
+    // is an exact multiple of common block sizes, so this happens every loop) and rem is a
+    // ~1e-16 rounding leftover. Snap to 0 and let the next block (oldPos == 0) fire step 0
+    // with a real segment - the dust segment used to fire it itself with a 1-sample span.
+    if (rem < barsPerSample * 1.0e-3) rem = 0.0;
     if (rem > 0.0)
-        checkChannelTriggers(0.0, rem, juce::jmax(1, numSamples - tailSamples), tailSamples, events);
+        checkChannelTriggers(0.0, rem, juce::jmax(1, numSamples - tailSamples), tailSamples, samplesPerBar, events);
     barPosition = rem;
 }
 
@@ -246,24 +250,27 @@ void Sequencer::advanceDaw(juce::AudioPlayHead* dawHead, double sampleRate, int 
     double barsPerSample  = beatsPerSample / quartersPerBar;
     double newPos = oldPos + numSamples * barsPerSample;
 
+    const double samplesPerBar = 1.0 / juce::jmax(1.0e-12, barsPerSample);
     if (newPos < 1.0)
     {
-        checkChannelTriggers(oldPos, newPos, numSamples, 0, events);
+        checkChannelTriggers(oldPos, newPos, numSamples, 0, samplesPerBar, events);
         barPosition = newPos;
         return;
     }
 
     const int tailSamples = juce::jlimit(0, numSamples,
                                          (int) std::floor((1.0 - oldPos) / juce::jmax(1.0e-12, barsPerSample)));
-    checkChannelTriggers(oldPos, 1.0, juce::jmax(1, tailSamples), 0, events);
+    checkChannelTriggers(oldPos, 1.0, juce::jmax(1, tailSamples), 0, samplesPerBar, events);
 
     onBarComplete();
     if (finished) { isCurrentlyPlaying = false; return; }
 
     double rem = newPos - 1.0;
     while (rem >= 1.0) rem -= 1.0;
+    if (rem < barsPerSample * 1.0e-3) rem = 0.0;   // floating-point dust at an exact block-edge
+                                                   // wrap (see advanceStandalone)
     if (rem > 0.0)   // rem == 0 -> next block's oldPos == 0 fires step 0 (no double-fire)
-        checkChannelTriggers(0.0, rem, juce::jmax(1, numSamples - tailSamples), tailSamples, events);
+        checkChannelTriggers(0.0, rem, juce::jmax(1, numSamples - tailSamples), tailSamples, samplesPerBar, events);
     barPosition = rem;
 }
 
@@ -353,10 +360,15 @@ void Sequencer::onBarComplete()
 //   - Sub-hits subdivide the SWUNG step span, so ratchets inside a swung step groove too.
 //   - The exact bar start (position 0) fires only when the scan starts at 0.
 void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSamples, int baseOffset,
+                                      double samplesPerBar,
                                       juce::Array<TriggerEvent>& events)
 {
     if (newPos < oldPos) return;
     const double span = juce::jmax(1.0e-12, newPos - oldPos);
+    // Bar-start tolerance: in DAW sync the block-start position comes from the host's ppq and can
+    // carry a sub-sample epsilon after a wrap; treat anything within a quarter sample of 0 as the
+    // bar start so column-0/step-0 hits are never dropped (the dedupe stops double-fires).
+    const double zeroTol = 0.25 / juce::jmax(1.0, samplesPerBar);
     Pattern& pp = patterns[playPattern];   // triggers come from the PLAYING pattern
 
     for (int ch = 0; ch < NUM_CHANNELS; ++ch)
@@ -382,7 +394,7 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
             {
                 const auto nt = c.drawNotes[ni];                      // copy (editor may edit concurrently)
                 const double colPos = (double) nt.start / (double) R; // bar-fraction of the note's start
-                const bool atZero = (oldPos == 0.0 && colPos == 0.0);
+                const bool atZero = (oldPos <= zeroTol && colPos == 0.0);
                 if (! atZero && ! (colPos > oldPos && colPos <= newPos)) continue;
                 if (prevTick == 100000 + (int) nt.start && prevTickLoop == loopCount) continue;   // seam re-crossing
                 firedCol = nt.start;
@@ -397,8 +409,12 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
                     if (m.start < nt.start && nt.start < m.start + m.len) overlap = true;
                     else if (m.start == nt.start && mj < ni) overlap = true;
                 }
+                // GATE from the ABSOLUTE bar length, NEVER the segment ratio: at a loop wrap the
+                // post-wrap segment can be a floating-point sliver (rem ~ 1e-16 bars, spanSamples
+                // clamped to 1) - segBars/span*spanSamples exploded to ~1e11 samples there, which
+                // was the "first note rings much longer from the second loop on" bug.
                 const double segBars = (double) nt.len / (double) R;
-                const long gate = (long) juce::jmax(64.0, segBars / span * (double) spanSamples);
+                const long gate = (long) juce::jmax(64.0, segBars * samplesPerBar);
                 const int off = baseOffset + (int) juce::jlimit(0.0, (double) spanSamples - 1.0,
                                                 (colPos - oldPos) / span * (double) spanSamples);
                 // PER-NOTE GLIDE (portamento): a note FLAGGED glide slides FROM its LEGATO predecessor's
@@ -450,7 +466,7 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
             for (int j = 0; j < roll; ++j)
             {
                 const double pos = juce::jlimit(0.0, 0.9999995, st + nud + (en - st) * (double) j / (double) roll);
-                const bool atZero = (oldPos == 0.0 && pos == 0.0);           // bar start fires inclusively
+                const bool atZero = (oldPos <= zeroTol && pos == 0.0);       // bar start fires inclusively
                 if (! atZero && ! (pos > oldPos && pos <= newPos)) continue;
 
                 // Seam dedupe: never fire the same tick twice within one loop iteration
@@ -497,15 +513,15 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
                 // note actually spans/holds through the merged steps (sustain holds, AHD rescales).
                 long gate = 0;
                 const float gl = juce::jlimit(0.0f, 1.0f, c.stepNoteLen[s]);
-                double chainFrac = (en - st) / span;                  // this step's share of the bar span
-                for (int k = s + 1; k < n && c.stepMerge[k]; ++k)
-                {
+                double chainBars = en - st;                           // chain length in BARS (absolute units -
+                for (int k = s + 1; k < n && c.stepMerge[k]; ++k)     // never the segment ratio, see the draw
+                {                                                     // branch's wrap-sliver note)
                     double st2, en2; stepSpan(k, n, pp.swing, st2, en2);
-                    chainFrac += (en2 - st2) / span;
+                    chainBars += en2 - st2;
                 }
-                const bool mergedChain = chainFrac > (en - st) / span + 1.0e-9;
+                const bool mergedChain = chainBars > (en - st) + 1.0e-9;
                 if (gl > 0.001f || mergedChain)
-                    gate = (long) juce::jmax(64.0, chainFrac * (double) spanSamples * (double)(gl > 0.001f ? gl : 1.0f));
+                    gate = (long) juce::jmax(64.0, chainBars * samplesPerBar * (double)(gl > 0.001f ? gl : 1.0f));
                 // SLIDE: glide across the FULL step so the pitch lands on the NEXT active step's
                 // pitch exactly at the boundary (that step then continues at the landed pitch).
                 long slideLen = 0; float slideTo = 0.0f;
@@ -517,7 +533,7 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
                         const int ns = (s + k) % juce::jmax(1, c.numSteps);
                         if (c.steps[ns]) { slideTo = c.stepPitch[ns]; break; }
                     }
-                    slideLen = (long) juce::jmax(256.0, (en - st) / span * (double) spanSamples);
+                    slideLen = (long) juce::jmax(256.0, (en - st) * samplesPerBar);
                 }
                 events.add({ ch, s, velScale, j, roll, off, gate, slideLen, slideTo });
             }

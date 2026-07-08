@@ -220,5 +220,6 @@ private:
     // Scanning the RANGE (not "which step are we in now") also fires steps a huge host buffer
     // would previously have skipped, and puts ratchet sub-hits inside the SWUNG step span.
     void checkChannelTriggers(double oldPos, double newPos, int spanSamples, int baseOffset,
+                              double samplesPerBar,
                               juce::Array<TriggerEvent>& events);
 };
