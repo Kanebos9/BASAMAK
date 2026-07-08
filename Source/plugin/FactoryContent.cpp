@@ -744,7 +744,7 @@ static void bNeuroBass(DC& c) {     // modern growl: folded+FM'd saw with a swep
 static void bHooverBass(DC& c) {    // rave hoover: wide 5-voice saw that RISES an octave into its pitch
     auto& s = mkSlot(c, DC::SrcOsc);
     s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 65.41f;     // C2
-    s.oscUnison = 5; s.oscDetune = 0.6f; s.oscUniCenter = true;
+    s.oscUnison = 5; s.oscDetune = 0.6f;
     s.oscWarp = 0.15f;
     s.oscPEnvAmt = -12.0f; s.oscPEnvTime = 0.09f;                  // starts -1 oct, sweeps up into the note
     s.atk = 0.002f; s.dec = 0.7f;
@@ -834,7 +834,7 @@ static void kEPiano(DC& c) {        // FM e-piano: sine + env-following FM = bel
 static void kSoftPad(DC& c) {       // slow airy pad: wide detuned saws, high sustain, long release
     auto& s = mkSlot(c, DC::SrcOsc);
     s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 220.0f;
-    s.oscUnison = 4; s.oscDetune = 0.3f; s.oscUniCenter = true;
+    s.oscUnison = 5; s.oscDetune = 0.3f;   // odd unison = a centred voice, all in the UI
     s.atk = 0.18f; s.dec = 1.5f; s.sustain = 0.8f; s.release = 0.7f;
     s.filterType = DC::LowPass; s.filterCutoff = 1400.0f; s.filterReso = 0.9f;
     c.reverbSend = 0.25f; c.volume = 0.68f;
@@ -894,7 +894,7 @@ static void kClav(DC& c) {          // funky clavinet: bright pulse + snappy fil
 static void kSynthBrass(DC& c) {    // analog synth-brass ensemble: filter-swept detuned saws, swells + sustains
     auto& s = mkSlot(c, DC::SrcOsc);
     s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
-    s.oscUnison = 3; s.oscDetune = 0.16f; s.oscUniCenter = true;
+    s.oscUnison = 3; s.oscDetune = 0.16f;
     s.atk = 0.06f; s.dec = 0.7f; s.sustain = 0.75f; s.release = 0.2f; // slow-ish brass swell
     s.filterType = DC::LowPass; s.filterCutoff = 900.0f; s.filterReso = 1.4f; s.filterEnvAmt = 0.55f;
     s.fxDriveType = DC::Tube; s.fxDrive = 0.1f;
@@ -904,7 +904,7 @@ static void kChoir(DC& c) {         // vocal "aah" pad: formant vowel shape, slo
     auto& s = mkSlot(c, DC::SrcOsc);
     s.oscShape = s.oscShapeB = 6;                                    // Vowel A (additive formant)
     s.oscFreq = 261.63f;
-    s.oscUnison = 3; s.oscDetune = 0.2f; s.oscUniCenter = true;
+    s.oscUnison = 3; s.oscDetune = 0.2f;
     s.atk = 0.25f; s.dec = 1.5f; s.sustain = 0.85f; s.release = 0.8f;
     s.lfoRate[1] = 5.0f; s.lfoAmt[1] = 0.015f;                       // subtle pitch vibrato = choir life
     c.reverbSend = 0.32f; c.volume = 0.64f;
@@ -913,7 +913,7 @@ static void kWarmPad(DC& c) {       // dark warm pad: mellow reed, very slow + v
     auto& s = mkSlot(c, DC::SrcOsc);
     s.oscShape = s.oscShapeB = 12;                                   // Reed (hollow odd harmonics)
     s.oscFreq = 261.63f;
-    s.oscUnison = 3; s.oscDetune = 0.22f; s.oscUniCenter = true;
+    s.oscUnison = 3; s.oscDetune = 0.22f;
     s.atk = 0.3f; s.dec = 2.0f; s.sustain = 0.85f; s.release = 1.3f;
     s.filterType = DC::LowPass; s.filterCutoff = 850.0f; s.filterReso = 0.8f;
     c.reverbSend = 0.34f; c.volume = 0.62f;
@@ -1239,7 +1239,7 @@ static void kHonkyTonk(DC& c) {    // saloon piano: two piano voices a few cents
 static void kChoirOoh(DC& c) {     // darker "ooh" choir (Vowel O vs Choir Aah's bright A)
     auto& s = mkSlot(c, DC::SrcOsc);
     s.oscShape = s.oscShapeB = 7; s.oscFreq = 261.63f;               // Vowel O
-    s.oscUnison = 3; s.oscDetune = 0.14f; s.oscUniCenter = true;
+    s.oscUnison = 3; s.oscDetune = 0.14f;
     s.atk = 0.22f; s.dec = 1.6f; s.sustain = 0.85f; s.release = 0.9f;
     c.reverbSend = 0.3f; c.volume = 0.66f;
 }
@@ -1261,7 +1261,7 @@ static void kShimmerPad(DC& c) {   // airy glass shimmer an octave up, drowned i
 static void kMotionPad(DC& c) {    // slow filter-breathing pad (the LFO IS the character)
     auto& s = mkSlot(c, DC::SrcOsc);
     s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 196.0f;        // G3
-    s.oscUnison = 3; s.oscDetune = 0.24f; s.oscUniCenter = true;
+    s.oscUnison = 3; s.oscDetune = 0.24f;
     s.atk = 0.3f; s.dec = 2.0f; s.sustain = 0.85f; s.release = 1.0f;
     s.filterType = DC::LowPass; s.filterCutoff = 900.0f; s.filterReso = 1.3f;
     s.lfoRate[0] = 0.3f; s.lfoAmt[0] = 0.55f;                        // ~3 s filter breathing
@@ -1438,7 +1438,7 @@ static void mBlast(DC& c) {        // distorted FM blast: mid-band explosion, fu
 static void mBraam(DC& c) {        // trailer BRAAM: detuned saw wall, foldback, slow bloom
     auto& s = mkSlot(c, DC::SrcOsc);
     s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 65.41f;        // C2
-    s.oscUnison = 5; s.oscDetune = 0.5f; s.oscUniCenter = true; s.uniSpread = 0.5f;
+    s.oscUnison = 5; s.oscDetune = 0.5f; s.uniSpread = 0.5f;
     s.atk = 0.02f; s.dec = 1.6f; s.sustain = 0.0f; s.release = 0.4f;
     s.filterType = DC::LowPass; s.filterCutoff = 950.0f; s.filterReso = 1.2f;
     s.fxDriveType = DC::Foldback; s.fxDrive = 0.4f;

@@ -20,8 +20,13 @@ int main() {
         if (ch->delaySend  > 0.001f) v.add("chanDly(" + juce::String(ch->delaySend, 2) + ")");
         if (ch->filterType != 0)     v.add("chanFilter(" + juce::String(ch->filterType) + ")");
         for (int s = 0; s < DrumChannel::NUM_SLOTS; ++s)
-            if (ch->slots[s].engine >= 0 && ch->slots[s].weight > 0.001f && ch->slots[s].chordMode > 0)
+        {
+            if (ch->slots[s].engine < 0 || ch->slots[s].weight <= 0.001f) continue;
+            if (ch->slots[s].chordMode > 0)
                 v.add("slot" + juce::String(s + 1) + "chord(" + juce::String(ch->slots[s].chordMode) + ")");
+            if (ch->slots[s].oscUniCenter)   // the centre-voice toggle's UI was removed with the chord chips
+                v.add("slot" + juce::String(s + 1) + "uniCenter");
+        }
         if (! v.isEmpty()) { ++bad; printf("%-16s %s\n", names[i].toRawUTF8(), v.joinIntoString(" ").toRawUTF8()); }
         delete ch;
     }
