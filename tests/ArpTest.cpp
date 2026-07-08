@@ -83,6 +83,8 @@ int main() {
         for (int k = 0; k < 5; ++k) gOK = gOK && DrumChannel::scaleNoteOffset(10, 0, 60, k) == aM[k];   // C root = A-shape
         gOK = gOK && DrumChannel::scaleNoteOffset(10, 0, 60, 5) < -90;                                  // C has no 6th string
         gOK = gOK && DrumChannel::scaleNoteOffset(11, 0, 60, 3) == 15;                                  // minor third (A-shape)
+        gOK = gOK && DrumChannel::scaleNoteOffset(10, 0, 62, 3) == 16;   // D root = 4-string D-shape...
+        gOK = gOK && DrumChannel::scaleNoteOffset(10, 0, 62, 4) < -90;   // ...with no 5th string (user: "D major is 4 strings")
         gOK = gOK && DrumChannel::scaleNoteOffset(10, 0, 61, 0) == -1;   // C# snaps to C (tie -> lower)
         printf("[4e] guitar voicings: root-dependent shapes + counts + snap -> %s\n", CHK(gOK) ? "OK" : "FAIL");
     }

@@ -1473,6 +1473,8 @@ static DC::Slot& mkGtr(DC& c, float hz, float tone, float pos, float dec)
     s.physStiff = 0.03f;                                 // a hint of real-string inharmonicity
     s.oscDetune = 0.05f;                                 // strings never PERFECTLY agree (chord shimmer)
     s.atk = 0.001f; s.dec = dec;
+    s.release = 0.5f;                                    // strings RING on release (arp gate / note ends
+                                                         // used to chop them with the 60 ms default)
     // "Guitar body": low-mid warmth + presence bite, the classic acoustic body curve.
     s.eqBand[DC::EQ_B1] = { true, 180.0f,  2.5f, 1.0f };
     s.eqBand[DC::EQ_B3] = { true, 2600.0f, 3.0f, 1.2f };

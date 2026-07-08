@@ -1010,8 +1010,9 @@ static const int kScaleLen[10] = { 7,7,7,7,7,7,7,5,5,6 };
 // kGtrNone and are SKIPPED by the renders - the Notes count is AUTO for these types (user spec:
 // "different chords have different string numbers"). With STRUM up this rakes like a guitar.
 static constexpr int8_t kGtrNone = -100;
-static const int8_t kGtrShapeE[2][6] = { { 0,7,12,16,19,24 }, { 0,7,12,15,19,24 } };
-static const int8_t kGtrShapeA[2][6] = { { 0,7,12,16,19,kGtrNone }, { 0,7,12,15,19,kGtrNone } };
+static const int8_t kGtrShapeE[2][6] = { { 0,7,12,16,19,24 }, { 0,7,12,15,19,24 } };           // 6 strings
+static const int8_t kGtrShapeA[2][6] = { { 0,7,12,16,19,kGtrNone }, { 0,7,12,15,19,kGtrNone } };   // 5
+static const int8_t kGtrShapeD[2][6] = { { 0,7,12,16,kGtrNone,kGtrNone }, { 0,7,12,15,kGtrNone,kGtrNone } };   // 4 (user: D major is 4 strings)
 
 // Voice k's offset (semitones, relative to the PLAYED note) for the diatonic chord of the note's scale
 // degree. Off-scale/between notes SNAP to the nearest scale member (tie -> lower); voice 0 = the snapped
@@ -1035,8 +1036,10 @@ static inline int scaleSemis(int scaleType, int key, int playedMidi, int k)
     if (gtr)
     {   // shape + string count follow the SNAPPED root, like a real neck
         const int rootPc = ((playedMidi + snapDelta) % 12 + 12) % 12;
-        const bool eShape = rootPc >= 4 && rootPc <= 8;             // E..G# = E-shape barre
-        const int8_t off = (eShape ? kGtrShapeE : kGtrShapeA)[scaleType - 10][juce::jlimit(0, 5, k)];
+        // like a real neck: E..G# = E-shape (6 str), D/D# = D-shape (4), the rest = A-shape (5)
+        const int8_t (*shape)[6] = (rootPc >= 4 && rootPc <= 8) ? kGtrShapeE
+                                 : (rootPc == 2 || rootPc == 3) ? kGtrShapeD : kGtrShapeA;
+        const int8_t off = shape[scaleType - 10][juce::jlimit(0, 5, k)];
         if (k > 5 || off == kGtrNone) return kGtrNone;              // no such string on this chord
         return snapDelta + (int) off;
     }
@@ -1171,7 +1174,8 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
             if (nStr > 1)
             {
                 const double perVoice = strumAmt * 0.090 * (double) sr / (double)(nStr - 1);   // up to ~90 ms spread
-                for (int u = 0; u < nStr; ++u) sv.uniDelay[u] = (int) std::lround(perVoice * (double) u);
+                for (int u = 0; u < nStr; ++u)   // strumFlip = a DOWNSTROKE (high string first; the arp alternates it)
+                    sv.uniDelay[u] = (int) std::lround(perVoice * (double) (strumFlip ? nStr - 1 - u : u));
             }
         }
 

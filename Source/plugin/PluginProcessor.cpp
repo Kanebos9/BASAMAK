@@ -446,7 +446,11 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             if (note < 0)   // rest row: silence whatever is ringing, play nothing
             { if (arpSounding >= 0) { arpKc.keyUp(arpSounding); arpSounding = -1; }
               arpSoundingUi.store(-1, std::memory_order_relaxed); return; }
-            arpKc.keyDown(note, arpVel, arpKc.keysSlot2Down, false);   // mono arp note
+            // Alternate strokes (user: up, down, up... like real strumming) - flip before the trigger.
+            arpKc.strumFlip = arpKc.arpAltStrum && ((arpFireCount++ & 1) != 0);
+            // POLY channels let the previous note RING into the next (gate/mono-cut used to chop
+            // strummed guitar chords ~15 ms after every fire = "sounds TOO SHORT"); mono keeps the cut.
+            arpKc.keyDown(note, arpVel, arpKc.keysSlot2Down, arpKc.keysPolyMode);
             arpSounding = note;
             arpNoteAge = 0;                                            // fresh note: the Gate countdown restarts
             arpSoundingUi.store(note, std::memory_order_relaxed);      // the keyboard highlight follows this live
@@ -462,7 +466,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         };
         auto startArp = [&](int note, float vel)
         {
-            arpRoot = note; arpVel = vel; arpChan = chIdx; arpStep = 0; arpAcc = 0.0; arpSounding = -1;
+            arpRoot = note; arpVel = vel; arpChan = chIdx; arpStep = 0; arpAcc = 0.0; arpSounding = -1; arpFireCount = 0;
             arpRootHeld = true;
             // ALIGN: while the transport plays, phase the accumulator so the NEXT note lands exactly on
             // the next bar-grid boundary (press mid-cell -> the riff locks onto the groove; the root
@@ -1576,6 +1580,7 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
     chState.setProperty("arpAlign", ch.arpAlign, nullptr);          // ARP: phase-lock to the bar while playing
     chState.setProperty("arpHold",  ch.arpHold,  nullptr);          // ARP: latch after key release
     chState.setProperty("arpGate",  ch.arpGate,  nullptr);          // ARP: note length fraction of a step
+    chState.setProperty("arpAltS",  ch.arpAltStrum, nullptr);        // ARP: alternate strum direction
     { juce::String ao; for (int i = 0; i < DrumChannel::ARP_ROWS; ++i) ao << (int) ch.arpOffset[i] << ',';
       chState.setProperty("arpOff", ao, nullptr); }                 // ARP: 12 row offsets (ARP_REST = rest)
     chState.setProperty("keysPoly",   ch.keysPolyMode, nullptr);   // KEYS: poly (held keys stack) vs mono (new key cuts)
@@ -1743,6 +1748,7 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
     ch.arpAlign = (bool) child.getProperty("arpAlign", true);
     ch.arpHold  = (bool) child.getProperty("arpHold", false);
     ch.arpGate  = juce::jlimit(0.1f, 1.0f, (float) child.getProperty("arpGate", 1.0f));
+    ch.arpAltStrum = (bool) child.getProperty("arpAltS", false);
     { const juce::String ao = child.getProperty("arpOff", "").toString();
       if (ao.isNotEmpty()) { auto f = juce::StringArray::fromTokens(ao, ",", "");
         for (int i = 0; i < DrumChannel::ARP_ROWS && i < f.size(); ++i)

@@ -534,6 +534,7 @@ public:
     int    sync = 8;     // the Notes/bar fader (7/8/9/10/11/13) - the BASE grid
     int    rate = 8;     // Rate multiplier index (11 decimal rates x0.25..x3); 8 = x2
     bool   align = true; // phase-lock to the bar grid while the transport plays
+    bool   altStrum = false; // alternate strum direction per note (up, down, up... like strumming)
     bool   hold  = false;// latch: keep looping after the key is released (same key again = stop)
     float  gate  = 1.0f; // note length as a fraction of one arp step (1 = ring into the next note)
     juce::Component* clickIgnore = nullptr;   // the Arp button: its own click toggles the popup
@@ -577,6 +578,7 @@ private:
     juce::Rectangle<int> faderRect() const { return { 150, 7, 112, 26 }; }                  // Notes/bar drag-fader (same style)
     juce::Rectangle<int> alignRect() const { return { getWidth() - 392, 7, 78, 26 }; }
     juce::Rectangle<int> holdRect()  const { return { getWidth() - 308, 7, 52, 26 }; }
+    juce::Rectangle<int> altRect()   const { return { getWidth() - 476, 7, 78, 26 }; }
     juce::Rectangle<int> gateRect()  const { return { getWidth() - 250, 7, 92, 26 }; }
     juce::Rectangle<int> lenDnRect() const { return { getWidth() - 152, 7, 20, 26 }; }
     juce::Rectangle<int> lenValRect()const { return { getWidth() - 130, 7, 100, 26 }; }
@@ -608,18 +610,26 @@ public:
     void mouseDrag(const juce::MouseEvent&) override;
     juce::String getTooltip() override;
 private:
-    // LIVE TUNER (bottom strip): what this channel is TUNED to - the Base Freq (+ roll Tune)
-    // against the nearest note. Pure arithmetic fed by the editor timer (zero DSP cost).
-public:
-    juce::String tunerNote;                        // e.g. "A1"
-    int          tunerCents = 0;                   // -50..+50 (deviation from that note)
-private:
     bool dragNotes = false, dragScale = false;
     juce::Rectangle<int> chipRect(int i) const { return { 52 + i * 22, 1, 20, 14 }; }
     juce::Rectangle<int> keyRect()   const { return { getWidth() - 58, 1, 54, 14 }; }
-    juce::Rectangle<int> notesRect() const { return { 4, 18, getWidth() - 8, 21 }; }
-    juce::Rectangle<int> scaleRect() const { return { 4, 41, getWidth() - 8, 21 }; }
-    juce::Rectangle<int> tunerRect() const { return { 4, 63, getWidth() - 8, 12 }; }
+    juce::Rectangle<int> notesRect() const { return { 4, 19, getWidth() - 8, 25 }; }
+    juce::Rectangle<int> scaleRect() const { return { 4, 47, getWidth() - 8, 25 }; }
+};
+
+// LIVE TUNER strip (its own box UNDER the ScaleBox - user placement): what the selected channel
+// is tuned to. While a key is held it follows THAT note's actual sounding pitch; idle it shows
+// the Base Freq (+ roll Tune). Pure arithmetic fed by the editor timer - zero DSP cost.
+class TunerBox : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    juce::String note;                             // e.g. "A1"
+    int          cents = 0;                        // -50..+50 (deviation from that note)
+    void paint(juce::Graphics&) override;
+    juce::String getTooltip() override
+    { return "LIVE TUNE: what this channel is tuned to (the Base Freq, the roll's Tune fader and "
+             "the note you are holding all flow in). Dots left = flat, right = sharp (one per "
+             "~12 cents); the ring turns green within +-3 cents."; }
 };
 
 // SPLIT KEYBOARD control: a toggle + two Arp-style boxes. Each box = the full C0..C8 range; the
@@ -667,6 +677,7 @@ public:
     juce::TextButton btnGuide { "Guide" };                // KEY GUIDE popup: dim out-of-scale keys (display only)
     juce::Label      lblGuideCur;                         // caption under it: the active key + scale ("Off")
     ScaleBox         scaleBox;                            // per-slot SCALE harmonizer controls (moved from the sound editor)
+    TunerBox         tunerBox;                            // LIVE TUNE strip under the ScaleBox (user placement)
     KeySplitBox      splitBox;                            // SPLIT keyboard: L half = slot 2, R half = slot 1 (windowed)
     juce::Label      lblChord[3];                         // LIVE names: [0] slot 1 (yellow), [1] slot 2 (pink), [2] ALL = both combined
     ArpEditor        arpEditor;                            // hold one key -> programmed riff (per-step); hidden until btnArp

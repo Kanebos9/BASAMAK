@@ -652,6 +652,8 @@ public:
     //   arpGate  = note length as a fraction of one arp step (0.1..1): 1 = ring until the next note
     //   (the old behaviour, bit-identical); lower = staccato (key-up after that fraction, authored release).
     bool   arpAlign = true;
+    bool   arpAltStrum = false;   // alternate strum DIRECTION per arp note (up, down, up... like real strumming)
+    bool   strumFlip = false;     // runtime: next trigger strums HIGH->LOW (a downstroke); the arp toggles it
     bool   arpHold  = false;
     float  arpGate  = 1.0f;
     static constexpr int ARP_SYNCS[6] = { 7, 8, 9, 10, 11, 13 };   // the fader's detents

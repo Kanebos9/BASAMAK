@@ -121,6 +121,7 @@ public:
     // Latest known tempo + time signature (host when DAW-synced, else the
     // plugin's own values). Used for the synced delay and the bar-length display.
     double currentBpm = 120.0;
+    int    arpFireCount = 0;   // alternate-strum stroke counter (reset at startArp)
     int    currentTimeSigNum = 4;
     int    currentTimeSigDen = 4;
 

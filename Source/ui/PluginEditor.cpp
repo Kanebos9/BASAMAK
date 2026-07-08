@@ -4255,31 +4255,32 @@ void ScaleBox::paint(juce::Graphics& g)
           gtrType ? juce::String("Notes: Auto") : "Notes x" + juce::String(s.count), s.on && ! gtrType);
     fader(scaleRect(), s.on ? (float)(s.type + 2) / (float)(kNumScales + 1) : 1.0f / (float)(kNumScales + 1),
           s.on ? juce::String(kUiScaleName[juce::jlimit(0, kNumScales - 1, s.type)]) : juce::String("Off"), true);
-    { // LIVE TUNER: "<note> <+/-cents>" with tuner-style dots - left dots = flat, right = sharp,
-      // the centre ring turns green within +-3 cents. Shows the CHANNEL's tuning (Base Freq +
-      // roll Tune), i.e. what a tuner would call the sound's 0-point.
-        const auto r = tunerRect();
-        const int cy = r.getCentreY();
-        const bool inTune = std::abs(tunerCents) <= 3;
-        const int lit = juce::jlimit(0, 4, (std::abs(tunerCents) + 11) / 12);   // 1 dot per ~12 cents
-        for (int i = 0; i < 4; ++i)
-        {
-            const int d = 4 - i;   // outermost first
-            auto dot = [&](int x, bool on) {
-                g.setColour(on ? juce::Colour(0xffffb03a) : juce::Colour(0xff33335a));
-                g.fillEllipse((float) x - 2.5f, (float) cy - 2.5f, 5.0f, 5.0f);
-            };
-            dot(r.getCentreX() - 34 - i * 11, tunerCents < 0 && lit >= d);
-            dot(r.getCentreX() + 34 + i * 11, tunerCents > 0 && lit >= d);
-        }
-        g.setColour(inTune ? juce::Colour(0xff2f9e57) : juce::Colour(0xff777fa8));
-        g.drawEllipse((float) r.getCentreX() - 24.0f, (float) cy - 4.0f, 8.0f, 8.0f, 1.5f);
-        g.setColour(inTune ? juce::Colour(0xff7ae0a0) : juce::Colour(0xffd8e0f0));
-        g.setFont(juce::Font(10.5f, juce::Font::bold));
-        g.drawText(tunerNote.isEmpty() ? juce::String("-")
-                     : tunerNote + " " + (tunerCents > 0 ? "+" : "") + juce::String(tunerCents) + "c",
-                   r.getCentreX() - 12, r.getY(), 70, r.getHeight(), juce::Justification::centredLeft, false);
+}
+
+void TunerBox::paint(juce::Graphics& g)
+{   // "<note> <+/-cents>" with tuner-style dots: left = flat, right = sharp; green ring = in tune.
+    g.fillAll(juce::Colour(0xff16162a));
+    const auto r = getLocalBounds();
+    const int cy = r.getCentreY();
+    const bool inTune = std::abs(cents) <= 3;
+    const int lit = juce::jlimit(0, 4, (std::abs(cents) + 11) / 12);   // 1 dot per ~12 cents
+    for (int i = 0; i < 4; ++i)
+    {
+        const int d = 4 - i;   // outermost first
+        auto dot = [&](int x, bool on) {
+            g.setColour(on ? juce::Colour(0xffffb03a) : juce::Colour(0xff33335a));
+            g.fillEllipse((float) x - 2.5f, (float) cy - 2.5f, 5.0f, 5.0f);
+        };
+        dot(r.getCentreX() - 40 - i * 12, cents < 0 && lit >= d);
+        dot(r.getCentreX() + 40 + i * 12, cents > 0 && lit >= d);
     }
+    g.setColour(inTune ? juce::Colour(0xff2f9e57) : juce::Colour(0xff777fa8));
+    g.drawEllipse((float) r.getCentreX() - 28.0f, (float) cy - 4.5f, 9.0f, 9.0f, 1.5f);
+    g.setColour(inTune ? juce::Colour(0xff7ae0a0) : juce::Colour(0xffd8e0f0));
+    g.setFont(juce::Font(11.0f, juce::Font::bold));
+    g.drawText(note.isEmpty() ? juce::String("-")
+                 : note + " " + (cents > 0 ? "+" : "") + juce::String(cents) + "c",
+               r.getCentreX() - 14, r.getY(), 80, r.getHeight(), juce::Justification::centredLeft, false);
 }
 
 void ScaleBox::mouseDown(const juce::MouseEvent& e)
@@ -4466,6 +4467,7 @@ KeysPanel::KeysPanel()
     lblGuideCur.setInterceptsMouseClicks(false, false);
     btnGuide.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
     addAndMakeVisible(scaleBox);
+    addAndMakeVisible(tunerBox);
     addAndMakeVisible(splitBox);
     { static const juce::Colour cc[3] = { juce::Colour(0xffe8bf4d), juce::Colour(0xffe86aa8), juce::Colour(0xffd8e0f0) };
       for (int i = 0; i < 3; ++i)
@@ -4546,6 +4548,7 @@ void ArpEditor::paint(juce::Graphics& g)
         g.drawText(t, rr, juce::Justification::centred, false); };
     togBtn(alignRect(), align, "Align bar");
     togBtn(holdRect(),  hold,  "Hold");
+    togBtn(altRect(),   altStrum, "Alt strum");   // up, down, up... (needs the channel's STRUM up)
     { // GATE drag-fader (same style as Rate): note length as % of one arp step
         auto gr = gateRect();
         g.setColour(juce::Colour(0xff26264a)); g.fillRoundedRectangle(gr.toFloat(), 4.0f);
@@ -4602,6 +4605,10 @@ juce::String ArpEditor::getTooltip()
     if (holdRect().contains(p))
         return "HOLD (latch): release the key and the arp keeps looping on its own. Press the SAME key again "
                "to stop it; a DIFFERENT key re-roots the riff. The plugin's STOP button also ends it.";
+    if (altRect().contains(p))
+        return "ALT STRUM: every other arp note strums the chord in the OPPOSITE direction - up, down, up... "
+               "like a real strumming hand. Needs the channel's STRUM knob (KEYS panel) up and a Chord/Scale "
+               "voicing on the sound to hear anything.";
     if (gateRect().contains(p))
         return "GATE (drag, 10-100%): each note's length as a fraction of its step. 100% = a note rings until "
                "the next one (legato). Lower = staccato: the note is released early with the sound's own "
@@ -4624,6 +4631,7 @@ void ArpEditor::mouseDown(const juce::MouseEvent& e)
     if (rateRect().contains(p))  { dragRate = true; mouseDrag(e); return; }   // drag-fader inside the box
     if (alignRect().contains(p)) { align = ! align; if (onChange) onChange(); repaint(); return; }
     if (holdRect().contains(p))  { hold = ! hold; if (onChange) onChange(); repaint(); return; }
+    if (altRect().contains(p))   { altStrum = ! altStrum; if (onChange) onChange(); repaint(); return; }
     if (gateRect().contains(p))  { dragGate = true; mouseDrag(e); return; }
     if (faderRect().contains(p)) { dragFader = true; mouseDrag(e); return; }
     if (lenDnRect().contains(p)) { len = juce::jmax(1, len - 1); if (onChange) onChange(); repaint(); return; }
@@ -4738,6 +4746,7 @@ void KeysPanel::resized()
     strip.removeFromLeft(8);
     // SCALE box rides in the SAME strip row, now FULL-HEIGHT down to the band bottom (user: use the space)
     scaleBox.setBounds(strip.getX(), strip.getY(), juce::jmax(150, strip.getWidth() - 2), 76);
+    tunerBox.setBounds(strip.getX(), strip.getY() + 78, juce::jmax(150, strip.getWidth() - 2), 16);
 
     r.removeFromTop(4);
     { // the BAND under the REC/mode/Takes/Slot2 row: SPLIT control + the three live chord names
@@ -5940,6 +5949,7 @@ void DrumSequencerEditor::writeChannelMix(juce::ValueTree& t, const DrumChannel&
         t.setProperty("arpAlign", ch.arpAlign, nullptr);
         t.setProperty("arpHold", ch.arpHold,  nullptr);
         t.setProperty("arpGate", ch.arpGate,  nullptr);
+        t.setProperty("arpAltS", ch.arpAltStrum, nullptr);
         juce::String ao; for (int i = 0; i < DrumChannel::ARP_ROWS; ++i) ao << (int) ch.arpOffset[i] << ',';
         t.setProperty("arpOff", ao, nullptr);
     }
@@ -6028,6 +6038,7 @@ void DrumSequencerEditor::readChannelMix(const juce::ValueTree& t, DrumChannel& 
         ch.arpAlign = (bool) t.getProperty("arpAlign", true);
         ch.arpHold  = (bool) t.getProperty("arpHold", false);
         ch.arpGate  = juce::jlimit(0.1f, 1.0f, (float) t.getProperty("arpGate", 1.0f));
+        ch.arpAltStrum = (bool) t.getProperty("arpAltS", false);
         const juce::String ao = t.getProperty("arpOff", "").toString();
         if (ao.isNotEmpty()) { auto f = juce::StringArray::fromTokens(ao, ",", "");
             for (int i = 0; i < DrumChannel::ARP_ROWS && i < f.size(); ++i)
@@ -9240,6 +9251,7 @@ void DrumSequencerEditor::refreshKeysPanel()
     keysPanel.arpEditor.align = kch.arpAlign;
     keysPanel.arpEditor.hold  = kch.arpHold;
     keysPanel.arpEditor.gate  = kch.arpGate;
+    keysPanel.arpEditor.altStrum = kch.arpAltStrum;
     for (int ai = 0; ai < DrumChannel::ARP_ROWS; ++ai) keysPanel.arpEditor.off[ai] = kch.arpOffset[ai];
     keysPanel.arpEditor.repaint();
     kbGuideApplied = -1;        // channel/slot scale may have changed -> re-evaluate the key guide
@@ -9253,6 +9265,7 @@ void DrumSequencerEditor::refreshKeysPanel()
         c.arpOn = keysPanel.arpEditor.on; c.arpLen = keysPanel.arpEditor.len;
         c.arpSync = keysPanel.arpEditor.sync; c.arpRate = keysPanel.arpEditor.rate;
         c.arpAlign = keysPanel.arpEditor.align; c.arpHold = keysPanel.arpEditor.hold; c.arpGate = keysPanel.arpEditor.gate;
+        c.arpAltStrum = keysPanel.arpEditor.altStrum;
         for (int ai = 0; ai < DrumChannel::ARP_ROWS; ++ai) c.arpOffset[ai] = keysPanel.arpEditor.off[ai];
         // The Arp button's green face must follow the popup's ON/OFF LIVE (it used to wait for the
         // next refreshKeysPanel = a key press - "I need to press a key to see if it's on").
@@ -10342,13 +10355,18 @@ void DrumSequencerEditor::timerCallback()
             }
             if (hz > 1.0f)
             {
-                const float m = 69.0f + 12.0f * std::log2(hz / 440.0f);
+                // LIVE: while a key is held, follow THAT note's actual sounding pitch on this
+                // channel (base offset + roll Tune flow into the cents); idle = the base itself.
+                const int held = proc.keysHeldNote.load(std::memory_order_relaxed);
+                float shownHz = hz;
+                if (held >= 0) shownHz = hz * std::pow(2.0f, (float) (held - 60) / 12.0f);
+                const float m = 69.0f + 12.0f * std::log2(shownHz / 440.0f);
                 const int   n = (int) std::lround(m);
                 cents = juce::jlimit(-50, 50, (int) std::lround((m - (float) n) * 100.0f));
                 tn = juce::MidiMessage::getMidiNoteName(juce::jlimit(0, 127, n), true, true, 4);
             }
-            if (tn != keysPanel.scaleBox.tunerNote || cents != keysPanel.scaleBox.tunerCents)
-            { keysPanel.scaleBox.tunerNote = tn; keysPanel.scaleBox.tunerCents = cents; keysPanel.scaleBox.repaint(); }
+            if (tn != keysPanel.tunerBox.note || cents != keysPanel.tunerBox.cents)
+            { keysPanel.tunerBox.note = tn; keysPanel.tunerBox.cents = cents; keysPanel.tunerBox.repaint(); }
         }
         if (proc.keysRecording.load())
         {
