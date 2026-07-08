@@ -6615,12 +6615,17 @@ void DrumSequencerEditor::setupComponents()
     btnModeVel.setTooltip("Velocity mode: drag a step UP/DOWN for how HARD that hit plays (0-100%). It's more than "
                           "volume: on sounds with a filter envelope a harder hit sweeps the filter further (303-style "
                           "accent), and MIDI Out channels send it as real MIDI velocity. Click again to leave.");
-    btnModeLen.setTooltip("Length mode: drag a step LEFT/RIGHT to set its NOTE LENGTH. The note keeps its attack/punch, "
-                          "then its DECAY is stretched (or tightened) so the fall fills exactly that much of the step - "
-                          "long notes ring down across their whole length (like a synth/303 note), short notes get a "
-                          "tight gated feel. 'Off' (default) = the sound's own natural length; for MIDI Out channels "
-                          "'Off' = a one-step note. Because it's a FRACTION of the step, changing the channel's step "
-                          "count keeps the feel. Double-click resets to Off.");
+    btnModeLen.setTooltip("Length mode: drag a step LEFT/RIGHT to set its NOTE LENGTH.\n\n"
+                          "- The note keeps its attack/punch, then its DECAY is stretched (or tightened) so the fall "
+                          "fills exactly that much of the step - long notes ring down across their whole length (like "
+                          "a synth/303 note), short notes get a tight gated feel. On a sound with SUSTAIN up, Length "
+                          "HOLDS the note instead (the same gate a held key uses).\n"
+                          "- 'Off' (default) = the sound's own natural length; for MIDI Out channels 'Off' = a "
+                          "one-step note. Because it's a FRACTION of the step, changing the step count keeps the feel.\n"
+                          "- PIANO ROLL round trips use Length too: switching to the roll turns a Length step into a "
+                          "gated note of that duration, and quantising the roll back to steps writes each GATED "
+                          "note's duration into Length (one-shot notes come back as plain steps).\n\n"
+                          "Double-click a step resets it to Off.");
     btnModePitch.setTooltip("Pitch edit mode: each step becomes a bipolar bar - centre is +0, drag up for higher / "
                             "down for lower pitch (semitones). Affects the whole sound of that hit. The 'slide' band "
                             "at the BOTTOM of each cell: click it and that step's pitch GLIDES across the step to land "
@@ -9516,9 +9521,10 @@ void DrumSequencerEditor::setupKnob(LearnableKnob& k, juce::Label& lbl, const ju
 void DrumSequencerEditor::quantizeDrawToSteps(DrumChannel& c, int n)
 {
     n = juce::jlimit(1, DrumChannel::MAX_STEPS, n);
-    // A REAL drawing quantises to a FRESH step pattern: clear the step-only values that draw mode
-    // doesn't use (Length / Roll / Loop / Slide / Pan / Vel) so a drawn line doesn't inherit stale
-    // step settings (user rule: drawn -> quantise = start fresh).
+    // A REAL drawing quantises to a FRESH step pattern: clear the step-only values so a drawn
+    // line doesn't inherit stale step settings (user rule). Velocity + Length are then REBUILT
+    // from the notes below (gated note -> Length; note vel -> step Vel); Roll/Loop/Slide/Pan
+    // have no note equivalent and start clean.
     for (int i = 0; i < DrumChannel::MAX_STEPS; ++i)
     {
         c.stepNoteLen[i] = 0.0f; c.stepRoll[i] = 1; c.stepRollDecay[i] = 0.0f;
@@ -9526,29 +9532,60 @@ void DrumSequencerEditor::quantizeDrawToSteps(DrumChannel& c, int n)
         c.stepVel[i] = 1.0f;     c.stepPan[i] = 0.0f;  c.stepNudge[i] = 0.0f;
     }
     const int R = DrumChannel::DRAW_RES;
-    int prevIdx = -1;
+    int noteOf[DrumChannel::MAX_STEPS]; for (auto& v : noteOf) v = -1;
     for (int s = 0; s < n; ++s)
     {
         const int c0 = s * R / n, c1 = (s + 1) * R / n;
-        // Dominant note of this step span = the NOTE (by index, so a re-articulated same pitch is
-        // two notes, not one merged run) covering the most columns in it.
-        int best = -1, bestc = 0, covered = 0;
+        // 1) A note STARTING in this step = a fresh HEAD (largest overlap wins). Deliberately
+        //    short notes still land as steps (the old coverage rule silently dropped them).
+        int head = -1, headc = 0;
+        for (int i = 0; i < c.drawNoteCount; ++i)
+        {
+            const auto& nt = c.drawNotes[i];
+            if (nt.start < c0 || nt.start >= c1) continue;
+            const int ov = juce::jmin((int) nt.start + nt.len, c1) - nt.start;
+            if (ov > headc) { headc = ov; head = i; }
+        }
+        if (head >= 0)
+        {
+            c.steps[s] = true; c.stepMerge[s] = false;
+            c.stepPitch[s] = (float) c.drawNotes[head].semi;
+            c.stepVel[s]   = juce::jlimit(0.05f, 1.0f, (float) c.drawNotes[head].vel / 255.0f);
+            noteOf[s] = head;
+            continue;
+        }
+        // 2) A note CONTINUING from the previous step: GATED -> merge continuation (step OFF,
+        //    the native convention); ONE-SHOT -> nothing (its natural ring covers this span).
+        int cont = -1, contc = 0;
         for (int i = 0; i < c.drawNoteCount; ++i)
         {
             const auto& nt = c.drawNotes[i];
             const int a = juce::jmax((int) nt.start, c0), b = juce::jmin((int) nt.start + nt.len, c1);
-            if (b > a) { covered += b - a; if (b - a > bestc) { bestc = b - a; best = i; } }
+            if (b > a && nt.start < c0 && b - a > contc) { contc = b - a; cont = i; }
         }
-        const int gap = (c1 - c0) - juce::jmin(c1 - c0, covered);
-        if (best >= 0 && bestc >= gap)   // a note dominates this step
+        if (cont >= 0 && s > 0 && noteOf[s - 1] == cont && ! c.drawNotes[cont].oneShot
+            && contc >= (c1 - c0) / 2)
         {
-            c.stepPitch[s] = (float) c.drawNotes[best].semi;
-            if (best == prevIdx && s > 0)   // the SAME note continues -> a merge CONTINUATION:
-            { c.steps[s] = false; c.stepMerge[s] = true; }   // step OFF (was wrongly enabled - user bug)
-            else { c.steps[s] = true; c.stepMerge[s] = false; }
-            prevIdx = best;
+            c.steps[s] = false; c.stepMerge[s] = true;
+            c.stepPitch[s] = (float) c.drawNotes[cont].semi;
+            noteOf[s] = cont;
         }
-        else { c.steps[s] = false; c.stepMerge[s] = false; prevIdx = -1; }
+        else { c.steps[s] = false; c.stepMerge[s] = false; }
+    }
+    // 3) GATED heads carry their duration into per-step LENGTH (user request): a merged chain
+    //    gates by construction (Length 0 = the whole chain; a fractional tail = the fraction);
+    //    a single-step gated note gets Length = its fraction of the step (1.0 = the full step -
+    //    on a sustained sound that is the SAME keyAdsr gate the roll used). One-shots stay 0.
+    for (int s = 0; s < n; ++s)
+    {
+        if (! c.steps[s] || noteOf[s] < 0) continue;
+        const auto& nt = c.drawNotes[noteOf[s]];
+        if (nt.oneShot) continue;                        // natural ring - Length stays 0
+        int e = s;
+        while (e + 1 < n && c.stepMerge[e + 1] && noteOf[e + 1] == noteOf[s]) ++e;
+        const int chainCols = (e + 1) * R / n - s * R / n;
+        const float frac = juce::jlimit(0.05f, 1.0f, (float) nt.len / (float) juce::jmax(1, chainCols));
+        c.stepNoteLen[s] = (frac >= 0.97f) ? (e > s ? 0.0f : 1.0f) : frac;
     }
     for (int i = n; i < DrumChannel::MAX_STEPS; ++i) { c.steps[i] = false; c.stepMerge[i] = false; }
     c.drawMode = false; c.numSteps = n;
