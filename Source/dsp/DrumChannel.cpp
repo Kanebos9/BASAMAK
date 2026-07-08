@@ -578,6 +578,7 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("sGn", s.smpGain, nullptr);
         st.setProperty("sEnv", s.smpEnvOn, nullptr);   // opt-in sample amp envelope
         st.setProperty("sPP", s.smpPreservePitch, nullptr);   // preserve pitch (ignore step/draw/key pitch)
+        st.setProperty("lkP", s.lockPitch, nullptr);          // LOCK PITCH (Osc/KS/Modal note-pitch ignore)
         st.setProperty("sFile", slotSample[b].file.getFullPathName(), nullptr);   // per-slot sample (reloaded)
         st.setProperty("yFo", s.oscFold, nullptr); st.setProperty("yOL", s.oscLevel, nullptr);
         st.setProperty("yNL", s.noiseLevel, nullptr); st.setProperty("yRs", s.resonAmt, nullptr);
@@ -665,6 +666,7 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         s.smpGain = (float)st.getProperty("sGn", d.smpGain);
         s.smpEnvOn = (bool)st.getProperty("sEnv", d.smpEnvOn);
         s.smpPreservePitch = (bool)st.getProperty("sPP", d.smpPreservePitch);   // default true (old projects preserve pitch)
+        s.lockPitch = (bool)st.getProperty("lkP", d.lockPitch);
         s.oscFold = (float)st.getProperty("yFo", d.oscFold); s.oscLevel = (float)st.getProperty("yOL", d.oscLevel);
         s.noiseLevel = (float)st.getProperty("yNL", d.noiseLevel); s.resonAmt = (float)st.getProperty("yRs", d.resonAmt);
         s.resonDrive = (float)st.getProperty("yRD", d.resonDrive);
@@ -1429,6 +1431,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         // === PER-SLOT FILTER (begin) - resonant LP; raw params here, coeffs recomputed per BLOCK
         //     (env-follow) into 'filt' just before the voice loop; state lives per-voice ===
         float  uniSpread = 0.0f; float uniPanL[UNI_MAX + 1] = {}, uniPanR[UNI_MAX + 1] = {};   // stereo WIDTH per voice (equal power)
+        bool   lockPitch = false;      // ignore note pitch (steps/roll/keys): the slot stays on its Base Freq
         bool   filtOn = false; double filtCutoff = 1000; float filtReso = 0.707f, filtEnvAmt = 0;
         double filtG = 0.1, filtK = 1.414;   // TPT SVF targets: g = tan(pi*fc/sr), k = 1/Q
         // === PER-SLOT FILTER (end) ===
@@ -1459,6 +1462,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         // Pitch-env time base = the AHD perceptual length the UI shows (atk+hold+dec); the voice itself still
         // renders its full exp tail (voiceEnd uses 3.2*dec) so nothing is cut - this just aligns the pitch timeline.
         c.voiceLenSamp = juce::jmax(1.0, (double)((sl.atk + sl.hold + sl.dec) * (float) sr));
+        c.lockPitch = sl.lockPitch;
         anySlotActive = true;
         if (sl.weight > domW) { domW = sl.weight; domSlot = s; }
         switch (sl.engine)
@@ -1898,8 +1902,11 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 // Freq to the pressed note (keySemis rides pe3Mul, so it reaches every pitched
                 // engine including the Modal strike-tuning and the KS varispeed read).
                 if (sv.keyMute) continue;
-                if (sv.keySemis != 0.0f)
+                if (sv.keySemis != 0.0f && ! c.lockPitch)
                     pe3Mul *= std::pow(2.0, (double) sv.keySemis / 12.0);
+                // LOCK PITCH: this slot ignores the note pitch (per-step/roll/slide = vPitchMul);
+                // env/vibrato/LFO in pe3Mul still apply. Sample slots have their own Keep pitch.
+                const double noteMul = c.lockPitch ? 1.0 : vPitchMul;
 
                 switch (c.engine)
                 {
@@ -1913,7 +1920,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         else
                             env = ahdsEnv(t, c.atk, c.hold, sv.gateDec > 0.0f ? sv.gateDec : c.dec, c.sustain, c.release);
                         double sSemis = (c.oscPEnvAmt != 0.0f) ? (double) c.oscPEnvAmt * pitchEnvShape(t, c.oscPEnvTime, c.oscPOffset) : 0.0;
-                        double freq = c.oscFreq * std::pow(2.0, sSemis / 12.0) * vPitchMul * c.oscVibFac * pe3Mul;
+                        double freq = c.oscFreq * std::pow(2.0, sSemis / 12.0) * noteMul * c.oscVibFac * pe3Mul;
                         // SCALE snaps the played note into the key. The FM modulator + sub-osc are SHARED across the
                         // unison/chord voices, so tune them to the SNAPPED ROOT (voice 0's offset) - else an off-scale
                         // note (C#) keeps its FM/sub at C# while the carriers snap to C-E-G, so C and C# sound DIFFERENT
@@ -2037,11 +2044,11 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         float fm = morphWave(sv.fmCarrier + c.fmIndex * modOut, cpos);
                         if (c.fmSub > 0.001f) {
                             fm = fm * (1.0f - 0.4f * c.fmSub) + (float) std::sin(sv.fmSubPhase) * c.fmSub;
-                            sv.fmSubPhase += 2.0 * kPi * c.fmCarrierF * 0.5 * fmPMul * vPitchMul * pe3Mul / sr;
+                            sv.fmSubPhase += 2.0 * kPi * c.fmCarrierF * 0.5 * fmPMul * noteMul * pe3Mul / sr;
                             if (sv.fmSubPhase > 2.0 * kPi) sv.fmSubPhase -= 2.0 * kPi;
                         }
-                        sv.fmCarrier += 2.0 * kPi * c.fmCarrierF * fmPMul * vPitchMul * pe3Mul / sr;
-                        sv.fmMod     += 2.0 * kPi * c.fmModF * fmPMul * vPitchMul * pe3Mul / sr;
+                        sv.fmCarrier += 2.0 * kPi * c.fmCarrierF * fmPMul * noteMul * pe3Mul / sr;
+                        sv.fmMod     += 2.0 * kPi * c.fmModF * fmPMul * noteMul * pe3Mul / sr;
                         if (sv.fmCarrier > 2.0 * kPi) sv.fmCarrier -= 2.0 * kPi;
                         if (sv.fmMod     > 2.0 * kPi) sv.fmMod     -= 2.0 * kPi;
                         sig = fm * env;
@@ -2058,7 +2065,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             env = ahdsEnv(t, c.atk, c.hold, sv.gateDec > 0.0f ? sv.gateDec : c.dec, c.sustain, c.release);
                         double pSemis = (c.physPEnvAmt != 0.0f) ? (double) c.physPEnvAmt * pitchEnvShape(t, c.physPEnvTime, c.physPOffset) : 0.0;
                         if (c.pm->pitchDrop != 0.0f) pSemis += (double) c.pm->pitchDrop * std::exp(-(float) t * 3.0f / (0.06f * (float) sr));
-                        double fBase = c.physBaseF * std::pow(2.0, pSemis / 12.0) * vPitchMul * c.physVibFac * pe3Mul;
+                        double fBase = c.physBaseF * std::pow(2.0, pSemis / 12.0) * noteMul * c.physVibFac * pe3Mul;
                         // Gate open (held key / Note Length) + sustain -> HOLD the string: near-lossless
                         // feedback AND a nearly-open loop filter (the LP is what actually drains the loop -
                         // feedback alone still lost ~18 dB in 2 s). Gate closed / sustain 0 = bit-identical.
@@ -2171,7 +2178,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         const int nNotes = juce::jlimit(1, MODAL_NOTES, c.uniVoices);
                         if (strike || ((c.pEnvOn || c.oscVibFac != 1.0f || modalGate || sv.modalHold) && i == 0)) {
                             sv.modalHold = modalGate;
-                            const double pmBase = vPitchMul * pe3Mul * (double) c.oscVibFac;   // vibrato = block-rate pole-angle wobble
+                            const double pmBase = noteMul * pe3Mul * (double) c.oscVibFac;   // vibrato = block-rate pole-angle wobble
                             if (strike) sv.modalNV = c.modalN;   // bank size fixed at the strike (immune to a mid-ring Material change)
                             double uniMul[MODAL_NOTES];
                             for (int j = 0; j < nNotes; ++j) {

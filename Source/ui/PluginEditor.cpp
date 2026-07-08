@@ -628,6 +628,27 @@ void SlotEditor::init(int idx, MidiLearnManager& mlm, juce::LookAndFeel* knobLNF
             if (onAudition) onAudition();
         }
     };
+    addChildComponent(lockPitchSw);               // Osc/KS/Modal: LOCK PITCH
+    addChildComponent(lockPitchLbl);
+    lockPitchLbl.setText("Lock Pitch", juce::dontSendNotification);
+    lockPitchLbl.setFont(juce::Font(10.0f, juce::Font::bold));
+    lockPitchLbl.setColour(juce::Label::textColourId, juce::Colour(0xffaebada));
+    lockPitchLbl.setJustificationType(juce::Justification::centredRight);
+    lockPitchLbl.setInterceptsMouseClicks(false, false);
+    lockPitchSw.setTooltip("LOCK PITCH: this slot always plays its Base Freq - per-step pitch, piano-roll "
+                           "notes, the keyboard and slide are all ignored (the pitch envelope, vibrato and "
+                           "the pitch LFO still work).\n\n"
+                           "- ON by default for drum-type factory sounds: a kick stays a kick while a melody "
+                           "plays on the other slot.\n"
+                           "- OFF for melodic sounds (keys, bass, bells...).\n"
+                           "- The piano roll never re-tunes a locked slot's Base Freq either.");
+    lockPitchSw.onClick = [this] {
+        if (auto* s = getSlot ? getSlot() : nullptr) {
+            s->lockPitch = lockPitchSw.getToggleState();
+            if (onEdit) onEdit();
+            if (onAudition) onAudition();
+        }
+    };
 
     // SrcOsc faders: Freq (shared base pitch, under the wave) + Reson (resonator gate). Horizontal so
     // each leaves the FM / Physical knobs a full clean row. MIDI-learnable like the knobs.
@@ -742,6 +763,8 @@ void SlotEditor::setEngine(int eng)
     physView.setVisible(eng == DrumChannel::SrcPhys);   // interactive string (Position/Tone)
     modalView.setVisible(eng == DrumChannel::SrcModal); // interactive struck body (Hit Pos/Damp)
     fmEnvSw.setVisible(eng == DrumChannel::SrcOsc);     // FM Amount env-follow (placed by placeOsc)
+    const bool lockable = eng == DrumChannel::SrcOsc || eng == DrumChannel::SrcPhys || eng == DrumChannel::SrcModal;
+    lockPitchSw.setVisible(lockable); lockPitchLbl.setVisible(lockable);
     morphView.fmMode = morph;   // Analog now does FM too -> show the live FM result for both (Depth 0 = plain carrier)
     oscLayout = (eng == DrumChannel::SrcOsc);   // sectioned Analog/FM/Resonator layout with Freq/Depth/Reson faders
     freqFader->setVisible(oscLayout);
@@ -819,6 +842,7 @@ void SlotEditor::pushValues()
         warpFader->setValue (s->oscWarp,  juce::dontSendNotification); warpFader->updateText();
         fromFader->setValue (s->oscShape, juce::dontSendNotification); fromFader->updateText();   // the Wave fader
         fmEnvSw.setToggleState(s->fmEnvFollow, juce::dontSendNotification);
+        lockPitchSw.setToggleState(s->lockPitch, juce::dontSendNotification);
     }
     morphView.repaint();          // reflect this slot's wave (+ warp + FM)
     physView.repaint(); modalView.repaint();   // reflect Position/Tone / Hit Pos/Damp + material looks
@@ -915,12 +939,16 @@ void SlotEditor::placeGeneric(int boxW)
     if (physView.isVisible()) {                           // Physical: interactive string across the top
         const int mh = 52;
         physView.setBounds(mL, yTop, innerW, mh);
+        lockPitchSw.setBounds(mL + innerW - 28, yTop + 2, 26, 13);
+        lockPitchLbl.setBounds(mL + innerW - 92, yTop + 2, 62, 13);
         physView.repaint();
         yTop += mh + 4;
     }
     if (modalView.isVisible()) {                          // Modal: interactive struck body across the top
         const int mh = 52;
         modalView.setBounds(mL, yTop, innerW, mh);
+        lockPitchSw.setBounds(mL + innerW - 28, yTop + 2, 26, 13);
+        lockPitchLbl.setBounds(mL + innerW - 92, yTop + 2, 62, 13);
         modalView.repaint();
         yTop += mh + 4;
     }
@@ -990,6 +1018,8 @@ void SlotEditor::placeOsc(int boxW)
         const int mh = juce::jlimit(24, 110, getHeight() - y - reserve);
         morphView.compact = (mh < 50);
         morphView.setBounds(mL, y, innerW, mh);
+        lockPitchSw.setBounds(mL + innerW - 28, y + 2, 26, 13);
+        lockPitchLbl.setBounds(mL + innerW - 92, y + 2, 62, 13);
         morphView.repaint();
         y += mh + 3;
     }
@@ -5690,7 +5720,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         h = mix(h, f(sl.physFreq)); h = mix(h, f(sl.physTone)); h = mix(h, f(sl.physMaterial)); h = mix(h, f(sl.physPosition)); h = mix(h, f(sl.physPEnvAmt)); h = mix(h, f(sl.physPEnvTime)); h = mix(h, f(sl.physPOffset)); h = mix(h, f(sl.physStiff)); h = mix(h, sl.physExcite);
         h = mix(h, f(sl.smpSpeed)); h = mix(h, f(sl.smpCrush)); h = mix(h, f(sl.smpPitch)); h = mix(h, f(sl.smpPEnvAmt)); h = mix(h, f(sl.smpPEnvTime)); h = mix(h, f(sl.smpPOffset)); h = mix(h, sl.smpReverse ? 1 : 0); h = mix(h, sl.smpUseRegion ? 1 : 0);
         h = mix(h, f(sl.smpStart)); h = mix(h, f(sl.smpEnd)); h = mix(h, sl.smpSlices); h = mix(h, f(sl.smpStretch)); h = mix(h, f(sl.smpGain));
-        h = mix(h, sl.smpEnvOn ? 1 : 0); h = mix(h, sl.smpPreservePitch ? 1 : 0); h = mix(h, sl.fmEnvFollow ? 1 : 0); h = mix(h, f(sl.modalMorph));
+        h = mix(h, sl.smpEnvOn ? 1 : 0); h = mix(h, sl.smpPreservePitch ? 1 : 0); h = mix(h, sl.lockPitch ? 1 : 0); h = mix(h, sl.fmEnvFollow ? 1 : 0); h = mix(h, f(sl.modalMorph));
         h = mix(h, sl.smpRegN); for (int r = 0; r < DrumChannel::Slot::MAXREG; ++r) { h = mix(h, f(sl.smpRegLo[r])); h = mix(h, f(sl.smpRegHi[r])); }
         h = mix(h, (juce::int64) c.slotSample[b].file.getFullPathName().hashCode64());   // this slot's sample
         h = mix(h, f(sl.oscFold)); h = mix(h, f(sl.oscLevel)); h = mix(h, f(sl.noiseLevel)); h = mix(h, f(sl.resonAmt)); h = mix(h, f(sl.resonDrive));
@@ -7543,7 +7573,7 @@ void DrumSequencerEditor::setupComponents()
                     const auto& hc = sq.patterns[head].channels[ci];
                     for (const auto& sl : hc.slots)
                     {
-                        if (sl.weight <= 0.001f) continue;
+                        if (sl.weight <= 0.001f || sl.lockPitch) continue;   // locked slots don't define the 0-point
                         float hz = 0.0f;
                         if (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal) hz = sl.oscFreq;
                         else if (sl.engine == DrumChannel::SrcPhys) hz = sl.physFreq;
@@ -9927,6 +9957,7 @@ void DrumSequencerEditor::refreshDetailPanel()
         for (int s = 0; s < DrumChannel::NUM_SLOTS; ++s)
         {
             auto& sl = ch.slots[s];
+            if (sl.lockPitch) continue;   // LOCK PITCH: the roll never re-tunes a locked slot (user spec)
             // slot 2 keeps its Slot-2 pitch baked (positive keysSlot2Down = semitones DOWN, like keyDown)
             const float want = (s == 1 && ch.keysSlot2Down != 0)
                                  ? pin * std::pow(2.0f, -(float) ch.keysSlot2Down / 12.0f) : pin;

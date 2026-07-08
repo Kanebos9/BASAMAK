@@ -528,7 +528,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                     float baseMidi = 60.0f;
                     for (const auto& sl : pch.slots)
                     {
-                        if (sl.weight <= 0.001f) continue;
+                        if (sl.weight <= 0.001f || sl.lockPitch) continue;   // locked slots don't define the 0-point
                         float hz = 0.0f;
                         if (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal) hz = sl.oscFreq;
                         else if (sl.engine == DrumChannel::SrcPhys) hz = sl.physFreq;

@@ -727,6 +727,8 @@ public:
     StringDisplay    physView;                       // Physical only: interactive string (Position/Tone on the visual)
     ModalDisplay     modalView;                      // Modal only: interactive struck-body (Hit Pos/Damp on the visual)
     ToggleSwitch     fmEnvSw;                        // SrcOsc only: FM Amount follows the amp envelope
+    ToggleSwitch     lockPitchSw;                    // Osc/KS/Modal: LOCK PITCH (ignore note pitch)
+    juce::Label      lockPitchLbl;
     // Drop an audio file on the box -> the editor switches this slot to Sample + loads it.
     std::function<void(const juce::File&)> onFileDropped;
     bool fileDragOver = false;                       // paint a drop highlight

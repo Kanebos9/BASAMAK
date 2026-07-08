@@ -460,6 +460,10 @@ public:
         float smpGain = 1.0f;                   // sample output boost (samples are quieter than the synth engines)
         bool  smpEnvOn = false;                 // OPT-IN amp envelope on the sample (off = play full length, legacy-identical)
         bool  smpPreservePitch = true;          // Sample: IGNORE step/draw/key/env pitch (play at the sample's own pitch). Default ON.
+        bool  lockPitch = false;         // LOCK PITCH (Osc/KS/Modal): ignore NOTE pitch entirely
+                                         // (steps, piano roll, keys, slide) - always play the Base
+                                         // Freq. Pitch env / vibrato / LFO still apply. Factory
+                                         // default: ON for drum-type categories, OFF for melodic.
         // -- Per-slot FX (per sound). Drive = an insert on this slot's signal; Reverb/Delay = this slot's
         //    SEND amount into the shared reverb/delay engines (character set in the FX box). --
         int   fxDriveType = 0;                  // DrumChannel::DriveType

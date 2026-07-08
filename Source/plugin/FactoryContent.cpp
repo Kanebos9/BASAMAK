@@ -1756,6 +1756,16 @@ void applyMix(DC& ch, int index)
     const juce::String cat(kMixes[index].cat);   // keyboard-first categories open in PIANO ROLL by
     if (cat == "Keys" || cat == "Pads & Choirs" || cat == "Leads" || cat == "Chords & Arps")
         ch.drawMode = true;   // default (user; step data is kept underneath)
+    // LOCK PITCH factory default (user spec): DRUM-type sounds ship locked (a kick stays a kick
+    // whatever the pitch lane does); MELODIC categories ship unlocked (they're for key playing).
+    {
+        const bool melodic = cat == "Bass" || cat == "Keys" || cat == "Pads & Choirs" || cat == "Leads"
+                          || cat == "Plucks & Strings" || cat == "Bells & Mallets" || cat == "Chords & Arps";
+        if (! melodic)
+            for (auto& sl : ch.slots)
+                if (sl.engine == DC::SrcOsc || sl.engine == DC::SrcPhys || sl.engine == DC::SrcModal)
+                    sl.lockPitch = true;
+    }
     finishSound(ch);
 }
 
