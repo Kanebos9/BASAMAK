@@ -1286,25 +1286,13 @@ int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly,
         }
         fadeOutVoices(0.015f);                         // 15 ms handover (3 ms crackled on slides)
     }
-    // TOUCHING the keyboard RE-BASES every eligible slot's Freq to middle C (261.63 Hz, displayed C4; slot 2 keeps
-    // its transpose baked in). This keeps the SEQUENCER consistent with what you hear: recorded
-    // step pitches are relative to C3, and playback re-pitches from the slot Freq - so Freq must
-    // BE C3 or the pattern would play at a different pitch than you performed. The Freq knob
-    // then works as an overall transpose afterwards.
-    constexpr double kMidC = 261.6255653;   // middle C (MIDI 60) - displayed as C4 (scientific)
-    for (int s = 0; s < NUM_SLOTS; ++s)
-    {
-        Slot& sl = slots[s];
-        // slot2Down is a SIGNED transpose for slot 2: positive = semitones DOWN (classic sub-osc),
-        // negative = UP. 0 / non-slot-2 = the pressed pitch. (Old projects stored 0..24 = down.)
-        const double base = kMidC * ((s == 1 && slot2Down != 0) ? std::pow(2.0, -(double) slot2Down / 12.0) : 1.0);
-        switch (sl.engine)
-        {
-            case SrcOsc: case SrcModal: sl.oscFreq  = (float) base; break;
-            case SrcPhys:               sl.physFreq = (float) base; break;
-            default: break;
-        }
-    }
+    // RELATIVE PITCH CONTRACT (2026-07-08): the old block here RE-BASED every slot's Freq to
+    // C4 on key press. Removed - the keyboard NEVER re-tunes the sound now. A pressed key
+    // transposes each slot by (note - 60) FROM ITS OWN base, exactly what sequencer playback
+    // of the recorded note does, so live and playback always match and the Freq knob is the
+    // honest master transpose in every mode. (Keys-bank sounds are authored on C4, so on them
+    // "pitch 0 = C4" still holds in practice. The Slot-2 transpose is BAKED into slot 2's
+    // stored base by finishSound / the Slot-2 dropdown now, not here.)
     const int vi = trigger(velocity, glideFrom, 0.0f, 0, /*glideTo*/ 0.0f, glideSamp, /*forceOverlap*/ true, slotMask);
     Voice& v = voices[vi];
     v.isKey = true; v.keyOff = -1; v.keyNote = midiNote;   // tag: keyUp(note) releases only this note's voices
@@ -1327,9 +1315,9 @@ int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly,
             case SrcNoise:    sv.keySemis = 0.0f; continue;   // noise is unpitched - just play it
             default: sv.keyMute = true; continue;             // legacy engines: not playable by keys
         }
-        double hz = targetHz;
-        if (s == 1 && slot2Down != 0) hz *= std::pow(2.0, -(double) slot2Down / 12.0);
-        sv.keySemis = (float)(12.0 * std::log2(hz / juce::jmax(1.0, base)));
+        juce::ignoreUnused(base, targetHz);
+        sv.keySemis = (float)(midiNote - 60);   // RELATIVE: semitones from the slot's own base
+                                                // (slot 2's transpose is baked into its base)
         // SCALE: trigger() computed uniSemis off the C3-rebased Freq; RE-compute from the pressed note
         // (slot 2 uses its transposed note) so the harmonizer voices the diatonic chord of what you played.
         if (sl.scaleOn)

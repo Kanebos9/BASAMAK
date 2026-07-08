@@ -412,11 +412,11 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
                         const auto& m = c.drawNotes[mj];
                         if (m.start < nt.start && (m.start + m.len) >= (nt.start - adjGap)
                             && m.semi != nt.semi && m.start > bestStart)
-                        { bestStart = m.start; glideFrom = (float) m.semi; }
+                        { bestStart = m.start; glideFrom = (float) m.semi + (float) m.cents * 0.01f; }
                     }
                 }
                 TriggerEvent e; e.channel = ch; e.step = 0; e.offset = off; e.gate = gate;
-                e.isDraw = true; e.drawPitch = (float) nt.semi;
+                e.isDraw = true; e.drawPitch = (float) nt.semi + (float) nt.cents * 0.01f;   // + FINE TUNE
                 e.drawVel = (float) nt.vel / 255.0f;                  // per-note velocity
                 e.drawSlot = nt.slot;                                 // per-note slot tag
                 e.drawOneShot = nt.oneShot != 0;
