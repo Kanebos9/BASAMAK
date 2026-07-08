@@ -56,6 +56,8 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
             // (bit-identical to a bare step) - the importer marks them; right-click menu toggles.
             const long g = e.drawOneShot ? 0 : e.gate;
             const bool kg = ! e.drawOneShot;
+            c.strumFlip = e.drawStrumUp;   // per-note strum direction + amount (trigger() consumes both)
+            c.strumOverride = e.drawStrumPct >= 0 ? (float) e.drawStrumPct * 0.01f : -1.0f;
             if (e.drawGlideFrom > -900.0f) {   // MONO legato glide: slide from the previous note's pitch to this one's
                 const long gs = (long) (c.keysGlide * 0.4 * sampleRate);   // same 0..400 ms as live keys
                 c.fadeOutVoices(0.015f);                                   // 15 ms handover on the outgoing voice (like keyDown)
@@ -422,6 +424,8 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
                 e.drawVel = (float) nt.vel / 255.0f;                  // per-note velocity
                 e.drawSlot = nt.slot;                                 // per-note slot tag
                 e.drawOneShot = nt.oneShot != 0;
+                e.drawStrumUp = nt.strumUp != 0;
+                e.drawStrumPct = nt.strumPct > 100 ? -1 : (int) nt.strumPct;
                 e.drawOverlap = overlap;
                 e.drawGlideFrom = glideFrom;
                 events.add(e);

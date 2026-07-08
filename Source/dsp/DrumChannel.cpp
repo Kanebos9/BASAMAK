@@ -1069,6 +1069,15 @@ int DrumChannel::chordNoteOffset(int chordMode, int k) { return chordSemis(chord
 int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long gateSamples,
                          float glideToSemis, long glideSamples, bool forceOverlap, int slotMask, bool keyGate)
 {
+    // ==== TEMP DEBUG (user repro: first loop pass rings short, later passes long). Logs every
+    // trigger of the ANALYSED channel: gate samples + which voice. REMOVE after the session.
+    if (analysisTap != nullptr)
+    {
+        static FILE* gdbg = fopen("/tmp/basamak_gate.log", "w");
+        if (gdbg != nullptr)
+        { fprintf(gdbg, "trigger gate=%ld glideTo=%.2f keyGate=%d overlap=%d\n",
+                  gateSamples, glideToSemis, (int) keyGate, (int) forceOverlap); fflush(gdbg); }
+    }
     // slotMask 0 (or all-bits) = every slot sounds; a piano-roll note may restrict to slot 1 or 2.
     const int mask = (slotMask == 0) ? ~0 : slotMask;
     // If this is the channel the editor is analysing, start a fresh spectrum
@@ -1178,7 +1187,8 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         // STRUM: spread this slot's chord/scale notes low->high in time (deterministic; a strum on
         // every hit). Only when the slot voices distinct pitches (CHORD or SCALE), else notes are
         // identical and a "strum" would just comb-filter. uniDelay[0] stays 0 (the root leads).
-        if (strumAmt > 0.001f && (sl.scaleOn || sl.chordMode > 0)
+        const float sAmt = strumOverride >= 0.0f ? strumOverride : strumAmt;   // per-note override (piano roll)
+        if (sAmt > 0.001f && (sl.scaleOn || sl.chordMode > 0)
             && (sl.engine == SrcOsc || sl.engine == SrcModal || sl.engine == SrcPhys))
         {
             const int nStr = juce::jlimit(1, UNI_MAX, sl.scaleOn ? (sl.scaleType >= 10 ? 6 : sl.scaleUnison)
@@ -1190,14 +1200,14 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
                 // inaudible in a live log session - the accent pattern is what a strumming hand
                 // actually sounds like (down-UP-down-UP = loud-light-loud-light).
                 const double spreadMul = strumFlip ? 0.7 : 1.0;
-                const double perVoice = strumAmt * 0.180 * spreadMul * (double) sr / (double)(nStr - 1);
+                const double perVoice = sAmt * 0.180 * spreadMul * (double) sr / (double)(nStr - 1);
                 for (int u = 0; u < nStr; ++u)
                     sv.uniDelay[u] = (int) std::lround(perVoice * (double) (strumFlip ? nStr - 1 - u : u));
                 if (strumFlip) sv.velScale *= 0.82f;
             }
         }
-        if (s == NUM_SLOTS - 1) strumFlip = false;   // one-shot flag: live sets it per stroke; sequenced
-                                                     // playback must never inherit a stale direction
+        if (s == NUM_SLOTS - 1) { strumFlip = false; strumOverride = -1.0f; }   // one-shot flags: live sets them
+                                                     // per strum; playback must never inherit stale values
 
         // Sample slot: this hit plays the NEXT slice of THIS slot's own sample, from its slice start
         // (= region start when slicing is off). Each Sample slot has independent slices/region/buffer.

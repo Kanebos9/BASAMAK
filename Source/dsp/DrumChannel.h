@@ -138,8 +138,12 @@ public:
     // orange, slot 1 = yellow, slot 2 = pink (matches the keyboard highlight).
     struct DrawNote { int16_t start = 0, len = 1; int8_t semi = 0; uint8_t vel = 255; uint8_t slot = 0;
                       uint8_t glide = 0;      // glide=1: slide INTO this note from the previous (legato) note's pitch
-                      uint8_t oneShot = 0; }; // 1 = INSTANT TRIGGER (no gate: pure AHD ring, exactly like a bare step);
+                      uint8_t oneShot = 0;    // 1 = INSTANT TRIGGER (no gate: pure AHD ring, exactly like a bare step);
                                               // 0 = held-key gate (sustain holds for len, then release). Right-click menu.
+                      uint8_t strumUp = 0;     // STRUM direction: 0 = down (normal), 1 = UP (alt. strum: reversed
+                                               // string order + lighter accent). Arp records it; note menu edits it.
+                      uint8_t strumPct = 255; };  // per-note STRUM amount OVERRIDE: 0..100 (%); 255 = follow the
+                                                  // sound's Strum knob (default). Right-click note menu.
     bool     drawMode = false;
     DrawNote drawNotes[DRAW_MAX_NOTES];
     int      drawNoteCount = 0;
@@ -150,7 +154,8 @@ public:
     void clearDrawNotes() { drawNoteCount = 0; }
     // Append (bounded); returns the index or -1 when full. Audio + message thread both use this;
     // count is written LAST so a concurrent reader never sees an uninitialised note.
-    int addDrawNote(int start, int len, int semi, int vel, int slot = 0, int glide = 0, int oneShot = 0)
+    int addDrawNote(int start, int len, int semi, int vel, int slot = 0, int glide = 0, int oneShot = 0,
+                    int strumUp = 0, int strumPct = -1)
     {
         if (drawNoteCount >= DRAW_MAX_NOTES) return -1;
         const int i = drawNoteCount;
@@ -162,7 +167,9 @@ public:
                          (uint8_t) juce::jlimit(0, 255, vel),
                          (uint8_t) juce::jlimit(0, 2, slot),
                          (uint8_t) (glide ? 1 : 0),
-                         (uint8_t) (oneShot ? 1 : 0) };
+                         (uint8_t) (oneShot ? 1 : 0),
+                         (uint8_t) (strumUp ? 1 : 0),
+                         (uint8_t) (strumPct < 0 || strumPct > 100 ? 255 : strumPct) };
         drawNoteCount = i + 1;
         return i;
     }
@@ -654,6 +661,8 @@ public:
     bool   arpAlign = true;
     bool   arpAltStrum = false;   // alternate strum DIRECTION per arp note (up, down, up... like real strumming)
     bool   strumFlip = false;     // runtime: next trigger strums HIGH->LOW (a downstroke); the arp toggles it
+    float  strumOverride = -1.0f; // runtime: next trigger's strum amount (0..1); -1 = the Strum knob. Set by
+                                  // piano-roll playback from the note's strumPct; consumed like strumFlip.
     bool   arpHold  = false;
     float  arpGate  = 1.0f;
     static constexpr int ARP_SYNCS[6] = { 7, 8, 9, 10, 11, 13 };   // the fader's detents

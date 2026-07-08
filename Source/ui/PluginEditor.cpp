@@ -2371,6 +2371,17 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
                 m.addItem(1, "Gate OFF: ring naturally (like a step)", true, nn.oneShot != 0);
                 m.addItem(2, "Gate ON: hold for the note length",       true, nn.oneShot == 0);
                 m.addSeparator();
+                m.addItem(5, "Strum DOWN (normal)",            true, nn.strumUp == 0);
+                m.addItem(6, "Strum UP (alt. strum: reversed + lighter)", true, nn.strumUp != 0);
+                juce::PopupMenu sa;   // per-note strum AMOUNT override (255 = follow the Strum knob)
+                sa.addItem(20, "Sound's Strum knob (default)", true, nn.strumPct == 255);
+                sa.addItem(21, "0% (no strum on this note)",   true, nn.strumPct == 0);
+                sa.addItem(22, "25%",                          true, nn.strumPct == 25);
+                sa.addItem(23, "50%",                          true, nn.strumPct == 50);
+                sa.addItem(24, "75%",                          true, nn.strumPct == 75);
+                sa.addItem(25, "100%",                         true, nn.strumPct == 100);
+                m.addSubMenu("Strum amount", sa);
+                m.addSeparator();
                 m.addItem(3, "Glide into this note", true, nn.glide != 0);
                 juce::PopupMenu sm;
                 sm.addItem(10, "Both slots", true, nn.slot == 0);
@@ -2392,6 +2403,10 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
                         if (r == 1)      apply(+[](DrumChannel::DrawNote& n, int){ n.oneShot = 1; }, 0);
                         else if (r == 2) apply(+[](DrumChannel::DrawNote& n, int){ n.oneShot = 0; }, 0);
                         else if (r == 3) apply(+[](DrumChannel::DrawNote& n, int){ n.glide = n.glide ? 0 : 1; }, 0);
+                        else if (r == 5) apply(+[](DrumChannel::DrawNote& n, int){ n.strumUp = 0; }, 0);
+                        else if (r == 6) apply(+[](DrumChannel::DrawNote& n, int){ n.strumUp = 1; }, 0);
+                        else if (r >= 20 && r <= 25) apply(+[](DrumChannel::DrawNote& n, int a){ n.strumPct = (uint8_t) a; },
+                                                           r == 20 ? 255 : (r - 21) * 25);
                         else if (r >= 10 && r <= 12) apply(+[](DrumChannel::DrawNote& n, int a){ n.slot = (uint8_t) a; }, r - 10);
                         else if (r == 4)
                         {
@@ -5850,7 +5865,7 @@ juce::int64 DrumSequencerEditor::stateHash() const
             h = mix(h, ch.drawMode ? 1 : 0);
             if (ch.drawMode) { h = mix(h, f(ch.drawVel)); h = mix(h, f(ch.drawPan)); h = mix(h, f(ch.drawTuneCents));
                 for (int i = 0; i < ch.drawNoteCount; ++i) { const auto& nt = ch.drawNotes[i];
-                    h = mix(h, nt.start); h = mix(h, nt.len); h = mix(h, (int) nt.semi + 128); h = mix(h, (int) nt.vel); h = mix(h, (int) nt.slot); h = mix(h, (int) nt.glide); h = mix(h, (int) nt.oneShot); } }
+                    h = mix(h, nt.start); h = mix(h, nt.len); h = mix(h, (int) nt.semi + 128); h = mix(h, (int) nt.vel); h = mix(h, (int) nt.slot); h = mix(h, (int) nt.glide); h = mix(h, (int) nt.oneShot); h = mix(h, (int) nt.strumUp); h = mix(h, (int) nt.strumPct); } }
         }
     }
     h = mix(h, f(s.standaloneBpm)); h = mix(h, s.timeSigNum); h = mix(h, s.timeSigDen);
@@ -6778,7 +6793,8 @@ void DrumSequencerEditor::setupComponents()
                           "one-step note. Because it's a FRACTION of the step, changing the step count keeps the feel.\n"
                           "- MERGE (SHIFT+click a step) = a note LONGER than one step: the merged cells continue "
                           "the previous step's note (their own on/off state doesn't matter - they never re-fire). "
-                          "A long piano-roll note quantises to exactly this: a head step + merged cells.\n"
+                          "On a merged chain, Gate = a fraction of the WHOLE chain (75% of 2 merged steps = 1.5 "
+                          "steps). A long piano-roll note quantises to exactly this: a head step + merged cells.\n"
                           "- PIANO ROLL round trips use Gate too: a Gate step becomes a gated note of that length, "
                           "and a gated note's duration comes back into Gate (Gate-OFF notes = plain steps).\n\n"
                           "Double-click a step resets it to Off.");
@@ -7492,7 +7508,7 @@ void DrumSequencerEditor::setupComponents()
         {
             const auto& nt = notes[i];
             const int b = juce::jlimit(0, bars - 1, (int) nt.start / RES);
-            sq.patterns[head + b].channels[ch].addDrawNote((int) nt.start - b * RES, nt.len, nt.semi, nt.vel, nt.slot, nt.glide, nt.oneShot);
+            sq.patterns[head + b].channels[ch].addDrawNote((int) nt.start - b * RES, nt.len, nt.semi, nt.vel, nt.slot, nt.glide, nt.oneShot, nt.strumUp, nt.strumPct == 255 ? -1 : nt.strumPct);
         }
     };
     stepGrid.onDrawTuneChanged = [this](int ch, float cents) {   // the roll's TUNE fader: whole-bar
@@ -9122,7 +9138,8 @@ void DrumSequencerEditor::keysLoadTake(int idx)
         {
             const int b = juce::jlimit(0, end - head, (int) nt.start / DrumChannel::DRAW_RES);
             sq.patterns[head + b].channels[t.channel].addDrawNote((int) nt.start - b * DrumChannel::DRAW_RES,
-                                                                  nt.len, nt.semi, nt.vel, nt.slot, nt.glide, nt.oneShot);
+                                                                  nt.len, nt.semi, nt.vel, nt.slot, nt.glide, nt.oneShot,
+                                                                  nt.strumUp, nt.strumPct == 255 ? -1 : nt.strumPct);
         }
         selectChannel(t.channel);
         strips[t.channel].comboSteps.setSelectedId(StepGridComponent::DRAW_ITEM_ID, juce::dontSendNotification);
@@ -9168,7 +9185,7 @@ juce::int64 DrumSequencerEditor::takeDataHash(const DrumSequencerProcessor::Keys
     auto mix = [&](juce::int64 v) { h = h * 33 ^ v; };
     mix(t.channel); mix(t.isDraw ? 1 : 0);
     if (t.isDraw) { mix(t.drawPat); for (const auto& nt : t.drawNotes)
-                    { mix(nt.start); mix(nt.len); mix((int) nt.semi + 128); mix((int) nt.vel); mix((int) nt.slot); mix((int) nt.glide); mix((int) nt.oneShot); } }
+                    { mix(nt.start); mix(nt.len); mix((int) nt.semi + 128); mix((int) nt.vel); mix((int) nt.slot); mix((int) nt.glide); mix((int) nt.oneShot); mix((int) nt.strumUp); mix((int) nt.strumPct); } }
     else for (auto& e : t.evts) { mix(e.pattern); mix(e.step); mix((int) e.semis + 128); mix(e.flags); }
     return h;
 }
@@ -9861,6 +9878,15 @@ void DrumSequencerEditor::quantizeDrawToSteps(DrumChannel& c, int n)
         while (e + 1 < n && c.stepMerge[e + 1] && noteOf[e + 1] == noteOf[s]) ++e;
         const int chainCols = (e + 1) * R / n - s * R / n;
         const float frac = juce::jlimit(0.05f, 1.0f, (float) nt.len / (float) juce::jmax(1, chainCols));
+        // DEGENERATE MERGE GUARD (user: "if it's below 50%, what's the use of merging two steps?"):
+        // merged-chain Gate is a fraction of the WHOLE chain - if the note doesn't even reach past
+        // the head step, the merge is pointless/confusing. Collapse it to a single gated step.
+        if (e > s && frac * (float) (e - s + 1) <= 1.0f)
+        {
+            for (int m2 = s + 1; m2 <= e; ++m2) { c.stepMerge[m2] = false; noteOf[m2] = -1; }
+            c.stepNoteLen[s] = juce::jlimit(0.05f, 1.0f, frac * (float) (e - s + 1));
+            continue;
+        }
         c.stepNoteLen[s] = (frac >= 0.97f) ? (e > s ? 0.0f : 1.0f) : frac;
     }
     for (int i = n; i < DrumChannel::MAX_STEPS; ++i) { c.steps[i] = false; c.stepMerge[i] = false; }

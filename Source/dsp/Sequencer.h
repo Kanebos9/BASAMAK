@@ -89,7 +89,9 @@ public:
                           int   drawSlot = 0;        // per-note slot tag (0 = both, 1 = slot 1, 2 = slot 2)
                           bool  drawOverlap = false;   // note starts while another sounds (chord) -> don't cut it
                           float drawGlideFrom = -999.0f;   // MONO glide: slide this note FROM this pitch (semis); -999 = no glide
-                          bool  drawOneShot = false; };    // ONE-SHOT note: instant trigger, natural ring (no gate) - like a bare step
+                          bool  drawOneShot = false;       // ONE-SHOT note: instant trigger, natural ring (no gate) - like a bare step
+                          bool  drawStrumUp = false;       // per-note STRUM direction (true = up / alt. strum)
+                          int   drawStrumPct = -1; };      // per-note STRUM amount override (0..100; -1 = Strum knob)
 
     // [start, end) of step `s` (bar fraction 0..1) with this pattern's swing applied. The
     // MIDI exporter reuses it so exported clips carry the same groove the engine plays.
