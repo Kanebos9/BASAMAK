@@ -464,18 +464,24 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             {
                 const double gridPerBar = (double) juce::jmax(1, arpKc.arpSync) * DrumChannel::arpRateMul(arpKc.arpRate);
                 const int colLen = juce::jmax(1, (int) ((double) DrumChannel::DRAW_RES / gridPerBar));
-                // SNAP the stamp to the arp's OWN grid: the raw playhead column is block-quantised,
-                // which made consecutive notes micro-overlap -> the false "overlapping notes"
-                // warning when switching an arp recording to steps (user report).
-                const int cell = arpKicked ? 0 : (int) std::lround(sequencer.barPos() * gridPerBar);
-                const int col  = juce::jlimit(0, DrumChannel::DRAW_RES - 1, cell * colLen);
-                sequencer.patterns[sequencer.playPattern].channels[chIdx].addDrawNote(col, colLen, note - 60,
-                                                                                      (int) std::lround(arpVel * 255.0f));
+                // FREE (unquantised) stamping - recording must capture what actually played (the
+                // grid snap was rightly cursed out). Overlaps (the false warning) are killed the
+                // honest way instead: the PREVIOUS arp stamp is TRIMMED to end where this one starts.
+                const int col = arpKicked ? 0 : juce::jlimit(0, DrumChannel::DRAW_RES - 1,
+                                                             (int) (sequencer.barPos() * DrumChannel::DRAW_RES));
+                auto& pch = sequencer.patterns[sequencer.playPattern].channels[chIdx];
+                if (arpLastStampIdx >= 0 && arpLastStampIdx < pch.drawNoteCount
+                    && arpLastStampPat == sequencer.playPattern
+                    && col > pch.drawNotes[arpLastStampIdx].start
+                    && pch.drawNotes[arpLastStampIdx].start + pch.drawNotes[arpLastStampIdx].len > col)
+                    pch.drawNotes[arpLastStampIdx].len = (int16_t) juce::jmax(1, col - pch.drawNotes[arpLastStampIdx].start);
+                arpLastStampIdx = pch.addDrawNote(col, colLen, note - 60, (int) std::lround(arpVel * 255.0f));
+                arpLastStampPat = sequencer.playPattern;
             }
         };
         auto startArp = [&](int note, float vel)
         {
-            arpRoot = note; arpVel = vel; arpChan = chIdx; arpStep = 0; arpAcc = 0.0; arpSounding = -1; arpFireCount = 0;
+            arpRoot = note; arpVel = vel; arpChan = chIdx; arpStep = 0; arpAcc = 0.0; arpSounding = -1; arpFireCount = 0; arpLastStampIdx = -1; arpLastStampPat = -1;
             arpRootHeld = true;
             // ALIGN: while the transport plays, phase the accumulator so the NEXT note lands exactly on
             // the next bar-grid boundary (press mid-cell -> the riff locks onto the groove; the root

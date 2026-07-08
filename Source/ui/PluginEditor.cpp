@@ -2079,8 +2079,8 @@ juce::String StepGridComponent::getTooltip()
                             "- display only.\n"
                             "- CMD/CTRL+click a note = GLIDE (slides in from the previous note; the KEYS Glide "
                             "knob sets the time).\n"
-                            "- RIGHT-CLICK a note = the NOTE MENU: one-shot vs gated, glide, slot, delete. "
-                            "ONE-SHOT (tapered end) = fires like a step and rings naturally; GATED (square end) "
+                            "- RIGHT-CLICK a note = the NOTE MENU: Gate on/off, glide, slot, delete. "
+                            "GATE OFF (tapered end) = fires like a step and rings naturally; GATE ON (square end) "
                             "= holds at sustain for its length, then releases.\n"
                             "- SHIFT+drag = SELECT an area: move the selected notes together (the note menu "
                             "then edits all of them), double-click deletes them, a colour button re-slots "
@@ -2368,8 +2368,8 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
                 const auto& nn = drawNotes[ch2][idx];
                 juce::PopupMenu m;
                 m.addSectionHeader(sel ? "Selected notes" : "Note");
-                m.addItem(1, "One-shot: ring naturally (like a step)", true, nn.oneShot != 0);
-                m.addItem(2, "Gated: hold for the note length",        true, nn.oneShot == 0);
+                m.addItem(1, "Gate OFF: ring naturally (like a step)", true, nn.oneShot != 0);
+                m.addItem(2, "Gate ON: hold for the note length",       true, nn.oneShot == 0);
                 m.addSeparator();
                 m.addItem(3, "Glide into this note", true, nn.glide != 0);
                 juce::PopupMenu sm;
@@ -5304,7 +5304,7 @@ private:
         if (r.isHeader)
         {
             g.setColour(juce::Colour(0xffcf9a2a));
-            g.setFont(juce::Font(14.5f, juce::Font::bold));   // x1.25 (user)
+            g.setFont(juce::Font(19.0f, juce::Font::bold));   // titles BIGGER than the items (user)
             g.drawFittedText(r.header, 4, 0, w - 8, h, juce::Justification::centredLeft, 1, 0.8f);
             return;
         }
@@ -6780,7 +6780,7 @@ void DrumSequencerEditor::setupComponents()
                           "the previous step's note (their own on/off state doesn't matter - they never re-fire). "
                           "A long piano-roll note quantises to exactly this: a head step + merged cells.\n"
                           "- PIANO ROLL round trips use Gate too: a Gate step becomes a gated note of that length, "
-                          "and a gated note's duration comes back into Gate (one-shot notes = plain steps).\n\n"
+                          "and a gated note's duration comes back into Gate (Gate-OFF notes = plain steps).\n\n"
                           "Double-click a step resets it to Off.");
     btnModePitch.setTooltip("Pitch edit mode: each step becomes a bipolar bar - centre is +0, drag up for higher / "
                             "down for lower pitch (semitones). Affects the whole sound of that hit. The 'slide' band "

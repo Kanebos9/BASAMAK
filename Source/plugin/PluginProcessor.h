@@ -122,6 +122,7 @@ public:
     // plugin's own values). Used for the synced delay and the bar-length display.
     double currentBpm = 120.0;
     int    arpFireCount = 0;   // alternate-strum stroke counter (reset at startArp)
+    int    arpLastStampIdx = -1, arpLastStampPat = -1;   // recording: trim the previous stamp (no overlaps, no snapping)
     TunerTap tunerTap;         // continuous audio ring for the LIVE TUNE strip (editor analyses it)
     int    currentTimeSigNum = 4;
     int    currentTimeSigDen = 4;
