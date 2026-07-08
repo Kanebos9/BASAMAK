@@ -2298,7 +2298,11 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             // the key is held, and LETTING GO releases it (the bell used to ring on
                             // after key-up, which read as broken). TEST/plain steps still ring free.
                             env = (c.atk > 0.005f) ? juce::jmin(1.0f, (float) t / juce::jmax(1.0f, c.atk * (float) sr)) : 1.0f;
-                            if (v.keyOff >= 0)
+                            // keyOff can be set IN ADVANCE (a piano-roll note's voice carries its gate
+                            // end from trigger()); the release must not start until the gate actually
+                            // ends - decayCurve with NEGATIVE time = exp(+t) = an exploding "louder
+                            // than live" note (the Mod Kalimba roll bug).
+                            if (v.keyOff >= 0 && t >= v.keyOff)
                                 env *= decayCurve(t - v.keyOff, juce::jmax(0.005f, c.release));
                         }
                         else if ((v.isKey || v.gateLen > 0) && c.sustain > 0.01f)
