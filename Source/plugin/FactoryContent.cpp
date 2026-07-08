@@ -1857,26 +1857,26 @@ static void pTwinkle(Sequencer& s)
     songChain(s, 12, 0.24f);
 }
 
-// "Fur Elise" (Beethoven) - the famous A section as a music box. 3/4, 12 steps = a 16th grid;
-// melody offsets from the Toy Piano's C5 base; the left-hand broken chords ride the A1 sub.
+// "Fur Elise" (Beethoven) - the A section as a music box, on a CONTINUOUS 16th timeline
+// (v1 left a quarter-note hole after the run - user caught it against the sheet music).
+// Each 12-step 3/4 bar = TWO 3/8 bars of the score. P0 = pickup + the E-D# run (intro only);
+// P1 = the A bar + B bar; P2 = the C bar + the run again; the loop bounces P1 <-> P2 so the
+// run always lands straight onto A with no gap. Toy Piano offsets from C5; sub from A1.
 static void pFurElise(Sequencer& s)
 {
     s.standaloneBpm = 72.0f; s.timeSigNum = 3; s.timeSigDen = 4;
-    // bar 1: the E-D#-E-D#-E-B-D-C run (16ths, natural toy-piano ring)
-    songNotes(s, 0, 0, kToyPiano, 12, { {0,4,1},{1,3,1},{2,4,1},{3,3,1},{4,4,1},{5,-1,1},{6,2,1},{7,0,1} });
-    // bar 2: lands on A4; pickup C4-E4-A4 climbs back in
-    songNotes(s, 1, 0, kToyPiano, 12, { {0,-3,1},{9,-12,1},{10,-8,1},{11,-3,1} });
-    // bar 3: B4; pickup E4-G#4-B4
-    songNotes(s, 2, 0, kToyPiano, 12, { {0,-1,1},{9,-8,1},{10,-4,1},{11,-1,1} });
-    // bar 4: C5; pickup E4 into the repeat
-    songNotes(s, 3, 0, kToyPiano, 12, { {0,0,1},{10,-8,1} });
-    // left hand: A-minor / E-major broken chords on the sub (offsets FROM ITS A1 base; the last
-    // note of each figure holds to the bar's end)
-    buildChP(s, 0, 1, kSubBass, 12, {});                              // bar 1 = right hand alone
-    songNotes(s, 1, 1, kSubBass, 12, { {0,12,2},{2,19,2},{4,24,5} }); // A2 E3 A3---
-    songNotes(s, 2, 1, kSubBass, 12, { {0,7,2},{2,19,2},{4,23,5} });  // E2 E3 G#3--
-    songNotes(s, 3, 1, kSubBass, 12, { {0,12,2},{2,19,2},{4,24,5} });
-    songChain(s, 4, 0.3f);
+    // P0: [. . . . E D# | E D# E B D C]  (pickup + run, 16ths)
+    songNotes(s, 0, 0, kToyPiano, 12, { {4,4,1},{5,3,1},{6,4,1},{7,3,1},{8,4,1},{9,-1,1},{10,2,1},{11,0,1} });
+    // P1: [A . . C E A | B . . E G# B]  (melody A + low pickup; then B + its pickup)
+    songNotes(s, 1, 0, kToyPiano, 12, { {0,-3,1},{3,-12,1},{4,-8,1},{5,-3,1},{6,-1,1},{9,-8,1},{10,-4,1},{11,-1,1} });
+    // P2: [C . . . E D# | E D# E B D C]  (resolution + the run straight back in)
+    songNotes(s, 2, 0, kToyPiano, 12, { {0,0,1},{4,4,1},{5,3,1},{6,4,1},{7,3,1},{8,4,1},{9,-1,1},{10,2,1},{11,0,1} });
+    // left hand: A-minor / E-major broken chords under the downbeats (natural sub ring)
+    buildChP(s, 0, 1, kSubBass, 12, {});
+    songNotes(s, 1, 1, kSubBass, 12, { {0,12,1},{1,19,1},{2,24,1},{6,7,1},{7,19,1},{8,23,1} });   // A2 E3 A3 | E2 E3 G#3
+    songNotes(s, 2, 1, kSubBass, 12, { {0,12,1},{1,19,1},{2,24,1} });                             // A2 E3 A3
+    songChain(s, 3, 0.3f);
+    s.patterns[2].chainSeq[0] = 1;   // P2 -> P1 (not back to the intro pickup)
 }
 
 // "Amazing Grace" (trad. 1779) - 3/4 hymn: gated e-piano melody, bar-long merged pad chords,
@@ -1949,6 +1949,67 @@ static void pCanon(Sequencer& s)
     songChain(s, 8, 0.3f);
 }
 
+// PIANO-ROLL presets: these channels are authored as DrawNotes (drawMode), not steps - held
+// voices under moving 16ths, and real CHORDS (overlapping notes), which step mode cannot hold.
+struct RollNote { int start, len, semi, vel; };
+static void rollNotes(Sequencer& s, int pat, int ch, Builder snd, std::initializer_list<RollNote> notes)
+{
+    buildChP(s, pat, ch, snd, 16, {});
+    auto& c = s.patterns[pat].channels[ch];
+    c.drawMode = true;
+    for (auto n : notes) c.addDrawNote(n.start, n.len, n.semi, n.vel);
+}
+
+// "Prelude in C" (Bach, WTC I) - the figuration: a HELD bass + held alto under running 16ths,
+// exactly what the piano roll can express and steps can't. 4 bars (C / Dm7 / G7 / C), looped.
+static void pPreludeC(Sequencer& s)
+{
+    s.standaloneBpm = 66.0f; s.timeSigNum = 4; s.timeSigDen = 4;
+    static const int bass[4] = { -12, -12, -13, -12 };            // C3 C3 B2 C3
+    static const int alto[4] = { 4, 2, 2, 4 };                    // E4 D4 D4 E4
+    static const int fig[4][3] = { {7,12,16}, {9,14,17}, {7,14,17}, {7,12,16} };   // G C' E' etc.
+    for (int p = 0; p < 4; ++p)
+    {
+        juce::Array<RollNote> n;                                  // one 16th = 24 columns
+        for (int half = 0; half < 2; ++half)
+        {
+            const int o = half * 192;
+            n.add({ o,      184, bass[p], 105 });                 // held bass (half note)
+            n.add({ o + 24, 160, alto[p], 95 });                  // held alto, a 16th later
+            for (int r = 0; r < 2; ++r)                           // the G-C-E figure, twice
+                for (int k = 0; k < 3; ++k)
+                    n.add({ o + 48 + (r * 3 + k) * 24, 24, fig[p][k], 100 });
+        }
+        buildChP(s, p, 0, kGrandPiano, 16, {});
+        auto& c = s.patterns[p].channels[0];
+        c.drawMode = true;
+        for (auto& rn : n) c.addDrawNote(rn.start, rn.len, rn.semi, rn.vel);
+    }
+    songChain(s, 4, 0.28f);
+}
+
+// "Lofi Chill" (groove) - piano-roll CHORD showcase: whole-bar e-piano 7th chords (4 overlapping
+// notes = impossible in step mode) over a dusty swung kit and vinyl crackle.
+static void pLofiChill(Sequencer& s)
+{
+    s.standaloneBpm = 75.0f; s.timeSigNum = 4; s.timeSigDen = 4;
+    static const int chords[4][4] = { { 0, 4, 7, 11 },     // Cmaj7
+                                      { -3, 0, 4, 7 },     // Am7
+                                      { -7, -3, 0, 4 },    // Fmaj7
+                                      { -5, -1, 2, 5 } };  // G7
+    for (int p = 0; p < 4; ++p)
+    {
+        rollNotes(s, p, 0, kEPiano, { { 0, 336, chords[p][0], 88 }, { 0, 336, chords[p][1], 84 },
+                                      { 0, 336, chords[p][2], 84 }, { 0, 336, chords[p][3], 90 } });
+        buildChP(s, p, 1, mBreakKick,  16, { 0, 10 });
+        buildChP(s, p, 2, mBrushSnare, 16, { 4, 12 });
+        buildChP(s, p, 3, mClosedHat,  16, { 0,2,4,6,8,10,12,14 });
+        buildChP(s, p, 4, mVinyl,      16, { 0,2,4,6,8,10,12,14 });
+        s.patterns[p].swing = 0.45f;
+    }
+    songChain(s, 4, 0.22f);
+}
+
 using PresetFn = void (*)(Sequencer&);
 static const struct { const char* name; PresetFn build; } kPresets[] = {
     { "Riser + Drop",       pRiserDrop },
@@ -1958,6 +2019,8 @@ static const struct { const char* name; PresetFn build; } kPresets[] = {
     { "Twinkle Twinkle (trad.)", pTwinkle },
     { "Amazing Grace (trad.)",  pAmazingGrace },
     { "When the Saints (trad.)", pSaints },
+    { "Prelude in C (Bach)",    pPreludeC },
+    { "Lofi Chill (groove)",    pLofiChill },
 };
 static constexpr int kNumPresets = (int) (sizeof(kPresets) / sizeof(kPresets[0]));
 

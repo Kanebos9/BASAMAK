@@ -7399,7 +7399,55 @@ void DrumSequencerEditor::setupComponents()
             // MERGED GROUP: the dropdown applies to EVERY bar individually (8 steps x 3 bars = a
             // 24-cell row in front of you); the roll spans all bars likewise.
             auto eachBar = [&](auto&& f) { for (int b = head; b <= end; ++b) f(sq.patterns[b].channels[ci]); };
-            if (id == StepGridComponent::DRAW_ITEM_ID) { eachBar([](DrumChannel& cc){ cc.drawMode = true; }); finish(); return; }   // -> piano roll (notes kept)
+            if (id == StepGridComponent::DRAW_ITEM_ID)
+            {   // -> piano roll. If the roll is EMPTY, IMPORT the step data as notes (user: "you
+                // can switch but notes aren't there anymore") - merge runs become long notes,
+                // Length becomes note length, slide becomes the next note's glide flag. A roll
+                // that already has notes is left alone (steps stay underneath as before).
+                eachBar([](DrumChannel& cc){
+                    if (! cc.drawMode && cc.drawNoteCount == 0 && cc.numSteps > 0)
+                    {
+                        const int cps = DrumChannel::DRAW_RES / cc.numSteps;   // columns per step
+                        int lastHead = -1;
+                        for (int st = 0; st < cc.numSteps; ++st)
+                        {
+                            if (! cc.steps[st] || (st > 0 && cc.stepMerge[st])) continue;
+                            int run = 1;
+                            while (st + run < cc.numSteps && cc.stepMerge[st + run]) ++run;
+                            int len = run * cps;
+                            if (run == 1 && cc.stepNoteLen[st] > 0.01f)
+                                len = juce::jmax(1, (int) (cc.stepNoteLen[st] * (float) cps));
+                            const int glide = (lastHead >= 0 && cc.stepSlide[lastHead]) ? 1 : 0;
+                            // NUDGE = the note's start offset (same +-half-step law as the engine)
+                            const int start = juce::jmax(0, st * cps
+                                                + (int) std::lround(cc.stepNudge[st] * 0.5f * (float) cps));
+                            const int semi  = (int) std::lround(cc.stepPitch[st]);
+                            const float vel = cc.stepVel[st];
+                            // ROLL/ratchets: expand the sub-hits into real notes with the engine's
+                            // exact velocity-ramp law. (NOT carried: per-step Pan + loop conditions -
+                            // the roll's note model has no equivalent; user OK'd dropping those.)
+                            const int roll = (run == 1) ? juce::jlimit(1, 6, (int) cc.stepRoll[st]) : 1;
+                            for (int j = 0; j < roll; ++j)
+                            {
+                                float velScale = 1.0f;
+                                if (roll > 1)
+                                {
+                                    const float rr   = juce::jlimit(-1.0f, 1.0f, cc.stepRollDecay[st]);
+                                    const float frac = (float) j / (float) (roll - 1);
+                                    velScale = (rr >= 0.0f) ? (1.0f - rr) + rr * frac : 1.0f + rr * frac;
+                                }
+                                cc.addDrawNote(start + j * (len / juce::jmax(1, roll)),
+                                               juce::jmax(1, len / juce::jmax(1, roll)), semi,
+                                               (int) juce::jlimit(1.0f, 255.0f, vel * velScale * 255.0f),
+                                               0, j == 0 ? glide : 0);
+                            }
+                            lastHead = st;
+                        }
+                    }
+                    cc.drawMode = true;
+                });
+                finish(); return;
+            }
             if (! c.drawMode) { eachBar([id](DrumChannel& cc){ cc.numSteps = id; }); finish(); return; }       // step -> step
             bool anyNotes = false, anyOverlap = false;
             for (int b = head; b <= end; ++b)
