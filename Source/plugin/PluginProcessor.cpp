@@ -517,16 +517,32 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                 { sequencer.startStandalone(); kicked = true; }
                 const int pat = sequencer.playPattern;
                 int rTgt = chIdx; const int recNote = paired ? note : splitMap(note, rTgt);
-                if (! paired && ! drawRec && (chain || pat == keysArmedPattern.load(std::memory_order_relaxed))
-                    && std::abs(recNote - 60) <= DrumChannel::PITCH_RANGE)   // out of the +-48 grid: play live, SKIP recording (pairs are roll-only)
+                if (! paired && ! drawRec && (chain || pat == keysArmedPattern.load(std::memory_order_relaxed)))
                 {
-                    const int semis = recNote - 60;   // FIXED reference: middle C (C4) = 0 (split: the MAPPED pitch)
                     auto& pch = sequencer.patterns[pat].channels[chIdx];
-                    const int n  = juce::jmax(1, pch.numSteps);
-                    const int st = ((int) std::lround(sequencer.barPos() * n)) % n;
-                    logEvt(pat, st, semis, 0);
-                    pch.steps[st] = true; pch.stepPitch[st] = (float) semis; pch.stepMerge[st] = false;
-                    keysLastStampStep.store(st, std::memory_order_relaxed);
+                    // STEP recording = FRACTIONAL offset from the Freq knob (2026-07-08): the keys
+                    // play ABSOLUTE notes; step pitch 0 = the knob. Storing the exact distance
+                    // (float - knob at A1: A2 records as +12; knob 30 cents flat: +12.3) means
+                    // playback ALWAYS reproduces the performance, even off-note knobs - no toggle
+                    // needed. (Roll recording keeps note-60: the roll pins its sounds to C4.)
+                    float baseMidi = 60.0f;
+                    for (const auto& sl : pch.slots)
+                    {
+                        if (sl.weight <= 0.001f) continue;
+                        float hz = 0.0f;
+                        if (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal) hz = sl.oscFreq;
+                        else if (sl.engine == DrumChannel::SrcPhys) hz = sl.physFreq;
+                        if (hz > 1.0f) { baseMidi = 69.0f + 12.0f * std::log2(hz / 440.0f); break; }
+                    }
+                    const float semis = (float) recNote - baseMidi;   // (split: the MAPPED pitch)
+                    if (std::abs(semis) <= (float) DrumChannel::PITCH_RANGE)   // out of grid: play live, skip recording
+                    {
+                        const int n  = juce::jmax(1, pch.numSteps);
+                        const int st = ((int) std::lround(sequencer.barPos() * n)) % n;
+                        logEvt(pat, st, (int) std::lround(semis), 0);   // take log stays integer (display only)
+                        pch.steps[st] = true; pch.stepPitch[st] = semis; pch.stepMerge[st] = false;
+                        keysLastStampStep.store(st, std::memory_order_relaxed);
+                    }
                 }
             }
             auto& kc = sequencer.patterns[keyPat].channels[chIdx];

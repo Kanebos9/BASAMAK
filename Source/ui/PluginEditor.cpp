@@ -657,9 +657,10 @@ void SlotEditor::init(int idx, MidiLearnManager& mlm, juce::LookAndFeel* knobLNF
     };
     freqFader->setTooltip("Frequency: the oscillator's base pitch (Hz). CLICK the value read-out to switch to NOTE "
                           "mode (shows A1, C2...; dragging snaps to semitones, SHIFT = free). Click again for Hz.\n\n"
-                          "KEYS: the moment you touch the on-screen piano this snaps to C4 (middle C), so recorded step pitches "
-                          "play back EXACTLY as performed (step pitch 0 = C4). Use this knob AFTERWARDS to transpose "
-                          "the whole sound.");
+                          "KEYS: the keyboard plays REAL notes no matter where this knob sits, and never changes it. "
+                          "Keyboard recordings are stored RELATIVE to this knob (step pitch 0 = this frequency), so "
+                          "they play back exactly as performed - and moving the knob afterwards transposes the whole "
+                          "pattern.");
     freqFader->onValueChange = [this] {
         if (auto* s = getSlot ? getSlot() : nullptr) {
             double v = freqFader->getValue();
@@ -865,9 +866,9 @@ void SlotEditor::applyFreqLock()
     static const juce::String freqFaderTip =
         "Frequency: the oscillator's base pitch (Hz). CLICK the value read-out to switch to NOTE "
         "mode (shows A1, C2...; dragging snaps to semitones, SHIFT = free). Click again for Hz.\n\n"
-        "KEYS: the moment you touch the on-screen piano this snaps to C4 (middle C), so recorded step pitches "
-        "play back EXACTLY as performed (step pitch 0 = C4). PIANO ROLL disables this knob and pins "
-        "0 to C4.";
+        "KEYS: the keyboard plays REAL notes no matter where this knob sits, and never changes it. "
+        "Keyboard recordings are stored RELATIVE to this knob (step pitch 0 = this frequency), so they "
+        "play back exactly as performed. PIANO ROLL disables this knob and pins 0 to C4.";
     auto apply = [this](juce::Slider& sl, const juce::String& openTip) {
         sl.setEnabled(! freqDisabled);
         sl.setAlpha(freqDisabled ? 0.45f : 1.0f);
@@ -6689,8 +6690,8 @@ void DrumSequencerEditor::setupComponents()
         "Chord or Scale mode exports its FULL voicing. Both slots export together.\n"
         "- A channel with only Sample/Noise slots exports its step/draw pitch on the channel's own note.\n"
         "- Merged step chains come out as one long note; rolls and swing are kept.\n\n"
-        "MIDI lands transposed? Check the slots' Freq knobs - they set the pitch 0-point (playing the "
-        "keys re-bases them to C4).");
+        "MIDI lands transposed? Check the slots' Freq knobs - they set the pitch 0-point (the "
+        "keyboard plays real notes but never changes them).");
 
 
     // Preset menu
@@ -8390,8 +8391,8 @@ void DrumSequencerEditor::setupComponents()
                         "from their own Freq knob; a slot in CHORD or SCALE mode exports its FULL voicing (every "
                         "chord note), and both slots export together. A channel with only Sample/Noise exports its "
                         "step/draw pitch on the channel's own note (no fixed anchor). If your MIDI lands transposed, "
-                        "check the Freq knobs on the sound slots: they set the 0-point of the pitch (playing the keys "
-                        "re-bases them to C4 automatically).");
+                        "check the Freq knobs on the sound slots: they set the 0-point of the pitch (the keyboard "
+                        "plays real notes but never changes the knobs).");
     patModeBtn.setTooltip("What happens after this pattern finishes: loop forever, stop after N loops, or jump to another pattern.");
 
     freqDisplay.setTooltip("Live spectrum (the frequencies of what's playing) + the EQ/filter curve. The spectrum "

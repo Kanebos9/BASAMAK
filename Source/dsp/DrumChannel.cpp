@@ -1286,25 +1286,12 @@ int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly,
         }
         fadeOutVoices(0.015f);                         // 15 ms handover (3 ms crackled on slides)
     }
-    // TOUCHING the keyboard RE-BASES every eligible slot's Freq to middle C (261.63 Hz, displayed C4; slot 2 keeps
-    // its transpose baked in). This keeps the SEQUENCER consistent with what you hear: recorded
-    // step pitches are relative to C3, and playback re-pitches from the slot Freq - so Freq must
-    // BE C3 or the pattern would play at a different pitch than you performed. The Freq knob
-    // then works as an overall transpose afterwards.
-    constexpr double kMidC = 261.6255653;   // middle C (MIDI 60) - displayed as C4 (scientific)
-    for (int s = 0; s < NUM_SLOTS; ++s)
-    {
-        Slot& sl = slots[s];
-        // slot2Down is a SIGNED transpose for slot 2: positive = semitones DOWN (classic sub-osc),
-        // negative = UP. 0 / non-slot-2 = the pressed pitch. (Old projects stored 0..24 = down.)
-        const double base = kMidC * ((s == 1 && slot2Down != 0) ? std::pow(2.0, -(double) slot2Down / 12.0) : 1.0);
-        switch (sl.engine)
-        {
-            case SrcOsc: case SrcModal: sl.oscFreq  = (float) base; break;
-            case SrcPhys:               sl.physFreq = (float) base; break;
-            default: break;
-        }
-    }
+    // KEYBOARD = ABSOLUTE PITCH, KNOB UNTOUCHED (2026-07-08, user spec): the old block here
+    // re-based every slot's Freq to C4 on key press - REMOVED. keySemis below already targets the
+    // pressed note ABSOLUTELY (12*log2(target/base)), so the keyboard plays real notes no matter
+    // where the Freq knob sits, and never rewrites it. Step recordings are stored as FRACTIONAL
+    // offsets from the knob (processor stamp), so playback still reproduces the performance
+    // exactly. TEST + step pitch 0 keep meaning "whatever the knob says" (the drum contract).
     const int vi = trigger(velocity, glideFrom, 0.0f, 0, /*glideTo*/ 0.0f, glideSamp, /*forceOverlap*/ true, slotMask);
     Voice& v = voices[vi];
     v.isKey = true; v.keyOff = -1; v.keyNote = midiNote;   // tag: keyUp(note) releases only this note's voices
