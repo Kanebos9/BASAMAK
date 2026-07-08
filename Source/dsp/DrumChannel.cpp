@@ -1003,6 +1003,10 @@ static const int8_t kScaleTab[10][7] = {
     { 0,3,5,6,7,10,0 },   // 9 Blues (6)
 };
 static const int kScaleLen[10] = { 7,7,7,7,7,7,7,5,5,6 };
+// GUITAR VOICINGS (types 10 = Gtr Major, 11 = Gtr Minor): not diatonic stacks - a FIXED E-shape
+// barre voicing from the snapped root (R,5,R,3,5,R across "6 strings"), snapping in Major /
+// Natural Minor. With STRUM up this rings like a real strummed guitar chord (user feature).
+static const int8_t kGtrShape[2][6] = { { 0,7,12,16,19,24 }, { 0,7,12,15,19,24 } };
 
 // Voice k's offset (semitones, relative to the PLAYED note) for the diatonic chord of the note's scale
 // degree. Off-scale/between notes SNAP to the nearest scale member (tie -> lower); voice 0 = the snapped
@@ -1010,9 +1014,11 @@ static const int kScaleLen[10] = { 7,7,7,7,7,7,7,5,5,6 };
 // octave-wrapped). key = 0..11 root pitch class (C = 0), playedMidi = the note in MIDI numbers.
 static inline int scaleSemis(int scaleType, int key, int playedMidi, int k)
 {
-    scaleType = juce::jlimit(0, 9, scaleType);
-    const int8_t* S = kScaleTab[scaleType];
-    const int     N = kScaleLen[scaleType];
+    scaleType = juce::jlimit(0, 11, scaleType);
+    const bool gtr = scaleType >= 10;                                // guitar voicings snap in Maj/Min
+    const int  tab = gtr ? scaleType - 10 : scaleType;
+    const int8_t* S = kScaleTab[tab];
+    const int     N = kScaleLen[tab];
     const int pc = ((playedMidi - key) % 12 + 12) % 12;              // pitch class relative to the key root
     int deg = 0, bestC = (int) S[0], bestD = 100;
     for (int i = 0; i < N; ++i)                                      // nearest member (with octave wraps), tie -> lower
@@ -1021,6 +1027,8 @@ static inline int scaleSemis(int scaleType, int key, int playedMidi, int k)
             if (d < bestD || (d == bestD && c < bestC)) { bestD = d; bestC = c; deg = i; }
         }
     const int snapDelta = bestC - pc;                               // 0 when the note is on-scale
+    if (gtr)                                                        // fixed shape from the snapped root
+        return snapDelta + (int) kGtrShape[scaleType - 10][k % 6] + 12 * (k / 6);
     const int td  = deg + 2 * k;
     const int oct = (int) std::floor((double) td / (double) N);
     const int idx = td - oct * N;

@@ -3380,13 +3380,15 @@ static const int8_t kUiScaleTab[10][7] = {
     { 0,2,4,5,7,9,11 },{ 0,2,3,5,7,8,10 },{ 0,2,3,5,7,8,11 },{ 0,2,3,5,7,9,10 },{ 0,1,3,5,7,8,10 },
     { 0,2,4,6,7,9,11 },{ 0,2,4,5,7,9,10 },{ 0,2,4,7,9,0,0 },{ 0,3,5,7,10,0,0 },{ 0,3,5,6,7,10,0 } };
 static const int   kUiScaleLen[10]   = { 7,7,7,7,7,7,7,5,5,6 };
-static const char* kUiScaleName[10]  = { "Major","Minor","Har Min","Dorian","Phrygian","Lydian","Mixolyd","Maj Pent","Min Pent","Blues" };
+static const char* kUiScaleName[12]  = { "Major","Minor","Har Min","Dorian","Phrygian","Lydian","Mixolyd","Maj Pent","Min Pent","Blues","Gtr Major","Gtr Minor" };
+static const int8_t kUiGtrShape[2][6] = { { 0,7,12,16,19,24 }, { 0,7,12,15,19,24 } };   // mirror of kGtrShape
 static const char* kUiNoteName[12]   = { "C","C#","D","D#","E","F","F#","G","G#","A","A#","B" };
-static constexpr int kNumScales = 10;
+static constexpr int kNumScales = 12;   // 10 scales + 2 GUITAR VOICINGS (fixed E-shape barre)
 // The TONIC diatonic chord's k-th tone (semitones from the tonic) - a REPRESENTATIVE voicing for the
 // display cluster + read-out (the real per-note voicing is note-dependent - see DrumChannel scaleSemis).
 static inline int uiScaleSemis(int scaleType, int k) {
-    scaleType = juce::jlimit(0, 9, scaleType);
+    scaleType = juce::jlimit(0, kNumScales - 1, scaleType);
+    if (scaleType >= 10) return (int) kUiGtrShape[scaleType - 10][k % 6] + 12 * (k / 6);   // guitar shape
     const int8_t* S = kUiScaleTab[scaleType]; const int N = kUiScaleLen[scaleType];
     const int td = 2 * k, oct = td / N, idx = td - oct * N;
     return (int) S[idx] + 12 * oct;
@@ -4249,8 +4251,8 @@ void ScaleBox::paint(juce::Graphics& g)
         g.drawText(t, r, juce::Justification::centred, false);
     };
     fader(notesRect(), (float) s.count / 7.0f, "Notes x" + juce::String(s.count), s.on);
-    fader(scaleRect(), s.on ? (float)(s.type + 2) / 11.0f : 1.0f / 11.0f,
-          s.on ? juce::String(kUiScaleName[juce::jlimit(0, 9, s.type)]) : juce::String("Off"), true);
+    fader(scaleRect(), s.on ? (float)(s.type + 2) / (float)(kNumScales + 1) : 1.0f / (float)(kNumScales + 1),
+          s.on ? juce::String(kUiScaleName[juce::jlimit(0, kNumScales - 1, s.type)]) : juce::String("Off"), true);
 }
 
 void ScaleBox::mouseDown(const juce::MouseEvent& e)
@@ -4283,10 +4285,10 @@ void ScaleBox::mouseDrag(const juce::MouseEvent& e)
         return;
     }
     if (dragScale)
-    {   // 11 positions: Off + the 10 scales
+    {   // Off + every scale (incl. the 2 GUITAR voicings) = kNumScales + 1 positions
         auto r = scaleRect();
         const float f = juce::jlimit(0.0f, 1.0f, (float)(e.getPosition().x - r.getX()) / (float) juce::jmax(1, r.getWidth()));
-        const int pos = juce::jlimit(0, 10, (int) (f * 11.0f));
+        const int pos = juce::jlimit(0, kNumScales, (int) (f * (float)(kNumScales + 1)));
         const bool nOn = pos > 0; const int nType = juce::jmax(0, pos - 1);
         if (nOn != s.on || (nOn && nType != s.type)) { s.on = nOn; if (nOn) s.type = nType; if (onChange) onChange(slot); repaint(); }
         return;
@@ -9184,7 +9186,7 @@ void DrumSequencerEditor::refreshKeysPanel()
     for (int si = 0; si < 2; ++si)
     {
         const auto& sl = kch.slots[si];
-        keysPanel.scaleBox.v[si] = { sl.scaleOn, juce::jlimit(0, 9, sl.scaleType),
+        keysPanel.scaleBox.v[si] = { sl.scaleOn, juce::jlimit(0, kNumScales - 1, sl.scaleType),
                                      ((sl.scaleKey % 12) + 12) % 12, juce::jlimit(1, 7, sl.scaleUnison) };
     }
     keysPanel.scaleBox.repaint();
@@ -9418,7 +9420,9 @@ void DrumSequencerEditor::updateKeyboardGuide()
 {
     // Build a 12-bit pitch-class mask of the keys that stay LIT (-1 = guide off / nothing to dim).
     auto scaleMask = [](int key, int type) {
-        int m = 0; type = juce::jlimit(0, 9, type);
+        type = juce::jlimit(0, kNumScales - 1, type);
+        if (type >= 10) type -= 10;   // guitar voicings snap in Major / Natural Minor - same lit keys
+        int m = 0;
         for (int k = 0; k < kUiScaleLen[type]; ++k) m |= 1 << ((key + kUiScaleTab[type][k]) % 12);
         return m;
     };

@@ -1462,6 +1462,67 @@ static void mOcean(DC& c) {        // ocean swell: brown noise breathing at wave
     c.volume = 0.6f;
 }
 
+
+// ---- Guitar batch (2026-07-08, user order: bass guitars + guitars + strum-ready chords). All
+// Karplus-Strong (THE plucked-string engine), all C-based, no hidden state (UIAudit-checked). ----
+static DC::Slot& mkGtr(DC& c, float hz, float tone, float pos, float dec)
+{
+    auto& s = mkSlot(c, DC::SrcPhys);
+    s.physFreq = hz; s.physMaterial = 1.0f;              // steel string
+    s.physTone = tone; s.physPosition = pos;
+    s.atk = 0.001f; s.dec = dec;
+    return s;
+}
+static void gFingerBass(DC& c) {   // fingered electric bass: warm, round, played near the neck
+    auto& s = mkGtr(c, 65.41f, 0.35f, 0.32f, 0.9f);      // C2
+    s.filterType = DC::LowPass; s.filterCutoff = 1100.0f; s.filterReso = 0.7f;
+    c.volume = 0.88f;
+}
+static void gPickBass(DC& c) {     // picked bass: brighter attack, close to the bridge = twang
+    auto& s = mkGtr(c, 65.41f, 0.72f, 0.12f, 0.8f);
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.10f;
+    c.volume = 0.85f;
+}
+static void gMutedBass(DC& c) {    // palm-muted bass: short thump, all fundamental
+    auto& s = mkGtr(c, 65.41f, 0.4f, 0.25f, 0.18f);
+    s.fxDriveType = DC::SoftClip; s.fxDrive = 0.15f;
+    c.volume = 0.9f;
+}
+static void gFuzzBass(DC& c) {     // fuzz bass: KS string into heavy fuzz - gnarly sustain
+    auto& s = mkGtr(c, 65.41f, 0.6f, 0.2f, 0.7f);
+    s.fxDriveType = DC::Fuzz; s.fxDrive = 0.45f;
+    s.filterType = DC::LowPass; s.filterCutoff = 1600.0f; s.filterReso = 0.8f;
+    c.volume = 0.78f;
+}
+static void gSteelGuitar(DC& c) {  // steel-string acoustic: bright, singing, a touch of room
+    auto& s = mkGtr(c, 130.81f, 0.68f, 0.2f, 1.2f);      // C3
+    s.physStiff = 0.04f;                                 // a hint of string stiffness = acoustic shimmer
+    s.fxReverbSend = 0.12f;
+    c.volume = 0.82f;
+}
+static void gElecGuitar(DC& c) {   // clean electric: rounder pickup tone, drier
+    auto& s = mkGtr(c, 130.81f, 0.52f, 0.28f, 1.3f);
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.08f;
+    c.volume = 0.82f;
+}
+static void gMutedGuitar(DC& c) {  // funk mute: the percussive "chick" scratch
+    auto& s = mkGtr(c, 130.81f, 0.55f, 0.15f, 0.12f);
+    c.volume = 0.85f;
+}
+static void gStrumAcoustic(DC& c) {   // GUITAR-VOICED chords (E-shape barre, 6 notes): turn the KEYS
+    auto& s = mkGtr(c, 130.81f, 0.66f, 0.2f, 1.2f);      // panel's STRUM up and it rings like a real
+    s.physStiff = 0.04f;                                  // strummed acoustic (the voicing feature).
+    s.scaleOn = true; s.scaleType = 10; s.scaleUnison = 6; s.scaleKey = 0;   // Gtr Major
+    s.fxReverbSend = 0.12f;
+    c.volume = 0.72f;
+}
+static void gStrumElectric(DC& c) {   // minor-voiced electric strum (same shape, minor third)
+    auto& s = mkGtr(c, 130.81f, 0.5f, 0.28f, 1.3f);
+    s.scaleOn = true; s.scaleType = 11; s.scaleUnison = 6; s.scaleKey = 0;   // Gtr Minor
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.08f;
+    c.volume = 0.72f;
+}
+
 static const struct { const char* name; Builder build; const char* cat; } kMixes[] = {
     // Categories are by INSTRUMENT (never by engine). Grouped + ordered like catOrder[] in
     // rebuildSoundMixMenu() - a category missing there is silently dropped from the menu.
@@ -1567,6 +1628,10 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Hoover Bass", bHooverBass, "Bass" },
     { "Reed Bass", bReedBass, "Bass" },
     { "Wobble Bass", bWobbleBass, "Bass" },
+    { "Finger Bass", gFingerBass, "Bass" },
+    { "Pick Bass", gPickBass, "Bass" },
+    { "Muted Bass", gMutedBass, "Bass" },
+    { "Fuzz Bass", gFuzzBass, "Bass" },
     { "Keys Bass", kKeysBass, "Bass" },
     { "Deep Sub", kSubBass, "Bass" },
     // ---- Keys ----
@@ -1606,6 +1671,9 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Filter Pluck", eFilterPluck, "Plucks & Strings" },
     { "Synth Pluck", kSynthPluck, "Plucks & Strings" },
     { "Stab", mStab, "Plucks & Strings" },
+    { "Steel Guitar", gSteelGuitar, "Plucks & Strings" },
+    { "Electric Guitar", gElecGuitar, "Plucks & Strings" },
+    { "Muted Guitar", gMutedGuitar, "Plucks & Strings" },
     { "Nylon Guitar", mNylonGuitar, "Plucks & Strings" },
     { "Koto", mKoto, "Plucks & Strings" },
     { "Pizzicato", mPizzicato, "Plucks & Strings" },
@@ -1637,6 +1705,8 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Trance Arp", kTranceArp, "Chords & Arps" },
     { "Acid Arp", kAcidArp, "Chords & Arps" },
     { "Dream Arp", kDreamArp, "Chords & Arps" },
+    { "Strum Acoustic", gStrumAcoustic, "Chords & Arps" },
+    { "Strum Electric", gStrumElectric, "Chords & Arps" },
     // ---- Risers & Falls ----
     { "Noise Sweep", mNoiseSweep, "Risers & Falls" },
     { "Uplifter", mUplifter, "Risers & Falls" },

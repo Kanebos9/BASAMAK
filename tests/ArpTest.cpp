@@ -74,6 +74,16 @@ int main() {
         printf("[4c] C# in C major snaps DOWN to C (voice0 = -1) -> %s\n", CHK(snap) ? "OK" : "FAIL");
         const bool m7 = (iv(1, 0, 60, 3) == 10);
         printf("[4d] C natural minor, 4th chord tone = Bb (min7) -> %s\n", CHK(m7) ? "OK" : "FAIL");
+        // [4e] GUITAR VOICINGS (types 10/11): fixed E-shape barre from the snapped root -
+        // Maj = R,5,R,3,5,R; Min = the same with a minor third; C# snaps down to C.
+        static const int gM[6] = { 0,7,12,16,19,24 }, gm[6] = { 0,7,12,15,19,24 };
+        bool gOK = true;
+        for (int k = 0; k < 6; ++k) {
+            gOK = gOK && DrumChannel::scaleNoteOffset(10, 0, 60, k) == gM[k];
+            gOK = gOK && DrumChannel::scaleNoteOffset(11, 0, 60, k) == gm[k];
+        }
+        gOK = gOK && DrumChannel::scaleNoteOffset(10, 0, 61, 0) == -1;   // C# snaps to C (tie -> lower)
+        printf("[4e] guitar voicings: Maj/Min E-shapes + snap -> %s\n", CHK(gOK) ? "OK" : "FAIL");
     }
 
     printf(fails ? "\n>>> ARP FAILURES\n" : "\n>>> ArpTest PASS\n");
