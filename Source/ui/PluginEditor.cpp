@@ -997,7 +997,7 @@ void SlotEditor::placeOsc(int boxW)
     const int n = activeParamCount();                     // 2 (FM only) or 6 (FM + Physical)
     const bool resonOn = (n > 2);
     const int KS = KNOB, step = KS + GAP, kh = KS + 16;
-    const int KS_FM = 44, kh_FM = KS_FM + 16;             // Ratio/Feedback knobs (value read-out below)
+    const int KS_FM = 44, kh_FM = KS_FM + 16; juce::ignoreUnused(KS_FM, kh_FM);   // (knob row retired - FM is stacked faders now)
     const int mL = 6, innerW = boxW - 2 * mL;
     juce::ignoreUnused(step, kh);
 
@@ -1011,7 +1011,7 @@ void SlotEditor::placeOsc(int boxW)
       y += 16 + 2; }
     // -- Wave visual: as TALL as possible (FM names sit BESIDE the knobs, so no name row below them). --
     {
-        const int reserve = 18 /*Freq+Warp row*/ + kh_FM /*FM row, names beside -> no label row*/ + 4;
+        const int reserve = 18 /*Freq+Warp row*/ + 56 /*FM = 3 stacked fader rows*/ + 4;
         const int mh = juce::jlimit(24, 110, getHeight() - y - reserve);
         morphView.compact = (mh < 50);
         morphView.setBounds(mL, y, innerW, mh);
@@ -1030,19 +1030,24 @@ void SlotEditor::placeOsc(int boxW)
     fmLineY = y;
     { const int tag = 30;                                  // "FM" tag drawn at fmLabelR (paint); Env switch under it
       fmLabelR = juce::Rectangle<int>(mL, y + 2, tag, 14);
-      fmEnvSw.setBounds(mL, y + 18, 26, 13);               // FM Amount follows the amp env (tooltip explains)
+      fmEnvSw.setBounds(mL, y + 22, 26, 13);               // FM Amount follows the amp env (tooltip explains)
+      // The 3 FM controls are STACKED HORIZONTAL FADERS (user order - the shrunken knobs were
+      // unreadable): name on the left, value read-out on the right, same row recipe as the
+      // Modal/Noise boxes. Lock Pitch keeps its reserved right column.
       const int fx0 = mL + tag;
       const int nfm = juce::jmin(3, (int) params.size());  // Amount, Ratio, Feedback
-      const int reserve = 54;                              // Lock Pitch gets its OWN right column -
-      const int cell = (innerW - tag - reserve) / juce::jmax(1, nfm);   // the knob cells shrink, nothing overlaps
+      const int reserve = 54;
+      const int nameW = 60, rowH = 18, valW = 46;
       for (int gi = 0; gi < nfm; ++gi) {
-          const int cellX = fx0 + gi * cell;
-          knobs[gi]->setBounds(cellX, y, KS_FM, kh_FM);                          // knob (value read-out below the dial)
+          const int yy = y + gi * rowH;
+          knobs[gi]->setSliderStyle(juce::Slider::LinearHorizontal);
+          knobs[gi]->setTextBoxStyle(juce::Slider::TextBoxRight, true, valW, rowH - 4);
+          knobs[gi]->setBounds(fx0 + nameW, yy, innerW - tag - nameW - reserve, rowH - 2);
           labels[gi]->setJustificationType(juce::Justification::centredLeft);
-          labels[gi]->setBounds(cellX + KS_FM + 2, y + (kh_FM - 14) / 2, cell - KS_FM - 2, 14);
+          labels[gi]->setBounds(fx0, yy, nameW - 2, rowH - 2);
       }
-      lockPitchSw.setBounds(mL + innerW - 48, y + (kh_FM - 30) / 2, 46, 30);     // its own column, mid-row
-      y += kh_FM + 2; }
+      lockPitchSw.setBounds(mL + innerW - 48, y + (nfm * rowH - 30) / 2, 46, 30);   // its own column
+      y += nfm * rowH + 2; }
 }
 
 // Section divider lines + names for the SrcOsc sectioned layout (drawn behind the children).
