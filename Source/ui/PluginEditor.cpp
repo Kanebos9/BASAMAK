@@ -2157,6 +2157,16 @@ void StepGridComponent::handleValueDrag(juce::Point<int> pos)
 
 void StepGridComponent::mouseDoubleClick(const juce::MouseEvent& e)
 {
+    if (drawMagCh >= 0)   // the roll's TUNE fader: double-click = back to 0 (like every knob)
+    {
+        const auto ov = drawOverlayRect();
+        if (prHdrTune(ov).contains(e.getPosition()))
+        {
+            drawTune[drawMagCh] = 0.0f;
+            if (onDrawTuneChanged) onDrawTuneChanged(drawMagCh, 0.0f);
+            repaint(); return;
+        }
+    }
     const auto p = e.getPosition();
     // PIANO ROLL: double-click a note = DELETE it (overlay or row).
     if (drawMagCh >= 0)
