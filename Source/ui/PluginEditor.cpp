@@ -3472,7 +3472,10 @@ juce::String VoiceModDisplay::getTooltip()
                "out across the stereo field in ALTERNATING +/- pairs (like the big synths), so both sides get "
                "sharp AND flat voices and the image never leans. Equal-power panning; the voice lines show "
                "their real side (BLUE = left, ORANGE = right). 0% = mono, exactly the old sound. The "
-               "sub-oscillator always stays centred so the bass keeps its punch. Needs more than one voice.";
+               "sub-oscillator always stays centred so the bass keeps its punch.\n\n"
+               "Needs more than one voice. Width DOES work with Detune at 0 (the voices' fixed phase "
+               "offsets give a subtle, static width), but it really opens up with some Detune - or "
+               "Chord/Scale notes - which is also when the lines here visibly fan apart.";
     juce::String s = "Voice controls for the selected slot. Hover the UNISON / CHORD / SCALE chips for what each mode "
                      "does. ";
     if (vibOn) s += "Vibrato = ~5.5 Hz pitch wobble (works on every engine here).";
