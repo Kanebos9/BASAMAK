@@ -1010,9 +1010,6 @@ static const int kScaleLen[10] = { 7,7,7,7,7,7,7,5,5,6 };
 // kGtrNone and are SKIPPED by the renders - the Notes count is AUTO for these types (user spec:
 // "different chords have different string numbers"). With STRUM up this rakes like a guitar.
 static constexpr int8_t kGtrNone = -100;
-static const int8_t kGtrShapeE[2][6] = { { 0,7,12,16,19,24 }, { 0,7,12,15,19,24 } };           // 6 strings
-static const int8_t kGtrShapeA[2][6] = { { 0,7,12,16,19,kGtrNone }, { 0,7,12,15,19,kGtrNone } };   // 5
-static const int8_t kGtrShapeD[2][6] = { { 0,7,12,16,kGtrNone,kGtrNone }, { 0,7,12,15,kGtrNone,kGtrNone } };   // 4 (user: D major is 4 strings)
 
 // Voice k's offset (semitones, relative to the PLAYED note) for the diatonic chord of the note's scale
 // degree. Off-scale/between notes SNAP to the nearest scale member (tie -> lower); voice 0 = the snapped
@@ -1034,14 +1031,29 @@ static inline int scaleSemis(int scaleType, int key, int playedMidi, int k)
         }
     const int snapDelta = bestC - pc;                               // 0 when the note is on-scale
     if (gtr)
-    {   // shape + string count follow the SNAPPED root, like a real neck
+    {   // GUITAR voicing, DIATONIC (user round-2: it must follow the KEY, not play only-maj/min):
+        // the chord QUALITY comes from the snapped note's scale DEGREE (C major: D plays D minor,
+        // B plays B dim...), voiced as a barre pattern R,5,R,3',5',R'' whose STRING COUNT follows
+        // the root like a real neck - E..G# = 6-string E-shape, D/D# = 4-string D-shape, the
+        // rest = 5-string A-shape. Missing strings = kGtrNone (skipped by the renders).
+        auto ivAt = [&](int steps) {                                 // diatonic interval deg -> deg+steps
+            const int td = deg + steps, oct = (int) std::floor((double) td / (double) N);
+            return (int) S[td - oct * N] + 12 * oct - (int) S[deg];
+        };
+        const int third = ivAt(2), fifth = ivAt(4);
         const int rootPc = ((playedMidi + snapDelta) % 12 + 12) % 12;
-        // like a real neck: E..G# = E-shape (6 str), D/D# = D-shape (4), the rest = A-shape (5)
-        const int8_t (*shape)[6] = (rootPc >= 4 && rootPc <= 8) ? kGtrShapeE
-                                 : (rootPc == 2 || rootPc == 3) ? kGtrShapeD : kGtrShapeA;
-        const int8_t off = shape[scaleType - 10][juce::jlimit(0, 5, k)];
-        if (k > 5 || off == kGtrNone) return kGtrNone;              // no such string on this chord
-        return snapDelta + (int) off;
+        const int nStrings = (rootPc >= 4 && rootPc <= 8) ? 6 : (rootPc == 2 || rootPc == 3) ? 4 : 5;
+        if (k >= nStrings) return kGtrNone;                          // no such string on this chord
+        static const int slot[6] = { 0, 1, 2, 3, 4, 5 };            // R,5,R',3'+12,5'+12,R''
+        switch (slot[juce::jlimit(0, 5, k)])
+        {
+            case 0:  return snapDelta;
+            case 1:  return snapDelta + fifth;
+            case 2:  return snapDelta + 12;
+            case 3:  return snapDelta + 12 + third;
+            case 4:  return snapDelta + 12 + fifth;
+            default: return snapDelta + 24;
+        }
     }
     const int td  = deg + 2 * k;
     const int oct = (int) std::floor((double) td / (double) N);
@@ -1173,7 +1185,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
                                                     : sl.chordMode > 0 ? sl.chordUnison : sl.oscUnison);
             if (nStr > 1)
             {
-                const double perVoice = strumAmt * 0.090 * (double) sr / (double)(nStr - 1);   // up to ~90 ms spread
+                const double perVoice = strumAmt * 0.180 * (double) sr / (double)(nStr - 1);   // up to ~180 ms spread (user: 100% should be wider)
                 for (int u = 0; u < nStr; ++u)   // strumFlip = a DOWNSTROKE (high string first; the arp alternates it)
                     sv.uniDelay[u] = (int) std::lround(perVoice * (double) (strumFlip ? nStr - 1 - u : u));
             }
@@ -2466,6 +2478,12 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             const auto* r = renderBuf.getReadPointer(1);
             for (int i = 0; i < numSamples; ++i) analysisTap->push(0.5f * (l[i] + r[i]));
         }
+    }
+    if (tunerTap != nullptr)   // REAL tuner: continuous decimated mono feed of this channel
+    {
+        const auto* l = renderBuf.getReadPointer(0);
+        const auto* r = renderBuf.getReadPointer(1);
+        for (int i = 0; i < numSamples; ++i) tunerTap->push(0.5f * (l[i] + r[i]));
     }
 
     // Apply volume and pan then mix into dest

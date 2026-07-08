@@ -700,6 +700,7 @@ public:
 
     //-- Optional spectrum tap (set by processor for the analysed channel only)
     SpectrumTap* analysisTap = nullptr;
+    TunerTap*    tunerTap    = nullptr;   // continuous ring for the REAL tuner (set with analysisTap)
     // === PER-SLOT EQ (begin) - which slot the spectrum analyses: -1 = the final mix (All),
     //     0/1 = that slot's signal (pre-mix). Set per block by the processor. ===
     int   analysisSlot = -1;

@@ -74,19 +74,21 @@ int main() {
         printf("[4c] C# in C major snaps DOWN to C (voice0 = -1) -> %s\n", CHK(snap) ? "OK" : "FAIL");
         const bool m7 = (iv(1, 0, 60, 3) == 10);
         printf("[4d] C natural minor, 4th chord tone = Bb (min7) -> %s\n", CHK(m7) ? "OK" : "FAIL");
-        // [4e] GUITAR VOICINGS (types 10/11): the SHAPE + STRING COUNT follow the root like a
-        // real neck - E..G# roots = 6-string E-shape (R,5,R,3,5,R), others = 5-string A-shape
-        // (missing 6th string = sentinel < -90). Minor = flat third. C# snaps down to C.
-        static const int eM[6] = { 0,7,12,16,19,24 }, aM[5] = { 0,7,12,16,19 };
+        // [4e] GUITAR VOICINGS (types 10/11) are DIATONIC in the selected key (user round-2):
+        // quality follows the DEGREE (C major: C = major, D = MINOR, E = minor, B = dim) voiced
+        // as barre patterns whose STRING COUNT follows the root (E..G# = 6, D/D# = 4, rest = 5).
         bool gOK = true;
-        for (int k = 0; k < 6; ++k) gOK = gOK && DrumChannel::scaleNoteOffset(10, 0, 64, k) == eM[k];   // E root = E-shape
-        for (int k = 0; k < 5; ++k) gOK = gOK && DrumChannel::scaleNoteOffset(10, 0, 60, k) == aM[k];   // C root = A-shape
-        gOK = gOK && DrumChannel::scaleNoteOffset(10, 0, 60, 5) < -90;                                  // C has no 6th string
-        gOK = gOK && DrumChannel::scaleNoteOffset(11, 0, 60, 3) == 15;                                  // minor third (A-shape)
-        gOK = gOK && DrumChannel::scaleNoteOffset(10, 0, 62, 3) == 16;   // D root = 4-string D-shape...
-        gOK = gOK && DrumChannel::scaleNoteOffset(10, 0, 62, 4) < -90;   // ...with no 5th string (user: "D major is 4 strings")
+        static const int cMaj[5] = { 0,7,12,16,19 };   // C in C major: A-shape, MAJOR third
+        for (int k = 0; k < 5; ++k) gOK = gOK && DrumChannel::scaleNoteOffset(10, 0, 60, k) == cMaj[k];
+        gOK = gOK && DrumChannel::scaleNoteOffset(10, 0, 60, 5) < -90;   // C has no 6th string
+        gOK = gOK && DrumChannel::scaleNoteOffset(10, 0, 62, 3) == 15;   // D in C major = D MINOR (diatonic!)
+        gOK = gOK && DrumChannel::scaleNoteOffset(10, 0, 62, 4) < -90;   // D-shape = 4 strings only
+        gOK = gOK && DrumChannel::scaleNoteOffset(10, 0, 64, 3) == 15;   // E in C major = E minor
+        gOK = gOK && DrumChannel::scaleNoteOffset(10, 0, 64, 5) == 24;   // E root = full 6-string E-shape
+        gOK = gOK && DrumChannel::scaleNoteOffset(10, 0, 71, 1) == 6;    // B in C major = DIMINISHED fifth
+        gOK = gOK && DrumChannel::scaleNoteOffset(11, 0, 60, 3) == 15;   // C in C minor = minor third
         gOK = gOK && DrumChannel::scaleNoteOffset(10, 0, 61, 0) == -1;   // C# snaps to C (tie -> lower)
-        printf("[4e] guitar voicings: root-dependent shapes + counts + snap -> %s\n", CHK(gOK) ? "OK" : "FAIL");
+        printf("[4e] guitar voicings: DIATONIC qualities + string counts + snap -> %s\n", CHK(gOK) ? "OK" : "FAIL");
     }
 
     printf(fails ? "\n>>> ARP FAILURES\n" : "\n>>> ArpTest PASS\n");

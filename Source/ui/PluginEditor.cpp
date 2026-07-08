@@ -3381,14 +3381,21 @@ static const int8_t kUiScaleTab[10][7] = {
     { 0,2,4,6,7,9,11 },{ 0,2,4,5,7,9,10 },{ 0,2,4,7,9,0,0 },{ 0,3,5,7,10,0,0 },{ 0,3,5,6,7,10,0 } };
 static const int   kUiScaleLen[10]   = { 7,7,7,7,7,7,7,5,5,6 };
 static const char* kUiScaleName[12]  = { "Major","Minor","Har Min","Dorian","Phrygian","Lydian","Mixolyd","Maj Pent","Min Pent","Blues","Gtr Major","Gtr Minor" };
-static const int8_t kUiGtrShape[2][6] = { { 0,7,12,16,19,24 }, { 0,7,12,15,19,24 } };   // mirror of kGtrShape
+// (guitar voicings are DIATONIC now - the display cluster shows the TONIC chord: see uiScaleSemis)
 static const char* kUiNoteName[12]   = { "C","C#","D","D#","E","F","F#","G","G#","A","A#","B" };
 static constexpr int kNumScales = 12;   // 10 scales + 2 GUITAR VOICINGS (fixed E-shape barre)
 // The TONIC diatonic chord's k-th tone (semitones from the tonic) - a REPRESENTATIVE voicing for the
 // display cluster + read-out (the real per-note voicing is note-dependent - see DrumChannel scaleSemis).
 static inline int uiScaleSemis(int scaleType, int k) {
     scaleType = juce::jlimit(0, kNumScales - 1, scaleType);
-    if (scaleType >= 10) return (int) kUiGtrShape[scaleType - 10][k % 6] + 12 * (k / 6);   // guitar shape
+    if (scaleType >= 10)
+    {   // guitar voicing display = the TONIC barre (diatonic 3rd/5th of the parent scale)
+        const int8_t* S = kUiScaleTab[scaleType - 10];
+        const int third = S[2], fifth = S[4];
+        static const int base[6] = { 0, 0, 12, 12, 12, 24 };
+        const int kk = juce::jlimit(0, 5, k);
+        return base[kk] + (kk == 1 ? fifth : kk == 3 ? third : kk == 4 ? fifth : 0);
+    }
     const int8_t* S = kUiScaleTab[scaleType]; const int N = kUiScaleLen[scaleType];
     const int td = 2 * k, oct = td / N, idx = td - oct * N;
     return (int) S[idx] + 12 * oct;
@@ -4763,7 +4770,7 @@ void KeysPanel::resized()
     kb.setBounds(r);
     // ARP editor = a DROPDOWN under the Arp button: anchored to it (right-aligned so it stays inside
     // the panel), as tall as the keyboard area allows (2x the first version - the cells are big now).
-    { const int pw = juce::jmin(680, getWidth() - 16);   // wider: the whole header is ONE row now
+    { const int pw = juce::jmin(780, getWidth() - 16);   // 780: Alt-strum needs its own slot in the header row
       const int px = juce::jlimit(8, getWidth() - pw - 8, btnArp.getRight() - pw);
       const int py = btnArp.getBottom() + 4;
       arpEditor.setBounds(px, py, pw, juce::jmax(120, getHeight() - py - 10)); }
@@ -10341,32 +10348,33 @@ void DrumSequencerEditor::timerCallback()
         updateKeyboardHighlight();   // light up the chord/scale/slot notes of the held key (cheap: change-gated)
         keysPanel.setSplitMark(keysView && detailShown
                                && proc.sequencer.channel(selectedChannel).mergeWith >= 0);
-        { // LIVE TUNER strip (ScaleBox bottom): the selected channel's tuning = first pitched
-          // audible unlocked slot's Base Freq (+ the roll Tune fader) vs the nearest note. Pure
-          // arithmetic each tick; setText-style change gate via the stored note+cents.
-            const auto& tc = proc.sequencer.channel(selectedChannel);
+        if (++tunerTick >= 6)   // REAL TUNER, ~10 Hz: NSDF autocorrelation on the analysed channel's
+        {                       // continuous ring (TunerTap) - measures the ACTUAL audio like
+            tunerTick = 0;      // ReaTune/GTune (user demand), not knob arithmetic.
             juce::String tn; int cents = 0;
-            float hz = 0.0f;
-            for (const auto& sl : tc.slots)
+            constexpr int NR = TunerTap::N;
+            static float snap[NR];
+            const int w = proc.tunerTap.widx.load(std::memory_order_acquire);
+            for (int i = 0; i < NR; ++i) snap[i] = proc.tunerTap.ring[(w + i) % NR];   // oldest..newest
+            const double fs = proc.spectrumRate() / (double) TunerTap::DECIM;
+            const int W = 2048;                        // analysis window = the newest 2048 samples
+            const double f = basamakDetectPitch(snap + (NR - W), W, fs);   // the SHARED detector
+            if (f > 0.0)                                                   // (TunerTest locks its accuracy)
             {
-                if (sl.weight <= 0.001f || sl.lockPitch) continue;
-                if (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal) { hz = sl.oscFreq; break; }
-                if (sl.engine == DrumChannel::SrcPhys) { hz = sl.physFreq; break; }
+                const double m = 69.0 + 12.0 * std::log2(f / 440.0);
+                const int    n = (int) std::lround(m);
+                if (n >= 0 && n <= 127)
+                {
+                    cents = juce::jlimit(-50, 50, (int) std::lround((m - (double) n) * 100.0));
+                    tn = juce::MidiMessage::getMidiNoteName(n, true, true, 4);
+                }
             }
-            if (hz > 1.0f)
+            if (tn.isNotEmpty() || tunerSilence++ > 6)   // hold the last reading briefly through gaps
             {
-                // LIVE: while a key is held, follow THAT note's actual sounding pitch on this
-                // channel (base offset + roll Tune flow into the cents); idle = the base itself.
-                const int held = proc.keysHeldNote.load(std::memory_order_relaxed);
-                float shownHz = hz;
-                if (held >= 0) shownHz = hz * std::pow(2.0f, (float) (held - 60) / 12.0f);
-                const float m = 69.0f + 12.0f * std::log2(shownHz / 440.0f);
-                const int   n = (int) std::lround(m);
-                cents = juce::jlimit(-50, 50, (int) std::lround((m - (float) n) * 100.0f));
-                tn = juce::MidiMessage::getMidiNoteName(juce::jlimit(0, 127, n), true, true, 4);
+                if (tn.isNotEmpty()) tunerSilence = 0;
+                if (tn != keysPanel.tunerBox.note || cents != keysPanel.tunerBox.cents)
+                { keysPanel.tunerBox.note = tn; keysPanel.tunerBox.cents = cents; keysPanel.tunerBox.repaint(); }
             }
-            if (tn != keysPanel.tunerBox.note || cents != keysPanel.tunerBox.cents)
-            { keysPanel.tunerBox.note = tn; keysPanel.tunerBox.cents = cents; keysPanel.tunerBox.repaint(); }
         }
         if (proc.keysRecording.load())
         {

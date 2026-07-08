@@ -2088,6 +2088,7 @@ private:
     // Ticks in a row that a popup menu has been open while NO window of ours has OS focus
     // (= the user clicked outside the plugin). Debounces the auto-dismiss of open dropdowns.
     int          outsideFocusTicks = 0;
+    int          tunerTick = 0, tunerSilence = 0;   // REAL-tuner cadence (~10 Hz) + brief hold-over
     int          lastModalCount = 0;      // menu-transition grace: a JUST-opened menu must not be
     juce::Component* lastModalComp = nullptr;   // dismissed by the focus hand-off from the one
                                           // closing (identity compared only, never dereferenced)

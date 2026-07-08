@@ -196,6 +196,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         for (int c = 0; c < Sequencer::NUM_CHANNELS; ++c) {
             auto& ch = sequencer.channel(c);
             ch.analysisTap    = (c == ac) ? &spectrumTap : nullptr;
+            ch.tunerTap       = (c == ac) ? &tunerTap    : nullptr;   // the REAL tuner follows the analysed channel
             ch.analysisSlot   = (c == ac) ? as : -1;
             ch.analysisBuf    = (c == ac && ! analysisScratch.empty()) ? analysisScratch.data() : nullptr;
             ch.analysisBufLen = (c == ac) ? (int) analysisScratch.size() : 0;
@@ -443,8 +444,10 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         auto fireArp = [&](int step)
         {
             const int note = DrumChannel::arpNoteAt(arpKc.arpOffset, arpKc.arpLen, arpRoot, step);
-            if (note < 0)   // rest row: silence whatever is ringing, play nothing
-            { if (arpSounding >= 0) { arpKc.keyUp(arpSounding); arpSounding = -1; }
+            if (note < 0)   // REST row: at Gate 100% the ringing note KEEPS RINGING through it
+            {               // (user: "it should continue until the next one"); below 100% the
+                            // gate countdown still cuts it, so rests stay usable as silence.
+              if (arpSounding >= 0 && arpKc.arpGate < 0.999f) { arpKc.keyUp(arpSounding); arpSounding = -1; }
               arpSoundingUi.store(-1, std::memory_order_relaxed); return; }
             // Alternate strokes (user: up, down, up... like real strumming) - flip before the trigger.
             arpKc.strumFlip = arpKc.arpAltStrum && ((arpFireCount++ & 1) != 0);
