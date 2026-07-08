@@ -4625,8 +4625,9 @@ juce::String ArpEditor::getTooltip()
                "root + notes 2-4, then back to the root. Clicking a cell's 'Note N' header sets this too.";
     if (p.y >= TOPH)
         return "One riff note (offset from the pressed key). Click the top/bottom strip or SCROLL = one "
-               "semitone (-24..+24 st; 0 st = the root pitch again). DRAG the middle = fast set. DOUBLE-CLICK "
-               "= REST (a silent step). Click the 'Note N' header = make it the LAST note.";
+               "semitone (-24..+24 st; 0 st = the root pitch again). DRAG the middle = fast set. "
+               "DOUBLE-CLICK = 0 st; RIGHT-CLICK = REST (a silent step). Click the 'Note N' header = "
+               "make it the LAST note.";
     return {};
 }
 
@@ -4634,6 +4635,13 @@ void ArpEditor::mouseDown(const juce::MouseEvent& e)
 {
     dragCell = -1; dragFader = false; dragRate = false; dragGate = false;
     const auto p = e.getPosition();
+    if (e.mods.isRightButtonDown() || e.mods.isPopupMenu())   // RIGHT-click a cell = REST (user spec)
+    {
+        const int i = cellAt(p);
+        if (i >= 0) { off[i] = DrumChannel::ARP_REST; if (i + 2 > len) len = i + 2;
+                      if (onChange) onChange(); repaint(); }
+        return;
+    }
     if (onRect().contains(p))    { on = ! on; if (onChange) onChange(); repaint(); return; }
     if (rateRect().contains(p))  { dragRate = true; mouseDrag(e); return; }   // drag-fader inside the box
     if (alignRect().contains(p)) { align = ! align; if (onChange) onChange(); repaint(); return; }
@@ -4693,7 +4701,7 @@ void ArpEditor::mouseDoubleClick(const juce::MouseEvent& e)
 {
     const int i = cellAt(e.getPosition());
     if (i < 0) return;
-    off[i] = (int8_t) (off[i] == DrumChannel::ARP_REST ? 0 : DrumChannel::ARP_REST);   // toggle REST <-> 0
+    off[i] = 0;   // double-click = 0 st (the root pitch); RIGHT-click = REST (user spec)
     if (i + 2 > len) len = i + 2;
     if (onChange) onChange(); repaint();
 }

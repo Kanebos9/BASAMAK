@@ -523,7 +523,7 @@ protected:
 // ARP EDITOR: a COMPACT popup (hidden until you click the "Arp" button, so it costs no permanent
 // space). Top bar = On + Rate + Notes(length). Below = a 2 x 6 grid of the 12 offset rows (notes
 // 2..13). Each cell: click the UP/DOWN arrow (or wheel) = +/-1 semitone (-24..+24, 0 = unison);
-// DRAG = fast set; DOUBLE-CLICK = toggle REST (a gap, distinct from 0). A cell edit extends the
+// DRAG = fast set; DOUBLE-CLICK = 0 st; RIGHT-CLICK = REST (a gap, distinct from 0). A cell edit extends the
 // length to include it. Chord/scale/glide apply per arp note.
 class ArpEditor : public juce::Component, public juce::SettableTooltipClient
 {
