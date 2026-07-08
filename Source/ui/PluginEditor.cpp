@@ -7550,8 +7550,8 @@ void DrumSequencerEditor::setupComponents()
                 const float resid = juce::jlimit(-50.0f, 50.0f,
                     std::round((baseOff - std::round(baseOff)) * 100.0f));
                 auto noteVal = [baseOff, resid](float stepPitch) { return stepPitch + baseOff - resid * 0.01f; };
-                bool lossy = false;
-                for (int b = head; b <= end && ! lossy; ++b)
+                bool lossyCents = false, lossyRange = false;   // two DIFFERENT problems, warned apart
+                for (int b = head; b <= end; ++b)
                 {
                     const auto& cb = sq.patterns[b].channels[ci];
                     if (cb.drawMode || cb.drawNoteCount > 0) continue;   // no import for this bar
@@ -7559,8 +7559,8 @@ void DrumSequencerEditor::setupComponents()
                     {
                         if (! cb.steps[st] || (st > 0 && cb.stepMerge[st])) continue;
                         const float v = noteVal(cb.stepPitch[st]);
-                        if (std::abs(v - std::round(v)) > 0.02f
-                            || std::abs(v) > (float) DrumChannel::PITCH_RANGE + 0.5f) { lossy = true; break; }
+                        if (std::abs(v - std::round(v)) > 0.02f) lossyCents = true;
+                        if (std::abs(v) > (float) DrumChannel::PITCH_RANGE + 0.5f) lossyRange = true;
                     }
                 }
                 auto doSwitch = [this, ci, head, end, finish, baseOff, resid, noteVal]()
@@ -7620,13 +7620,23 @@ void DrumSequencerEditor::setupComponents()
                 }
                 finish();
                 };
-                if (! lossy) { doSwitch(); return; }
-                juce::PopupMenu wm;   // the user-requested WARNING (PopupMenu - message boxes hang)
-                wm.addSectionHeader("Your steps use in-between pitches (the Base Freq knob and/or recorded");
-                wm.addSectionHeader("step pitches sit between notes). The piano roll works in exact notes:");
-                wm.addSectionHeader("steps will be placed on the NEAREST note - the knob's own offset is");
-                wm.addSectionHeader("kept in the roll's Tune fader, but per-step cents will be rounded.");
-                wm.addItem(1, "Continue - place steps on the nearest notes");
+                if (! lossyCents && ! lossyRange) { doSwitch(); return; }
+                juce::PopupMenu wm;   // the user-requested WARNING, SPECIFIC to what will actually happen
+                if (lossyRange)
+                {   // the serious one: notes fall off the roll's grid and their PITCH changes
+                    wm.addSectionHeader("PITCH CHANGES: the Base Freq knob sits far from C4, so some steps land");
+                    wm.addSectionHeader("OUTSIDE the piano roll's C0-C8 grid. Those notes will be CLAMPED to the");
+                    wm.addSectionHeader("nearest edge and play at a DIFFERENT pitch.");
+                    wm.addSectionHeader("Tip: move Base Freq closer to C4 first, then switch.");
+                }
+                if (lossyCents)
+                {   // the mild one: in-between pitches round to the nearest note
+                    if (lossyRange) wm.addSeparator();
+                    wm.addSectionHeader("SMALL TUNING LOSS: some step pitches sit between notes. They will be");
+                    wm.addSectionHeader("placed on the NEAREST note (a few cents difference at most). The Base");
+                    wm.addSectionHeader("Freq knob's own offset is kept in the roll's Tune fader.");
+                }
+                wm.addItem(1, lossyRange ? "Continue anyway" : "Continue - place steps on the nearest notes");
                 wm.addItem(2, "Cancel - stay in step mode");
                 wm.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&strips[ci].comboSteps),
                                  [doSwitch](int r) { if (r == 1) doSwitch(); });
