@@ -59,7 +59,7 @@ static void setSteps(DC& c, int n, std::initializer_list<int> on)
       c.stepRollDecay[i] = 0.0f; c.stepNoteLen[i] = 0.0f; c.stepPan[i] = 0.0f; c.stepNudge[i] = 0.0f; c.stepSlide[i] = false;
       c.stepMerge[i] = false; c.stepCondLen[i] = 1; c.stepCondMask[i] = 0; }
     for (int s : on) if (s >= 0 && s < n) c.steps[s] = true;
-    c.drawMode = false; c.drawVel = 1.0f; c.drawPan = 0.0f;   // presets/sounds are step-mode
+    c.drawMode = false; c.drawVel = 1.0f; c.drawPan = 0.0f; c.drawTuneCents = 0.0f;   // presets/sounds are step-mode
     c.clearDrawNotes();
 }
 

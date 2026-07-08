@@ -144,6 +144,9 @@ public:
     DrawNote drawNotes[DRAW_MAX_NOTES];
     int      drawNoteCount = 0;
     float    drawVel = 1.0f, drawPan = 0.0f;   // drawVel = the DEFAULT velocity for freshly drawn notes; drawPan whole-channel
+    float    drawTuneCents = 0.0f;   // PIANO-ROLL TUNE fader (-50..+50 cents): shifts the WHOLE bar - the roll's
+                                     // C4 pin becomes C4 + this, the keys target the tuned pitch on this channel,
+                                     // and leaving the roll parks the Base Freq knob at the tuned value.
     void clearDrawNotes() { drawNoteCount = 0; }
     // Append (bounded); returns the index or -1 when full. Audio + message thread both use this;
     // count is written LAST so a concurrent reader never sees an uninitialised note.

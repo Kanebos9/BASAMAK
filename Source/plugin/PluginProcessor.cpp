@@ -1639,6 +1639,7 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
         chState.setProperty("drawNotes", ns, nullptr);
         chState.setProperty("drawVel", ch.drawVel, nullptr);
         chState.setProperty("drawPan", ch.drawPan, nullptr);
+        chState.setProperty("drawTune", ch.drawTuneCents, nullptr);
     }
 
     ch.writeSlots(chState);   // 2-slot model (duplicate engines survive save/load + undo)
@@ -1807,6 +1808,7 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
             ch.drawMode = (bool) child.getProperty("drawMode", false);
             ch.drawVel  = (float) child.getProperty("drawVel", 1.0f);
             ch.drawPan  = (float) child.getProperty("drawPan", 0.0f);
+            ch.drawTuneCents = juce::jlimit(-50.0f, 50.0f, (float) child.getProperty("drawTune", 0.0f));
             ch.clearDrawNotes();
             const juce::String ns = child.getProperty("drawNotes", "").toString();
             if (ns.isNotEmpty())   // new format: "start:len:semi:vel," per note

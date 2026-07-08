@@ -30,6 +30,8 @@ public:
     std::function<void(int ch, float vel, float pan)> onDrawVelPan;   // whole-channel Pan (+ default Vel) in piano-roll mode
     std::function<void(int ch)> onDrawModeMaybeChanged;               // ch's roll-vs-step may have changed (fade buttons)
     std::function<void()> onGridDivEdit;   // clicking the snap-grid header: type a value (1-64, 0 = off)
+    std::function<void(int ch, float cents)> onDrawTuneChanged;   // the roll's TUNE fader (-50..+50 cents)
+    float drawTune[Sequencer::NUM_CHANNELS] = {};                 // mirror of each channel's drawTuneCents
     std::function<void(int semi)> onRollPreview;   // AUDITION while drawing/moving a note (hear the pitch live)
     std::function<void()> onRollPreviewEnd;        // gesture ended -> release the preview note
     // GHOST LINES: asks the editor which pitches slot 'slot' ACTUALLY sounds for a drawn note at

@@ -134,7 +134,7 @@ juce::Array<SlotParam> slotParamsFor(int engine)
         case DrumChannel::SrcPhys:
             // Position + Tone are edited on the interactive STRING visual (drag the dot: X = Position,
             // Y = Tone) - they're no longer knobs here.
-            p.add(F ("Freq", 20, 4186, &S::physFreq, "nHz", false,
+            p.add(F ("Base Freq", 20, 4186, &S::physFreq, "nHz", false,
                      "Base pitch of the plucked/struck string. CLICK the value read-out to switch Hz <-> NOTE mode "
                      "(shows A1/C2...; dragging snaps to semitones, SHIFT = free). Also follows per-step pitch. "
                      "KEYS: touching the piano snaps this to C4 (middle C) so recordings play back as performed - transpose "
@@ -194,7 +194,7 @@ juce::Array<SlotParam> slotParamsFor(int engine)
         case DrumChannel::SrcModal: {
             juce::StringArray mats;
             for (int i = 0; i < DrumChannel::modalMaterialCount(); ++i) mats.add(DrumChannel::modalMaterialName(i));
-            p.add(F ("Freq", 20, 4186, &S::oscFreq, "nHz", false, "Base pitch of the struck body. CLICK the value read-out to switch Hz <-> NOTE mode (snaps to semitones there, SHIFT = free). Follows per-step pitch + the pitch envelope. KEYS: touching the piano snaps this to C4 (middle C) so recordings play back as performed - transpose with it afterwards."));
+            p.add(F ("Base Freq", 20, 4186, &S::oscFreq, "nHz", false, "Base pitch of the struck body - the 0-point of step Pitch mode. CLICK the value read-out to switch Hz <-> NOTE mode (snaps to semitones there, SHIFT = free). Follows per-step pitch + the pitch envelope. Double-click = C4. The keyboard plays real notes and never changes this."));
             p.add(Ic("Material", 0, juce::jmax(0, DrumChannel::modalMaterialCount() - 1), &S::modalMaterial, mats,
                      "The struck body - sets each mode's frequency, gain + decay (Marimba/Tubular Bell/Glass/Membrane/"
                      "Metal Plate/Wood Block/Kalimba/Cowbell). The starting point Decay/Tone/Struct then shape."));
@@ -648,7 +648,7 @@ void SlotEditor::init(int idx, MidiLearnManager& mlm, juce::LookAndFeel* knobLNF
     resonFader = mkFader("reson");
     // DOUBLE-CLICK -> the Analog+FM faders' FACTORY DEFAULTS (fresh Slot), like the other knobs.
     { DrumChannel::Slot d;
-      freqFader->setDoubleClickReturnValue (true, d.oscFreq);
+      freqFader->setDoubleClickReturnValue (true, 261.6255653);   // dbl-click = C4 (the roll's pin; user spec)
       depthFader->setDoubleClickReturnValue(true, d.fmDepth); }
     freqFader->setRange(20.0, 4186.0, 0.0);   // reach C7 (MIDI 108 = 4186 Hz) - covers an 88-key top octave for sound design
     freqFader->setSkewFactorFromMidPoint(500.0);   // middle of the fader ~= 500 Hz (gently slow, not too slow)
@@ -771,7 +771,10 @@ void SlotEditor::setEngine(int eng)
         // DOUBLE-CLICK = reset to the parameter's FACTORY DEFAULT (the value on a fresh Slot).
         // Slot knobs are REUSED across engines and never had a return value set, so double-click did
         // nothing on them (user: some knobs "went to a different value" = stayed on the edited value).
-        { DrumChannel::Slot dflt; knobs[i]->setDoubleClickReturnValue(true, p.get(dflt)); }
+        { DrumChannel::Slot dflt;
+          // pitched Base Freq knobs double-click to C4 (practical reset - user spec); everything
+          // else keeps the fresh-Slot default.
+          knobs[i]->setDoubleClickReturnValue(true, p.suffix == "nHz" ? 261.6255653 : p.get(dflt)); }
     }
     updateKnobVisibility();   // hide the resonator reveal knobs unless this slot's Reson is up
     pushValues();
@@ -1035,7 +1038,7 @@ void SlotEditor::paint(juce::Graphics& g)
     // ANALOG: "Wave" (above the visual) + "Freq" + "Warp" tags to the left of their faders.
     g.setColour(juce::Colour(0xff9a9ac0));
     g.drawText("Wave", oscLabelR,  juce::Justification::centredLeft, false);
-    g.drawText("Freq", freqLabelR, juce::Justification::centredLeft, false);
+    g.drawText("Base Freq", freqLabelR, juce::Justification::centredLeft, false);
     g.drawText("Warp", warpLabelR, juce::Justification::centredLeft, false);
 
     // FM: a rule, then an "FM" tag + the Env-follow switch's caption.
@@ -1136,6 +1139,7 @@ void StepGridComponent::setGridDiv(int n) { drawGridDiv = juce::jlimit(0, 64, n)
 
 void StepGridComponent::update(const Sequencer& seq, bool hasSolo)
 {
+    for (int i = 0; i < NCH; ++i) drawTune[i] = seq.patterns[seq.currentPattern].channels[i].drawTuneCents;
     currentPattern = seq.currentPattern;
     // MERGED GROUP: show all the group's bars SIDE BY SIDE (steps concatenated per channel, roll
     // spanning grpBars * DRAW_RES columns). The viewed pattern is always the group HEAD.
@@ -1605,6 +1609,7 @@ static juce::Rectangle<int> prHdrGrid (const juce::Rectangle<int>& ov)        { 
 static juce::Rectangle<int> prHdrSlot (const juce::Rectangle<int>& ov, int i)
 { static const int x[3] = { 308, 388, 452 }, w[3] = { 76, 60, 60 }; return { ov.getX() + x[i], ov.getY() + 4, w[i], 24 }; }
 static juce::Rectangle<int> prHdrClose(const juce::Rectangle<int>& ov)        { return { ov.getRight() - 30, ov.getY() + 4, 24, 24 }; }
+static juce::Rectangle<int> prHdrTune (const juce::Rectangle<int>& ov)        { return { ov.getX() + 522, ov.getY() + 4, 96, 24 }; }
 
 // Piano-roll note colours by slot target - the SAME family as the keyboard highlight:
 // slot 1 = yellow, slot 2 = pink, both = the 50/50 orange blend.
@@ -1882,9 +1887,23 @@ void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle
                 g.drawText(nm[i], sr, juce::Justification::centred, false);
             }
         }
+        { // TUNE drag-fader (Arp-Rate style): shifts the WHOLE bar +-50 cents. The roll's 0-point
+          // becomes C4 + this; leaving the roll parks the Base Freq knob at the tuned value.
+            const auto tr = prHdrTune(rect);
+            const float tv = juce::jlimit(-50.0f, 50.0f, drawTune[ch]);
+            g.setColour(juce::Colour(0xff33335a)); g.fillRoundedRectangle(tr.toFloat(), 4.0f);
+            g.setColour(juce::Colour(0x5535c0ff));   // faint fill showing the position (centre = 0)
+            const float fx = (float) tr.getX() + (tv + 50.0f) / 100.0f * (float) tr.getWidth();
+            const float cx0 = (float) tr.getCentreX();
+            g.fillRect(juce::Rectangle<float>(juce::jmin(cx0, fx), (float) tr.getY() + 2.0f,
+                                              juce::jmax(2.0f, std::abs(fx - cx0)), (float) tr.getHeight() - 4.0f));
+            g.setColour(juce::Colour(0xff9fdcff)); g.setFont(juce::Font(13.0f, juce::Font::bold));
+            g.drawText("Tune " + juce::String(tv > 0 ? "+" : "") + juce::String((int) std::lround(tv)) + "c",
+                       tr, juce::Justification::centred, false);
+        }
         g.setColour(juce::Colour(0xff9aa4c0)); g.setFont(juce::Font(12.0f, juce::Font::bold));
-        g.drawText("drag=draw/move - right edge=length - dbl-click=delete - SHIFT=select - CMD/CTRL+click=glide",
-                   rect.getX() + 522, rect.getY(), rect.getWidth() - 522 - 34, PR_HEAD, juce::Justification::centredLeft, false);
+        g.drawText("drag=draw - dbl-click=delete - SHIFT=select - RIGHT-CLICK=note menu",
+                   rect.getX() + 630, rect.getY(), rect.getWidth() - 630 - 34, PR_HEAD, juce::Justification::centredLeft, false);
         const auto cl = prHdrClose(rect);
         g.setColour(juce::Colour(0xff5a2a2a)); g.fillRoundedRectangle(cl.toFloat(), 4.0f);
         g.setColour(juce::Colours::white); g.setFont(juce::Font(15.0f, juce::Font::bold));
@@ -2033,7 +2052,10 @@ juce::String StepGridComponent::getTooltip()
                             "= holds at sustain for its length, then releases.\n"
                             "- SHIFT+drag = SELECT an area: move the selected notes together (the note menu "
                             "then edits all of them), double-click deletes them, a colour button re-slots "
-                            "them.\n\n"
+                            "them.\n"
+                            "- TUNE (header fader): shifts the WHOLE bar up to +-50 cents (tape-style detune). The "
+                            "keyboard follows it on this channel, and switching to steps keeps the transposed "
+                            "0-point on the Base Freq knob.\n\n"
                             "Humanize/Strum apply here too. Pick a step count in the dropdown to QUANTISE the roll "
                             "to steps.");
     return juce::String("STEP GRID. Click = toggle steps; the buttons top-right switch edit modes (Vel/Len/Pitch/"
@@ -2248,6 +2270,16 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
                   repaint(); return; }   // range radio
             if (prHdrGrid(ov).contains(p))   // snap grid: type a value
             { if (onGridDivEdit) onGridDivEdit(); return; }
+            if (prHdrTune(ov).contains(p))   // TUNE fader: absolute drag across the box (Arp-Rate style)
+            {
+                prMode = 7;
+                const auto tr = prHdrTune(ov);
+                const float tv = juce::jlimit(-50.0f, 50.0f,
+                    ((float)(p.x - tr.getX()) / (float) juce::jmax(1, tr.getWidth())) * 100.0f - 50.0f);
+                drawTune[drawMagCh] = std::round(tv);
+                if (onDrawTuneChanged) onDrawTuneChanged(drawMagCh, drawTune[drawMagCh]);
+                repaint(); return;
+            }
             {   // DRAW-TARGET buttons: pick which slot new notes play; a live selection gets RE-TAGGED
                 for (int i = 0; i < 3; ++i)
                     if (prHdrSlot(ov, i).contains(p))
@@ -2473,6 +2505,19 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
 void StepGridComponent::mouseDrag(const juce::MouseEvent& e)
 {
     // PIANO-ROLL editor: SCROLL the pitch view by dragging the note-name column.
+    if (drawMagCh >= 0 && prMode == 7)   // TUNE fader drag
+    {
+        const auto tr = prHdrTune(drawOverlayRect());
+        const float tv = juce::jlimit(-50.0f, 50.0f,
+            ((float)(e.getPosition().x - tr.getX()) / (float) juce::jmax(1, tr.getWidth())) * 100.0f - 50.0f);
+        if (std::round(tv) != drawTune[drawMagCh])
+        {
+            drawTune[drawMagCh] = std::round(tv);
+            if (onDrawTuneChanged) onDrawTuneChanged(drawMagCh, drawTune[drawMagCh]);
+            repaint();
+        }
+        return;
+    }
     if (drawMagCh >= 0 && prMode == 4)
     {
         const auto lane = prLane(drawOverlayRect());
@@ -5700,7 +5745,7 @@ juce::int64 DrumSequencerEditor::stateHash() const
             h = mix(h, st); h = mix(h, ch.mute ? 1 : 0); h = mix(h, ch.solo ? 2 : 0);
             for (int i = 0; i < ch.numSteps; ++i) { h = mix(h, f(ch.stepVel[i])); h = mix(h, f(ch.stepPitch[i])); h = mix(h, f(ch.stepNoteLen[i])); h = mix(h, ch.stepSlide[i] ? 1 : 0); h = mix(h, ch.stepMerge[i] ? 1 : 0); h = mix(h, ch.stepRoll[i]); h = mix(h, f(ch.stepRollDecay[i])); h = mix(h, f(ch.stepPan[i])); h = mix(h, f(ch.stepNudge[i])); h = mix(h, ch.stepCondLen[i]); h = mix(h, ch.stepCondMask[i]); }
             h = mix(h, ch.drawMode ? 1 : 0);
-            if (ch.drawMode) { h = mix(h, f(ch.drawVel)); h = mix(h, f(ch.drawPan));
+            if (ch.drawMode) { h = mix(h, f(ch.drawVel)); h = mix(h, f(ch.drawPan)); h = mix(h, f(ch.drawTuneCents));
                 for (int i = 0; i < ch.drawNoteCount; ++i) { const auto& nt = ch.drawNotes[i];
                     h = mix(h, nt.start); h = mix(h, nt.len); h = mix(h, (int) nt.semi + 128); h = mix(h, (int) nt.vel); h = mix(h, (int) nt.slot); h = mix(h, (int) nt.glide); h = mix(h, (int) nt.oneShot); } }
         }
@@ -5753,7 +5798,7 @@ void DrumSequencerEditor::resetChannelToDefault(DrumChannel& c, int ch)
     // (Physical starts off so the default blend is unchanged).
     for (int i = 0; i < 4; ++i) { c.srcOn[i] = true; c.srcWeight[i] = 0.25f; }
     c.srcOn[DrumChannel::SrcPhys] = false; c.srcWeight[DrumChannel::SrcPhys] = 0.0f;
-    c.drawMode = false; c.drawVel = 1.0f; c.drawPan = 0.0f;   // fresh channel = step mode
+    c.drawMode = false; c.drawVel = 1.0f; c.drawPan = 0.0f; c.drawTuneCents = 0.0f;   // fresh channel = step mode
     c.keysSlot2Down = 0;                                      // KEYS slot-2 transpose (channel-wide) resets too
     c.humanizeAmt = 0.0f; c.strumAmt = 0.0f; c.keysMinVel = 0.0f; c.keysMaxVel = 1.0f; c.keysGlide = 0.0f;   // HUMANIZE / STRUM / vel range / GLIDE default
     c.mergeWith = -1; c.keysSplitW1 = 60; c.keysSplitW2 = 12;   // MERGE&SPLIT off / identity windows
@@ -7336,6 +7381,13 @@ void DrumSequencerEditor::setupComponents()
             sq.patterns[head + b].channels[ch].addDrawNote((int) nt.start - b * RES, nt.len, nt.semi, nt.vel, nt.slot, nt.glide, nt.oneShot);
         }
     };
+    stepGrid.onDrawTuneChanged = [this](int ch, float cents) {   // the roll's TUNE fader: whole-bar
+        auto& sq = proc.sequencer;                                // transpose, uniform across a merged group
+        const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
+        for (int b = head; b <= end; ++b)
+            sq.patterns[b].channels[ch].drawTuneCents = juce::jlimit(-50.0f, 50.0f, cents);
+        if (ch == selectedChannel) refreshDetailPanel();          // re-pins the base to C4 + tune NOW
+    };
     stepGrid.onDrawVelPan = [this](int ch, float vel, float pan) {           // whole-channel Pan (+ default vel)
         auto& sq = proc.sequencer;
         const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
@@ -7468,9 +7520,49 @@ void DrumSequencerEditor::setupComponents()
                 // can switch but notes aren't there anymore") - merge runs become long notes,
                 // Length becomes note length, slide becomes the next note's glide flag. A roll
                 // that already has notes is left alone (steps stay underneath as before).
-                eachBar([](DrumChannel& cc){
+                // BASE COMPENSATION (user spec): step mode's 0-point is the free Base Freq knob;
+                // the roll pins to C4. The import keeps the ABSOLUTE pitch: notes shift by the
+                // knob's whole-semitone distance from C4 and the leftover cents go into the
+                // roll's TUNE fader. Only per-step FRACTIONAL pitches are lossy (they round to
+                // the nearest note) - that case gets the WARNING below before switching.
+                float baseOff = 0.0f;
+                {
+                    const auto& hc = sq.patterns[head].channels[ci];
+                    for (const auto& sl : hc.slots)
+                    {
+                        if (sl.weight <= 0.001f) continue;
+                        float hz = 0.0f;
+                        if (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal) hz = sl.oscFreq;
+                        else if (sl.engine == DrumChannel::SrcPhys) hz = sl.physFreq;
+                        if (hz > 1.0f) { baseOff = 12.0f * std::log2(hz / 261.6255653f); break; }
+                    }
+                }
+                const float resid = juce::jlimit(-50.0f, 50.0f,
+                    std::round((baseOff - std::round(baseOff)) * 100.0f));
+                auto noteVal = [baseOff, resid](float stepPitch) { return stepPitch + baseOff - resid * 0.01f; };
+                bool lossy = false;
+                for (int b = head; b <= end && ! lossy; ++b)
+                {
+                    const auto& cb = sq.patterns[b].channels[ci];
+                    if (cb.drawMode || cb.drawNoteCount > 0) continue;   // no import for this bar
+                    for (int st = 0; st < cb.numSteps; ++st)
+                    {
+                        if (! cb.steps[st] || (st > 0 && cb.stepMerge[st])) continue;
+                        const float v = noteVal(cb.stepPitch[st]);
+                        if (std::abs(v - std::round(v)) > 0.02f
+                            || std::abs(v) > (float) DrumChannel::PITCH_RANGE + 0.5f) { lossy = true; break; }
+                    }
+                }
+                auto doSwitch = [this, ci, head, end, finish, baseOff, resid, noteVal]()
+                {
+                auto& sq2 = proc.sequencer;
+                for (int b = head; b <= end; ++b)
+                {
+                auto& cc = sq2.patterns[b].channels[ci];
+                {
                     if (! cc.drawMode && cc.drawNoteCount == 0 && cc.numSteps > 0)
                     {
+                        if (std::abs(baseOff) > 0.005f) cc.drawTuneCents = resid;   // cents -> the TUNE fader
                         const int cps = DrumChannel::DRAW_RES / cc.numSteps;   // columns per step
                         int lastHead = -1;
                         for (int st = 0; st < cc.numSteps; ++st)
@@ -7485,7 +7577,7 @@ void DrumSequencerEditor::setupComponents()
                             // NUDGE = the note's start offset (same +-half-step law as the engine)
                             const int start = juce::jmax(0, st * cps
                                                 + (int) std::lround(cc.stepNudge[st] * 0.5f * (float) cps));
-                            const int semi  = (int) std::lround(cc.stepPitch[st]);
+                            const int semi  = (int) std::lround(noteVal(cc.stepPitch[st]));
                             const float vel = cc.stepVel[st];
                             // ROLL/ratchets: expand the sub-hits into real notes with the engine's
                             // exact velocity-ramp law. (NOT carried: per-step Pan + loop conditions -
@@ -7511,9 +7603,24 @@ void DrumSequencerEditor::setupComponents()
                             lastHead = st;
                         }
                     }
+                    else if (! cc.drawMode && cc.drawNoteCount == 0 && std::abs(baseOff) > 0.005f)
+                        cc.drawTuneCents = resid;   // empty channel: still carry the knob's cents
                     cc.drawMode = true;
-                });
-                finish(); return;
+                }
+                }
+                finish();
+                };
+                if (! lossy) { doSwitch(); return; }
+                juce::PopupMenu wm;   // the user-requested WARNING (PopupMenu - message boxes hang)
+                wm.addSectionHeader("Your steps use in-between pitches (the Base Freq knob and/or recorded");
+                wm.addSectionHeader("step pitches sit between notes). The piano roll works in exact notes:");
+                wm.addSectionHeader("steps will be placed on the NEAREST note - the knob's own offset is");
+                wm.addSectionHeader("kept in the roll's Tune fader, but per-step cents will be rounded.");
+                wm.addItem(1, "Continue - place steps on the nearest notes");
+                wm.addItem(2, "Cancel - stay in step mode");
+                wm.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&strips[ci].comboSteps),
+                                 [doSwitch](int r) { if (r == 1) doSwitch(); });
+                return;
             }
             if (! c.drawMode) { eachBar([id](DrumChannel& cc){ cc.numSteps = id; }); finish(); return; }       // step -> step
             bool anyNotes = false, anyOverlap = false;
@@ -9791,12 +9898,15 @@ void DrumSequencerEditor::refreshDetailPanel()
     if (ch.drawMode)
     {
         constexpr float kMidC = 261.6255653f;   // middle C (MIDI 60) - displayed as C4 (scientific)
+        // The TUNE fader shifts the whole pin: 0-point = C4 + drawTuneCents. Leaving the roll
+        // simply keeps the knob parked there = the step 0-point inherits the transpose (user spec).
+        const float pin = kMidC * std::pow(2.0f, juce::jlimit(-50.0f, 50.0f, ch.drawTuneCents) / 1200.0f);
         for (int s = 0; s < DrumChannel::NUM_SLOTS; ++s)
         {
             auto& sl = ch.slots[s];
             // slot 2 keeps its Slot-2 pitch baked (positive keysSlot2Down = semitones DOWN, like keyDown)
             const float want = (s == 1 && ch.keysSlot2Down != 0)
-                                 ? kMidC * std::pow(2.0f, -(float) ch.keysSlot2Down / 12.0f) : kMidC;
+                                 ? pin * std::pow(2.0f, -(float) ch.keysSlot2Down / 12.0f) : pin;
             if (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal)
             { if (std::abs(sl.oscFreq - want) > 0.01f) { sl.oscFreq = want; ch.markDspDirty(); } }
             else if (sl.engine == DrumChannel::SrcPhys)

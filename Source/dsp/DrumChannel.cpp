@@ -1295,7 +1295,11 @@ int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly,
     const int vi = trigger(velocity, glideFrom, 0.0f, 0, /*glideTo*/ 0.0f, glideSamp, /*forceOverlap*/ true, slotMask);
     Voice& v = voices[vi];
     v.isKey = true; v.keyOff = -1; v.keyNote = midiNote;   // tag: keyUp(note) releases only this note's voices
-    const double targetHz = 440.0 * std::pow(2.0, (double)(midiNote - 69) / 12.0);
+    double targetHz = 440.0 * std::pow(2.0, (double)(midiNote - 69) / 12.0);
+    // PIANO-ROLL TUNE: a tuned bar's keys target the TUNED pitch, so live play always matches
+    // what the recorded notes will play back (the user's never-differ rule survives the fader).
+    if (drawMode && std::abs(drawTuneCents) > 0.01f)
+        targetHz *= std::pow(2.0, (double) drawTuneCents / 1200.0);
     for (int s = 0; s < NUM_SLOTS; ++s)
     {
         SlotVoice& sv = v.sv[s];
