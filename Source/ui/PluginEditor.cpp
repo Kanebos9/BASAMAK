@@ -6635,10 +6635,14 @@ void DrumSequencerEditor::setupComponents()
                             "(a slow bass line) - on a busy 16/32-step pattern each step is too short to hear the bend, "
                             "so slow it down or stretch the notes to really hear it.");
     btnModeProb.setTooltip("Loop-condition mode: DRAG a step left/right to set a cycle of N bars, then CLICK the bars to pick which loops it fires on (e.g. N=6, bars 3 & 6 -> fires only on the 3rd and 6th loop). No bars picked = every loop. The step must also be ON in normal mode. Double-click resets.");
-    btnModeRoll.setTooltip("Roll / ratchet mode: each step is a 2D cell. Drag UP/DOWN = how many times it re-fires (1-6). "
-                           "Drag LEFT/RIGHT = the velocity RAMP across those hits: centre = flat (all equal), left = fade "
-                           "OUT (each hit quieter), right = build UP (each hit louder). The bars show the ramp shape. Great "
-                           "for drum-roll fades, crescendo buzzes and stutters.");
+    btnModeRoll.setTooltip("Roll / ratchet mode: each step is a 2D cell.\n\n"
+                           "- Drag UP/DOWN = how many times the step re-fires (1-6).\n"
+                           "- Drag LEFT/RIGHT = the velocity RAMP across those hits: centre = flat, left = fade OUT, "
+                           "right = build UP. The bars show the ramp shape.\n"
+                           "- PIANO ROLL round trips keep rolls: switching to the roll expands a ratchet into its real "
+                           "sub-notes (ramp included), and quantising back turns several same-pitch notes inside one "
+                           "step into a roll again - count, ramp and loudness survive both ways.\n\n"
+                           "Great for drum-roll fades, crescendo buzzes and stutters.");
     btnModePan.setTooltip("Pan edit mode: each step becomes a bipolar bar - drag LEFT/RIGHT to place that hit in the "
                           "stereo field (centre = middle). Per-step pan rides on top of the channel Pan. For built-in "
                           "sounds only (a MIDI-Out channel sends notes, not audio). Click again to leave.");
@@ -9536,15 +9540,50 @@ void DrumSequencerEditor::quantizeDrawToSteps(DrumChannel& c, int n)
     for (int s = 0; s < n; ++s)
     {
         const int c0 = s * R / n, c1 = (s + 1) * R / n;
-        // 1) A note STARTING in this step = a fresh HEAD (largest overlap wins). Deliberately
-        //    short notes still land as steps (the old coverage rule silently dropped them).
-        int head = -1, headc = 0;
-        for (int i = 0; i < c.drawNoteCount; ++i)
+        // 1) Notes STARTING in this step. SEVERAL at the SAME pitch = a RATCHET: they quantise to
+        //    a step ROLL (count + velocity ramp - the exact inverse of the importer's expansion,
+        //    so a roll survives the round trip). Otherwise the largest-overlap starter is the
+        //    HEAD (deliberately short notes still land; the old rule silently dropped them).
+        int starters[8]; int k = 0;
+        for (int i = 0; i < c.drawNoteCount && k < 8; ++i)
         {
             const auto& nt = c.drawNotes[i];
-            if (nt.start < c0 || nt.start >= c1) continue;
+            if (nt.start >= c0 && nt.start < c1) starters[k++] = i;
+        }
+        for (int a = 1; a < k; ++a)   // sort by start column (tiny N)
+            for (int b = a; b > 0 && c.drawNotes[starters[b]].start < c.drawNotes[starters[b - 1]].start; --b)
+                std::swap(starters[b], starters[b - 1]);
+        bool samePitch = k >= 2;
+        for (int a = 1; a < k && samePitch; ++a)
+            samePitch = c.drawNotes[starters[a]].semi == c.drawNotes[starters[0]].semi;
+        if (k >= 2 && samePitch)
+        {
+            const auto& first = c.drawNotes[starters[0]];
+            const auto& last  = c.drawNotes[starters[k - 1]];
+            c.steps[s] = true; c.stepMerge[s] = false;
+            c.stepPitch[s] = (float) first.semi;
+            c.stepRoll[s]  = juce::jlimit(2, 6, k);
+            const float v0 = juce::jmax(1.0f, (float) first.vel), v1 = juce::jmax(1.0f, (float) last.vel);
+            c.stepRollDecay[s] = (v1 >= v0) ? (1.0f - v0 / v1)     // build up (engine law inverted)
+                                            : (v1 / v0 - 1.0f);    // fade out
+            c.stepVel[s] = juce::jlimit(0.05f, 1.0f, juce::jmax(v0, v1) / 255.0f);
+            // Length/Roll balance: a one-shot ratchet rings naturally (Length off); a GATED one
+            // gates the span the notes actually cover (>=97% of the step = the full step).
+            if (! first.oneShot)
+            {
+                const float frac = juce::jlimit(0.05f, 1.0f,
+                    (float) (last.start + last.len - c0) / (float) juce::jmax(1, c1 - c0));
+                c.stepNoteLen[s] = frac >= 0.97f ? 1.0f : frac;
+            }
+            noteOf[s] = -1;   // a roll never continues into a merge chain
+            continue;
+        }
+        int head = -1, headc = 0;
+        for (int a = 0; a < k; ++a)
+        {
+            const auto& nt = c.drawNotes[starters[a]];
             const int ov = juce::jmin((int) nt.start + nt.len, c1) - nt.start;
-            if (ov > headc) { headc = ov; head = i; }
+            if (ov > headc) { headc = ov; head = starters[a]; }
         }
         if (head >= 0)
         {
