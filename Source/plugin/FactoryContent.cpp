@@ -1470,7 +1470,12 @@ static DC::Slot& mkGtr(DC& c, float hz, float tone, float pos, float dec)
     auto& s = mkSlot(c, DC::SrcPhys);
     s.physFreq = hz; s.physMaterial = 1.0f;              // steel string
     s.physTone = tone; s.physPosition = pos;
+    s.physStiff = 0.03f;                                 // a hint of real-string inharmonicity
+    s.oscDetune = 0.05f;                                 // strings never PERFECTLY agree (chord shimmer)
     s.atk = 0.001f; s.dec = dec;
+    // "Guitar body": low-mid warmth + presence bite, the classic acoustic body curve.
+    s.eqBand[DC::EQ_B1] = { true, 180.0f,  2.5f, 1.0f };
+    s.eqBand[DC::EQ_B3] = { true, 2600.0f, 3.0f, 1.2f };
     return s;
 }
 static void gFingerBass(DC& c) {   // fingered electric bass: warm, round, played near the neck
@@ -1494,32 +1499,36 @@ static void gFuzzBass(DC& c) {     // fuzz bass: KS string into heavy fuzz - gna
     s.filterType = DC::LowPass; s.filterCutoff = 1600.0f; s.filterReso = 0.8f;
     c.volume = 0.78f;
 }
-static void gSteelGuitar(DC& c) {  // steel-string acoustic: bright, singing, a touch of room
-    auto& s = mkGtr(c, 130.81f, 0.68f, 0.2f, 1.2f);      // C3
-    s.physStiff = 0.04f;                                 // a hint of string stiffness = acoustic shimmer
+static void gSteelGuitar(DC& c) {  // steel-string acoustic: bright, singing, a touch of room.
+    auto& s = mkGtr(c, 130.81f, 0.68f, 0.2f, 1.2f);      // C3. Ships IN the guitar voicing (user
+    s.scaleOn = true; s.scaleType = 10; s.scaleKey = 0;  // order) - string count is AUTO per chord.
     s.fxReverbSend = 0.12f;
-    c.volume = 0.82f;
+    c.strumAmt = 0.55f;                                  // strummed by default (strum rides with sounds now)
+    c.volume = 0.8f;
 }
 static void gElecGuitar(DC& c) {   // clean electric: rounder pickup tone, drier
     auto& s = mkGtr(c, 130.81f, 0.52f, 0.28f, 1.3f);
+    s.scaleOn = true; s.scaleType = 10; s.scaleKey = 0;  // guitar voicing by default (user order)
     s.fxDriveType = DC::Tube; s.fxDrive = 0.08f;
-    c.volume = 0.82f;
+    c.strumAmt = 0.45f;
+    c.volume = 0.8f;
 }
 static void gMutedGuitar(DC& c) {  // funk mute: the percussive "chick" scratch
     auto& s = mkGtr(c, 130.81f, 0.55f, 0.15f, 0.12f);
     c.volume = 0.85f;
 }
 static void gStrumAcoustic(DC& c) {   // GUITAR-VOICED chords (E-shape barre, 6 notes): turn the KEYS
-    auto& s = mkGtr(c, 130.81f, 0.66f, 0.2f, 1.2f);      // panel's STRUM up and it rings like a real
-    s.physStiff = 0.04f;                                  // strummed acoustic (the voicing feature).
-    s.scaleOn = true; s.scaleType = 10; s.scaleUnison = 6; s.scaleKey = 0;   // Gtr Major
-    s.fxReverbSend = 0.12f;
+    auto& s = mkGtr(c, 130.81f, 0.66f, 0.2f, 1.2f);      // rings like a real strummed acoustic -
+    s.scaleOn = true; s.scaleType = 10; s.scaleKey = 0;  // Gtr Major, AUTO string count
+    s.fxReverbSend = 0.14f;
+    c.strumAmt = 0.6f;                                   // ships STRUMMED (strum rides with sounds now)
     c.volume = 0.72f;
 }
 static void gStrumElectric(DC& c) {   // minor-voiced electric strum (same shape, minor third)
     auto& s = mkGtr(c, 130.81f, 0.5f, 0.28f, 1.3f);
-    s.scaleOn = true; s.scaleType = 11; s.scaleUnison = 6; s.scaleKey = 0;   // Gtr Minor
+    s.scaleOn = true; s.scaleType = 11; s.scaleKey = 0;  // Gtr Minor, AUTO string count
     s.fxDriveType = DC::Tube; s.fxDrive = 0.08f;
+    c.strumAmt = 0.6f;
     c.volume = 0.72f;
 }
 

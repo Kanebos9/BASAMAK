@@ -1003,10 +1003,15 @@ static const int8_t kScaleTab[10][7] = {
     { 0,3,5,6,7,10,0 },   // 9 Blues (6)
 };
 static const int kScaleLen[10] = { 7,7,7,7,7,7,7,5,5,6 };
-// GUITAR VOICINGS (types 10 = Gtr Major, 11 = Gtr Minor): not diatonic stacks - a FIXED E-shape
-// barre voicing from the snapped root (R,5,R,3,5,R across "6 strings"), snapping in Major /
-// Natural Minor. With STRUM up this rings like a real strummed guitar chord (user feature).
-static const int8_t kGtrShape[2][6] = { { 0,7,12,16,19,24 }, { 0,7,12,15,19,24 } };
+// GUITAR VOICINGS (types 10 = Gtr Major, 11 = Gtr Minor): not diatonic stacks - REAL barre
+// shapes from the snapped root, snapping in Major / Natural Minor. The SHAPE (and its STRING
+// COUNT) follows the root like on a real neck: roots E..G# = E-shape barre (6 strings,
+// R,5,R,3,5,R), everything else = A-shape barre (5 strings, R,5,R,3,5). Unused strings return
+// kGtrNone and are SKIPPED by the renders - the Notes count is AUTO for these types (user spec:
+// "different chords have different string numbers"). With STRUM up this rakes like a guitar.
+static constexpr int8_t kGtrNone = -100;
+static const int8_t kGtrShapeE[2][6] = { { 0,7,12,16,19,24 }, { 0,7,12,15,19,24 } };
+static const int8_t kGtrShapeA[2][6] = { { 0,7,12,16,19,kGtrNone }, { 0,7,12,15,19,kGtrNone } };
 
 // Voice k's offset (semitones, relative to the PLAYED note) for the diatonic chord of the note's scale
 // degree. Off-scale/between notes SNAP to the nearest scale member (tie -> lower); voice 0 = the snapped
@@ -1027,8 +1032,14 @@ static inline int scaleSemis(int scaleType, int key, int playedMidi, int k)
             if (d < bestD || (d == bestD && c < bestC)) { bestD = d; bestC = c; deg = i; }
         }
     const int snapDelta = bestC - pc;                               // 0 when the note is on-scale
-    if (gtr)                                                        // fixed shape from the snapped root
-        return snapDelta + (int) kGtrShape[scaleType - 10][k % 6] + 12 * (k / 6);
+    if (gtr)
+    {   // shape + string count follow the SNAPPED root, like a real neck
+        const int rootPc = ((playedMidi + snapDelta) % 12 + 12) % 12;
+        const bool eShape = rootPc >= 4 && rootPc <= 8;             // E..G# = E-shape barre
+        const int8_t off = (eShape ? kGtrShapeE : kGtrShapeA)[scaleType - 10][juce::jlimit(0, 5, k)];
+        if (k > 5 || off == kGtrNone) return kGtrNone;              // no such string on this chord
+        return snapDelta + (int) off;
+    }
     const int td  = deg + 2 * k;
     const int oct = (int) std::floor((double) td / (double) N);
     const int idx = td - oct * N;
@@ -1155,7 +1166,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         if (strumAmt > 0.001f && (sl.scaleOn || sl.chordMode > 0)
             && (sl.engine == SrcOsc || sl.engine == SrcModal || sl.engine == SrcPhys))
         {
-            const int nStr = juce::jlimit(1, UNI_MAX, sl.scaleOn ? sl.scaleUnison
+            const int nStr = juce::jlimit(1, UNI_MAX, sl.scaleOn ? (sl.scaleType >= 10 ? 6 : sl.scaleUnison)
                                                     : sl.chordMode > 0 ? sl.chordUnison : sl.oscUnison);
             if (nStr > 1)
             {
@@ -1222,7 +1233,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
             const float pos = juce::jlimit(0.0f, 1.0f, sl.physPosition);
             // Physical unison/chord: excite one real string per note, each tuned to its own pitch
             // (chord interval + detune). Single-voice sounds excite string 0 only = bit-identical.
-            const int nStr = (sl.engine == SrcPhys) ? juce::jlimit(1, KS_UNI, sl.scaleOn ? sl.scaleUnison : sl.oscUnison) : 1;
+            const int nStr = (sl.engine == SrcPhys) ? juce::jlimit(1, KS_UNI, sl.scaleOn ? (sl.scaleType >= 10 ? 6 : sl.scaleUnison) : sl.oscUnison) : 1;
 
             auto exciteString = [&](int strIdx, float freqK)
             {
@@ -1255,6 +1266,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
 
             for (int k = 0; k < nStr; ++k)
             {
+                if (sl.scaleOn && sv.uniSemis[k] < -90.0f) continue;   // guitar voicing: missing string
                 double uniMul = 1.0;
                 if (sl.engine == SrcPhys && nStr > 1)
                 {
@@ -1406,7 +1418,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         int    oscShape = 0, oscShapeB = 0; double oscFreq = 0; float oscPEnvAmt = 0, oscPEnvTime = 0.04f, oscPOffset = 0;
         int    uniVoices = 1; float uniCents = 0, uniGain = 1, oscVibFac = 1; bool uniCenter = false; int uniMode = 0; int chord = 0;
         bool   scaleOn = false;   // SCALE (diatonic harmonizer): read per-voice sv.uniSemis[] instead of the fixed chord table
-        double uniMul[KS_UNI] = { 1.0, 1.0, 1.0 };   // per-string pitch multipliers (Physical unison/chord)
+        double uniMul[KS_UNI] = { 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };   // per-string pitch multipliers (Physical unison/chord)
         int    noiseType = 0; bool noiseBP = false; double noiseFc = 1000, nQ = 0.7; float noiseDrive = 0, noiseCrackle = 0;
         float  greyB0 = 1, greyB1 = 0, greyB2 = 0, greyA1 = 0, greyA2 = 0;   // grey = white through a mid-scoop peaking biquad
         double fmCarrierF = 220, fmModF = 220; float fmIndex = 0, fmPEnvAmt = 0, fmPEnvTime = 0.05f, fmPOffset = 0, fmFeedback = 0, fmSub = 0;
@@ -1479,7 +1491,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 c.oscShape = sl.oscShape; c.oscShapeB = sl.oscShapeB; c.oscFreq = sl.oscFreq;
                 c.oscPEnvAmt = sl.oscPEnvAmt; c.oscPEnvTime = sl.oscPEnvTime; c.oscPOffset = sl.oscPOffset;
                 c.scaleOn   = sl.scaleOn;
-                c.uniVoices = juce::jlimit(1, UNI_MAX, sl.scaleOn ? sl.scaleUnison : sl.chordMode > 0 ? sl.chordUnison : sl.oscUnison);
+                c.uniVoices = juce::jlimit(1, UNI_MAX, sl.scaleOn ? (sl.scaleType >= 10 ? 6 : sl.scaleUnison) : sl.chordMode > 0 ? sl.chordUnison : sl.oscUnison);
                 c.uniCents  = juce::jlimit(0.0f, 1.0f, sl.oscDetune) * 100.0f;   // up to +/-100 cents (1 semitone) spread
                 c.uniCenter = sl.oscUniCenter; c.uniMode = sl.oscDetuneMode;
                 c.uniGain   = 1.0f / std::sqrt((float) (c.uniVoices + (c.uniCenter ? 1 : 0)));
@@ -1544,7 +1556,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 // (Release is the user's own value now - see the note in the amp-env bake above.)
                 // UNISON/CHORD: pre-compute each string's pitch multiplier (chord interval + detune spread).
                 c.scaleOn   = sl.scaleOn;   // SCALE reads sv.uniSemis per-string in the render (c.uniMul ignored)
-                c.uniVoices = juce::jlimit(1, KS_UNI, sl.scaleOn ? sl.scaleUnison : sl.chordMode > 0 ? sl.chordUnison : sl.oscUnison);
+                c.uniVoices = juce::jlimit(1, KS_UNI, sl.scaleOn ? (sl.scaleType >= 10 ? 6 : sl.scaleUnison) : sl.chordMode > 0 ? sl.chordUnison : sl.oscUnison);
                 c.chord     = juce::jlimit(0, 7, sl.chordMode);
                 c.uniCents  = juce::jlimit(0.0f, 1.0f, sl.oscDetune) * 100.0f;
                 for (int k = 0; k < KS_UNI; ++k)
@@ -1971,8 +1983,11 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             double det = std::pow(2.0, (double)(sp * c.uniCents) / 1200.0);
                             // CHORD mode: each unison voice becomes a chord note (root/third/fifth/..);
                             // detune still micro-spreads each note. The centre voice stays on the root.
-                            if (c.scaleOn && ! centreVoice)                        // SCALE: per-note diatonic offset
+                            if (c.scaleOn && ! centreVoice)
+                            {   // SCALE: per-note diatonic offset; guitar voicings mark missing
+                                if (sv.uniSemis[u] < -90.0f) continue;   // strings with a sentinel
                                 det *= std::pow(2.0, (double) sv.uniSemis[u] / 12.0);
+                            }
                             else if (c.chord > 0 && ! centreVoice)
                                 det *= std::pow(2.0, (double) chordSemis(c.chord, u) / 12.0);
                             const float dt = (float)(freq * det / sr);   // cycles/sample for PolyBLEP
@@ -2097,6 +2112,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             // STRUM: hold string k silent until its onset. Its excitation stays pristine in
                             // the KS line, so it starts as a FRESH pluck, not a decayed one. uniDelay 0 = identical.
                             if (k < UNI_MAX && t < sv.uniDelay[k]) continue;
+                            if (c.scaleOn && sv.uniSemis[k] < -90.0f) continue;   // guitar voicing: no such string
                             const int base = k * KS_MAX;
                             const double f = fBase * (c.scaleOn                     // SCALE: per-string diatonic offset + detune spread
                                 ? std::pow(2.0, (double) sv.uniSemis[k] / 12.0
@@ -2189,12 +2205,15 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             const double pmBase = noteMul * pe3Mul * (double) c.oscVibFac;   // vibrato = block-rate pole-angle wobble
                             if (strike) sv.modalNV = c.modalN;   // bank size fixed at the strike (immune to a mid-ring Material change)
                             double uniMul[MODAL_NOTES];
+                            bool noteOn[MODAL_NOTES];
                             for (int j = 0; j < nNotes; ++j) {
                                 const double sp = nNotes > 1 ? 2.0 * (double) j / (double)(nNotes - 1) - 1.0 : 0.0;
                                 const double iv = c.scaleOn ? (double) sv.uniSemis[j] : (double) chordSemis(c.chord, j);   // SCALE per-note offset
-                                uniMul[j] = std::pow(2.0, iv / 12.0 + sp * (double) c.uniCents / 1200.0);
+                                noteOn[j] = ! (c.scaleOn && sv.uniSemis[j] < -90.0f);   // guitar voicing: missing string
+                                uniMul[j] = noteOn[j] ? std::pow(2.0, iv / 12.0 + sp * (double) c.uniCents / 1200.0) : 1.0;
                             }
                             for (int j = 0; j < nNotes; ++j) {
+                                if (! noteOn[j]) continue;
                                 const double pm = pmBase * uniMul[j];
                                 for (int m = 0; m < sv.modalNV; ++m) {
                                     if (strike) { sv.modalY1[j][m] = 0.0f; sv.modalY2[j][m] = 0.0f; }

@@ -4250,9 +4250,36 @@ void ScaleBox::paint(juce::Graphics& g)
         g.setColour(juce::Colour(0xffd8e0f0).withAlpha(active ? 0.9f : 0.55f)); g.setFont(juce::Font(12.0f, juce::Font::bold));
         g.drawText(t, r, juce::Justification::centred, false);
     };
-    fader(notesRect(), (float) s.count / 7.0f, "Notes x" + juce::String(s.count), s.on);
+    const bool gtrType = s.on && s.type >= 10;   // guitar voicings pick their own string count
+    fader(notesRect(), gtrType ? 1.0f : (float) s.count / 7.0f,
+          gtrType ? juce::String("Notes: Auto") : "Notes x" + juce::String(s.count), s.on && ! gtrType);
     fader(scaleRect(), s.on ? (float)(s.type + 2) / (float)(kNumScales + 1) : 1.0f / (float)(kNumScales + 1),
           s.on ? juce::String(kUiScaleName[juce::jlimit(0, kNumScales - 1, s.type)]) : juce::String("Off"), true);
+    { // LIVE TUNER: "<note> <+/-cents>" with tuner-style dots - left dots = flat, right = sharp,
+      // the centre ring turns green within +-3 cents. Shows the CHANNEL's tuning (Base Freq +
+      // roll Tune), i.e. what a tuner would call the sound's 0-point.
+        const auto r = tunerRect();
+        const int cy = r.getCentreY();
+        const bool inTune = std::abs(tunerCents) <= 3;
+        const int lit = juce::jlimit(0, 4, (std::abs(tunerCents) + 11) / 12);   // 1 dot per ~12 cents
+        for (int i = 0; i < 4; ++i)
+        {
+            const int d = 4 - i;   // outermost first
+            auto dot = [&](int x, bool on) {
+                g.setColour(on ? juce::Colour(0xffffb03a) : juce::Colour(0xff33335a));
+                g.fillEllipse((float) x - 2.5f, (float) cy - 2.5f, 5.0f, 5.0f);
+            };
+            dot(r.getCentreX() - 34 - i * 11, tunerCents < 0 && lit >= d);
+            dot(r.getCentreX() + 34 + i * 11, tunerCents > 0 && lit >= d);
+        }
+        g.setColour(inTune ? juce::Colour(0xff2f9e57) : juce::Colour(0xff777fa8));
+        g.drawEllipse((float) r.getCentreX() - 24.0f, (float) cy - 4.0f, 8.0f, 8.0f, 1.5f);
+        g.setColour(inTune ? juce::Colour(0xff7ae0a0) : juce::Colour(0xffd8e0f0));
+        g.setFont(juce::Font(10.5f, juce::Font::bold));
+        g.drawText(tunerNote.isEmpty() ? juce::String("-")
+                     : tunerNote + " " + (tunerCents > 0 ? "+" : "") + juce::String(tunerCents) + "c",
+                   r.getCentreX() - 12, r.getY(), 70, r.getHeight(), juce::Justification::centredLeft, false);
+    }
 }
 
 void ScaleBox::mouseDown(const juce::MouseEvent& e)
@@ -4278,6 +4305,7 @@ void ScaleBox::mouseDrag(const juce::MouseEvent& e)
     auto& s = v[juce::jlimit(0, 1, slot)];
     if (dragNotes)
     {
+        if (s.on && s.type >= 10) return;   // guitar voicings: string count is AUTO (per chord shape)
         auto r = notesRect();
         const float f = juce::jlimit(0.0f, 1.0f, (float)(e.getPosition().x - r.getX()) / (float) juce::jmax(1, r.getWidth()));
         const int c = juce::jlimit(1, 7, 1 + (int) (f * 7.0f));
@@ -5707,6 +5735,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
     auto f   = [](float x) { juce::int64 b = 0; std::memcpy(&b, &x, sizeof(float)); return b; };
     juce::int64 h = 146959810934665603LL;
     h = mix(h, c.keysSlot2Down);   // slot-2 pitch is part of the SOUND now (rides + refreshes with mixes)
+    h = mix(h, f(c.strumAmt));     // STRUM is per-sound too (user order: guitar sounds ship strummed)
     h = mix(h, c.keysPolyMode ? 1 : 0);   // keys Poly/Mono is per-sound too
     for (int i = 0; i < DrumChannel::NUM_SOURCES; ++i) { h = mix(h, c.srcOn[i] ? 1 : 0); h = mix(h, f(c.srcWeight[i])); }
     h = mix(h, f(c.padX)); h = mix(h, f(c.padY)); h = mix(h, c.padLayoutB ? 1 : 0);
@@ -5915,6 +5944,7 @@ void DrumSequencerEditor::writeChannelMix(juce::ValueTree& t, const DrumChannel&
         t.setProperty("arpOff", ao, nullptr);
     }
     t.setProperty("keys2Dn",  ch.keysSlot2Down,      nullptr);   // slot-2 pitch rides with the sound mix
+    t.setProperty("strum",    ch.strumAmt,           nullptr);   // STRUM rides with the sound (user order)
     t.setProperty("userSample", ch.usingUserSample ? ch.userSampleFile.getFullPathName() : juce::String(), nullptr);
     for (int i = 0; i < DrumChannel::NUM_SOURCES; ++i) { t.setProperty("srcOn" + juce::String(i), ch.srcOn[i], nullptr);
                                   t.setProperty("srcW"  + juce::String(i), ch.srcWeight[i], nullptr); }
@@ -6004,6 +6034,7 @@ void DrumSequencerEditor::readChannelMix(const juce::ValueTree& t, DrumChannel& 
                 ch.arpOffset[i] = (int8_t) juce::jlimit(-128, 127, f[i].getIntValue()); }
     }
     ch.keysSlot2Down = juce::jlimit(-24, 24, (int) t.getProperty("keys2Dn", 0));   // slot-2 pitch (0 for old mix files)
+    ch.strumAmt = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("strum", 0.0f));   // per-sound strum (0 for old files)
     for (int i = 0; i < DrumChannel::NUM_SOURCES; ++i) { ch.srcOn[i]     = (bool)  t.getProperty("srcOn" + juce::String(i), i == 0);
                                   ch.srcWeight[i] = (float) t.getProperty("srcW"  + juce::String(i), i == 0 ? 1.0f : 0.0f); }
     ch.padX = (float) t.getProperty("padX", 0.5f);
@@ -7328,9 +7359,13 @@ void DrumSequencerEditor::setupComponents()
         int n = 0;
         if (sl.scaleOn)
         {
-            const int nv = juce::jlimit(1, 8, sl.scaleUnison);
+            const int nv = juce::jlimit(1, 8, sl.scaleType >= 10 ? 6 : sl.scaleUnison);   // guitar = AUTO
             for (int k = 0; k < nv && n < 8; ++k)
-                out[n++] = base + DrumChannel::scaleNoteOffset(sl.scaleType, sl.scaleKey, 60 + base, k);
+            {
+                const int off = DrumChannel::scaleNoteOffset(sl.scaleType, sl.scaleKey, 60 + base, k);
+                if (off < -90) continue;   // guitar voicing: missing string
+                out[n++] = base + off;
+            }
         }
         else if (sl.chordMode > 0)
         {
@@ -9330,8 +9365,9 @@ void DrumSequencerEditor::updateKeyboardHighlight()
                                   || sl.engine == DrumChannel::SrcPhys);
             const bool transposes = pitched || (sl.engine == DrumChannel::SrcSample && ! sl.smpPreservePitch);
             const int base = held - (s == 1 && transposes ? c.keysSlot2Down : 0);
-            auto add = [&](int off) { const int m = base + off; if (m >= 0 && m < 128) used[s][m] = true; };
-            if (pitched && sl.scaleOn) { const int nv = juce::jlimit(1, DrumChannel::UNI_MAX, sl.scaleUnison);
+            auto add = [&](int off) { if (off < -90) return;   // guitar voicing: missing string
+                                      const int m = base + off; if (m >= 0 && m < 128) used[s][m] = true; };
+            if (pitched && sl.scaleOn) { const int nv = juce::jlimit(1, DrumChannel::UNI_MAX, sl.scaleType >= 10 ? 6 : sl.scaleUnison);
                 for (int u = 0; u < nv; ++u) add(DrumChannel::scaleNoteOffset(sl.scaleType, sl.scaleKey, base, u)); }
             else if (pitched && sl.chordMode > 0) { const int nv = juce::jlimit(1, DrumChannel::UNI_MAX, sl.chordUnison);
                 for (int u = 0; u < nv; ++u) add(DrumChannel::chordNoteOffset(sl.chordMode, u)); }
@@ -9508,7 +9544,7 @@ void DrumSequencerEditor::loadPitchAndVoice()
     // Per-engine unison cap so you can't select more voices than the engine builds: Physical = 3
     // real strings, Modal = 4 banks, Oscillator = 7. (User: "up to 3 for physical but I can select
     // more" - now the handle stops at the real max.)
-    voiceMod.setMaxUni((e == DrumChannel::SrcPhys || e == DrumChannel::SrcModal) ? 3 : 7);
+    voiceMod.setMaxUni(e == DrumChannel::SrcModal ? 3 : e == DrumChannel::SrcPhys ? 6 : 7);   // KS = 6 real strings
     voiceMod.setValues((int) sl.oscUnison, sl.chordUnison, sl.scaleUnison, sl.oscDetune, sl.vibrato, sl.oscUniCenter, sl.oscDetuneMode, sl.chordMode, sl.scaleOn, sl.scaleType, sl.scaleKey, sl.uniSpread);
     voiceMod.setSupport(uniOn, vibOn, naReason);
 }
@@ -10292,6 +10328,28 @@ void DrumSequencerEditor::timerCallback()
         updateKeyboardHighlight();   // light up the chord/scale/slot notes of the held key (cheap: change-gated)
         keysPanel.setSplitMark(keysView && detailShown
                                && proc.sequencer.channel(selectedChannel).mergeWith >= 0);
+        { // LIVE TUNER strip (ScaleBox bottom): the selected channel's tuning = first pitched
+          // audible unlocked slot's Base Freq (+ the roll Tune fader) vs the nearest note. Pure
+          // arithmetic each tick; setText-style change gate via the stored note+cents.
+            const auto& tc = proc.sequencer.channel(selectedChannel);
+            juce::String tn; int cents = 0;
+            float hz = 0.0f;
+            for (const auto& sl : tc.slots)
+            {
+                if (sl.weight <= 0.001f || sl.lockPitch) continue;
+                if (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal) { hz = sl.oscFreq; break; }
+                if (sl.engine == DrumChannel::SrcPhys) { hz = sl.physFreq; break; }
+            }
+            if (hz > 1.0f)
+            {
+                const float m = 69.0f + 12.0f * std::log2(hz / 440.0f);
+                const int   n = (int) std::lround(m);
+                cents = juce::jlimit(-50, 50, (int) std::lround((m - (float) n) * 100.0f));
+                tn = juce::MidiMessage::getMidiNoteName(juce::jlimit(0, 127, n), true, true, 4);
+            }
+            if (tn != keysPanel.scaleBox.tunerNote || cents != keysPanel.scaleBox.tunerCents)
+            { keysPanel.scaleBox.tunerNote = tn; keysPanel.scaleBox.tunerCents = cents; keysPanel.scaleBox.repaint(); }
+        }
         if (proc.keysRecording.load())
         {
             parseKeysEvents();   // live: each finished loop becomes a take while you keep playing

@@ -608,11 +608,18 @@ public:
     void mouseDrag(const juce::MouseEvent&) override;
     juce::String getTooltip() override;
 private:
+    // LIVE TUNER (bottom strip): what this channel is TUNED to - the Base Freq (+ roll Tune)
+    // against the nearest note. Pure arithmetic fed by the editor timer (zero DSP cost).
+public:
+    juce::String tunerNote;                        // e.g. "A1"
+    int          tunerCents = 0;                   // -50..+50 (deviation from that note)
+private:
     bool dragNotes = false, dragScale = false;
     juce::Rectangle<int> chipRect(int i) const { return { 52 + i * 22, 1, 20, 14 }; }
     juce::Rectangle<int> keyRect()   const { return { getWidth() - 58, 1, 54, 14 }; }
-    juce::Rectangle<int> notesRect() const { return { 4, 19, getWidth() - 8, 25 }; }
-    juce::Rectangle<int> scaleRect() const { return { 4, 47, getWidth() - 8, 25 }; }
+    juce::Rectangle<int> notesRect() const { return { 4, 18, getWidth() - 8, 21 }; }
+    juce::Rectangle<int> scaleRect() const { return { 4, 41, getWidth() - 8, 21 }; }
+    juce::Rectangle<int> tunerRect() const { return { 4, 63, getWidth() - 8, 12 }; }
 };
 
 // SPLIT KEYBOARD control: a toggle + two Arp-style boxes. Each box = the full C0..C8 range; the

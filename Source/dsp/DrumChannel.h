@@ -783,7 +783,7 @@ private:
     // One playing note. The channel holds a small pool so overlapping triggers
     // can ring out together (polyphony); in mono mode only voice 0 is used.
     static constexpr int KS_MAX    = 4096;   // Karplus-Strong delay buffer (min ~11 Hz @ 44.1k)
-    static constexpr int KS_UNI    = 3;      // Physical unison/chord: up to this many real strings per voice
+    static constexpr int KS_UNI    = 6;      // Physical unison/chord: up to SIX real strings per voice (guitar voicings)
     // Per-slot synthesis state: each of the 2 slots runs its own engine, so it
     // needs its own oscillator phases / noise colour state / Karplus-Strong line /
     // sample playhead. The KS line (16 KB) is HEAP-allocated lazily by ensureKsBuffers()
