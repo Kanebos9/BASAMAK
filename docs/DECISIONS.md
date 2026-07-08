@@ -16,8 +16,8 @@
 
 | # | Decision | Why | Status |
 |---|---|---|---|
-| 1 | Steps->roll IMPORT runs only when the roll is EMPTY; a roll with notes is left untouched and the Base Freq knob is re-pinned (knob experiments in step mode don't carry back) | after a quantize round trip both sides hold the same melody; importing again would double every note | EXPLAINED (2026-07-09; option B — absorbing the knob offset into notes+Tune on return — offered, no verdict yet) |
-| 2 | Quantizing roll->steps KEEPS the roll notes underneath (only the chord-overlap path deletes them) | so switching back shows your roll again instead of a lossy re-import | OPEN (this is what makes #1 bite) |
+| 1 | ~~Import only when the roll is empty~~ **REBUILT to user spec (2026-07-09): quantizing roll->steps FORGETS the roll, so switching back ALWAYS re-imports the steps (with compensation + warnings)** | user: "it should forget how piano roll was. So it should just be converted again" | RESOLVED |
+| 2 | ~~Roll notes kept underneath after quantize~~ **REBUILT (2026-07-09): quantize clears them; the round trip is a fresh conversion each way** | user: "I prefer lossy re-import. There is an undo button anyway" | RESOLVED |
 | 3 | Quantize: several same-pitch notes starting in one step become a step ROLL; the ramp is recovered by inverting the engine's velocity law; step Vel = the louder end | round-trips ratchets instead of dropping them | OPEN |
 | 4 | Quantize: a mixed-pitch cluster inside one step keeps only the largest-overlap note | a step holds ONE pitch; something had to win | OPEN |
 | 5 | Quantize: gate fractions >= 97% round to full; a merged chain's fractional tail is written on the HEAD step | avoids 99%-gate noise; merged cells have no own Gate | OPEN |
@@ -32,7 +32,7 @@
 | # | Decision | Why | Status |
 |---|---|---|---|
 | 11 | Arp recording: when jitter makes stamps overlap, the PREVIOUS note's length is trimmed (recording itself stays unquantized) | replaced the grid-snap you rightly rejected; free timing is the hard rule | EXPLAINED |
-| 12 | The upstroke accent (x0.82) is baked into recorded VELOCITY (plus the per-note Strum UP flag since 2026-07-09) | live == recording for the audible accent | EXPLAINED |
+| 12 | ~~Upstroke accent baked into recorded velocity~~ **REBUILT (2026-07-09): velocity is stamped clean; the Strum UP flag alone reproduces the accent through the same DSP gate as live.** (The bake + flag combo was double-applying = recorded upstrokes 0.67x live - found by the user's challenge) | user: "Why baked in velocity? Why not to strum or alt strum?" - exactly right | RESOLVED |
 | 13 | Recording SKIPS notes beyond +-48 st instead of storing a clamped-wrong pitch (they still play live) | a wrong pitch in the take is worse than a missing note | OPEN |
 | 14 | Step recording stamps FRACTIONAL knob-relative pitches (e.g. +12.3) | your "create your own solution... just do" — playback always reproduces the performance | EXPLAINED (you dislike the look; PARKED for a better idea) |
 | 15 | Group (multi-bar) recording is looper-style overdub; per-pass draw takes for single bars; a group take can truncate a note still ringing at the pass end | per-pass clearing was wiping bar 1 mid-hold | OPEN (truncation part) |

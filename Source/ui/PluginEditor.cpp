@@ -7811,7 +7811,8 @@ void DrumSequencerEditor::setupComponents()
                                     "or PIANO ROLL for a free note lane (draw or record melodies AND chords; the lens opens "
                                     "the full editor). Switching from Piano Roll to a step count QUANTISES your notes onto "
                                     "the grid (undoable) - but overlapping notes (chords) can't fit steps, so it asks first "
-                                    "and deletes them if you continue.");
+                                    "and deletes them if you continue. Switching BACK to Piano Roll converts the steps "
+                                    "into notes again (each switch is a fresh conversion; undo restores the previous side).");
     }
 
     // Detail panel
@@ -9890,6 +9891,11 @@ void DrumSequencerEditor::quantizeDrawToSteps(DrumChannel& c, int n)
         c.stepNoteLen[s] = (frac >= 0.97f) ? (e > s ? 0.0f : 1.0f) : frac;
     }
     for (int i = n; i < DrumChannel::MAX_STEPS; ++i) { c.steps[i] = false; c.stepMerge[i] = false; }
+    // FORGET the roll (user verdict on DECISIONS.md #1/#2): the steps are the one source of
+    // truth now; switching back to Piano Roll re-IMPORTS them (with the base compensation +
+    // loss warnings). "Maybe the user just wanted to quantize first" - the round trip is a
+    // conversion each way, and undo covers regrets.
+    c.clearDrawNotes();
     c.drawMode = false; c.numSteps = n;
 }
 

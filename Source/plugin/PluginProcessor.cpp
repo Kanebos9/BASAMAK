@@ -482,9 +482,13 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                     && col > pch.drawNotes[arpLastStampIdx].start
                     && pch.drawNotes[arpLastStampIdx].start + pch.drawNotes[arpLastStampIdx].len > col)
                     pch.drawNotes[arpLastStampIdx].len = (int16_t) juce::jmax(1, col - pch.drawNotes[arpLastStampIdx].start);
+                // Velocity is stamped CLEAN: the Strum UP flag reproduces the upstroke accent
+                // (x0.82) through the SAME DSP gate as live - baking it into velocity too played
+                // recorded upstrokes at 0.67x live (double-applied), and made recordings quieter
+                // than live on sounds that don't strum at all (live has no accent there).
                 arpLastStampIdx = pch.addDrawNote(col, len, note - 60,
-                                    (int) std::lround(arpVel * (upStroke ? 0.82f : 1.0f) * 255.0f),
-                                    0, 0, 0, upStroke ? 1 : 0);   // strum direction recorded with the note
+                                    (int) std::lround(arpVel * 255.0f),
+                                    0, 0, 0, upStroke ? 1 : 0);
                 arpLastStampPat = sequencer.playPattern;
             }
         };
