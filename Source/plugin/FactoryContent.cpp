@@ -696,6 +696,8 @@ static void bStationBass(DC& c) {   // the flagship: detuned saw + square sub, c
     s.fxDriveType = DC::Tube; s.fxDrive = 0.18f;
     auto& b = mkSlot2(c, DC::SrcOsc, 0.58f);
     b.oscShape = b.oscShapeB = DC::WvSquare; b.oscFreq = 27.5f;   // sub: -1 octave, square = BS2 style
+    c.keysSlot2Down = 12;   // DECLARE the octave (sub already lives an octave down in the base):
+                            // live keys + the roll keep the sub interval instead of collapsing it
     b.atk = 0.002f; b.dec = 0.55f;
     b.filterType = DC::LowPass; b.filterCutoff = 260.0f; b.filterReso = 0.8f; b.filterEnvAmt = 0.2f;
     c.volume = 0.8f;
@@ -708,6 +710,8 @@ static void bLadderBass(DC& c) {    // warm funk: saw through a low, barely-reso
     s.fxDriveType = DC::SoftClip; s.fxDrive = 0.12f;
     auto& b = mkSlot2(c, DC::SrcOsc, 0.55f);
     b.oscShape = b.oscShapeB = DC::WvSine; b.oscFreq = 27.5f;
+    c.keysSlot2Down = 12;   // DECLARE the octave (sub already lives an octave down in the base):
+                            // live keys + the roll keep the sub interval instead of collapsing it
     b.atk = 0.002f; b.dec = 0.35f;
     c.volume = 0.82f;
 }
@@ -732,6 +736,8 @@ static void bNeuroBass(DC& c) {     // modern growl: folded+FM'd saw with a swep
     s.fxDriveType = DC::Foldback; s.fxDrive = 0.22f;
     auto& b = mkSlot2(c, DC::SrcOsc, 0.60f);
     b.oscShape = b.oscShapeB = DC::WvSine; b.oscFreq = 27.5f;     // untouched low end - growl stays on top
+    c.keysSlot2Down = 12;   // DECLARE the octave (sub already lives an octave down in the base):
+                            // live keys + the roll keep the sub interval instead of collapsing it
     b.atk = 0.002f; b.dec = 0.65f;
     c.volume = 0.78f;
 }
@@ -746,6 +752,8 @@ static void bHooverBass(DC& c) {    // rave hoover: wide 5-voice saw that RISES 
     s.fxDriveType = DC::Tube; s.fxDrive = 0.15f;
     auto& b = mkSlot2(c, DC::SrcOsc, 0.65f);
     b.oscShape = b.oscShapeB = DC::WvSquare; b.oscFreq = 32.7f;   // C1 sub keeps the bottom solid
+    c.keysSlot2Down = 12;   // DECLARE the octave (sub already lives an octave down in the base):
+                            // live keys + the roll keep the sub interval instead of collapsing it
     b.atk = 0.002f; b.dec = 0.7f;
     b.filterType = DC::LowPass; b.filterCutoff = 300.0f; b.filterReso = 0.8f;
     c.volume = 0.72f;
@@ -759,6 +767,8 @@ static void bReedBass(DC& c) {      // hollow house bass: odd-harmonic "reed" wa
     s.fxDriveType = DC::SoftClip; s.fxDrive = 0.08f;
     auto& b = mkSlot2(c, DC::SrcOsc, 0.58f);
     b.oscShape = b.oscShapeB = DC::WvSine; b.oscFreq = 32.7f;
+    c.keysSlot2Down = 12;   // DECLARE the octave (sub already lives an octave down in the base):
+                            // live keys + the roll keep the sub interval instead of collapsing it
     b.atk = 0.002f; b.dec = 0.3f;
     c.volume = 0.85f;
 }
@@ -773,6 +783,8 @@ static void bWobbleBass(DC& c) {    // dubstep wobble: LFO drives the resonant L
     s.fxDriveType = DC::Tube; s.fxDrive = 0.2f;
     auto& b = mkSlot2(c, DC::SrcOsc, 0.62f);
     b.oscShape = b.oscShapeB = DC::WvSine; b.oscFreq = 27.5f;      // steady sub - the wobble lives on top
+    c.keysSlot2Down = 12;   // DECLARE the octave (sub already lives an octave down in the base):
+                            // live keys + the roll keep the sub interval instead of collapsing it
     b.atk = 0.002f; b.dec = 1.2f;
     c.volume = 0.78f;
 }
@@ -1215,10 +1227,12 @@ static void kHonkyTonk(DC& c) {    // saloon piano: two piano voices a few cents
     s.oscShape = s.oscShapeB = 10; s.oscFreq = 261.63f;              // Bell-ish hammer tone
     s.fmDepth = 0.12f; s.fmPitch = 0.5f; s.fmEnvFollow = true;
     s.atk = 0.002f; s.dec = 1.3f; s.sustain = 0.2f; s.release = 0.25f;
+    s.oscUnison = 2; s.oscDetune = 0.06f;                            // each "string pair" a few cents apart -
     auto& b = mkSlot2(c, DC::SrcOsc, 0.5f);
-    b.oscShape = b.oscShapeB = 10; b.oscFreq = 263.4f;               // ~12 cents sharp = the honky-tonk beat
-    b.fmDepth = 0.12f; b.fmPitch = 0.5f; b.fmEnvFollow = true;
-    b.atk = 0.002f; b.dec = 1.3f; b.sustain = 0.2f; b.release = 0.25f;
+    b.oscShape = b.oscShapeB = 10; b.oscFreq = 261.63f;              // EQUAL base (the old 263.4 was a hard-wired
+    b.oscUnison = 2; b.oscDetune = 0.12f;                            // mistune: live keys collapsed it) - the
+    b.fmDepth = 0.12f; b.fmPitch = 0.5f; b.fmEnvFollow = true;       // honky beat now comes from unison detune,
+    b.atk = 0.002f; b.dec = 1.3f; b.sustain = 0.2f; b.release = 0.25f;   // identical live and sequenced
     c.volume = 0.72f;
 }
 // ---- Pads & Choirs (+5) ----
