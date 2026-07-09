@@ -10730,12 +10730,31 @@ static constexpr int STRIP_W    = 414;   // wider so the sound-mix dropdown fits
 // bottom edge and was covering a background-drawn outline's bottom line.
 void DrumSequencerEditor::paintStripOutline(juce::Graphics& g)
 {
-    const int selRow = selectedChannel - firstChannelRow;
-    if (selRow < 0 || selRow >= viewRows()) return;
     if (soundPicker != nullptr && soundPicker->isVisible())   // the picker dropdown stays ON TOP
         g.excludeClipRegion(soundPicker->getBounds());        // (paintOverChildren covers children)
-    g.setColour(juce::Colour(0xffff3b30));
     const float x0 = channelBar.isVisible() ? 17.0f : 2.0f;   // start AFTER the yellow scrollbar (x 2..14)
+    // MERGED CHANNEL PAIRS: ONE clean rounded VIOLET box around the two paired rows - the same visual
+    // language as the amber pattern-merge box (no busy/crossing lines, user's OCD note). Per pattern;
+    // pairs are adjacent channels. Inset INSIDE the red selected outline so the two never sit on top
+    // of each other (concentric with a gap when a paired row is also selected). Drawn regardless of
+    // which channel is selected (must show even when the selected channel is scrolled off-view).
+    {
+        auto& sq = proc.sequencer;
+        g.setColour(juce::Colour(0xffb46bff));   // merge violet (matches the C4 split marker + Merge UI)
+        for (int c = 0; c + 1 < Sequencer::NUM_CHANNELS; ++c)
+        {
+            if (sq.channel(c).mergeWith != c + 1) continue;   // draw once, from the LOWER channel of the pair
+            const int rA = c - firstChannelRow, rB = rA + 1;
+            if (rB < 0 || rA >= viewRows()) continue;         // pair fully scrolled out of view
+            const int top = GRID_TOP + juce::jmax(0, rA) * ROW_H;
+            const int bot = GRID_TOP + juce::jmin(viewRows(), rB + 1) * ROW_H;
+            g.drawRoundedRectangle(juce::Rectangle<float>(x0 + 3.0f, (float) top + 2.0f,
+                                   (float) STRIP_W - 9.0f - x0, (float) (bot - top) - 4.0f), 6.0f, 2.0f);
+        }
+    }
+    const int selRow = selectedChannel - firstChannelRow;
+    if (selRow < 0 || selRow >= viewRows()) return;           // selected channel scrolled off -> no red outline
+    g.setColour(juce::Colour(0xffff3b30));
     g.drawRoundedRectangle(juce::Rectangle<float>(x0, (float) (GRID_TOP + selRow * ROW_H) + 1.0f,
                                                   (float) STRIP_W - 3.0f - x0, (float) ROW_H - 1.5f), 5.0f, 2.0f);   // bottom edge BELOW the level meter
 }
