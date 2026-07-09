@@ -35,7 +35,6 @@ static void clearSound(DC& c)
     // Per-source AHD: fast attack, no hold, source-appropriate decay (Sample/Noise/Osc/FM/Physical).
     const float decDef[DC::NUM_SOURCES] = { 2.0f, 0.08f, 0.20f, 0.30f, 0.80f };
     for (int s = 0; s < DC::NUM_SOURCES; ++s) { c.srcAtk[s] = 0.003f; c.srcHold[s] = 0.0f; c.srcDec[s] = decDef[s]; }
-    c.bloom = 0.0f; c.drift = 0.0f; c.spread = 0.0f; c.punch = 0.0f; c.glue = 0.0f;
     c.pitch = 0.0f; c.volume = 0.8f; c.pan = 0.0f;
     for (int b = 0; b < DC::NUM_EQ_BANDS; ++b) c.eqBand[b] = DC::defaultEqBand(b);
     c.filterType = DC::FilterOff; c.filterCutoff = 20000.0f; c.filterReso = 0.707f; c.filterEnvAmt = 0.0f;

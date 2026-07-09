@@ -1230,11 +1230,6 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
         if      (param == "volume")  dch.volume     = norm;
         else if (param == "pan")     dch.pan        = norm * 2.0f - 1.0f;
         else if (param == "pitch")   dch.pitch      = (norm * 2.0f - 1.0f) * 24.0f;
-        else if (param == "bloom")  dch.bloom  = norm;                                 // 0..1 blend character
-        else if (param == "drift")  dch.drift  = norm;
-        else if (param == "spread") dch.spread = norm;
-        else if (param == "punch")  dch.punch  = norm;
-        else if (param == "glue")   dch.glue   = norm;
         else if (param.startsWith("atk")) { int s = param.substring(3).getIntValue();
                                             if (s >= 0 && s < DrumChannel::NUM_SOURCES) dch.srcAtk[s]  = norm * 1.0f; }
         else if (param.startsWith("hld")) { int s = param.substring(3).getIntValue();
@@ -1560,11 +1555,6 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
     chState.setProperty("pEnvTime", ch.pitchEnvTime,   nullptr);
     chState.setProperty("pEnvOff",  ch.pitchOffset,    nullptr);
     chState.setProperty("smpRev",   ch.sampleReverse,  nullptr);
-    chState.setProperty("bloom",  ch.bloom,  nullptr);
-    chState.setProperty("drift",  ch.drift,  nullptr);
-    chState.setProperty("spread", ch.spread, nullptr);
-    chState.setProperty("punch",  ch.punch,  nullptr);
-    chState.setProperty("glue",   ch.glue,   nullptr);
     for (int i = 0; i < DrumChannel::NUM_SOURCES; ++i) {
         chState.setProperty("srcOn" + juce::String(i), ch.srcOn[i],     nullptr);
         chState.setProperty("srcW"  + juce::String(i), ch.srcWeight[i], nullptr);
@@ -1731,11 +1721,6 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
     ch.pitchEnvTime     = (float)child.getProperty("pEnvTime", 0.05f);
     ch.pitchOffset      = (float)child.getProperty("pEnvOff",  0.0f);
     ch.sampleReverse    = (bool) child.getProperty("smpRev",   false);
-    ch.bloom  = (float)child.getProperty("bloom",  0.0f);
-    ch.drift  = (float)child.getProperty("drift",  0.0f);
-    ch.spread = (float)child.getProperty("spread", 0.0f);
-    ch.punch  = (float)child.getProperty("punch",  0.0f);
-    ch.glue   = (float)child.getProperty("glue",   0.0f);
     for (int i = 0; i < DrumChannel::NUM_SOURCES; ++i) {
         ch.srcOn[i]     = (bool) child.getProperty("srcOn" + juce::String(i), i == 0);
         ch.srcWeight[i] = (float)child.getProperty("srcW"  + juce::String(i), i == 0 ? 1.0f : 0.0f);

@@ -315,19 +315,6 @@ public:
     float srcHold[NUM_SOURCES] = { 0.0f,   0.0f,   0.0f,   0.0f,   0.0f   };
     float srcDec[NUM_SOURCES]  = { 2.0f,   0.08f,  0.20f,  0.30f,  0.80f  }; // Sample/Noise/Osc/FM/Physical
 
-    // BLEND character: five clean, non-distorting controls that shape how the
-    // blended sources behave together. Each 0..1, 0 = off.
-    //   bloom  - per hit, the blend starts focused on the loudest source then opens
-    //            up to the full mix (punchy attack -> layered body).
-    //   drift  - the blend slowly wanders over time so the timbre keeps evolving.
-    //   spread - widens the (synth) sources across the stereo field.
-    //   punch  - transient shaper on the combined hit (snap / hardness).
-    //   glue   - gentle compression that fuses the blend together.
-    float bloom  = 0.0f;
-    float drift  = 0.0f;
-    float spread = 0.0f;
-    float punch  = 0.0f;
-    float glue   = 0.0f;
 
     // Oscillator source
     int   layerOscShape     = OscSine;
@@ -483,18 +470,10 @@ public:
         //    2 = volume (tremolo). Any mix can run at once. Edited on the LFO visual (FX box). --
         float lfoRate[3] = { 4.0f, 4.0f, 4.0f };
         float lfoAmt[3]  = { 0.0f, 0.0f, 0.0f };
-        // -- Synth (SrcSynth) only -- the unified engine reuses the osc/FM/noise/phys
-        // fields above and adds these section controls:
-        //   oscFold  = wavefold amount (metallic / FM-ish harmonics from one knob)
-        //   oscLevel = oscillator+FM section level   noiseLevel = noise section level
-        //   resonAmt = 0 -> resonator OFF; >0 -> Karplus-Strong resonator decay/amount
-        float oscFold = 0.0f, oscLevel = 1.0f, noiseLevel = 0.0f, resonAmt = 0.0f;
-        // -- Oscillator resonator (the Analog/FM engine's tucked-away PHYSICAL section).
-        //    resonAmt doubles as the SrcOsc gate (0 = off -> pure analog/FM, identical to before;
-        //    >0 = a Karplus-Strong string is added, tuned to oscFreq, voiced by physMaterial/physTone).
-        //    resonDrive = how hard the oscillator(+FM) output EXCITES the string: 0 = only the
-        //    trigger noise-burst plucks it (== pure Physical); up = osc/FM-driven string hybrids.
-        float resonDrive = 0.0f;
+        // -- legacy unified-engine (SrcSynth, retired) section extras, still read by nothing but
+        //    kept as dormant fields so old-project persistence/migration stays graceful:
+        //   oscFold = wavefold amount   oscLevel = osc section level   noiseLevel = noise section level
+        float oscFold = 0.0f, oscLevel = 1.0f, noiseLevel = 0.0f;
         // -- 4-point PITCH ENVELOPE (per slot, applies on TOP of any legacy per-engine
         //    pitch env). X = time as a fraction (0..1) of the sound's length; Y = pitch in
         //    semitones. The line is ANCHORED at 0 on both edges: (0,0) -> 4 dots -> (1,0),
@@ -787,11 +766,7 @@ public:
 
 private:
     double sr = 44100.0;
-    // Per-channel state for the blend-character processors (Drift/Punch/Glue).
-    float driftPhase = 0.0f;
     float vibPhase   = 0.0f;   // shared ~5.5 Hz vibrato LFO (Analog + Physical)
-    float punchFast = 0.0f, punchSlow = 0.0f;
-    float glueEnv = 0.0f;
 
     // One playing note. The channel holds a small pool so overlapping triggers
     // can ring out together (polyphony); in mono mode only voice 0 is used.

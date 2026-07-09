@@ -67,7 +67,7 @@ public:
     // Close the piano-roll editor unless it belongs to `ch` (selecting another channel must not
     // leave a stale editor covering the grid - user report).
     void closeDrawEditorIfNot(int ch)
-    { if (drawMagCh >= 0 && drawMagCh != ch) { drawMagCh = -1; prMode = 0; drawReadSemi = -128; drawReadVel = -1; prHoverSemi = -999; repaint(); } }
+    { if (drawMagCh >= 0 && drawMagCh != ch) { drawMagCh = -1; prMode = 0; drawReadSemi = -128; prHoverSemi = -999; repaint(); } }
     float getRollDec(int ch, int step) const { return rollDec[ch][step]; }
     float getVel(int ch, int step) const { return vel[ch][step]; }   // velocity set by X-drag in Roll mode
     float getNoteLen(int ch, int step) const { return noteLen[ch][step]; }  // per-step gate length (Len mode)
@@ -106,7 +106,6 @@ private:
     int    drawNoteCount[NCH] = {};
     int    drawDragCh = -1, drawLastCol = -1;          // channel being line-drawn + last column (interp)
     int    strokeNoteIdx = -1;                          // the note the current ROW line-stroke is extending
-    int    drawReadVel = -1;                            // ModeVel watermark: last velocity dragged (0-255, -1 = none)
     bool   drawErase = false;                          // right-drag erases (removes notes under the stroke)
     float  playBarFrac = 0.0f;                         // current bar position 0..1 (piano-roll playhead)
     int    drawMagCh = -1;                             // channel whose BIG piano-roll OVERLAY is open (-1 = none)
@@ -129,7 +128,7 @@ private:
     int8_t  prOrigSemi[MIR_MAX]  = {};
     void   prClearSel() { if (prSelCount > 0) { for (auto& b : prSel) b = false; prSelCount = 0; } }
     int    prViewClamp() const { return DrumChannel::PITCH_RANGE - drawRange; }   // |center| max: window stays inside +-48
-    float  dVel[NCH] = {}, dPan[NCH] = {};             // piano-roll whole-channel default Vel / Pan mirror
+    float  dVel[NCH] = {};                             // piano-roll whole-channel default velocity mirror (drawVel)
     void   paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle<int> rect, bool overlay);
     juce::Rectangle<int> drawRowRect(int ch) const;                  // the normal (1x) row rect
     juce::Rectangle<int> drawOverlayRect() const;                    // the BIG piano-roll editor panel
@@ -761,7 +760,7 @@ public:
     // SrcOsc only: the box is split into ANALOG (wave + Freq fader) / FM (Depth fader + Ratio/Feedback
     // knobs) / PHYSICAL (Reson fader + revealed knob row). Freq, Depth (FM amount) and Reson (resonator
     // amount) are each a horizontal fader leading its section, so each knob group is one clean row.
-    std::unique_ptr<LearnableKnob> freqFader, depthFader, resonFader;
+    std::unique_ptr<LearnableKnob> freqFader, depthFader;
     // SrcOsc wave pickers: From / To vertical faders flanking the wave (replace click-to-cycle) + a
     // horizontal Warp fader (phase skew / PWM) in the ANALOG section.
     std::unique_ptr<LearnableKnob> fromFader, toFader, warpFader;
@@ -777,7 +776,7 @@ public:
         for (auto& k : knobs) { k->setColour(juce::Slider::rotarySliderFillColourId, c);
                                 k->setColour(juce::Slider::thumbColourId, c);
                                 k->setColour(juce::Slider::trackColourId, c); }   // filled side of the engine FADERS = slot colour
-        for (auto* f : { freqFader.get(), depthFader.get(), resonFader.get(), fromFader.get(), warpFader.get() })
+        for (auto* f : { freqFader.get(), depthFader.get(), fromFader.get(), warpFader.get() })
             if (f) f->setColour(juce::Slider::trackColourId, c);
     }
     void setEngine(int eng);     // rebuild params + show/hide knobs
@@ -1805,8 +1804,6 @@ private:
 
     juce::ComboBox comboOutput;      // per-channel routing (Main / Out 1..N / MIDI Out)
     juce::Label    lblOutput;
-    juce::ComboBox comboMidiNote;    // the MIDI note this channel sends in MIDI Out mode
-    juce::Label    lblMidiNote;
     static constexpr int kMidiOutId = DrumSequencerProcessor::NUM_AUX_OUTS + 2;  // combo id for "MIDI Out"
     juce::TextButton btnRoute { "Routing" };   // top-bar: open the per-channel routing overview
     void refreshRouting();           // recolour the channel strips + Route button by routing
@@ -1879,12 +1876,7 @@ private:
     LearnableKnob    knobSmpPOff { "p0_ch0_smpPOff", proc.midiLearn };
     juce::Label      lblSmpPOff;
     // Source interaction: Ring (multiply), Warp (cross-pitch FM), Morph (cross-filter).
-    LearnableKnob    knobBloom  { "p0_ch0_bloom",  proc.midiLearn };
-    LearnableKnob    knobDrift  { "p0_ch0_drift",  proc.midiLearn };
-    LearnableKnob    knobSpread { "p0_ch0_spread", proc.midiLearn };
-    LearnableKnob    knobPunch  { "p0_ch0_punch",  proc.midiLearn };
-    LearnableKnob    knobGlue   { "p0_ch0_glue",   proc.midiLearn };
-    juce::Label      lblBloom, lblDrift, lblSpread, lblPunch, lblGlue, lblBlendTitle, lblBlendBot;
+    juce::Label      lblBlendTitle, lblBlendBot;
     juce::Label      hdrSamplerG;     // "SAMPLE" group header (row 1)
     juce::TextButton btnSaveMix { "SAVE TO SOUND BANK" };
     void cacheWaveform(int channel);

@@ -472,7 +472,7 @@ void DrumChannel::buildSlotsFromLegacy()
         {
             float  pa = 0.0f, pt = 0.05f, po = 0.0f; float* legacyAmt = nullptr;
             switch (sl.engine) {
-                case SrcOsc:  case SrcSynth: pa = sl.oscPEnvAmt;  pt = sl.oscPEnvTime;  po = sl.oscPOffset;  legacyAmt = &sl.oscPEnvAmt;  break;
+                case SrcOsc:                 pa = sl.oscPEnvAmt;  pt = sl.oscPEnvTime;  po = sl.oscPOffset;  legacyAmt = &sl.oscPEnvAmt;  break;
                 case SrcFM:                  pa = sl.fmPEnvAmt;   pt = sl.fmPEnvTime;   po = sl.fmPOffset;   legacyAmt = &sl.fmPEnvAmt;   break;
                 case SrcPhys:                pa = sl.physPEnvAmt; pt = sl.physPEnvTime; po = sl.physPOffset; legacyAmt = &sl.physPEnvAmt; break;
                 case SrcSample:              pa = sl.smpPEnvAmt;  pt = sl.smpPEnvTime;  po = sl.smpPOffset;  legacyAmt = &sl.smpPEnvAmt;  break;
@@ -580,8 +580,7 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("sPP", s.smpPreservePitch, nullptr);   // preserve pitch (ignore step/draw/key pitch)
         st.setProperty("sFile", slotSample[b].file.getFullPathName(), nullptr);   // per-slot sample (reloaded)
         st.setProperty("yFo", s.oscFold, nullptr); st.setProperty("yOL", s.oscLevel, nullptr);
-        st.setProperty("yNL", s.noiseLevel, nullptr); st.setProperty("yRs", s.resonAmt, nullptr);
-        st.setProperty("yRD", s.resonDrive, nullptr);   // Osc-resonator exciter drive
+        st.setProperty("yNL", s.noiseLevel, nullptr);
         st.setProperty("wTb", s.waveTable, nullptr); st.setProperty("wPs", s.wavePos, nullptr);  // wavetable
         st.setProperty("oWp", s.oscWarp, nullptr);   // oscillator wave warp
         st.setProperty("mMa", s.modalMaterial, nullptr); st.setProperty("mDe", s.modalDecay, nullptr);   // modal
@@ -622,6 +621,10 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         if (st.getType() != juce::Identifier("Slot")) continue;
         Slot& s = slots[n];  s = Slot();
         s.engine = (int)  st.getProperty("eng", -1);
+        // MIGRATE the retired slot engines (SrcSynth=5 / SrcWave=6, removed v1.2.x) onto Analog+FM so
+        // OLD projects play a real sound instead of falling through to silence. SrcModal=7 is a live
+        // engine and is left alone. After this, no current data ever holds SrcSynth/SrcWave.
+        if (s.engine == SrcSynth || s.engine == SrcWave) s.engine = SrcOsc;
         s.weight = (float)st.getProperty("w", 0.0f);
         s.atk = (float)st.getProperty("atk", d.atk); s.hold = (float)st.getProperty("hld", d.hold);
         s.dec = (float)st.getProperty("dec", d.dec); s.sustain = (float)st.getProperty("sus", d.sustain);
@@ -666,8 +669,7 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         s.smpEnvOn = (bool)st.getProperty("sEnv", d.smpEnvOn);
         s.smpPreservePitch = (bool)st.getProperty("sPP", d.smpPreservePitch);   // default true (old projects preserve pitch)
         s.oscFold = (float)st.getProperty("yFo", d.oscFold); s.oscLevel = (float)st.getProperty("yOL", d.oscLevel);
-        s.noiseLevel = (float)st.getProperty("yNL", d.noiseLevel); s.resonAmt = (float)st.getProperty("yRs", d.resonAmt);
-        s.resonDrive = (float)st.getProperty("yRD", d.resonDrive);
+        s.noiseLevel = (float)st.getProperty("yNL", d.noiseLevel);
         s.waveTable = (int)st.getProperty("wTb", d.waveTable); s.wavePos = (float)st.getProperty("wPs", d.wavePos);
         s.oscWarp = (float)st.getProperty("oWp", d.oscWarp);
         if (! st.hasProperty("v3")) s.oscWarp = 0.0f;   // pre-wavefold: drop the old phase-skew warp (different effect)
@@ -719,7 +721,6 @@ void DrumChannel::prepareToPlay(double sampleRate, int maxBlockSize)
 
     for (auto& b : eqHP) b.reset();  for (auto& b : eqBell) b.reset();  for (auto& b : eqLP) b.reset();
     for (auto& b : formantBP) b.reset();
-    driftPhase = 0.0f; punchFast = punchSlow = glueEnv = 0.0f;
 
     for (auto& v : voices)
     {
@@ -763,7 +764,7 @@ void DrumChannel::ensureKsBuffers()
     if (ksReady.load(std::memory_order_acquire)) return;
     bool needs = false;
     for (auto& s : slots)
-        if (s.engine == SrcPhys || s.engine == SrcSynth) { needs = true; break; }
+        if (s.engine == SrcPhys) { needs = true; break; }
     if (! needs) return;
     for (auto& v : voices)
         for (auto& sv : v.sv)
@@ -1067,15 +1068,6 @@ int DrumChannel::chordNoteOffset(int chordMode, int k) { return chordSemis(chord
 int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long gateSamples,
                          float glideToSemis, long glideSamples, bool forceOverlap, int slotMask, bool keyGate)
 {
-    // ==== TEMP DEBUG (user repro: first loop pass rings short, later passes long). Logs every
-    // trigger of the ANALYSED channel: gate samples + which voice. REMOVE after the session.
-    if (analysisTap != nullptr)
-    {
-        static FILE* gdbg = fopen("/tmp/basamak_gate.log", "w");
-        if (gdbg != nullptr)
-        { fprintf(gdbg, "trigger gate=%ld glideTo=%.2f keyGate=%d overlap=%d\n",
-                  gateSamples, glideToSemis, (int) keyGate, (int) forceOverlap); fflush(gdbg); }
-    }
     // slotMask 0 (or all-bits) = every slot sounds; a piano-roll note may restrict to slot 1 or 2.
     const int mask = (slotMask == 0) ? ~0 : slotMask;
     // If this is the channel the editor is analysing, start a fresh spectrum
@@ -1103,7 +1095,6 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
 
     // Reset the free-running modulation LFOs so every hit starts at the same phase - otherwise non-zero Drift
     // (weight wobble) or Vibrato (varispeed on samples) makes the sound vary between identical hits.
-    driftPhase = 0.0f;
     vibPhase   = 0.0f;
 
     Voice& v = voices[vi];
@@ -1243,9 +1234,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         for (auto& w : sv.ksWrite) w = 0.0;
         for (auto& l : sv.ksLp) l = 0.0f;
         for (auto& row : sv.ksApSt) for (auto& a : row) a = 0.0f;
-        const bool ksPluck = (ksReady.load(std::memory_order_acquire)
-                              && ((sl.engine == SrcPhys)
-                                  || (sl.engine == SrcSynth && sl.resonAmt > 0.001f)));
+        const bool ksPluck = (ksReady.load(std::memory_order_acquire) && sl.engine == SrcPhys);
         if (ksPluck) std::fill(sv.ksBuf.begin(), sv.ksBuf.end(), 0.0f);
         if (ksPluck)
         {
@@ -1434,8 +1423,6 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
     // from the legacy fields only on load, via buildSlotsFromLegacy().
 
     // Block-rate modulation: Drift (slow weight wander) + Vibrato (pitch LFO).
-    driftPhase += 2.0f * kPi * 0.25f * (float) numSamples / (float) sr;   // ~0.25 Hz
-    if (driftPhase > 2.0f * kPi) driftPhase -= 2.0f * kPi;
     vibPhase += 2.0f * kPi * 5.5f * (float) numSamples / (float) sr;       // ~5.5 Hz
     if (vibPhase > 2.0f * kPi) vibPhase -= 2.0f * kPi;
     const float vibLfo = std::sin(vibPhase);
@@ -1464,16 +1451,14 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         bool   smpPreserve = true;   // Sample: ignore step/draw/key/env pitch (play at the sample's own pitch)
         const juce::AudioBuffer<float>* buf = nullptr; int srcLen = 0, regLo = 0, regHi = 0, slices = 1;  // per-slot sample
         float  smpGain = 1.0f;   // sample output boost
-        // -- Synth (unified) extras: section levels + fold + resonator on --
-        // (reson + resonDrive are ALSO used by the SrcOsc resonator section.)
-        float  oscFold = 0, oscLevel = 1, noiseLevel = 0; bool reson = false; float resonDrive = 0; float resonMix = 1;
+        // -- section levels + fold (legacy unified-engine extras) --
+        float  oscFold = 0, oscLevel = 1, noiseLevel = 0;
         float  oscWarp = 0.0f;                      // wave WARP = one-way wavefold (0 = off)
         int    fxDriveType = 0; float fxDrive = 0;  // per-slot Drive (insert); fxRevSend/fxDelSend = per-slot send amounts
         float  fxRevSend = 0, fxDelSend = 0;
         int    waveTable = 0; float wavePos = 0;   // wavetable (SrcWave)
         int    modalN = 0; float modalA1[MODAL_MODES] = {}, modalA2[MODAL_MODES] = {}, modalGain[MODAL_MODES] = {};  // modal bank
         float  modalDecaySec = 0.5f;   // base ring length (for voiceEnd)
-        float  gL = 1, gR = 1;
         // -- 4-point pitch envelope (applies on top of the legacy per-engine env) --
         bool   pEnvOn = false; float pEnvP[Slot::NPE] = { 0, 0, 0, 0 }, pEnvT[Slot::NPE] = { 0.2f, 0.4f, 0.6f, 0.8f };
         double voiceLenSamp = 1.0;   // sound length in samples, for the time-fraction axis
@@ -1550,7 +1535,6 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 }
                 c.fmFeedback = sl.fmFeedback; c.fmSub = sl.fmSub;
                 c.fmEnvF     = sl.fmEnvFollow;
-                c.reson = false;   // resonator REMOVED from Analog+FM (use the standalone Physical engine instead)
                 break;
             case SrcNoise:
                 c.noiseType = sl.noiseType;
@@ -1725,26 +1709,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
     if (! anySlotActive)
     { for (auto& v : voices) v.playHead = -1.0; feedSilence(); return; }
 
-    // Blend character (Bloom/Drift/Spread/Punch/Glue) was REMOVED from the UI - force every amount to 0 so it has
-    // ZERO effect (no phantom drift/spread/etc). The math below stays but is neutral. (Fields are now vestigial.)
-    const float spreadAmt = 0.0f;
-    static const float panBaseSlot[NUM_SLOTS] = { -0.6f, 0.6f };   // slot 0 left, slot 1 right at full spread
-    for (int s = 0; s < NUM_SLOTS; ++s)
-    {
-        const float p = spreadAmt * panBaseSlot[s];
-        sc[s].gL = juce::jmin(1.0f, 1.0f - p);
-        sc[s].gR = juce::jmin(1.0f, 1.0f + p);
-    }
-
-    // Drift: slow per-slot weight wander. (REMOVED -> 0.)
-    const float driftAmt = 0.0f;
-    float driftMod[NUM_SLOTS];
-    for (int s = 0; s < NUM_SLOTS; ++s)
-        driftMod[s] = juce::jmax(0.0f, 1.0f + driftAmt * 1.4f * std::sin(driftPhase + (float) s * 1.7f));
-
-    // Bloom: at the attack only the loudest slot plays; the rest swell in. (REMOVED -> 0.)
-    const float bloomAmt  = 0.0f;
-    const float bloomRise = 1.0f / ((0.04f + 0.20f * bloomAmt) * (float) sr);
+    // (Blend character Bloom/Drift/Spread was removed - it was hardcoded to 0 = no effect. Slots mix at
+    //  their own weight; per-slot stereo comes from Unison Width, not a slot pan.)
 
     // Voice length = the longest active slot's tail.
     long voiceEnd = 1;
@@ -1765,12 +1731,6 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         else if (c.engine == SrcPhys)
             voiceEnd = juce::jmax(voiceEnd, (long) ((c.atk + c.hold + 3.6f * c.dec * c.pm->decScale) * (float) sr) + 8
                                             + (c.sustain > 0.001f ? susTail : 0));
-        else if (c.engine == SrcSynth || (c.engine == SrcOsc && c.reson))
-        {   // amp tail, plus the resonator's ring when it is on (Synth + Osc-resonator)
-            long e = ahdEnd + (c.sustain > 0.001f ? susTail : 0);
-            if (c.reson) e = juce::jmax(e, (long) ((c.atk + c.hold + 3.6f * c.dec * c.pm->decScale) * (float) sr) + 8);
-            voiceEnd = juce::jmax(voiceEnd, e);
-        }
         else if (c.engine == SrcModal)   // the modes carry the decay (Ring); + the Strike (attack) ramp on top
             voiceEnd = juce::jmax(voiceEnd, (long) ((c.atk + 6.0f * c.modalDecaySec) * (float) sr) + 8);
         else
@@ -1835,7 +1795,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
 
         // Set noise band-pass coefficients once per voice (Noise + Synth-noise slots).
         for (int s = 0; s < NUM_SLOTS; ++s)
-            if ((sc[s].engine == SrcNoise || sc[s].engine == SrcSynth) && sc[s].noiseBP)
+            if (sc[s].engine == SrcNoise && sc[s].noiseBP)
                 v.sv[s].noiseBP.bandpass(sr, sc[s].noiseFc, sc[s].nQ);
 
         // Channel PITCH (semitones). SYNTHS shift frequency here (vPitchMul). SAMPLES get the channel/slot
@@ -1922,8 +1882,6 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 vPitchMul = vStepMul * chanMul;
             }
             float vEnv = 0.0f, mixL = 0.0f, mixR = 0.0f;
-            const float be = bloomAmt > 0.0001f ? (1.0f - std::exp(-(float) tv * bloomRise)) : 1.0f;
-            const float bGate = (1.0f - bloomAmt) + bloomAmt * be;
 
             for (int s = 0; s < NUM_SLOTS; ++s)
             {
@@ -2376,17 +2334,16 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
 
                 vEnv = juce::jmax(vEnv, env);
                 // HUMANIZE velocity jitter: sv.velScale (~1) loosens this slot's level per hit (1 = identical).
-                const float wEff = c.weight * driftMod[s] * (s == domSlot ? 1.0f : bGate) * sv.velScale;
-                const float cL = (stereo ? sL : sig) * wEff * c.gL;
-                const float cR = (stereo ? sR : sig) * wEff * c.gR;
+                const float wEff = c.weight * sv.velScale;
+                const float cL = (stereo ? sL : sig) * wEff;
+                const float cR = (stereo ? sR : sig) * wEff;
                 mixL += cL; mixR += cR;
                 // Per-slot reverb/delay SEND: this slot's signal x its own send amount (pre channel-gain; gain added later).
                 if (c.fxRevSend > 0.0001f) { fxRevL[i] += cL * v.velGain * vPanL * c.fxRevSend * kg; fxRevR[i] += cR * v.velGain * vPanR * c.fxRevSend * kg; }
                 if (c.fxDelSend > 0.0001f) { fxDelL[i] += cL * v.velGain * vPanL * c.fxDelSend * kg; fxDelR[i] += cR * v.velGain * vPanR * c.fxDelSend * kg; }
                 // === PER-SLOT EQ (begin) - capture THIS slot's mono output for its spectrum ===
                 if (s == tapSlot && i < analysisBufLen) {
-                    const float mono = stereo ? 0.5f * (wEff * sL * c.gL + wEff * sR * c.gR)
-                                              : 0.5f * wEff * sig * (c.gL + c.gR);
+                    const float mono = stereo ? 0.5f * wEff * (sL + sR) : wEff * sig;
                     analysisBuf[i] += mono * v.velGain;
                 }
                 // === PER-SLOT EQ (end) ===
@@ -2412,40 +2369,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
     // Per-slot filter env-follow: remember this block's per-slot level for next block's sweep.
     for (int s = 0; s < NUM_SLOTS; ++s) slotFiltEnv[s] = blockSlotEnv[s];
 
-    // ---- PUNCH (transient shaper) + GLUE (gentle compression) on the mix - both REMOVED (-> 0). -----
-    const float punchAmt = 0.0f;
-    const float glueAmt  = 0.0f;
-    if (punchAmt > 0.0001f || glueAmt > 0.0001f)
-    {
-        const float fastC = 1.0f - std::exp(-1.0f / (0.0012f * (float) sr)); // ~1.2 ms
-        const float slowC = 1.0f - std::exp(-1.0f / (0.035f  * (float) sr)); // ~35 ms
-        const float glAtt = 1.0f - std::exp(-1.0f / (0.003f  * (float) sr)); // glue attack
-        const float glRel = 1.0f - std::exp(-1.0f / (0.090f  * (float) sr)); // glue release (pumps)
-        const float glThr = 0.12f, glMakeup = 1.0f + glueAmt * 1.3f;          // hard squash + big make-up
-        for (int i = 0; i < numSamples; ++i)
-        {
-            const float a = 0.5f * (std::fabs(outL[i]) + std::fabs(outR[i]));
-            float g = 1.0f;
-            if (punchAmt > 0.0001f)   // strongly boost the attack transient
-            {
-                punchFast += fastC * (a - punchFast);
-                punchSlow += slowC * (a - punchSlow);
-                const float trans = juce::jmax(0.0f, punchFast - punchSlow);
-                g *= 1.0f + punchAmt * 14.0f * trans;
-            }
-            if (glueAmt > 0.0001f)    // hard ~5:1 compression above threshold + make-up (pumps)
-            {
-                glueEnv += (a > glueEnv ? glAtt : glRel) * (a - glueEnv);
-                if (glueEnv > glThr)
-                {
-                    const float gr = std::pow(glueEnv / glThr, -0.8f); // ~5:1
-                    g *= (1.0f - glueAmt) + glueAmt * gr;
-                }
-                g *= glMakeup;
-            }
-            outL[i] *= g; outR[i] *= g;
-        }
-    }
+    // (Channel Punch/Glue were removed - hardcoded to 0 = no effect. The MASTER Glue knob is separate.)
 
     // Rebuild EQ coefficients on the audio thread if a knob changed
     if (dspDirty.exchange(false))
