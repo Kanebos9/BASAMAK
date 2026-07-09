@@ -890,9 +890,10 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             auto& ch = sequencer.patterns[sequencer.playPattern].channels[e.channel];
             if (! ch.midiOut) continue;
             const int midiCh = juce::jlimit(1, 16, ch.midiOutChannel);   // per-channel MIDI out channel
-            // PIANO-ROLL notes emit MIDI too: use the NOTE's own pitch/velocity (not step 0's), so a
-            // MIDI-out channel in the roll drives another plugin correctly (user request).
-            const int note  = e.isDraw ? juce::jlimit(0, 127, ch.midiNote + juce::roundToInt(e.drawPitch))
+            // PIANO-ROLL notes emit MIDI too: the roll is C4-ABSOLUTE (row 0 = C4 = MIDI 60), so a
+            // note plays its OWN pitch directly (the base-note picker is disabled + ignored in the
+            // roll - you pick pitches on the grid). Step mode uses the base note + per-step pitch.
+            const int note  = e.isDraw ? juce::jlimit(0, 127, 60 + juce::roundToInt(e.drawPitch))
                                        : juce::jlimit(0, 127, ch.midiNote + juce::roundToInt(ch.stepPitch[e.step]));
             const float v   = e.isDraw ? juce::jlimit(0.0f, 1.0f, e.drawVel)
                                        : juce::jlimit(0.0f, 1.0f, ch.stepVel[e.step] * e.velScale);
@@ -1442,7 +1443,9 @@ juce::File DrumSequencerProcessor::exportMidiFile(int channel)
                 seq.addEvent(juce::MidiMessage::noteOn (midiCh, note, vel), tickOff + tOn);
                 seq.addEvent(juce::MidiMessage::noteOff(midiCh, note),      tickOff + tOff);
             };
-            if (chn.midiOut)        { add(juce::jlimit(0, 127, chn.midiNote + semis)); return; }   // unchanged behaviour
+            // MIDI-out: step mode = base note + pitch; PIANO ROLL = C4-absolute (60 + note pitch),
+            // matching the live MIDI-out (the base picker is disabled in the roll).
+            if (chn.midiOut)        { add(juce::jlimit(0, 127, (chn.drawMode ? 60 : chn.midiNote) + semis)); return; }
             if (pslots.isEmpty())   { add(juce::jlimit(0, 127, chn.midiNote + semis)); return; }   // Sample/Noise: the channel's own note + step/draw pitch (no C3 anchor)
             for (const auto& p : pslots)
             {

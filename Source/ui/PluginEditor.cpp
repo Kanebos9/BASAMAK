@@ -8053,7 +8053,8 @@ void DrumSequencerEditor::setupComponents()
         comboMidiNote.addItem(juce::MidiMessage::getMidiNoteName(n, true, true, 4) + " (" + juce::String(n) + ")", n + 1);
     comboMidiNote.setTooltip("The MIDI note this channel sends in MIDI Out mode (e.g. C1 = 36). "
                              "Set it to whatever note the target plugin/track expects (a drum pad, or a pitch for a synth). "
-                             "Per-step Pitch transposes it, step velocity + Roll set the note's dynamics. Channel-wide (all patterns).");
+                             "Per-step Pitch transposes it, step velocity + Roll set the note's dynamics. Channel-wide (all patterns).\n\n"
+                             "Disabled in PIANO ROLL: there you pick the pitches on the grid (C4-absolute), so this base note isn't used.");
     comboMidiNote.onChange = [this] {
         if (ignoreKnobCallbacks) return;
         const int note = juce::jlimit(0, 127, comboMidiNote.getSelectedId() - 1);
@@ -8083,16 +8084,18 @@ void DrumSequencerEditor::setupComponents()
                             + " (ch " + juce::String(o * 2 + 1) + "/" + juce::String(o * 2 + 2) + ")",
                             true, !c.midiOut && c.outputBus == o);
             sub.addSeparator();
-            // Two MIDI lines: (1) route to MIDI out keeping the current note; (2) change the note.
+            // MIDI Out. In the PIANO ROLL the notes come from the grid (C4-absolute), so the base-note
+            // picker is redundant -> the item shows that and the "Change note" submenu is disabled (user).
             sub.addItem(ch * 100 + 50,
-                        "MIDI Out (" + juce::MidiMessage::getMidiNoteName(c.midiNote, true, true, 4) + ")",
+                        c.drawMode ? "MIDI Out (notes from the Piano Roll)"
+                                   : "MIDI Out (" + juce::MidiMessage::getMidiNoteName(c.midiNote, true, true, 4) + ")",
                         true, c.midiOut);
             juce::PopupMenu notes;
             for (int n = 0; n <= 127; ++n)
                 notes.addItem(100000 + ch * 200 + n,
                               juce::MidiMessage::getMidiNoteName(n, true, true, 4) + " (" + juce::String(n) + ")",
                               true, c.midiOut && c.midiNote == n);
-            sub.addSubMenu("Change MIDI Out note", notes);
+            sub.addSubMenu("Change MIDI Out note", notes, ! c.drawMode);   // disabled in Piano Roll (pitch comes from the grid)
             // MIDI Out channel (1-16) - so different drums can drive different instruments / DAW MIDI tracks.
             juce::PopupMenu mchan;
             for (int mc = 1; mc <= 16; ++mc)
@@ -10063,7 +10066,7 @@ void DrumSequencerEditor::refreshDetailPanel()
     comboFilterType.setSelectedId(ch.filterType + 1, juce::dontSendNotification);
     comboOutput.setSelectedId    (ch.midiOut ? kMidiOutId : ch.outputBus + 1, juce::dontSendNotification);
     comboMidiNote.setSelectedId  (juce::jlimit(0, 127, ch.midiNote) + 1, juce::dontSendNotification);
-    comboMidiNote.setEnabled(ch.midiOut);   // only relevant when this channel is on MIDI Out
+    comboMidiNote.setEnabled(ch.midiOut && ! ch.drawMode);   // MIDI Out only, and NOT in Piano Roll (pitch comes from the grid)
     // Per-slot FX (Drive + Reverb/Delay send + LFO) for the selected slot:
     { auto& sl = ch.slots[envTargetSlot()];
       knobDrive.setValue (sl.fxDrive,       juce::dontSendNotification);
