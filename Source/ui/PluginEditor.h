@@ -114,13 +114,16 @@ private:
     int    drawGridDiv = 16;                            // overlay SNAP grid: divisions of the bar (0 = free)
     int    prTargetSlot = 0;                            // DRAW TARGET: 0 = both slots (orange), 1 = slot 1 (yellow), 2 = slot 2 (pink)
     // Overlay pointer gestures: 0 = none, 1 = MOVE a note, 2 = RESIZE its right edge, 3 = CREATE new,
-    // 4 = SCROLL the pitch view (drag the left note-name column when the range is < +-36).
+    // 4 = SCROLL the pitch view (drag the left note-name column when the range is < +-36),
+    // 5 = MARQUEE area-select, 6 = MOVE the whole selection, 8 = PENDING right-click (menu if no drag, else marquee).
     int    prMode = 0, prIdx = -1, prGrabDCol = 0, prGrabDSemi = 0;
+    int    prRightIdx = -1;                             // note under a pending right-click (prMode 8) - menu target on no-drag
     int    drawViewCenter = 0;                          // overlay pitch-view centre (semitones; 0 = C3 row centred)
     int    prScrollGrabY = 0, prScrollGrabC = 0;        // scroll-gesture anchors
     int    prHoverSemi = -999;                          // key row under the CURSOR (highlighted even over empty space)
-    // MULTI-SELECT (piano-roll editor): SHIFT+drag = marquee (prMode 5); dragging a selected note
-    // moves the whole selection (prMode 6); right/double-click a selected note deletes them all.
+    // MULTI-SELECT (piano-roll editor): RIGHT-DRAG = marquee (prMode 5); dragging a selected note
+    // moves the whole selection (prMode 6). A right-click that DOESN'T drag opens the note menu.
+    void   showRollNoteMenu(int ch2, int idx);          // the note right-click menu (called from mouseUp on a no-drag right-click)
     bool   prSel[MIR_MAX] = {};
     int    prSelCount = 0;
     juce::Point<int> prMarqA, prMarqB;                  // marquee corners while prMode == 5

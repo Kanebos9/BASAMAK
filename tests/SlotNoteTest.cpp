@@ -1,4 +1,4 @@
-// PER-SLOT NOTE tags: slot 1 = a low saw (C3 base), slot 2 = a high saw (C5 base). Draw one note at
+// PER-SLOT NOTE tags: the roll is C4-ABSOLUTE (ignores each slot's Freq knob), so slot 1 plays C4 and
 // each of three columns tagged both / slot1-only / slot2-only; verify each column sounds the right
 // slot(s). slot 0 (both) must be bit-identical to the pre-feature "both slots" behaviour.
 #include "Sequencer.h"
@@ -27,7 +27,8 @@ int main() {
     ch.slots[0].oscShape = ch.slots[0].oscShapeB = DrumChannel::WvSine; ch.slots[0].oscFreq = 261.6256f;   // C3
     ch.slots[0].atk = 0.002f; ch.slots[0].dec = 0.5f;                    // sines: C3 has NO energy at C5
     ch.slots[1].engine = DrumChannel::SrcOsc; ch.slots[1].weight = 0.5f;
-    ch.slots[1].oscShape = ch.slots[1].oscShapeB = DrumChannel::WvSine; ch.slots[1].oscFreq = 1046.502f;   // C5
+    ch.slots[1].oscShape = ch.slots[1].oscShapeB = DrumChannel::WvSine; ch.slots[1].oscFreq = 1046.502f;   // (ignored in roll)
+    ch.keysSlot2Down = -24;   // slot 2 UP two octaves -> C5, so the two slots are pitch-distinguishable
     ch.slots[1].atk = 0.002f; ch.slots[1].dec = 0.5f;
     ch.drawMode = true;
     ch.addDrawNote(0,   80, 0, 255, 0);   // beat 1: BOTH

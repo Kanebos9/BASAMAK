@@ -1158,7 +1158,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         for (int u = 0; u < UNI_MAX; ++u) sv.uniSemis[u] = 0.0f;
         if (sl.scaleOn && (sl.engine == SrcOsc || sl.engine == SrcModal || sl.engine == SrcPhys))
         {
-            const double baseF = (sl.engine == SrcPhys) ? (double) sl.physFreq : (double) sl.oscFreq;
+            const double baseF = slotBaseHz(s, sl);
             const int playedMidi = (int) std::lround(69.0 + 12.0 * std::log2(juce::jmax(1.0, baseF) / 440.0) + (double) pitchSemis);
             const int nv = juce::jlimit(1, UNI_MAX, sl.scaleUnison);
             for (int u = 0; u < nv; ++u) sv.uniSemis[u] = (float) scaleSemis(sl.scaleType, sl.scaleKey, playedMidi, u);
@@ -1238,13 +1238,13 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         if (ksPluck) std::fill(sv.ksBuf.begin(), sv.ksBuf.end(), 0.0f);
         if (ksPluck)
         {
-            const float ksFreq0 = (sl.engine == SrcPhys) ? sl.physFreq : sl.oscFreq;
+            const float ksFreq0 = (float) slotBaseHz(s, sl);
             // User stiffness adds allpass DC delay to the loop - compensate the burst-fill length the
             // same way the render compensates its read length (designStiffChain), so pitch matches.
             // One comp from the base freq is shared by every unison string (matches the render).
             float apComp = 0.0f;
             if (sl.engine == SrcPhys && sl.physStiff > 0.01f)
-            { float ac; int an; designStiffChain(sl.physStiff, (double) sl.physFreq, sr, ac, an, apComp); }
+            { float ac; int an; designStiffChain(sl.physStiff, slotBaseHz(s, sl), sr, ac, an, apComp); }
             const int mdl = juce::jlimit(0, kNumPhysModels - 1, (int) std::lround(sl.physMaterial));
             // EXCITATION shapes how the string/bar is set in motion: Pluck = full-length noise burst (rich);
             // Strike = a short sharp burst at the start (percussive mallet hit); Mallet = a soft, rounded burst.
@@ -1350,9 +1350,9 @@ int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly,
         double base = 0.0;
         switch (sl.engine)
         {
-            case SrcOsc:   base = sl.oscFreq;  break;   // Analog+FM
-            case SrcModal: base = sl.oscFreq;  break;   // Modal's Freq lives on oscFreq too
-            case SrcPhys:  base = sl.physFreq; break;
+            case SrcOsc:   base = (float) slotBaseHz(s, sl);  break;   // Analog+FM
+            case SrcModal: base = (float) slotBaseHz(s, sl);  break;   // Modal's Freq lives on oscFreq too
+            case SrcPhys:  base = (float) slotBaseHz(s, sl); break;
             case SrcSample:   // Sample plays on keys: Preserve pitch = its own pitch (keySemis 0);
                               // else varispeed relative to C3 (MIDI 60), slot 2 transposed.
                 sv.keySemis = sl.smpPreservePitch ? 0.0f
@@ -1503,7 +1503,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         switch (sl.engine)
         {
             case SrcOsc:
-                c.oscShape = sl.oscShape; c.oscShapeB = sl.oscShapeB; c.oscFreq = sl.oscFreq;
+                c.oscShape = sl.oscShape; c.oscShapeB = sl.oscShapeB; c.oscFreq = (float) slotBaseHz(s, sl);
                 c.oscPEnvAmt = sl.oscPEnvAmt; c.oscPEnvTime = sl.oscPEnvTime; c.oscPOffset = sl.oscPOffset;
                 c.scaleOn   = sl.scaleOn;
                 c.uniVoices = juce::jlimit(1, UNI_MAX, sl.scaleOn ? (sl.scaleType >= 10 ? 6 : sl.scaleUnison) : sl.chordMode > 0 ? sl.chordUnison : sl.oscUnison);
@@ -1589,9 +1589,9 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 // design (designStiffChain) - the positive-coefficient approach was inaudible at the
                 // 2x engine rate (twice reported by the user; see the function comment for the math).
                 { const float st = juce::jlimit(0.0f, 1.0f, sl.physStiff);
-                  if (st > 0.01f) designStiffChain(st, (double) sl.physFreq, sr, c.ksApC, c.ksApN, c.ksApComp);
+                  if (st > 0.01f) designStiffChain(st, slotBaseHz(s, sl), sr, c.ksApC, c.ksApN, c.ksApComp);
                   else { c.ksApC = c.pm->apC; c.ksApN = c.pm->apStages; c.ksApComp = 0.0f; } }
-                c.physBaseF  = juce::jlimit(20.0, sr * 0.45, (double) sl.physFreq);
+                c.physBaseF  = juce::jlimit(20.0, sr * 0.45, slotBaseHz(s, sl));
                 c.physPEnvAmt = sl.physPEnvAmt; c.physPEnvTime = sl.physPEnvTime; c.physPOffset = sl.physPOffset;
                 c.physVibFac = 1.0f + juce::jlimit(0.0f, 1.0f, sl.vibrato) * 0.07f * vibLfo;
                 break;
@@ -1626,7 +1626,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 const auto& B  = kModalMaterials[juce::jmin(mi + 1, kNumModalMaterials - 1)];
                 const float mo = juce::jlimit(0.0f, 1.0f, sl.modalMorph);
                 const int   nModes = (mo > 0.001f) ? juce::jmax(A.n, B.n) : A.n;
-                const double baseF = juce::jlimit(20.0, sr * 0.45, (double) sl.oscFreq);
+                const double baseF = juce::jlimit(20.0, sr * 0.45, slotBaseHz(s, sl));
                 const float  decaySec = 0.05f + juce::jlimit(0.0f, 1.0f, sl.modalDecay) * 3.95f;     // 0.05..4 s
                 const float  tone   = juce::jlimit(0.0f, 1.0f, sl.modalTone);
                 const float  stretch = 0.6f + juce::jlimit(0.0f, 1.0f, sl.modalStruct) * 0.8f;        // 0.6..1.4 (0.5->1.0)

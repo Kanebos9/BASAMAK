@@ -815,19 +815,19 @@ void SlotEditor::hookFreqReadouts()
     applyFreqLock();   // the lock state must survive every re-place/refresh
 }
 
-// PIANO ROLL locks pitch to C3: grey + disable every Freq control while this channel is in
-// Piano Roll mode (the note grid IS the pitch, 0 = C3). Restores the authored tooltip in step mode.
+// (freqDisabled is always false now - PIANO ROLL is knob-INDEPENDENT: it plays a C4-absolute base in
+// the DSP and never touches this knob. The lock path stays inert for safety.)
 void SlotEditor::applyFreqLock()
 {
-    static const juce::String lockMsg =
-        "Frequency is disabled while this channel is in PIANO ROLL: the note grid sets the pitch and "
-        "0 is fixed to C4 (middle C). Switch the channel back to steps (the step-count dropdown) to use Freq again.";
+    static const juce::String lockMsg;   // unused (freqDisabled never set)
     static const juce::String freqFaderTip =
         "Frequency: the oscillator's base pitch (Hz). CLICK the value read-out to switch to NOTE "
         "mode (shows A1, C2...; dragging snaps to semitones, SHIFT = free). Click again for Hz.\n\n"
         "KEYS: the keyboard plays REAL notes no matter where this knob sits, and never changes it. "
         "Keyboard recordings are stored RELATIVE to this knob (step pitch 0 = this frequency), so they "
-        "play back exactly as performed. PIANO ROLL disables this knob and pins 0 to C4.";
+        "play back exactly as performed.\n\n"
+        "PIANO ROLL ignores this knob entirely - the roll always plays C4-referenced notes (row 0 = C4), "
+        "so the knob stays free and untouched. It only matters in step mode.";
     auto apply = [this](juce::Slider& sl, const juce::String& openTip) {
         sl.setEnabled(! freqDisabled);
         sl.setAlpha(freqDisabled ? 0.45f : 1.0f);
@@ -8265,28 +8265,10 @@ void DrumSequencerEditor::refreshDetailPanel()
     ignoreKnobCallbacks = true;
     auto& ch = proc.sequencer.channel(selectedChannel);
 
-    // Piano Roll = Freq locked to C4: tell both slot editors before their values/tooltips refresh below.
-    slotEd[0].freqDisabled = ch.drawMode; slotEd[1].freqDisabled = ch.drawMode;
-    // PIANO ROLL pins the pitch 0-point to C4: force every pitched slot's base Freq to C4 (idempotent -
-    // Freq is disabled in this mode so it never drifts; the ~0.01 Hz guard avoids re-marking as modified).
-    if (ch.drawMode)
-    {
-        constexpr float kMidC = 261.6255653f;   // middle C (MIDI 60) - displayed as C4 (scientific)
-        // The TUNE fader shifts the whole pin: 0-point = C4 + drawTuneCents. Leaving the roll
-        // simply keeps the knob parked there = the step 0-point inherits the transpose (user spec).
-        const float pin = kMidC * std::pow(2.0f, juce::jlimit(-50.0f, 50.0f, ch.drawTuneCents) / 1200.0f);
-        for (int s = 0; s < DrumChannel::NUM_SLOTS; ++s)
-        {
-            auto& sl = ch.slots[s];
-            // slot 2 keeps its Slot-2 pitch baked (positive keysSlot2Down = semitones DOWN, like keyDown)
-            const float want = (s == 1 && ch.keysSlot2Down != 0)
-                                 ? pin * std::pow(2.0f, -(float) ch.keysSlot2Down / 12.0f) : pin;
-            if (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal)
-            { if (std::abs(sl.oscFreq - want) > 0.01f) { sl.oscFreq = want; ch.markDspDirty(); } }
-            else if (sl.engine == DrumChannel::SrcPhys)
-            { if (std::abs(sl.physFreq - want) > 0.01f) { sl.physFreq = want; ch.markDspDirty(); } }
-        }
-    }
+    // PIANO ROLL is knob-INDEPENDENT now (user): the roll plays a C4-absolute base regardless of the
+    // Freq knob (handled in the DSP via DrumChannel::slotBaseHz), so the knob is NOT forced to C4, NOT
+    // faded, and NOT parked on exit - it just stays the step-mode base. Nothing to do here.
+    slotEd[0].freqDisabled = false; slotEd[1].freqDisabled = false;
 
     lblSelected.setText("Editing: Pattern " + juce::String(currentPattern() + 1)
                         + " / Channel " + juce::String(selectedChannel + 1),

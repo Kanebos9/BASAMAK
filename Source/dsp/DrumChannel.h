@@ -541,6 +541,17 @@ public:
         // === PER-SLOT FILTER (end) ===
     };
     Slot slots[NUM_SLOTS];
+    // Effective BASE frequency for a pitched slot. In PIANO ROLL every pitched engine plays a
+    // C4-ABSOLUTE base (+ the Tune fader), independent of the Freq knob - so the roll is knob-free
+    // (the knob is never forced/faded/parked; it stays the STEP-mode base). Slot 2 keeps its
+    // Slot-2 transpose. Step mode = the slot's own Freq. Bit-identical to the retired "pin the knob
+    // to C4" behaviour, just without mutating the visible control.
+    double slotBaseHz(int s, const Slot& sl) const {
+        const double own = (sl.engine == SrcPhys) ? (double) sl.physFreq : (double) sl.oscFreq;
+        if (! drawMode) return own;
+        const double c4 = 261.6255653 * std::pow(2.0, (double) juce::jlimit(-50.0f, 50.0f, drawTuneCents) / 1200.0);
+        return (s == 1 && keysSlot2Down != 0) ? c4 * std::pow(2.0, -(double) keysSlot2Down / 12.0) : c4;
+    }
     float slotFiltEnv[NUM_SLOTS] = {}; // runtime: per-slot amp-env level from the PREVIOUS block, feeds the per-slot filter's env-follow sweep
     // Legacy-authoring bridge: factory sounds built via buildSlotsFromLegacy can't set slot fields
     // directly (applyPreset re-runs the build and would wipe them) - this channel-level flag is

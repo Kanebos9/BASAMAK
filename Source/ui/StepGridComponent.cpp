@@ -662,7 +662,7 @@ void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle
             { g.setColour(juce::Colour(0xff35c0ff)); g.fillRect(juce::Rectangle<float>(x1 - 2.0f, y - bh, 2.0f, bh * 2.0f)); }
         }
     }
-    if (overlay && prMode == 5)   // MARQUEE rubber band (shift+drag)
+    if (overlay && prMode == 5)   // MARQUEE rubber band (right-drag)
     {
         const auto mr = juce::Rectangle<int>::leftTopRightBottom(juce::jmin(prMarqA.x, prMarqB.x), juce::jmin(prMarqA.y, prMarqB.y),
                                                                  juce::jmax(prMarqA.x, prMarqB.x), juce::jmax(prMarqA.y, prMarqB.y));
@@ -734,7 +734,7 @@ void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle
             g.drawText("Quantize", qr, juce::Justification::centred, false);
         }
         g.setColour(juce::Colour(0xff9aa4c0)); g.setFont(juce::Font(12.0f, juce::Font::bold));
-        g.drawText("drag=draw - dbl-click=delete - SHIFT=select - RIGHT-CLICK=note menu",
+        g.drawText("drag=draw - dbl-click=delete - RIGHT-CLICK=note menu - RIGHT-DRAG=select area",
                    rect.getX() + 724, rect.getY(), rect.getWidth() - 724 - 34, PR_HEAD, juce::Justification::centredLeft, false);
         const auto cl = prHdrClose(rect);
         g.setColour(juce::Colour(0xff5a2a2a)); g.fillRoundedRectangle(cl.toFloat(), 4.0f);
@@ -879,12 +879,12 @@ juce::String StepGridComponent::getTooltip()
                             "- display only.\n"
                             "- CMD/CTRL+click a note = GLIDE (slides in from the previous note; the KEYS Glide "
                             "knob sets the time).\n"
-                            "- RIGHT-CLICK a note = the NOTE MENU: Gate on/off, glide, slot, delete. "
+                            "- RIGHT-CLICK a note (no drag) = the NOTE MENU: Gate on/off, glide, slot, delete. "
                             "GATE OFF (tapered end) = fires like a step and rings naturally; GATE ON (square end) "
                             "= holds at sustain for its length, then releases.\n"
-                            "- SHIFT+drag = SELECT an area: move the selected notes together (the note menu "
-                            "then edits all of them), double-click deletes them, a colour button re-slots "
-                            "them.\n"
+                            "- RIGHT-DRAG = SELECT an area (marquee): then drag any selected note to move them all "
+                            "together (the note menu edits all of them), double-click deletes them, a colour button "
+                            "re-slots them.\n"
                             "- TUNE (header fader): shifts the WHOLE bar up to +-50 cents (tape-style detune). The "
                             "keyboard follows it on this channel, and switching to steps keeps the transposed "
                             "0-point on the Base Freq knob.\n\n"
@@ -1147,149 +1147,10 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
             const int col = prColAt(lane, p.x);
             const int semi = yToDrawSemi(lane, p.y, drawRange, drawViewCenter);
             const int idx = prNoteAt(ch2, col, semi);
-            auto deleteSelected = [&] {
-                for (int i = drawNoteCount[ch2] - 1; i >= 0; --i)
-                    if (prSel[i]) { for (int j = i; j < drawNoteCount[ch2] - 1; ++j) drawNotes[ch2][j] = drawNotes[ch2][j + 1];
-                                    --drawNoteCount[ch2]; }
-                prClearSel(); pushNotes(ch2); repaint();
-            };
-            if (e.mods.isShiftDown())
-            {   // SHIFT+drag = MARQUEE select (a fresh selection each time)
-                prClearSel();
-                prMode = 5; prMarqA = prMarqB = p;
-                repaint();
-                return;
-            }
             if (e.mods.isRightButtonDown() || e.mods.isPopupMenu())
-            {   // right-click a note = the NOTE MENU (one-shot/gated, glide, slot, delete). Applies to
-                // the whole SELECTION when the clicked note is part of it. Double-click still deletes.
-                if (idx < 0) return;
-                const bool sel = prSel[idx];
-                const auto& nn = drawNotes[ch2][idx];
-                // STRUM only does something on stacked chord VOICES that share a time span. It's
-                // available when either (user spec):
-                //  - the target notes SHARE start AND length (a chord drawn by hand - ANY pitches), OR
-                //  - a SINGLE note whose SOUND voices it into a chord (Scale/Chord = it has "shadow" notes).
-                bool strumOk;
-                {
-                    int fs = -1, fl = -1, count = 0; bool uniform = true;
-                    for (int i = 0; i < drawNoteCount[ch2]; ++i)
-                        if (i == idx || (sel && prSel[i])) {
-                            if (count == 0) { fs = drawNotes[ch2][i].start; fl = drawNotes[ch2][i].len; }
-                            else if (drawNotes[ch2][i].start != fs || drawNotes[ch2][i].len != fl) uniform = false;
-                            ++count;
-                        }
-                    auto hasShadows = [&](const DrumChannel::DrawNote& q) -> bool {
-                        if (! getSlotVoicing) return false; int vo[8];
-                        if ((q.slot == 0 || q.slot == 1) && getSlotVoicing(ch2, 0, q.semi, vo) > 1) return true;
-                        if ((q.slot == 0 || q.slot == 2) && getSlotVoicing(ch2, 1, q.semi, vo) > 1) return true;
-                        return false;
-                    };
-                    strumOk = uniform && (count >= 2 || (count == 1 && hasShadows(drawNotes[ch2][idx])));
-                }
-                juce::PopupMenu m;
-                m.addSectionHeader(sel ? "Selected notes" : "Note");
-                m.addItem(1, "Gate OFF: ring naturally (like a step)", true, nn.oneShot != 0);
-                m.addItem(2, "Gate ON: hold for the note length",       true, nn.oneShot == 0);
-                m.addSeparator();
-                m.addItem(5, "Strum DOWN (normal)",            strumOk, nn.strumUp == 0);
-                m.addItem(6, "Strum UP (alt. strum: reversed + lighter)", strumOk, nn.strumUp != 0);
-                juce::PopupMenu sa;   // per-note strum AMOUNT override; stepped 0/20/40/60/80/100 (matches the knob)
-                sa.addItem(20, "Sound's Strum knob (default)", strumOk, nn.strumPct == 255);
-                sa.addItem(21, "0% (no strum on this note)",   strumOk, nn.strumPct == 0);
-                sa.addItem(22, "20%",                          strumOk, nn.strumPct == 20);
-                sa.addItem(23, "40%",                          strumOk, nn.strumPct == 40);
-                sa.addItem(24, "60%",                          strumOk, nn.strumPct == 60);
-                sa.addItem(28, "80%",                          strumOk, nn.strumPct == 80);
-                sa.addItem(29, "100%",                         strumOk, nn.strumPct == 100);
-                m.addSubMenu("Strum amount (needs a chord: stacked same-time notes, or a Scale/Chord sound)", sa, strumOk);
-                m.addSeparator();
-                // VELOCITY: "Type exact %" gives FULL 1% resolution (matches the min/max vel knobs -
-                // no coarse mismatch, user rule), plus quick 10% presets. Current % shown at the top.
-                juce::PopupMenu vm;
-                vm.addItem(31, "Type exact % (currently " + juce::String((int) std::lround((float) nn.vel / 255.0f * 100.0f)) + "%)...");
-                vm.addSeparator();
-                for (int vp = 10; vp <= 100; vp += 10) {
-                    const int v255 = juce::jlimit(1, 255, (int) std::lround(vp / 100.0 * 255.0));
-                    vm.addItem(300 + vp, juce::String(vp) + "%", true, std::abs((int) nn.vel - v255) <= 12);
-                }
-                m.addSubMenu("Velocity", vm);
-                // PAN (per note). Default = follow the whole-channel pan (inherit); the explicit
-                // positions override it (0 = a true centre, distinct from inherit).
-                const bool panInherit = nn.pan == DrumChannel::PAN_INHERIT;
-                juce::PopupMenu pm;
-                pm.addItem(205, "Channel pan (default)", true, panInherit);
-                pm.addSeparator();
-                pm.addItem(200, "Left 100%",  true, ! panInherit && nn.pan <= -90);
-                pm.addItem(201, "Left 50%",   true, ! panInherit && nn.pan > -90 && nn.pan <= -30);
-                pm.addItem(202, "Centre",     true, ! panInherit && nn.pan > -30 && nn.pan <  30);
-                pm.addItem(203, "Right 50%",  true, ! panInherit && nn.pan >= 30 && nn.pan <  90);
-                pm.addItem(204, "Right 100%", true, ! panInherit && nn.pan >= 90);
-                m.addSubMenu("Pan", pm);
-                m.addSeparator();
-                m.addItem(3, "Glide into this note", true, nn.glide != 0);
-                juce::PopupMenu sm;
-                sm.addItem(10, "Both slots", true, nn.slot == 0);
-                sm.addItem(11, "Slot 1",     true, nn.slot == 1);
-                sm.addItem(12, "Slot 2",     true, nn.slot == 2);
-                m.addSubMenu("Play on", sm);
-                m.addSeparator();
-                m.addItem(4, sel ? "Delete selected notes" : "Delete note");
-                m.showMenuAsync(juce::PopupMenu::Options(),
-                    [this, ch2, idx, sel, deleteSelected](int r)
-                    {
-                        if (r == 0 || idx >= drawNoteCount[ch2]) return;
-                        auto apply = [&](void (*f)(DrumChannel::DrawNote&, int), int arg)
-                        {
-                            for (int i = 0; i < drawNoteCount[ch2]; ++i)
-                                if (i == idx || (sel && prSel[i])) f(drawNotes[ch2][i], arg);
-                            pushNotes(ch2); repaint();
-                        };
-                        if (r == 1)      apply(+[](DrumChannel::DrawNote& n, int){ n.oneShot = 1; }, 0);
-                        else if (r == 2) apply(+[](DrumChannel::DrawNote& n, int){ n.oneShot = 0; }, 0);
-                        else if (r == 3) apply(+[](DrumChannel::DrawNote& n, int){ n.glide = n.glide ? 0 : 1; }, 0);
-                        else if (r == 5) apply(+[](DrumChannel::DrawNote& n, int){ n.strumUp = 0; }, 0);
-                        else if (r == 6) apply(+[](DrumChannel::DrawNote& n, int){ n.strumUp = 1; }, 0);
-                        else if (r == 20) apply(+[](DrumChannel::DrawNote& n, int){ n.strumPct = 255; }, 0);
-                        else if (r == 21) apply(+[](DrumChannel::DrawNote& n, int){ n.strumPct = 0;   }, 0);
-                        else if (r == 22) apply(+[](DrumChannel::DrawNote& n, int){ n.strumPct = 20;  }, 0);
-                        else if (r == 23) apply(+[](DrumChannel::DrawNote& n, int){ n.strumPct = 40;  }, 0);
-                        else if (r == 24) apply(+[](DrumChannel::DrawNote& n, int){ n.strumPct = 60;  }, 0);
-                        else if (r == 28) apply(+[](DrumChannel::DrawNote& n, int){ n.strumPct = 80;  }, 0);
-                        else if (r == 29) apply(+[](DrumChannel::DrawNote& n, int){ n.strumPct = 100; }, 0);
-                        else if (r == 205) apply(+[](DrumChannel::DrawNote& n, int){ n.pan = DrumChannel::PAN_INHERIT; }, 0);
-                        else if (r >= 200 && r <= 204) { const int pv[5] = { -100, -50, 0, 50, 100 };
-                                                         apply(+[](DrumChannel::DrawNote& n, int a){ n.pan = (int8_t) a; }, pv[r - 200]); }
-                        else if (r >= 310 && r <= 400) apply(+[](DrumChannel::DrawNote& n, int a){ n.vel = (uint8_t) a; },
-                                                             juce::jlimit(1, 255, (int) std::lround((r - 300) / 100.0 * 255.0)));
-                        else if (r == 31)   // TYPE EXACT velocity % - full 1% resolution (matches the knobs)
-                        {
-                            const int cur = (int) std::lround((float) drawNotes[ch2][idx].vel / 255.0f * 100.0f);
-                            auto* aw = new juce::AlertWindow("Note velocity", "Velocity % (0-100):",
-                                                             juce::MessageBoxIconType::NoIcon);
-                            aw->addTextEditor("v", juce::String(cur));
-                            aw->addButton("OK",     1, juce::KeyPress(juce::KeyPress::returnKey));
-                            aw->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
-                            aw->enterModalState(true, juce::ModalCallbackFunction::create(
-                                [this, ch2, idx, sel, aw](int rr) {
-                                    if (rr != 1) return;
-                                    const int pct  = juce::jlimit(0, 100, aw->getTextEditorContents("v").getIntValue());
-                                    const int v255 = juce::jlimit(1, 255, (int) std::lround(pct / 100.0 * 255.0));
-                                    for (int i = 0; i < drawNoteCount[ch2]; ++i)
-                                        if (i == idx || (sel && prSel[i])) drawNotes[ch2][i].vel = (uint8_t) v255;
-                                    pushNotes(ch2); repaint();
-                                }), true);
-                        }
-                        else if (r >= 10 && r <= 12) apply(+[](DrumChannel::DrawNote& n, int a){ n.slot = (uint8_t) a; }, r - 10);
-                        else if (r == 4)
-                        {
-                            if (sel) { deleteSelected(); return; }
-                            prClearSel();
-                            for (int j = idx; j < drawNoteCount[ch2] - 1; ++j) drawNotes[ch2][j] = drawNotes[ch2][j + 1];
-                            --drawNoteCount[ch2]; pushNotes(ch2); repaint();
-                        }
-                    });
-                return;
+            {   // RIGHT-CLICK: decided on release. NO drag = the NOTE MENU (on a note); a DRAG =
+                // marquee area-select (any pitch). prMode 8 = 'pending right-click' until mouseUp/mouseDrag.
+                prMode = 8; prMarqA = prMarqB = p; prRightIdx = idx; return;
             }
             if ((e.mods.isCommandDown() || e.mods.isCtrlDown()) && idx >= 0)
             {   // cmd/ctrl+click toggles GLIDE on this note: it slides in from the previous (legato) note's
@@ -1455,6 +1316,8 @@ void StepGridComponent::mouseDrag(const juce::MouseEvent& e)
         repaint();
         return;
     }
+    // PENDING right-click that started to MOVE -> promote to a fresh marquee area-select.
+    if (drawMagCh >= 0 && prMode == 8 && e.getDistanceFromDragStart() > 3) { prClearSel(); prMode = 5; }
     // MARQUEE select: stretch the rubber band (selection resolves on mouse-up).
     if (drawMagCh >= 0 && prMode == 5) { prMarqB = e.getPosition(); repaint(); return; }
     // GROUP MOVE: shift every selected note by the drag delta (columns snapped to the grid).
@@ -1552,6 +1415,14 @@ void StepGridComponent::mouseUp(const juce::MouseEvent&)
         }
         prMode = 0; repaint(); return;
     }
+    if (prMode == 8)   // a right-click that DID NOT drag -> the note menu (on a note), else clear selection
+    {
+        const int ch2 = drawMagCh, ridx = prRightIdx;
+        prMode = 0; prRightIdx = -1;
+        if (ridx >= 0) showRollNoteMenu(ch2, ridx);
+        else { prClearSel(); repaint(); }
+        return;
+    }
     if (prMode != 0) { prMode = 0; prIdx = -1; repaint(); return; }   // piano-roll gesture ended
     if (drawDragCh >= 0) { drawDragCh = -1; drawLastCol = -1; strokeNoteIdx = -1; drawReadSemi = -128; repaint(); return; }   // line stroke ended
     // Loop-condition: a plain CLICK (no drag) toggles the bar under the cursor.
@@ -1576,3 +1447,142 @@ void StepGridComponent::mouseUp(const juce::MouseEvent&)
     endMagnify();   // shrink the held step back
 }
 
+
+
+// The piano-roll NOTE right-click menu (Gate/Strum/Velocity/Pan/Glide/Slot/Delete). Called from
+// mouseUp when a right-click did NOT drag (a right-DRAG is the marquee area-select instead).
+void StepGridComponent::showRollNoteMenu(int ch2, int idx)
+{
+    if (idx < 0 || idx >= drawNoteCount[ch2]) return;
+    auto deleteSelected = [this, ch2] {
+        for (int i = drawNoteCount[ch2] - 1; i >= 0; --i)
+            if (prSel[i]) { for (int j = i; j < drawNoteCount[ch2] - 1; ++j) drawNotes[ch2][j] = drawNotes[ch2][j + 1];
+                            --drawNoteCount[ch2]; }
+        prClearSel(); pushNotes(ch2); repaint();
+    };
+    const bool sel = prSel[idx];
+    const auto& nn = drawNotes[ch2][idx];
+    // STRUM only does something on stacked chord VOICES that share a time span. It's
+    // available when either (user spec):
+    //  - the target notes SHARE start AND length (a chord drawn by hand - ANY pitches), OR
+    //  - a SINGLE note whose SOUND voices it into a chord (Scale/Chord = it has "shadow" notes).
+    bool strumOk;
+    {
+        int fs = -1, fl = -1, count = 0; bool uniform = true;
+        for (int i = 0; i < drawNoteCount[ch2]; ++i)
+            if (i == idx || (sel && prSel[i])) {
+                if (count == 0) { fs = drawNotes[ch2][i].start; fl = drawNotes[ch2][i].len; }
+                else if (drawNotes[ch2][i].start != fs || drawNotes[ch2][i].len != fl) uniform = false;
+                ++count;
+            }
+        auto hasShadows = [&](const DrumChannel::DrawNote& q) -> bool {
+            if (! getSlotVoicing) return false; int vo[8];
+            if ((q.slot == 0 || q.slot == 1) && getSlotVoicing(ch2, 0, q.semi, vo) > 1) return true;
+            if ((q.slot == 0 || q.slot == 2) && getSlotVoicing(ch2, 1, q.semi, vo) > 1) return true;
+            return false;
+        };
+        strumOk = uniform && (count >= 2 || (count == 1 && hasShadows(drawNotes[ch2][idx])));
+    }
+    juce::PopupMenu m;
+    m.addSectionHeader(sel ? "Selected notes" : "Note");
+    m.addItem(1, "Gate OFF: ring naturally (like a step)", true, nn.oneShot != 0);
+    m.addItem(2, "Gate ON: hold for the note length",       true, nn.oneShot == 0);
+    m.addSeparator();
+    m.addItem(5, "Strum DOWN (normal)",            strumOk, nn.strumUp == 0);
+    m.addItem(6, "Strum UP (alt. strum: reversed + lighter)", strumOk, nn.strumUp != 0);
+    juce::PopupMenu sa;   // per-note strum AMOUNT override; stepped 0/20/40/60/80/100 (matches the knob)
+    sa.addItem(20, "Sound's Strum knob (default)", strumOk, nn.strumPct == 255);
+    sa.addItem(21, "0% (no strum on this note)",   strumOk, nn.strumPct == 0);
+    sa.addItem(22, "20%",                          strumOk, nn.strumPct == 20);
+    sa.addItem(23, "40%",                          strumOk, nn.strumPct == 40);
+    sa.addItem(24, "60%",                          strumOk, nn.strumPct == 60);
+    sa.addItem(28, "80%",                          strumOk, nn.strumPct == 80);
+    sa.addItem(29, "100%",                         strumOk, nn.strumPct == 100);
+    m.addSubMenu("Strum amount (needs a chord: stacked same-time notes, or a Scale/Chord sound)", sa, strumOk);
+    m.addSeparator();
+    // VELOCITY: "Type exact %" gives FULL 1% resolution (matches the min/max vel knobs -
+    // no coarse mismatch, user rule), plus quick 10% presets. Current % shown at the top.
+    juce::PopupMenu vm;
+    vm.addItem(31, "Type exact % (currently " + juce::String((int) std::lround((float) nn.vel / 255.0f * 100.0f)) + "%)...");
+    vm.addSeparator();
+    for (int vp = 10; vp <= 100; vp += 10) {
+        const int v255 = juce::jlimit(1, 255, (int) std::lround(vp / 100.0 * 255.0));
+        vm.addItem(300 + vp, juce::String(vp) + "%", true, std::abs((int) nn.vel - v255) <= 12);
+    }
+    m.addSubMenu("Velocity", vm);
+    // PAN (per note). Default = follow the whole-channel pan (inherit); the explicit
+    // positions override it (0 = a true centre, distinct from inherit).
+    const bool panInherit = nn.pan == DrumChannel::PAN_INHERIT;
+    juce::PopupMenu pm;
+    pm.addItem(205, "Channel pan (default)", true, panInherit);
+    pm.addSeparator();
+    pm.addItem(200, "Left 100%",  true, ! panInherit && nn.pan <= -90);
+    pm.addItem(201, "Left 50%",   true, ! panInherit && nn.pan > -90 && nn.pan <= -30);
+    pm.addItem(202, "Centre",     true, ! panInherit && nn.pan > -30 && nn.pan <  30);
+    pm.addItem(203, "Right 50%",  true, ! panInherit && nn.pan >= 30 && nn.pan <  90);
+    pm.addItem(204, "Right 100%", true, ! panInherit && nn.pan >= 90);
+    m.addSubMenu("Pan", pm);
+    m.addSeparator();
+    m.addItem(3, "Glide into this note", true, nn.glide != 0);
+    juce::PopupMenu sm;
+    sm.addItem(10, "Both slots", true, nn.slot == 0);
+    sm.addItem(11, "Slot 1",     true, nn.slot == 1);
+    sm.addItem(12, "Slot 2",     true, nn.slot == 2);
+    m.addSubMenu("Play on", sm);
+    m.addSeparator();
+    m.addItem(4, sel ? "Delete selected notes" : "Delete note");
+    m.showMenuAsync(juce::PopupMenu::Options(),
+        [this, ch2, idx, sel, deleteSelected](int r)
+        {
+            if (r == 0 || idx >= drawNoteCount[ch2]) return;
+            auto apply = [&](void (*f)(DrumChannel::DrawNote&, int), int arg)
+            {
+                for (int i = 0; i < drawNoteCount[ch2]; ++i)
+                    if (i == idx || (sel && prSel[i])) f(drawNotes[ch2][i], arg);
+                pushNotes(ch2); repaint();
+            };
+            if (r == 1)      apply(+[](DrumChannel::DrawNote& n, int){ n.oneShot = 1; }, 0);
+            else if (r == 2) apply(+[](DrumChannel::DrawNote& n, int){ n.oneShot = 0; }, 0);
+            else if (r == 3) apply(+[](DrumChannel::DrawNote& n, int){ n.glide = n.glide ? 0 : 1; }, 0);
+            else if (r == 5) apply(+[](DrumChannel::DrawNote& n, int){ n.strumUp = 0; }, 0);
+            else if (r == 6) apply(+[](DrumChannel::DrawNote& n, int){ n.strumUp = 1; }, 0);
+            else if (r == 20) apply(+[](DrumChannel::DrawNote& n, int){ n.strumPct = 255; }, 0);
+            else if (r == 21) apply(+[](DrumChannel::DrawNote& n, int){ n.strumPct = 0;   }, 0);
+            else if (r == 22) apply(+[](DrumChannel::DrawNote& n, int){ n.strumPct = 20;  }, 0);
+            else if (r == 23) apply(+[](DrumChannel::DrawNote& n, int){ n.strumPct = 40;  }, 0);
+            else if (r == 24) apply(+[](DrumChannel::DrawNote& n, int){ n.strumPct = 60;  }, 0);
+            else if (r == 28) apply(+[](DrumChannel::DrawNote& n, int){ n.strumPct = 80;  }, 0);
+            else if (r == 29) apply(+[](DrumChannel::DrawNote& n, int){ n.strumPct = 100; }, 0);
+            else if (r == 205) apply(+[](DrumChannel::DrawNote& n, int){ n.pan = DrumChannel::PAN_INHERIT; }, 0);
+            else if (r >= 200 && r <= 204) { const int pv[5] = { -100, -50, 0, 50, 100 };
+                                             apply(+[](DrumChannel::DrawNote& n, int a){ n.pan = (int8_t) a; }, pv[r - 200]); }
+            else if (r >= 310 && r <= 400) apply(+[](DrumChannel::DrawNote& n, int a){ n.vel = (uint8_t) a; },
+                                                 juce::jlimit(1, 255, (int) std::lround((r - 300) / 100.0 * 255.0)));
+            else if (r == 31)   // TYPE EXACT velocity % - full 1% resolution (matches the knobs)
+            {
+                const int cur = (int) std::lround((float) drawNotes[ch2][idx].vel / 255.0f * 100.0f);
+                auto* aw = new juce::AlertWindow("Note velocity", "Velocity % (0-100):",
+                                                 juce::MessageBoxIconType::NoIcon);
+                aw->addTextEditor("v", juce::String(cur));
+                aw->addButton("OK",     1, juce::KeyPress(juce::KeyPress::returnKey));
+                aw->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+                aw->enterModalState(true, juce::ModalCallbackFunction::create(
+                    [this, ch2, idx, sel, aw](int rr) {
+                        if (rr != 1) return;
+                        const int pct  = juce::jlimit(0, 100, aw->getTextEditorContents("v").getIntValue());
+                        const int v255 = juce::jlimit(1, 255, (int) std::lround(pct / 100.0 * 255.0));
+                        for (int i = 0; i < drawNoteCount[ch2]; ++i)
+                            if (i == idx || (sel && prSel[i])) drawNotes[ch2][i].vel = (uint8_t) v255;
+                        pushNotes(ch2); repaint();
+                    }), true);
+            }
+            else if (r >= 10 && r <= 12) apply(+[](DrumChannel::DrawNote& n, int a){ n.slot = (uint8_t) a; }, r - 10);
+            else if (r == 4)
+            {
+                if (sel) { deleteSelected(); return; }
+                prClearSel();
+                for (int j = idx; j < drawNoteCount[ch2] - 1; ++j) drawNotes[ch2][j] = drawNotes[ch2][j + 1];
+                --drawNoteCount[ch2]; pushNotes(ch2); repaint();
+            }
+        });
+}

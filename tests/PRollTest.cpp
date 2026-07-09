@@ -64,7 +64,7 @@ int main() {
         for (auto& sl : c2.slots) sl = DrumChannel::Slot();
         { auto& sl = c2.slots[0];
           sl.engine = DrumChannel::SrcOsc; sl.weight = 1.0f;
-          sl.oscShape = sl.oscShapeB = DrumChannel::WvSaw; sl.oscFreq = 261.6256f;
+          sl.oscShape = sl.oscShapeB = DrumChannel::WvSaw; sl.oscFreq = 261.6255653f;   // exact C4 (roll base is C4-absolute now)
           sl.atk = 0.002f; sl.dec = 0.4f; sl.sustain = 0.9f; sl.release = 0.05f; }
         if (draw) { c2.drawMode = true; c2.addDrawNote(0, 96, 0, 255, 0, 0, oneShot); }
         else      { c2.numSteps = 16; c2.steps[0] = true; }
