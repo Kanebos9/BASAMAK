@@ -82,6 +82,9 @@
 | 37 | SrcWave display scaffolding (waveView + waveTable/wavePos fields) KEPT as inert dormant compat, not removed | it never shows after migration (zero runtime effect); removing it = disproportionate layout surgery vs. reward | OPEN (flag if you want it fully stripped) |
 | 38 | Per-note pan sentinel = 127 (PAN_INHERIT); explicit -100..100 (0 = true centre) | fixes #28 - "centre" and "inherit" no longer collide; the field is brand-new so no migration risk | RESOLVED |
 | 39 | Monolith split = extracted StepGridComponent (1571 lines) to its own .cpp; did NOT split the rest | it's the one large, cleanly-separable, callback-driven unit; splitting DrumSequencerEditor's 100+ methods needs a shared internal header for ~30 file-statics = a bigger, riskier pass | PARTIAL (more splitting possible later) |
+| 40 | #13 (dropdown) HARDENED: the per-tick combo refresh now also skips while the popup is OPEN (isPopupActive), not just change-only - can't fight your selection even if the change-only test is ever dropped | structural, not conventional, safety for the recurring "dropdown ignores my pick" bug | RESOLVED |
+| 41 | #14 (undo window) CLOSED: doUndo() force-commits any uncommitted current state FIRST, so the stack top always equals the screen - undoing right after an edit steps back exactly one edit | removes the ~0.1 s "undo skips a step" window at its source (no more scattered patches needed) | RESOLVED |
+| 42 | #15 readability = already handled (labels squeeze, custom + default buttons auto-fit, no "..." strings); the magic-number LAYOUT refactor NOT done | can't visually verify blind layout changes = exactly the "dont break it" risk; will fix specific truncated spots if screenshotted | OPEN (maintainability only; no current readability issue) |
 
 ## Engine / infrastructure (behaviour-affecting internals)
 

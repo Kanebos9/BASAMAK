@@ -4964,6 +4964,12 @@ bool DrumSequencerEditor::keyPressed(const juce::KeyPress& k)
 
 void DrumSequencerEditor::doUndo()
 {
+    // The passive timer commits a snapshot ~0.1 s AFTER each edit, so for a split-second the top
+    // of the stack can be STALE (the pre-edit state) while the screen shows a newer change. Undoing
+    // in that window used to skip a step. Force-commit any uncommitted current state FIRST, so the
+    // top ALWAYS equals what's on screen and undo steps back exactly one edit. (No-op if already
+    // committed; a real uncommitted change correctly clears redo, like any new edit.)
+    commitUndoNow();
     if (undoStack.size() < 2) return;          // top is the current state; need a prior one
     redoStack.push_back(undoStack.back());
     undoStack.pop_back();
@@ -8448,7 +8454,10 @@ void DrumSequencerEditor::refreshChannelStrips()
                                                        strips[i].btnPoly.setAlpha(roll ? 0.4f : 1.0f); } }
         { auto& cc = proc.sequencer.channel(i);
           const int tgt = cc.drawMode ? StepGridComponent::DRAW_ITEM_ID : cc.numSteps;
-          if (strips[i].comboSteps.getSelectedId() != tgt)   // change-ONLY (touching it every tick fought the open dropdown)
+          // NEVER touch the combo while its popup is OPEN (that fought the user's selection = the
+          // recurring "dropdown ignores my pick" bug) - structural guard, on top of the change-only
+          // check, so it can't regress even if someone drops the change-only test later.
+          if (! strips[i].comboSteps.isPopupActive() && strips[i].comboSteps.getSelectedId() != tgt)
               strips[i].comboSteps.setSelectedId(tgt, juce::dontSendNotification);
           const bool lockRoll = proc.sequencer.channel(i).mergeWith >= 0;   // merged pairs are PIANO-ROLL only
           if (strips[i].comboSteps.isEnabled() == lockRoll)
