@@ -94,6 +94,7 @@ target_sources(DrumSequencer PRIVATE
     Source/plugin/PluginProcessor.cpp
     Source/plugin/FactoryContent.cpp
     Source/ui/PluginEditor.cpp
+    Source/ui/StepGridComponent.cpp
     Source/dsp/DrumChannel.cpp
     Source/dsp/Sequencer.cpp
     Source/midi/MidiLearnManager.cpp

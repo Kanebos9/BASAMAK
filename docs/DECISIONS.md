@@ -54,14 +54,6 @@
 | 21 | finishSound migrates channel-level sends/drive onto the slots; split drive colours very low velocities slightly differently | your UI-replicability order; sends are linear-equivalent, drive nearly so | EXPLAINED (accepted at the time) |
 | 22 | Which categories ship Lock Pitch ON (all drums/FX) vs OFF (Bass/Keys/Pads/Leads/Plucks/Bells/Chords) | you approved the toggle + "drums locked by default"; the exact category split was my fill | OPEN (list in applyMix, trivially editable) |
 
-## Engine / infrastructure (behaviour-affecting internals)
-
-| # | Decision | Why | Status |
-|---|---|---|---|
-| 23 | Loop-wrap fix internals: sub-1/1000-sample remainders snap to 0; bar-start check tolerates a quarter sample | the gate-explosion bugfix needed a tolerance; values chosen conservatively | EXPLAINED (bugfix session) |
-| 24 | Take names use the wall clock (same-second duplicates possible) | known gap, never prioritised | OPEN |
-| 25 | Old projects with removed legacy engines (SrcSynth/SrcWave) load SILENT on those slots instead of erroring | graceful compat break | OPEN |
-
 ## Steps<->roll SIMPLIFICATION batch (2026-07-09) — decisions inside a user-directed redesign
 
 > The batch itself (clear-on-switch, remove Lock Pitch, per-note pan/velocity/strum in the roll,
@@ -73,7 +65,7 @@
 |---|---|---|---|
 | 26 | Roll ModeVel per-note velocity DRAG + whole-channel ModePan editing were DELETED (not just disabled) | user: "delete their roll-only code" - all step edit-modes are off in the roll; per-note velocity/pan now come from the right-click menu | EXPLAINED (the fine velocity DRAG is gone; right-click velocity is 10% steps - say if you want the drag back as a roll-only tool) |
 | 27 | ~~Right-click Velocity = 10% steps~~ **FIXED (2026-07-09, user caught it): right-click Velocity now has "Type exact %..." = FULL 1% resolution (matches the min/max vel knobs), plus 10% quick presets** | the first version shipped the exact coarse/fine MISMATCH the user warned against (coarse menu + continuous knobs); a typed dialog delivers option #1 ("just as sensitive as the knobs") without coarsening anything | RESOLVED |
-| 28 | Per-note Pan is a NEW DrawNote field; when a note's pan is 0 it FALLS BACK to the legacy whole-channel drawPan | so old projects that set a whole-channel roll pan aren't silently re-centred | OPEN |
+| 28 | ~~Per-note Pan==0 falls back to channel pan~~ **RESOLVED by #38: pan now uses a 127 sentinel for inherit, so 0 = a true centre** | the 0-means-both ambiguity is gone | RESOLVED |
 | 29 | Strum stepped to 0/20/40/60/80/100%; factory strum values rounded (0.45->0.40, 0.55->0.60) | match the knob to the right-click override exactly (no live-vs-record drift) - your request; the rounding keeps factory sounds on the new grid | EXPLAINED |
 | 30 | Channel Merge & Split now CLEARS the paired channels' steps (forced roll) | consistency with the new "switching clears" model; it warns first + is undoable | EXPLAINED |
 | 31 | Unmerge SPLITS a note that spanned the bar line into a truncated head + a gated continuation clamped to ONE bar | your "it should end and start again where the pattern ends"; clamping to one bar because the freed pattern loops alone | EXPLAINED |
@@ -81,13 +73,23 @@
 | 33 | Fresh instance + Init default channels 7 + 8 to Piano Roll (set in the processor ctor AND initPreset; a loaded project overrides via its saved drawMode) | your request; the ctor covers a brand-new plugin, initPreset covers the Init button | EXPLAINED |
 | 34 | Quantize (roll header) snaps note STARTS to 1/N and clamps length to >= one cell, on the selected channel across a merged-pattern group | "quantizing is a one-time thing... do whatever is smart" - starts are what matter for timing; length-clamp avoids zero-length notes | EXPLAINED |
 
+## Code-review cleanup (2026-07-09) — user asked for items 1-12 + 16 of the review
+
+| # | Decision | Why | Status |
+|---|---|---|---|
+| 35 | Blend-character (bloom/drift/spread/punch/glue) removal is BIT-IDENTICAL (all amounts were hardcoded 0, so every multiply resolved to identity) | remove dead DSP without changing any sound; tests confirm | RESOLVED |
+| 36 | Old SrcSynth/SrcWave slots MIGRATE to SrcOsc on load (were rendering silent) | user: "old projects must use current settings, no reliance on obsolete code" - a plain oscillator beats silence | RESOLVED |
+| 37 | SrcWave display scaffolding (waveView + waveTable/wavePos fields) KEPT as inert dormant compat, not removed | it never shows after migration (zero runtime effect); removing it = disproportionate layout surgery vs. reward | OPEN (flag if you want it fully stripped) |
+| 38 | Per-note pan sentinel = 127 (PAN_INHERIT); explicit -100..100 (0 = true centre) | fixes #28 - "centre" and "inherit" no longer collide; the field is brand-new so no migration risk | RESOLVED |
+| 39 | Monolith split = extracted StepGridComponent (1571 lines) to its own .cpp; did NOT split the rest | it's the one large, cleanly-separable, callback-driven unit; splitting DrumSequencerEditor's 100+ methods needs a shared internal header for ~30 file-statics = a bigger, riskier pass | PARTIAL (more splitting possible later) |
+
 ## Engine / infrastructure (behaviour-affecting internals)
 
 | # | Decision | Why | Status |
 |---|---|---|---|
 | 23 | Loop-wrap fix internals: sub-1/1000-sample remainders snap to 0; bar-start check tolerates a quarter sample | the gate-explosion bugfix needed a tolerance; values chosen conservatively | EXPLAINED (bugfix session) |
 | 24 | Take names use the wall clock (same-second duplicates possible) | known gap, never prioritised | OPEN |
-| 25 | Old projects with removed legacy engines (SrcSynth/SrcWave) load SILENT on those slots instead of erroring | graceful compat break | OPEN |
+| 25 | ~~Old SrcSynth/SrcWave load silent~~ **FIXED (#36): they now migrate to SrcOsc on load** | no reliance on obsolete code | RESOLVED |
 
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
