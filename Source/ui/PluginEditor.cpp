@@ -2350,8 +2350,11 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
                 sa.addItem(29, "100%",                         strumOk, nn.strumPct == 100);
                 m.addSubMenu("Strum amount (needs same-pitch, same-length notes)", sa, strumOk);
                 m.addSeparator();
-                // VELOCITY: 10% steps (fine enough to match the recorded value; drag in Vel mode is finer).
+                // VELOCITY: "Type exact %" gives FULL 1% resolution (matches the min/max vel knobs -
+                // no coarse mismatch, user rule), plus quick 10% presets. Current % shown at the top.
                 juce::PopupMenu vm;
+                vm.addItem(31, "Type exact % (currently " + juce::String((int) std::lround((float) nn.vel / 255.0f * 100.0f)) + "%)...");
+                vm.addSeparator();
                 for (int vp = 10; vp <= 100; vp += 10) {
                     const int v255 = juce::jlimit(1, 255, (int) std::lround(vp / 100.0 * 255.0));
                     vm.addItem(300 + vp, juce::String(vp) + "%", true, std::abs((int) nn.vel - v255) <= 12);
@@ -2400,6 +2403,24 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
                                                          apply(+[](DrumChannel::DrawNote& n, int a){ n.pan = (int8_t) a; }, pv[r - 200]); }
                         else if (r >= 310 && r <= 400) apply(+[](DrumChannel::DrawNote& n, int a){ n.vel = (uint8_t) a; },
                                                              juce::jlimit(1, 255, (int) std::lround((r - 300) / 100.0 * 255.0)));
+                        else if (r == 31)   // TYPE EXACT velocity % - full 1% resolution (matches the knobs)
+                        {
+                            const int cur = (int) std::lround((float) drawNotes[ch2][idx].vel / 255.0f * 100.0f);
+                            auto* aw = new juce::AlertWindow("Note velocity", "Velocity % (0-100):",
+                                                             juce::MessageBoxIconType::NoIcon);
+                            aw->addTextEditor("v", juce::String(cur));
+                            aw->addButton("OK",     1, juce::KeyPress(juce::KeyPress::returnKey));
+                            aw->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+                            aw->enterModalState(true, juce::ModalCallbackFunction::create(
+                                [this, ch2, idx, sel, aw](int rr) {
+                                    if (rr != 1) return;
+                                    const int pct  = juce::jlimit(0, 100, aw->getTextEditorContents("v").getIntValue());
+                                    const int v255 = juce::jlimit(1, 255, (int) std::lround(pct / 100.0 * 255.0));
+                                    for (int i = 0; i < drawNoteCount[ch2]; ++i)
+                                        if (i == idx || (sel && prSel[i])) drawNotes[ch2][i].vel = (uint8_t) v255;
+                                    pushNotes(ch2); repaint();
+                                }), true);
+                        }
                         else if (r >= 10 && r <= 12) apply(+[](DrumChannel::DrawNote& n, int a){ n.slot = (uint8_t) a; }, r - 10);
                         else if (r == 4)
                         {
