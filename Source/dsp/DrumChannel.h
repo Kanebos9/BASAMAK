@@ -120,7 +120,17 @@ public:
     static const int VALID_STEP_COUNTS[];
     static constexpr int NUM_VALID_STEP_COUNTS = 20;
 
-    DrumChannel() { for (int i = 0; i < MAX_STEPS; ++i) { stepVel[i] = 1.0f; stepPitch[i] = 0.0f; stepRoll[i] = 1; stepRollDecay[i] = 0.0f; stepNoteLen[i] = 0.0f; stepPan[i] = 0.0f; stepNudge[i] = 0.0f; stepSlide[i] = false; stepMerge[i] = false; stepCondLen[i] = 1; stepCondMask[i] = 0; } }
+    DrumChannel() { clearStepData(); }
+
+    // Reset every step + all its per-step values to defaults (THE one place - callers used to inline
+    // this loop in ~4 spots and could forget a field when a new per-step value was added).
+    void clearStepData() {
+        for (int i = 0; i < MAX_STEPS; ++i) {
+            steps[i] = false; stepVel[i] = 1.0f; stepPitch[i] = 0.0f; stepRoll[i] = 1;
+            stepRollDecay[i] = 0.0f; stepNoteLen[i] = 0.0f; stepPan[i] = 0.0f; stepNudge[i] = 0.0f;
+            stepSlide[i] = false; stepMerge[i] = false; stepCondLen[i] = 1; stepCondMask[i] = 0;
+        }
+    }
 
     // ===== PIANO ROLL (was "draw" - internal names kept), an alternative to steps for a channel =====
     // A POLYPHONIC NOTE LIST across the whole bar at fine time resolution (v-poly rework, phase 2):
@@ -136,6 +146,7 @@ public:
     // slot = which sound slot(s) play this note: 0 = both, 1 = slot 1 only, 2 = slot 2 only. Lets a
     // channel draw two independent lines (e.g. a bass on slot 1, a lead on slot 2). Colours: both =
     // orange, slot 1 = yellow, slot 2 = pink (matches the keyboard highlight).
+    static constexpr int8_t PAN_INHERIT = 127;   // per-note pan sentinel: use the whole-channel drawPan
     struct DrawNote { int16_t start = 0, len = 1; int8_t semi = 0; uint8_t vel = 255; uint8_t slot = 0;
                       uint8_t glide = 0;      // glide=1: slide INTO this note from the previous (legato) note's pitch
                       uint8_t oneShot = 0;    // 1 = INSTANT TRIGGER (no gate: pure AHD ring, exactly like a bare step);
@@ -144,7 +155,34 @@ public:
                                                // string order + lighter accent). Arp records it; note menu edits it.
                       uint8_t strumPct = 255;  // per-note STRUM amount OVERRIDE: 0..100 (%); 255 = follow the
                                                // sound's Strum knob (default). Right-click note menu.
-                      int8_t  pan = 0; };      // per-note PAN: -100 (L) .. 0 (centre) .. +100 (R). Right-click menu.
+                      int8_t  pan = PAN_INHERIT;   // per-note PAN: -100 (L) .. 0 (true centre) .. +100 (R), or
+                                                   // PAN_INHERIT (127) = follow the whole-channel pan (the default).
+
+        // ONE serialization format (was smeared across 4 sites; adding a field used to mean editing
+        // all of them by hand). "start:len:semi:vel:slot:glide:oneShot:strumUp:strumPct:pan" - the
+        // caller appends the ',' separator. unpack() is old-string tolerant (short files fill defaults).
+        juce::String pack() const {
+            return juce::String((int) start) + ":" + juce::String((int) len) + ":" + juce::String((int) semi)
+                 + ":" + juce::String((int) vel) + ":" + juce::String((int) slot) + ":" + juce::String((int) glide)
+                 + ":" + juce::String((int) oneShot) + ":" + juce::String((int) strumUp)
+                 + ":" + juce::String((int) strumPct) + ":" + juce::String((int) pan);
+        }
+        static DrawNote unpack(const juce::StringArray& f) {
+            DrawNote n;
+            if (f.size() < 3) return n;
+            n.start   = (int16_t) juce::jlimit(0, DRAW_RES * 8 - 1, f[0].getIntValue());   // loose (concat takes); addDrawNote tightens
+            n.len     = (int16_t) juce::jlimit(1, DRAW_RES * 8, f[1].getIntValue());
+            n.semi    = (int8_t)  juce::jlimit(-PITCH_RANGE, PITCH_RANGE, f[2].getIntValue());
+            n.vel     = (uint8_t) juce::jlimit(0, 255, f.size() > 3 ? f[3].getIntValue() : 255);
+            n.slot    = (uint8_t) juce::jlimit(0, 2, f.size() > 4 ? f[4].getIntValue() : 0);
+            n.glide   = (uint8_t) (f.size() > 5 && f[5].getIntValue() ? 1 : 0);
+            n.oneShot = (uint8_t) (f.size() > 6 && f[6].getIntValue() ? 1 : 0);
+            n.strumUp = (uint8_t) (f.size() > 7 && f[7].getIntValue() ? 1 : 0);
+            n.strumPct= (uint8_t) juce::jlimit(0, 255, f.size() > 8 ? f[8].getIntValue() : 255);
+            n.pan     = (int8_t)  (f.size() > 9 ? juce::jlimit(-128, 127, f[9].getIntValue()) : PAN_INHERIT);
+            return n;
+        }
+    };
     bool     drawMode = false;
     DrawNote drawNotes[DRAW_MAX_NOTES];
     int      drawNoteCount = 0;
@@ -153,27 +191,33 @@ public:
                                      // C4 pin becomes C4 + this, the keys target the tuned pitch on this channel,
                                      // and leaving the roll parks the Base Freq knob at the tuned value.
     void clearDrawNotes() { drawNoteCount = 0; }
-    // Append (bounded); returns the index or -1 when full. Audio + message thread both use this;
-    // count is written LAST so a concurrent reader never sees an uninitialised note.
-    int addDrawNote(int start, int len, int semi, int vel, int slot = 0, int glide = 0, int oneShot = 0,
-                    int strumUp = 0, int strumPct = -1, int pan = 0)
+    // Append a note struct (bounded; clamps to a single bar's start range). Audio + message thread
+    // both use this; count is written LAST so a concurrent reader never sees an uninitialised note.
+    int addDrawNote(const DrawNote& src)
     {
         if (drawNoteCount >= DRAW_MAX_NOTES) return -1;
         const int i = drawNoteCount;
-        // len may exceed the bar: a note recorded/drawn across a MERGED-GROUP bar line keeps
-        // sustaining into the following bars (its voice lives in the bar it started in).
-        drawNotes[i] = { (int16_t) juce::jlimit(0, DRAW_RES - 1, start),
-                         (int16_t) juce::jlimit(1, DRAW_RES * 8, len),
-                         (int8_t)  juce::jlimit(-PITCH_RANGE, PITCH_RANGE, semi),
-                         (uint8_t) juce::jlimit(0, 255, vel),
-                         (uint8_t) juce::jlimit(0, 2, slot),
-                         (uint8_t) (glide ? 1 : 0),
-                         (uint8_t) (oneShot ? 1 : 0),
-                         (uint8_t) (strumUp ? 1 : 0),
-                         (uint8_t) (strumPct < 0 || strumPct > 100 ? 255 : strumPct),
-                         (int8_t)  juce::jlimit(-100, 100, pan) };
+        DrawNote n = src;
+        n.start = (int16_t) juce::jlimit(0, DRAW_RES - 1, (int) src.start);
+        n.len   = (int16_t) juce::jlimit(1, DRAW_RES * 8, (int) src.len);   // len may cross bars (merged groups)
+        n.semi  = (int8_t)  juce::jlimit(-PITCH_RANGE, PITCH_RANGE, (int) src.semi);
+        n.slot  = (uint8_t) juce::jlimit(0, 2, (int) src.slot);
+        drawNotes[i] = n;
         drawNoteCount = i + 1;
         return i;
+    }
+    // Convenience field-wise append (most call sites). strumPct<0 -> 255 (follow knob); pan defaults to inherit.
+    int addDrawNote(int start, int len, int semi, int vel, int slot = 0, int glide = 0, int oneShot = 0,
+                    int strumUp = 0, int strumPct = -1, int pan = PAN_INHERIT)
+    {
+        DrawNote n;
+        n.start = (int16_t) start; n.len = (int16_t) len; n.semi = (int8_t) semi;
+        n.vel = (uint8_t) juce::jlimit(0, 255, vel); n.slot = (uint8_t) slot;
+        n.glide = (uint8_t) (glide ? 1 : 0); n.oneShot = (uint8_t) (oneShot ? 1 : 0);
+        n.strumUp = (uint8_t) (strumUp ? 1 : 0);
+        n.strumPct = (uint8_t) (strumPct < 0 || strumPct > 100 ? 255 : strumPct);
+        n.pan = (int8_t) (pan >= PAN_INHERIT ? PAN_INHERIT : juce::jlimit(-100, 100, pan));
+        return addDrawNote(n);
     }
     void removeDrawNote(int idx)
     {

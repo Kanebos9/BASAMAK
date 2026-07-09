@@ -977,8 +977,8 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
     //-- Master output stage (final): volume, pan, optional mono, safety limiter
     {
         auto& mfx = masterFX();                       // this pattern's master settings
-        const float gL = mfx.volume * (mfx.pan <= 0.0f ? 1.0f : 1.0f - mfx.pan);
-        const float gR = mfx.volume * (mfx.pan >= 0.0f ? 1.0f : 1.0f + mfx.pan);
+        const float gL = mfx.volume;   // (master pan removed)
+        const float gR = mfx.volume;
         const bool  mono = mfx.mono;
 
         // Limiter is OFF at 0; above that it sets a brick-wall ceiling that drops
@@ -1670,15 +1670,7 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
     if (ch.drawMode)
     {
         juce::String ns; ns.preallocateBytes((size_t) ch.drawNoteCount * 14);
-        for (int i = 0; i < ch.drawNoteCount; ++i)
-            ns << (int) ch.drawNotes[i].start << ':' << (int) ch.drawNotes[i].len << ':'
-               << (int) ch.drawNotes[i].semi  << ':' << (int) ch.drawNotes[i].vel  << ':'
-               << (int) ch.drawNotes[i].slot  << ':'
-               << (int) ch.drawNotes[i].glide << ':'
-               << (int) ch.drawNotes[i].oneShot << ':'
-               << (int) ch.drawNotes[i].strumUp << ':'
-               << (int) ch.drawNotes[i].strumPct << ':'
-               << (int) ch.drawNotes[i].pan << ',';
+        for (int i = 0; i < ch.drawNoteCount; ++i) ns << ch.drawNotes[i].pack() << ',';
         chState.setProperty("drawNotes", ns, nullptr);
         chState.setProperty("drawVel", ch.drawVel, nullptr);
         chState.setProperty("drawPan", ch.drawPan, nullptr);
@@ -1855,14 +1847,7 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
                 for (auto& tok : juce::StringArray::fromTokens(ns, ",", ""))
                 {
                     auto f = juce::StringArray::fromTokens(tok, ":", "");
-                    if (f.size() >= 4)
-                        ch.addDrawNote(f[0].getIntValue(), f[1].getIntValue(), f[2].getIntValue(), f[3].getIntValue(),
-                                       f.size() >= 5 ? f[4].getIntValue() : 0,
-                                       f.size() >= 6 ? f[5].getIntValue() : 0,
-                                       f.size() >= 7 ? f[6].getIntValue() : 0,
-                                       f.size() >= 8 ? f[7].getIntValue() : 0,
-                                       f.size() >= 9 ? f[8].getIntValue() : -1,
-                                       f.size() >= 10 ? f[9].getIntValue() : 0);
+                    if (f.size() >= 3) ch.addDrawNote(DrumChannel::DrawNote::unpack(f));
                 }
             }
             else   // MIGRATION: old mono column lane ("drawSemi"/"drawVelC") -> same-semi runs become notes
@@ -1942,7 +1927,7 @@ void DrumSequencerProcessor::copyChannel(int pat, int src, int dst)
     const int  keepMidiCh= chans[dst].midiOutChannel;
     const int  keepChoke = chans[dst].chokeGroup;  // choke is channel-wide too
     const int  keepDuckBy = chans[dst].duckBy; const float keepDuckAmt = chans[dst].duckAmt;
-    const int  keepMerge = chans[dst].mergeWith;                    // MERGE&SPLIT pairing is channel-wide too
+    const int  keepMerge = chans[dst].mergeWith;                    // MERGE&SPLIT pairing is PER-PATTERN - keep this pattern's dest pairing
     const int  keepW1 = chans[dst].keysSplitW1, keepW2 = chans[dst].keysSplitW2;
 
     juce::ValueTree t("ch");
@@ -1996,10 +1981,7 @@ juce::ValueTree DrumSequencerProcessor::captureStateTree()
                 tt.setProperty("draw", true, nullptr);
                 tt.setProperty("drawPat", t.drawPat, nullptr);
                 juce::String ns; ns.preallocateBytes(t.drawNotes.size() * 14);
-                for (const auto& nt : t.drawNotes)
-                    ns << (int) nt.start << ':' << (int) nt.len << ':' << (int) nt.semi << ':' << (int) nt.vel
-                       << ':' << (int) nt.slot << ':' << (int) nt.glide << ':' << (int) nt.oneShot
-                       << ':' << (int) nt.strumUp << ':' << (int) nt.strumPct << ':' << (int) nt.pan << ',';
+                for (const auto& nt : t.drawNotes) ns << nt.pack() << ',';
                 tt.setProperty("notes", ns, nullptr);   // piano-roll take = the note list
             }
             else
@@ -2042,7 +2024,6 @@ juce::ValueTree DrumSequencerProcessor::captureStateTree()
         patState.setProperty("delDiv",  m.delayDivision, nullptr);
         patState.setProperty("delPP",   m.delayPingPong, nullptr);
         patState.setProperty("mVol",    m.volume,        nullptr);
-        patState.setProperty("mPan",    m.pan,           nullptr);
         patState.setProperty("mMono",   m.mono,          nullptr);
         patState.setProperty("mLimit",  m.limit,         nullptr);
         patState.setProperty("mGlue",   m.glue,          nullptr);
@@ -2118,17 +2099,8 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
                     for (auto& tok : juce::StringArray::fromTokens(ns, ",", ""))
                     {
                         auto f = juce::StringArray::fromTokens(tok, ":", "");
-                        if (f.size() >= 4 && (int) t.drawNotes.size() < DRAW_TAKE_MAX)   // group takes = concat columns
-                            t.drawNotes.push_back({ (int16_t) juce::jlimit(0, DrumChannel::DRAW_RES * 8 - 1, f[0].getIntValue()),
-                                                    (int16_t) juce::jlimit(1, DrumChannel::DRAW_RES * 8, f[1].getIntValue()),
-                                                    (int8_t)  juce::jlimit(-DrumChannel::PITCH_RANGE, DrumChannel::PITCH_RANGE, f[2].getIntValue()),
-                                                    (uint8_t) juce::jlimit(0, 255, f[3].getIntValue()),
-                                                    (uint8_t) juce::jlimit(0, 2, f.size() >= 5 ? f[4].getIntValue() : 0),
-                                                    (uint8_t) (f.size() >= 6 && f[5].getIntValue() ? 1 : 0),
-                                                    (uint8_t) (f.size() >= 7 && f[6].getIntValue() ? 1 : 0),
-                                                    (uint8_t) (f.size() >= 8 && f[7].getIntValue() ? 1 : 0),
-                                                    (uint8_t) juce::jlimit(0, 255, f.size() >= 9 ? f[8].getIntValue() : 255),
-                                                    (int8_t)  juce::jlimit(-100, 100, f.size() >= 10 ? f[9].getIntValue() : 0) });
+                        if (f.size() >= 3 && (int) t.drawNotes.size() < DRAW_TAKE_MAX)   // group takes = concat columns
+                            t.drawNotes.push_back(DrumChannel::DrawNote::unpack(f));
                     }
                 }
                 else   // MIGRATION: old lane take -> same-semi runs become notes
@@ -2196,7 +2168,6 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
             m.delayDivision = (int)  child.getProperty("delDiv",  4);
             m.delayPingPong = (bool) child.getProperty("delPP",   false);
             m.volume        = (float)child.getProperty("mVol",    0.9f);
-            m.pan           = (float)child.getProperty("mPan",    0.0f);
             m.mono          = (bool) child.getProperty("mMono",   false);
             m.limit         = (float)child.getProperty("mLimit",  0.003f);
             m.glue          = (float)child.getProperty("mGlue",   0.0f);

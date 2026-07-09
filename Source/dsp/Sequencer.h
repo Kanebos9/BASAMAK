@@ -29,7 +29,7 @@ public:
         bool  delayPingPong = false;    // cross-feed L<->R so echoes bounce across the stereo field
         float reverbPreDelay = 0.0f;    // 0..1 -> 0..120 ms gap before the reverb tail (drums love this)
         float reverbWidth    = 1.0f;    // reverb stereo width (0 = mono/narrow tail, 1 = full wide)
-        float volume = 0.9f, pan = 0.0f;
+        float volume = 0.9f;
         bool  mono   = false;
         float limit  = 0.003f;          // 0 = limiter off; default ~-0.1 dB ceiling (light/transparent)
         float glue   = 0.0f;            // 0 = off; master bus "glue" compressor amount (before the limiter)

@@ -442,7 +442,7 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
                 e.drawOneShot = nt.oneShot != 0;
                 e.drawStrumUp = nt.strumUp != 0;
                 e.drawStrumPct = nt.strumPct > 100 ? -1 : (int) nt.strumPct;
-                e.drawNotePan = nt.pan != 0 ? (float) nt.pan * 0.01f : c.drawPan;   // per-note pan, else legacy whole-channel
+                e.drawNotePan = nt.pan == DrumChannel::PAN_INHERIT ? c.drawPan : (float) nt.pan * 0.01f;   // 127 = inherit channel pan; else explicit (0 = true centre)
                 e.drawOverlap = overlap;
                 e.drawGlideFrom = glideFrom;
                 events.add(e);

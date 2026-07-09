@@ -1939,13 +1939,12 @@ private:
     ToggleSwitch     swDelayPingPong;
     juce::Label      lblDelayPingPong;
     LearnableKnob    knobMasterVol   { "global_masterVol",   proc.midiLearn };
-    LearnableKnob    knobMasterPan   { "global_masterPan",   proc.midiLearn };
     LearnableKnob    knobMasterLimit { "global_masterLimit", proc.midiLearn };
     LearnableKnob    knobMasterGlue  { "global_masterGlue",  proc.midiLearn };
     LearnableKnob    knobMasterTilt  { "global_masterTilt",  proc.midiLearn };
     LearnableKnob    knobMasterSat   { "global_masterSat",   proc.midiLearn };
     ToggleSwitch     swMasterMono;
-    juce::Label      lblRevDecay, lblMasterVol, lblMasterPan, lblMasterLimit, lblMasterMono, lblMasterGlue, lblMasterTilt, lblMasterSat;
+    juce::Label      lblRevDecay, lblMasterVol, lblMasterLimit, lblMasterMono, lblMasterGlue, lblMasterTilt, lblMasterSat;
 
     // (EQ knobs removed - the EQ is drawn/dragged on freqDisplay now.)
     juce::Label lblPit,lblVol,lblPan;

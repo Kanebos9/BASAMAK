@@ -2269,13 +2269,17 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
                     vm.addItem(300 + vp, juce::String(vp) + "%", true, std::abs((int) nn.vel - v255) <= 12);
                 }
                 m.addSubMenu("Velocity", vm);
-                // PAN direction (per note; overrides the whole-channel pan).
+                // PAN (per note). Default = follow the whole-channel pan (inherit); the explicit
+                // positions override it (0 = a true centre, distinct from inherit).
+                const bool panInherit = nn.pan == DrumChannel::PAN_INHERIT;
                 juce::PopupMenu pm;
-                pm.addItem(200, "Left 100%",  true, nn.pan <= -90);
-                pm.addItem(201, "Left 50%",   true, nn.pan > -90 && nn.pan <= -30);
-                pm.addItem(202, "Centre",     true, nn.pan > -30 && nn.pan <  30);
-                pm.addItem(203, "Right 50%",  true, nn.pan >= 30 && nn.pan <  90);
-                pm.addItem(204, "Right 100%", true, nn.pan >= 90);
+                pm.addItem(205, "Channel pan (default)", true, panInherit);
+                pm.addSeparator();
+                pm.addItem(200, "Left 100%",  true, ! panInherit && nn.pan <= -90);
+                pm.addItem(201, "Left 50%",   true, ! panInherit && nn.pan > -90 && nn.pan <= -30);
+                pm.addItem(202, "Centre",     true, ! panInherit && nn.pan > -30 && nn.pan <  30);
+                pm.addItem(203, "Right 50%",  true, ! panInherit && nn.pan >= 30 && nn.pan <  90);
+                pm.addItem(204, "Right 100%", true, ! panInherit && nn.pan >= 90);
                 m.addSubMenu("Pan", pm);
                 m.addSeparator();
                 m.addItem(3, "Glide into this note", true, nn.glide != 0);
@@ -2308,6 +2312,7 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
                         else if (r == 24) apply(+[](DrumChannel::DrawNote& n, int){ n.strumPct = 60;  }, 0);
                         else if (r == 28) apply(+[](DrumChannel::DrawNote& n, int){ n.strumPct = 80;  }, 0);
                         else if (r == 29) apply(+[](DrumChannel::DrawNote& n, int){ n.strumPct = 100; }, 0);
+                        else if (r == 205) apply(+[](DrumChannel::DrawNote& n, int){ n.pan = DrumChannel::PAN_INHERIT; }, 0);
                         else if (r >= 200 && r <= 204) { const int pv[5] = { -100, -50, 0, 50, 100 };
                                                          apply(+[](DrumChannel::DrawNote& n, int a){ n.pan = (int8_t) a; }, pv[r - 200]); }
                         else if (r >= 310 && r <= 400) apply(+[](DrumChannel::DrawNote& n, int a){ n.vel = (uint8_t) a; },
@@ -5770,7 +5775,7 @@ juce::int64 DrumSequencerEditor::stateHash() const
         h = mix(h, f(m.reverbRoom)); h = mix(h, f(m.reverbDamp)); h = mix(h, f(m.reverbWet));
         h = mix(h, f(m.reverbPreDelay)); h = mix(h, f(m.reverbWidth));
         h = mix(h, f(m.delayTime)); h = mix(h, f(m.delayFeedback)); h = mix(h, f(m.delayWet)); h = mix(h, m.delaySync ? 1 : 0); h = mix(h, m.delayDivision); h = mix(h, m.delayPingPong ? 1 : 0);
-        h = mix(h, f(m.volume)); h = mix(h, f(m.pan)); h = mix(h, m.mono ? 1 : 0); h = mix(h, f(m.limit)); h = mix(h, f(m.glue));
+        h = mix(h, f(m.volume)); h = mix(h, m.mono ? 1 : 0); h = mix(h, f(m.limit)); h = mix(h, f(m.glue));
         for (int c = 0; c < Sequencer::NUM_CHANNELS; ++c)
         {
             auto& ch = P.channels[c];
@@ -6388,13 +6393,7 @@ void DrumSequencerEditor::initPreset()
             ch.mute = false; ch.solo = false;   // mixer state resets with the preset too (audit)
             ch.duckBy = -1; ch.duckAmt = 0.5f;
             ch.numSteps = 8;
-            // Wipe EVERY per-step value too (not just on/off) so a fresh init really starts clean - matches the
-            // Clear button. Without this, edited Vel/Len/Pan/Pitch/Roll/Loop values leaked into the new preset.
-            for (int i = 0; i < DrumChannel::MAX_STEPS; ++i) {
-                ch.steps[i] = false; ch.stepVel[i] = 1.0f; ch.stepPitch[i] = 0.0f;
-                ch.stepRoll[i] = 1; ch.stepRollDecay[i] = 0.0f; ch.stepNoteLen[i] = 0.0f; ch.stepPan[i] = 0.0f; ch.stepNudge[i] = 0.0f;
-                ch.stepSlide[i] = false; ch.stepMerge[i] = false; ch.stepCondLen[i] = 1; ch.stepCondMask[i] = 0;
-            }
+            ch.clearStepData();   // wipe every per-step value (a fresh init starts clean, like Clear)
             // Channels 7 + 8 (0-indexed 6 + 7) open in PIANO ROLL on a fresh init (user: a starting
             // point for melodic/chord parts). The rest start in step mode.
             ch.drawMode = (c == 6 || c == 7);
@@ -6973,11 +6972,7 @@ void DrumSequencerEditor::setupComponents()
         for (int b = head; b <= end; ++b)
         {
             auto& ch = sq.patterns[b].channels[selectedChannel];
-            for (int s = 0; s < DrumChannel::MAX_STEPS; ++s) {
-                ch.steps[s] = false; ch.stepVel[s] = 1.0f; ch.stepPitch[s] = 0.0f;
-                ch.stepRoll[s] = 1; ch.stepRollDecay[s] = 0.0f; ch.stepNoteLen[s] = 0.0f; ch.stepPan[s] = 0.0f; ch.stepNudge[s] = 0.0f;
-                ch.stepSlide[s] = false; ch.stepMerge[s] = false; ch.stepCondLen[s] = 1; ch.stepCondMask[s] = 0;
-            }
+            ch.clearStepData();
             // Piano-roll content too: wipe every note and reset the whole-channel default vel/pan.
             // (drawMode itself is left as-is.)
             ch.clearDrawNotes();
@@ -7681,14 +7676,7 @@ void DrumSequencerEditor::setupComponents()
             // quantize, no pitch compensation - those were confusing and lossy). If there's data to
             // lose we WARN first (a plain PopupMenu, never a message box); an already-empty side just
             // switches silently. Undo restores the previous side (the clear mutates hashed data).
-            auto clearSteps = [](DrumChannel& cc) {
-                for (int s = 0; s < DrumChannel::MAX_STEPS; ++s) {
-                    cc.steps[s] = false; cc.stepVel[s] = 1.0f; cc.stepPitch[s] = 0.0f;
-                    cc.stepRoll[s] = 1; cc.stepRollDecay[s] = 0.0f; cc.stepNoteLen[s] = 0.0f;
-                    cc.stepPan[s] = 0.0f; cc.stepNudge[s] = 0.0f; cc.stepSlide[s] = false;
-                    cc.stepMerge[s] = false; cc.stepCondLen[s] = 1; cc.stepCondMask[s] = 0;
-                }
-            };
+            auto clearSteps = [](DrumChannel& cc) { cc.clearStepData(); };
             auto clearRoll = [](DrumChannel& cc) { cc.clearDrawNotes(); cc.drawVel = 1.0f;
                                                    cc.drawPan = 0.0f; cc.drawTuneCents = 0.0f; };
             if (id == StepGridComponent::DRAW_ITEM_ID)
@@ -8056,7 +8044,6 @@ void DrumSequencerEditor::setupComponents()
     knobMasterVol.setTextBoxStyle(juce::Slider::TextBoxRight, true, 38, 16);
     knobMasterVol.setColour(juce::Slider::trackColourId,      juce::Colour(0xffffc24a)); // filled (left of thumb) = amber
     knobMasterVol.setColour(juce::Slider::backgroundColourId, juce::Colour(0xff2a2a44)); // empty (right) = dark
-    setupKnob(knobMasterPan,   lblMasterPan,   "Pan",   -1.0, 1.0,  0.0, 1.0, fmtPan);   // (Pan removed from the UI)
     // Limiter read-out = the output CEILING in dB (concrete) instead of a meaningless %. "Off" at 0.
     setupKnob(knobMasterLimit, lblMasterLimit, "Limit",  0.0, 1.0,  0.003, 1.0,
               [](double v){ return v <= 0.0005 ? juce::String("Off") : juce::String(-0.1 - v * 11.9, 1) + " dB"; });
@@ -8098,7 +8085,6 @@ void DrumSequencerEditor::setupComponents()
     // Volume / Pan / Limiter are MASTER-level too now (write ALL patterns) - the whole master section
     // is preset-wide, so it doesn't change as the chain moves between patterns.
     knobMasterVol.onValueChange   = [this, allM] { allM([this](Sequencer::MasterFX& m){ m.volume = (float)knobMasterVol.getValue(); }); };
-    knobMasterPan.onValueChange   = [this] { if (!ignoreKnobCallbacks) proc.masterFX().pan = (float)knobMasterPan.getValue(); };   // (Pan is REMOVED from the UI - dead knob, left as-is)
     knobMasterLimit.onValueChange = [this, allM] { allM([this](Sequencer::MasterFX& m){ m.limit  = (float)knobMasterLimit.getValue(); }); };
     // Glue is a MASTER bus compressor (one shared setting for the whole kit) -> write ALL patterns, like the FX flavour.
     knobMasterGlue.onValueChange  = [this, allM] { allM([this](Sequencer::MasterFX& m){ m.glue = (float)knobMasterGlue.getValue(); }); };
@@ -8580,7 +8566,6 @@ void DrumSequencerEditor::setupComponents()
     knobDelayFB.setTooltip("Delay feedback - how many times the echo repeats. Higher = more repeats.");
     knobDelayWet.setTooltip("Overall delay amount (how loud the echoes are in the mix) - like the reverb Wet.");
     knobMasterVol.setTooltip("MASTER output volume (the final fader, per pattern).");
-    knobMasterPan.setTooltip("(unused - master pan was removed)");
     knobMasterLimit.setTooltip("MASTER output limiter. The read-out is the output CEILING in dB - peaks are held just "
                                "below this level so loud EQ/volume boosts can't make your DAW mute or clip. 'Off' = no "
                                "limiting. A light ceiling (-0.1 to -1 dB) just catches stray peaks transparently; lower "
@@ -9386,12 +9371,7 @@ void DrumSequencerEditor::setChannelMerge(int a, int b)
     // span a MERGED-PATTERN group (head..end) - those bars are one unit, so the pairing follows.
     const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
     const bool unmerge = sq.patterns[head].channels[a].mergeWith == b;
-    auto clearSteps = [](DrumChannel& cc) {
-        for (int s = 0; s < DrumChannel::MAX_STEPS; ++s) {
-            cc.steps[s] = false; cc.stepVel[s] = 1.0f; cc.stepPitch[s] = 0.0f; cc.stepRoll[s] = 1;
-            cc.stepRollDecay[s] = 0.0f; cc.stepNoteLen[s] = 0.0f; cc.stepPan[s] = 0.0f; cc.stepNudge[s] = 0.0f;
-            cc.stepSlide[s] = false; cc.stepMerge[s] = false; cc.stepCondLen[s] = 1; cc.stepCondMask[s] = 0; }
-    };
+    auto clearSteps = [](DrumChannel& cc) { cc.clearStepData(); };
     auto doIt = [this, a, b, head, end, unmerge, clearSteps]() {
         auto& sq2 = proc.sequencer;
         auto clearPairOf = [&](int ch) {   // dissolve any existing pairing of ch, across this group only
@@ -9920,7 +9900,6 @@ void DrumSequencerEditor::refreshDetailPanel()
     swDelayPingPong.setToggleState(proc.masterFX().delayPingPong, juce::dontSendNotification);
     knobDelayTime.updateText();
     knobMasterVol.setValue  (proc.masterFX().volume,            juce::dontSendNotification);
-    knobMasterPan.setValue  (proc.masterFX().pan,               juce::dontSendNotification);
     knobMasterLimit.setValue(proc.masterFX().limit,             juce::dontSendNotification);
     knobMasterGlue.setValue (proc.masterFX().glue,              juce::dontSendNotification);
     knobMasterTilt.setValue (proc.masterFX().tilt,             juce::dontSendNotification);
@@ -11051,7 +11030,7 @@ void DrumSequencerEditor::layoutContent()
         // -- Hide every engine knob/header/sample-widget; the active boxes re-show. --
         auto hideK = [](std::initializer_list<LearnableKnob*> ks) { for (auto* k : ks) k->setVisible(false); };
         auto hideL = [](std::initializer_list<juce::Label*> ls) { for (auto* l : ls) l->setVisible(false); };
-        hideK({ &knobPitch, &knobPEnvAmt, &knobPEnvTime, &knobSmpPOff,   // knobSpeed = channel Pitch (always shown)
+        hideK({ &knobPitch, &knobPEnvAmt, &knobPEnvTime, &knobSmpPOff,   // knobSpeed is a hidden legacy loader (never shown; loads old ch.pitch)
                 &knobLayOscShape, &knobLaySineFreq, &knobOscUnison, &knobOscDetune, &knobLaySinePEA, &knobLaySinePET, &knobLaySinePOff, &knobOscSustain, &knobOscVib,
                 &knobLayNoiseType, &knobLayNoiseCtr, &knobLayNoiseWid, &knobNoiseSus,
                 &knobFmPitch, &knobFmSpread, &knobFmDepth, &knobFmSub, &knobFmFeedback, &knobFmPEnv, &knobFmPTime, &knobFmPOff, &knobFmSustain,
@@ -11144,7 +11123,6 @@ void DrumSequencerEditor::layoutContent()
         hdrChan.setBounds(0, 0, 0, 0); hdrChan.setVisible(false);
         hdrMasterFX.setBounds(0, 0, 0, 0); hdrMasterFX.setVisible(false);
         comboOutput.setBounds(0, 0, 0, 0); lblOutput.setBounds(0, 0, 0, 0);
-        knobMasterPan.setBounds(0, 0, 0, 0); lblMasterPan.setBounds(0, 0, 0, 0);
 
         // ===== FX column (cxFx, per-sound only): 1/2 selector, then a 2x2 grid -
         //       top row = Drive type + Drive, bottom row = Reverb + Delay (sends). =====
