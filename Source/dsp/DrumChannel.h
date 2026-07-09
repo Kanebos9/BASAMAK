@@ -142,8 +142,9 @@ public:
                                               // 0 = held-key gate (sustain holds for len, then release). Right-click menu.
                       uint8_t strumUp = 0;     // STRUM direction: 0 = down (normal), 1 = UP (alt. strum: reversed
                                                // string order + lighter accent). Arp records it; note menu edits it.
-                      uint8_t strumPct = 255; };  // per-note STRUM amount OVERRIDE: 0..100 (%); 255 = follow the
-                                                  // sound's Strum knob (default). Right-click note menu.
+                      uint8_t strumPct = 255;  // per-note STRUM amount OVERRIDE: 0..100 (%); 255 = follow the
+                                               // sound's Strum knob (default). Right-click note menu.
+                      int8_t  pan = 0; };      // per-note PAN: -100 (L) .. 0 (centre) .. +100 (R). Right-click menu.
     bool     drawMode = false;
     DrawNote drawNotes[DRAW_MAX_NOTES];
     int      drawNoteCount = 0;
@@ -155,7 +156,7 @@ public:
     // Append (bounded); returns the index or -1 when full. Audio + message thread both use this;
     // count is written LAST so a concurrent reader never sees an uninitialised note.
     int addDrawNote(int start, int len, int semi, int vel, int slot = 0, int glide = 0, int oneShot = 0,
-                    int strumUp = 0, int strumPct = -1)
+                    int strumUp = 0, int strumPct = -1, int pan = 0)
     {
         if (drawNoteCount >= DRAW_MAX_NOTES) return -1;
         const int i = drawNoteCount;
@@ -169,7 +170,8 @@ public:
                          (uint8_t) (glide ? 1 : 0),
                          (uint8_t) (oneShot ? 1 : 0),
                          (uint8_t) (strumUp ? 1 : 0),
-                         (uint8_t) (strumPct < 0 || strumPct > 100 ? 255 : strumPct) };
+                         (uint8_t) (strumPct < 0 || strumPct > 100 ? 255 : strumPct),
+                         (int8_t)  juce::jlimit(-100, 100, pan) };
         drawNoteCount = i + 1;
         return i;
     }
@@ -467,7 +469,6 @@ public:
         float smpGain = 1.0f;                   // sample output boost (samples are quieter than the synth engines)
         bool  smpEnvOn = false;                 // OPT-IN amp envelope on the sample (off = play full length, legacy-identical)
         bool  smpPreservePitch = true;          // Sample: IGNORE step/draw/key/env pitch (play at the sample's own pitch). Default ON.
-        bool  lockPitch = false;         // LOCK PITCH (Osc/KS/Modal): ignore NOTE pitch entirely
                                          // (steps, piano roll, keys, slide) - always play the Base
                                          // Freq. Pitch env / vibrato / LFO still apply. Factory
                                          // default: ON for drum-type categories, OFF for melodic.

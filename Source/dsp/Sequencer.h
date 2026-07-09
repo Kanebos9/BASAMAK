@@ -91,7 +91,8 @@ public:
                           float drawGlideFrom = -999.0f;   // MONO glide: slide this note FROM this pitch (semis); -999 = no glide
                           bool  drawOneShot = false;       // ONE-SHOT note: instant trigger, natural ring (no gate) - like a bare step
                           bool  drawStrumUp = false;       // per-note STRUM direction (true = up / alt. strum)
-                          int   drawStrumPct = -1; };      // per-note STRUM amount override (0..100; -1 = Strum knob)
+                          int   drawStrumPct = -1;         // per-note STRUM amount override (0..100; -1 = Strum knob)
+                          float drawNotePan = 0.0f; };     // per-note PAN (-1..+1); overrides the whole-channel drawPan
 
     // [start, end) of step `s` (bar fraction 0..1) with this pattern's swing applied. The
     // MIDI exporter reuses it so exported clips carry the same groove the engine plays.

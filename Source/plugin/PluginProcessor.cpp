@@ -64,11 +64,15 @@ DrumSequencerProcessor::DrumSequencerProcessor()
 
     // Default sound on every channel: Slot 1 = Analog + FM (SrcOsc), Slot 2 empty (no sample default).
     for (auto& pat : sequencer.patterns)
-        for (auto& ch : pat.channels) {
+        for (int i = 0; i < Sequencer::NUM_CHANNELS; ++i) {
+            auto& ch = pat.channels[i];
             for (auto& s : ch.slots) s = DrumChannel::Slot();      // both empty
             ch.slots[0].engine = DrumChannel::SrcOsc; ch.slots[0].weight = 1.0f;
             ch.padX = 0.0f; ch.padY = 0.5f;
             ch.restoredSlots = true;   // authored -> prepareToPlay won't rebuild from legacy
+            // A FRESH instance opens channels 7 + 8 in PIANO ROLL (matches Init; user request).
+            // A loaded project's readChannel overrides this with its saved drawMode.
+            ch.drawMode = (i == 6 || i == 7);
         }
 }
 
@@ -560,7 +564,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                     float baseMidi = 60.0f;
                     for (const auto& sl : pch.slots)
                     {
-                        if (sl.weight <= 0.001f || sl.lockPitch) continue;   // locked slots don't define the 0-point
+                        if (sl.weight <= 0.001f) continue;
                         float hz = 0.0f;
                         if (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal) hz = sl.oscFreq;
                         else if (sl.engine == DrumChannel::SrcPhys) hz = sl.physFreq;
@@ -886,8 +890,12 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             auto& ch = sequencer.patterns[sequencer.playPattern].channels[e.channel];
             if (! ch.midiOut) continue;
             const int midiCh = juce::jlimit(1, 16, ch.midiOutChannel);   // per-channel MIDI out channel
-            const int note  = juce::jlimit(0, 127, ch.midiNote + juce::roundToInt(ch.stepPitch[e.step]));
-            const float v   = juce::jlimit(0.0f, 1.0f, ch.stepVel[e.step] * e.velScale);
+            // PIANO-ROLL notes emit MIDI too: use the NOTE's own pitch/velocity (not step 0's), so a
+            // MIDI-out channel in the roll drives another plugin correctly (user request).
+            const int note  = e.isDraw ? juce::jlimit(0, 127, ch.midiNote + juce::roundToInt(e.drawPitch))
+                                       : juce::jlimit(0, 127, ch.midiNote + juce::roundToInt(ch.stepPitch[e.step]));
+            const float v   = e.isDraw ? juce::jlimit(0.0f, 1.0f, e.drawVel)
+                                       : juce::jlimit(0.0f, 1.0f, ch.stepVel[e.step] * e.velScale);
             const auto  vel = (juce::uint8) juce::jlimit(1, 127, juce::roundToInt(v * 127.0f));
             // SAMPLE-ACCURATE placement: the event offset is at the engine (OS) rate -> host rate.
             const int hostOff = juce::jlimit(0, juce::jmax(0, numSamples - 1), e.offset / kEngineOS);
@@ -897,10 +905,16 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
 
             midi.addEvent(juce::MidiMessage::noteOn(midiCh, note, vel), hostOff);
             activeMidiChan[e.channel] = midiCh;
-            const double samplesPerStep = barSamples / juce::jmax(1, ch.numSteps);
-            const float  gl = juce::jlimit(0.0f, 1.0f, ch.stepNoteLen[e.step]);
-            const double lenSteps = gl > 0.001f ? (double) gl : 1.0;   // 0 = a full step; else fraction of a step
-            const int len = juce::jmax(1, (int)(lenSteps * samplesPerStep));
+            // Note length: piano-roll notes carry their own gate (host-rate samples); steps use the
+            // per-step Length as a fraction of the step.
+            int len;
+            if (e.isDraw) len = juce::jmax(1, (int) (e.gate / kEngineOS));
+            else {
+                const double samplesPerStep = barSamples / juce::jmax(1, ch.numSteps);
+                const float  gl = juce::jlimit(0.0f, 1.0f, ch.stepNoteLen[e.step]);
+                const double lenSteps = gl > 0.001f ? (double) gl : 1.0;   // 0 = a full step; else fraction of a step
+                len = juce::jmax(1, (int)(lenSteps * samplesPerStep));
+            }
             if (hostOff + len < numSamples) { midi.addEvent(juce::MidiMessage::noteOff(midiCh, note), hostOff + len); activeMidiNote[e.channel] = -1; }
             else                            { activeMidiNote[e.channel] = note; midiNoteCountdown[e.channel] = len - (numSamples - hostOff); }
             triggered[e.channel] = true;
@@ -1670,7 +1684,8 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
                << (int) ch.drawNotes[i].glide << ':'
                << (int) ch.drawNotes[i].oneShot << ':'
                << (int) ch.drawNotes[i].strumUp << ':'
-               << (int) ch.drawNotes[i].strumPct << ',';
+               << (int) ch.drawNotes[i].strumPct << ':'
+               << (int) ch.drawNotes[i].pan << ',';
         chState.setProperty("drawNotes", ns, nullptr);
         chState.setProperty("drawVel", ch.drawVel, nullptr);
         chState.setProperty("drawPan", ch.drawPan, nullptr);
@@ -1858,7 +1873,8 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
                                        f.size() >= 6 ? f[5].getIntValue() : 0,
                                        f.size() >= 7 ? f[6].getIntValue() : 0,
                                        f.size() >= 8 ? f[7].getIntValue() : 0,
-                                       f.size() >= 9 ? f[8].getIntValue() : -1);
+                                       f.size() >= 9 ? f[8].getIntValue() : -1,
+                                       f.size() >= 10 ? f[9].getIntValue() : 0);
                 }
             }
             else   // MIGRATION: old mono column lane ("drawSemi"/"drawVelC") -> same-semi runs become notes
@@ -1995,7 +2011,7 @@ juce::ValueTree DrumSequencerProcessor::captureStateTree()
                 for (const auto& nt : t.drawNotes)
                     ns << (int) nt.start << ':' << (int) nt.len << ':' << (int) nt.semi << ':' << (int) nt.vel
                        << ':' << (int) nt.slot << ':' << (int) nt.glide << ':' << (int) nt.oneShot
-                       << ':' << (int) nt.strumUp << ':' << (int) nt.strumPct << ',';
+                       << ':' << (int) nt.strumUp << ':' << (int) nt.strumPct << ':' << (int) nt.pan << ',';
                 tt.setProperty("notes", ns, nullptr);   // piano-roll take = the note list
             }
             else
@@ -2123,7 +2139,8 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
                                                     (uint8_t) (f.size() >= 6 && f[5].getIntValue() ? 1 : 0),
                                                     (uint8_t) (f.size() >= 7 && f[6].getIntValue() ? 1 : 0),
                                                     (uint8_t) (f.size() >= 8 && f[7].getIntValue() ? 1 : 0),
-                                                    (uint8_t) juce::jlimit(0, 255, f.size() >= 9 ? f[8].getIntValue() : 255) });
+                                                    (uint8_t) juce::jlimit(0, 255, f.size() >= 9 ? f[8].getIntValue() : 255),
+                                                    (int8_t)  juce::jlimit(-100, 100, f.size() >= 10 ? f[9].getIntValue() : 0) });
                     }
                 }
                 else   // MIGRATION: old lane take -> same-semi runs become notes

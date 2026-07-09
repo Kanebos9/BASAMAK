@@ -30,6 +30,7 @@ public:
     std::function<void(int ch, float vel, float pan)> onDrawVelPan;   // whole-channel Pan (+ default Vel) in piano-roll mode
     std::function<void(int ch)> onDrawModeMaybeChanged;               // ch's roll-vs-step may have changed (fade buttons)
     std::function<void()> onGridDivEdit;   // clicking the snap-grid header: type a value (1-64, 0 = off)
+    std::function<void()> onQuantizeEdit;  // clicking the Quantize header: type 1/N, snap note starts once
     std::function<void(int ch, float cents)> onDrawTuneChanged;   // the roll's TUNE fader (-50..+50 cents)
     float drawTune[Sequencer::NUM_CHANNELS] = {};                 // mirror of each channel's drawTuneCents
     std::function<void(int semi)> onRollPreview;   // AUDITION while drawing/moving a note (hear the pitch live)
@@ -129,8 +130,6 @@ private:
     void   prClearSel() { if (prSelCount > 0) { for (auto& b : prSel) b = false; prSelCount = 0; } }
     int    prViewClamp() const { return DrumChannel::PITCH_RANGE - drawRange; }   // |center| max: window stays inside +-48
     float  dVel[NCH] = {}, dPan[NCH] = {};             // piano-roll whole-channel default Vel / Pan mirror
-    void   setDrawVelPan(int ch, int x);               // Pan mode: drag sets the one channel value
-    void   setDrawColVel(int ch, juce::Point<int> pos); // Vel mode: drag a note's velocity (Y = level)
     void   paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle<int> rect, bool overlay);
     juce::Rectangle<int> drawRowRect(int ch) const;                  // the normal (1x) row rect
     juce::Rectangle<int> drawOverlayRect() const;                    // the BIG piano-roll editor panel
@@ -745,24 +744,6 @@ public:
     StringDisplay    physView;                       // Physical only: interactive string (Position/Tone on the visual)
     ModalDisplay     modalView;                      // Modal only: interactive struck-body (Hit Pos/Damp on the visual)
     ToggleSwitch     fmEnvSw;                        // SrcOsc only: FM Amount follows the amp envelope
-    // Two-line "Lock / Pitch" toggle button (user-specced placement: the free cell at the end
-    // of the knob row, NOT over the engine visual).
-    struct TwoLineToggle : juce::Button
-    {
-        TwoLineToggle() : juce::Button({}) { setClickingTogglesState(true); }
-        void paintButton(juce::Graphics& g, bool over, bool) override
-        {
-            const bool on = getToggleState();
-            g.setColour(on ? juce::Colour(0xff2f9e57) : juce::Colour(0xff26263c));
-            g.fillRoundedRectangle(getLocalBounds().toFloat().reduced(1.0f), 4.0f);
-            g.setColour(juce::Colour(over ? 0xffffffff : (on ? 0xffe9f6ee : 0xffaebada)));
-            g.setFont(juce::Font(10.5f, juce::Font::bold));
-            auto r = getLocalBounds();
-            g.drawText("Lock",  r.removeFromTop(getHeight() / 2), juce::Justification::centredBottom, false);
-            g.drawText("Pitch", r, juce::Justification::centredTop, false);
-        }
-    };
-    TwoLineToggle    lockPitchSw;                    // Osc/KS/Modal: LOCK PITCH (ignore note pitch)
     // Drop an audio file on the box -> the editor switches this slot to Sample + loads it.
     std::function<void(const juce::File&)> onFileDropped;
     bool fileDragOver = false;                       // paint a drop highlight
@@ -1618,6 +1599,7 @@ private:
     bool undoDirty = false;
     bool applyingUndo = false;
     void pushUndoSnapshot();
+    void commitUndoNow();   // force-commit the CURRENT state as an undo entry (before a destructive edit)
     void applyUndoState(const UndoEntry& e);
     void doUndo();
     void doRedo();
@@ -2047,7 +2029,6 @@ private:
 
     void selectChannel(int ch);
     void refreshDrawModeButtons();   // grey Len/Pitch/Roll for a draw-mode channel
-    void quantizeDrawToSteps(DrumChannel& c, int n);   // draw lane -> N steps (with a confirm)
     void selectPattern(int p);
     void copyPatternContent(int src, int dst);   // duplicate src's steps + per-pattern settings into dst
     // MERGED GROUPS: copy ONE channel's SOUND (mix: slots/env/EQ/FX/... - not steps/routing) between

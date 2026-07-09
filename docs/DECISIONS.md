@@ -62,6 +62,33 @@
 | 24 | Take names use the wall clock (same-second duplicates possible) | known gap, never prioritised | OPEN |
 | 25 | Old projects with removed legacy engines (SrcSynth/SrcWave) load SILENT on those slots instead of erroring | graceful compat break | OPEN |
 
+## Steps<->roll SIMPLIFICATION batch (2026-07-09) — decisions inside a user-directed redesign
+
+> The batch itself (clear-on-switch, remove Lock Pitch, per-note pan/velocity/strum in the roll,
+> disable step edit-modes in the roll, per-pattern channel merge, ch 7/8 roll on init, quantize
+> box, merged-pattern warnings) was user-directed = design. The rows below are the gap-fills I
+> made WITHIN it.
+
+| # | Decision | Why | Status |
+|---|---|---|---|
+| 26 | Roll ModeVel per-note velocity DRAG + whole-channel ModePan editing were DELETED (not just disabled) | user: "delete their roll-only code" - all step edit-modes are off in the roll; per-note velocity/pan now come from the right-click menu | EXPLAINED (the fine velocity DRAG is gone; right-click velocity is 10% steps - say if you want the drag back as a roll-only tool) |
+| 27 | Right-click Velocity menu = 10% steps (not a continuous control) | a menu can't be continuous; 10% is fine enough to match a recorded value, and playback always plays the stored value so there's no live-vs-record mismatch | EXPLAINED (your "as sensitive as the knobs" - a menu approximation; the min/max-vel knobs stay continuous, they're a different feature) |
+| 28 | Per-note Pan is a NEW DrawNote field; when a note's pan is 0 it FALLS BACK to the legacy whole-channel drawPan | so old projects that set a whole-channel roll pan aren't silently re-centred | OPEN |
+| 29 | Strum stepped to 0/20/40/60/80/100%; factory strum values rounded (0.45->0.40, 0.55->0.60) | match the knob to the right-click override exactly (no live-vs-record drift) - your request; the rounding keeps factory sounds on the new grid | EXPLAINED |
+| 30 | Channel Merge & Split now CLEARS the paired channels' steps (forced roll) | consistency with the new "switching clears" model; it warns first + is undoable | EXPLAINED |
+| 31 | Unmerge SPLITS a note that spanned the bar line into a truncated head + a gated continuation clamped to ONE bar | your "it should end and start again where the pattern ends"; clamping to one bar because the freed pattern loops alone | EXPLAINED |
+| 32 | Overlap (strip button) FADES in the roll; Duck + Choke stay live in the roll | Overlap is a step-retrigger concept (roll uses per-note length + the keyboard Poly toggle); Duck/Choke are level/gate effects that apply to any trigger incl. roll notes | EXPLAINED (my opinion on your ask) |
+| 33 | Fresh instance + Init default channels 7 + 8 to Piano Roll (set in the processor ctor AND initPreset; a loaded project overrides via its saved drawMode) | your request; the ctor covers a brand-new plugin, initPreset covers the Init button | EXPLAINED |
+| 34 | Quantize (roll header) snaps note STARTS to 1/N and clamps length to >= one cell, on the selected channel across a merged-pattern group | "quantizing is a one-time thing... do whatever is smart" - starts are what matter for timing; length-clamp avoids zero-length notes | EXPLAINED |
+
+## Engine / infrastructure (behaviour-affecting internals)
+
+| # | Decision | Why | Status |
+|---|---|---|---|
+| 23 | Loop-wrap fix internals: sub-1/1000-sample remainders snap to 0; bar-start check tolerates a quarter sample | the gate-explosion bugfix needed a tolerance; values chosen conservatively | EXPLAINED (bugfix session) |
+| 24 | Take names use the wall clock (same-second duplicates possible) | known gap, never prioritised | OPEN |
+| 25 | Old projects with removed legacy engines (SrcSynth/SrcWave) load SILENT on those slots instead of erroring | graceful compat break | OPEN |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

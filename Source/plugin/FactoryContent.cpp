@@ -1505,14 +1505,14 @@ static void gSteelGuitar(DC& c) {  // steel-string acoustic: bright, singing, a 
     auto& s = mkGtr(c, 130.81f, 0.68f, 0.2f, 1.2f);      // C3. Ships IN the guitar voicing (user
     s.scaleOn = true; s.scaleType = 10; s.scaleKey = 0;  // order) - string count is AUTO per chord.
     s.fxReverbSend = 0.12f;
-    c.strumAmt = 0.55f;                                  // strummed by default (strum rides with sounds now)
+    c.strumAmt = 0.6f;                                   // strummed by default (strum is stepped 0/20/40/60/80/100%)
     c.volume = 0.8f;
 }
 static void gElecGuitar(DC& c) {   // clean electric: rounder pickup tone, drier
     auto& s = mkGtr(c, 130.81f, 0.52f, 0.28f, 1.3f);
     s.scaleOn = true; s.scaleType = 10; s.scaleKey = 0;  // guitar voicing by default (user order)
     s.fxDriveType = DC::Tube; s.fxDrive = 0.08f;
-    c.strumAmt = 0.45f;
+    c.strumAmt = 0.4f;    // stepped strum grid (0/20/40/60/80/100%)
     c.volume = 0.8f;
 }
 static void gMutedGuitar(DC& c) {  // funk mute: the percussive "chick" scratch
@@ -1838,18 +1838,6 @@ void applyMix(DC& ch, int index)
     if (cat == "Keys" || cat == "Pads & Choirs" || cat == "Leads" || cat == "Chords & Arps")
         ch.drawMode = true;   // default (user; step data is kept underneath)
     finishSound(ch);
-    // LOCK PITCH factory default (user spec): DRUM-type sounds ship locked (a kick stays a kick
-    // whatever the pitch lane does); MELODIC categories ship unlocked (they're for key playing).
-    // MUST run AFTER finishSound: legacy builders only get their slots BUILT there (setting the
-    // flag before it hit zero slots = the 'kicks are not locked' bug).
-    {
-        const bool melodic = cat == "Bass" || cat == "Keys" || cat == "Pads & Choirs" || cat == "Leads"
-                          || cat == "Plucks & Strings" || cat == "Bells & Mallets" || cat == "Chords & Arps";
-        if (! melodic)
-            for (auto& sl : ch.slots)
-                if (sl.engine == DC::SrcOsc || sl.engine == DC::SrcPhys || sl.engine == DC::SrcModal)
-                    sl.lockPitch = true;
-    }
 }
 
 //==============================================================================

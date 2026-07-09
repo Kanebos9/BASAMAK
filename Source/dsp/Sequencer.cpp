@@ -61,12 +61,12 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
             if (e.drawGlideFrom > -900.0f) {   // MONO legato glide: slide from the previous note's pitch to this one's
                 const long gs = (long) (c.keysGlide * 0.4 * sampleRate);   // same 0..400 ms as live keys
                 c.fadeOutVoices(0.015f);                                   // 15 ms handover on the outgoing voice (like keyDown)
-                c.trigger(e.drawVel, e.drawGlideFrom, c.drawPan, g, /*glideTo*/ e.drawPitch, gs,
+                c.trigger(e.drawVel, e.drawGlideFrom, e.drawNotePan, g, /*glideTo*/ e.drawPitch, gs,
                           /*forceOverlap*/ true, mask, kg);
             } else
                 // POLY channels: release tails ring over the next note in PLAYBACK exactly as
                 // they do live (mono channels keep the classic mono-cut - also like live).
-                c.trigger(e.drawVel, e.drawPitch, c.drawPan, g, 0.0f, 0, e.drawOverlap || c.keysPolyMode, mask, kg);
+                c.trigger(e.drawVel, e.drawPitch, e.drawNotePan, g, 0.0f, 0, e.drawOverlap || c.keysPolyMode, mask, kg);
             return; }
         // Choke groups: a hit FADES OUT (~3 ms) the ringing tails of other channels in the same
         // group (e.g. a closed hi-hat silencing an open one). A hard cut clicked whenever the
@@ -442,6 +442,7 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
                 e.drawOneShot = nt.oneShot != 0;
                 e.drawStrumUp = nt.strumUp != 0;
                 e.drawStrumPct = nt.strumPct > 100 ? -1 : (int) nt.strumPct;
+                e.drawNotePan = nt.pan != 0 ? (float) nt.pan * 0.01f : c.drawPan;   // per-note pan, else legacy whole-channel
                 e.drawOverlap = overlap;
                 e.drawGlideFrom = glideFrom;
                 events.add(e);
