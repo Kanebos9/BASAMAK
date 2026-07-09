@@ -1474,9 +1474,8 @@ static DC::Slot& mkGtr(DC& c, float hz, float tone, float pos, float dec)
     s.atk = 0.001f; s.dec = dec;
     s.release = 0.5f;                                    // strings RING on release (arp gate / note ends
                                                          // used to chop them with the 60 ms default)
-    // "Guitar body": low-mid warmth + presence bite, the classic acoustic body curve.
-    s.eqBand[DC::EQ_B1] = { true, 180.0f,  2.5f, 1.0f };
-    s.eqBand[DC::EQ_B3] = { true, 2600.0f, 3.0f, 1.2f };
+    // (Removed the +1 dB "guitar body" EQ bells: too subtle to see on the EQ curve = felt hidden.
+    //  The guitars now use ZERO EQ - fully visible. Imperceptible sound change.)
     return s;
 }
 static void gFingerBass(DC& c) {   // fingered electric bass: warm, round, played near the neck
