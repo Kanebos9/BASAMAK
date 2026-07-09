@@ -2325,14 +2325,27 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
                 if (idx < 0) return;
                 const bool sel = prSel[idx];
                 const auto& nn = drawNotes[ch2][idx];
-                // STRUM only does anything on stacked chord voices - notes at the SAME pitch AND
-                // the SAME length (a chord recorded in Scale mode lands on one vertical line). Fade
-                // the strum items when the target set isn't uniform (user request).
-                bool strumOk = true;
-                if (sel) { int fs = -999, fl = -1;
-                    for (int i = 0; i < drawNoteCount[ch2]; ++i) if (prSel[i]) {
-                        if (fs == -999) { fs = drawNotes[ch2][i].semi; fl = drawNotes[ch2][i].len; }
-                        else if (drawNotes[ch2][i].semi != fs || drawNotes[ch2][i].len != fl) { strumOk = false; break; } } }
+                // STRUM only does something on stacked chord VOICES that share a time span. It's
+                // available when either (user spec):
+                //  - the target notes SHARE start AND length (a chord drawn by hand - ANY pitches), OR
+                //  - a SINGLE note whose SOUND voices it into a chord (Scale/Chord = it has "shadow" notes).
+                bool strumOk;
+                {
+                    int fs = -1, fl = -1, count = 0; bool uniform = true;
+                    for (int i = 0; i < drawNoteCount[ch2]; ++i)
+                        if (i == idx || (sel && prSel[i])) {
+                            if (count == 0) { fs = drawNotes[ch2][i].start; fl = drawNotes[ch2][i].len; }
+                            else if (drawNotes[ch2][i].start != fs || drawNotes[ch2][i].len != fl) uniform = false;
+                            ++count;
+                        }
+                    auto hasShadows = [&](const DrumChannel::DrawNote& q) -> bool {
+                        if (! getSlotVoicing) return false; int vo[8];
+                        if ((q.slot == 0 || q.slot == 1) && getSlotVoicing(ch2, 0, q.semi, vo) > 1) return true;
+                        if ((q.slot == 0 || q.slot == 2) && getSlotVoicing(ch2, 1, q.semi, vo) > 1) return true;
+                        return false;
+                    };
+                    strumOk = uniform && (count >= 2 || (count == 1 && hasShadows(drawNotes[ch2][idx])));
+                }
                 juce::PopupMenu m;
                 m.addSectionHeader(sel ? "Selected notes" : "Note");
                 m.addItem(1, "Gate OFF: ring naturally (like a step)", true, nn.oneShot != 0);
@@ -2348,7 +2361,7 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
                 sa.addItem(24, "60%",                          strumOk, nn.strumPct == 60);
                 sa.addItem(28, "80%",                          strumOk, nn.strumPct == 80);
                 sa.addItem(29, "100%",                         strumOk, nn.strumPct == 100);
-                m.addSubMenu("Strum amount (needs same-pitch, same-length notes)", sa, strumOk);
+                m.addSubMenu("Strum amount (needs a chord: stacked same-time notes, or a Scale/Chord sound)", sa, strumOk);
                 m.addSeparator();
                 // VELOCITY: "Type exact %" gives FULL 1% resolution (matches the min/max vel knobs -
                 // no coarse mismatch, user rule), plus quick 10% presets. Current % shown at the top.
@@ -7577,8 +7590,20 @@ void DrumSequencerEditor::setupComponents()
         if (ignoreKnobCallbacks) return;
         auto& ch = proc.sequencer.channel(selectedChannel);
         auto& sl = ch.slots[juce::jlimit(0, 1, si)];
+        const bool wasVoiced = sl.scaleOn || sl.chordMode > 0;
         const auto& nv = keysPanel.scaleBox.v[juce::jlimit(0, 1, si)];
         sl.scaleOn = nv.on; sl.scaleType = nv.type; sl.scaleKey = nv.key; sl.scaleUnison = nv.count;
+        // FORGET per-note strum when a note loses ALL its chord voicing (user: turning scale/chord
+        // OFF forgets the strum; just CHANGING the scale keeps it). Applies across a merged group.
+        if (wasVoiced && ! (sl.scaleOn || sl.chordMode > 0)) {
+            auto slotVoiced = [&](int s){ return ch.slots[s].scaleOn || ch.slots[s].chordMode > 0; };
+            auto& sq = proc.sequencer; const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
+            for (int b = head; b <= end; ++b) { auto& cc = sq.patterns[b].channels[selectedChannel];
+                for (int i = 0; i < cc.drawNoteCount; ++i) { auto& nt = cc.drawNotes[i];
+                    const bool sh = (nt.slot == 0 && (slotVoiced(0) || slotVoiced(1)))
+                                 || (nt.slot == 1 && slotVoiced(0)) || (nt.slot == 2 && slotVoiced(1));
+                    if (! sh) { nt.strumUp = 0; nt.strumPct = 255; } } }
+        }
         ch.markDspDirty();
         kbGuideApplied = -1;
         keysHighlightMaskLo = keysHighlightMaskHi = ~0ULL;   // voicing changed -> recompute highlight + chord name
