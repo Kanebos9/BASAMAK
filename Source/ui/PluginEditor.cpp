@@ -693,6 +693,7 @@ void HarmonicEditor::loadShapeSpectrum(int f, int shape)
 // MESSAGE THREAD (async chooser callback); unpitched material reports instead of guessing.
 void HarmonicEditor::analyzeSample(int f)
 {
+    if (menuOpen) return;   // a chooser/menu is already up - never stack two
     menuOpen = true;   // the OS file dialog must not trip the outside-click closer
     chooser = std::make_unique<juce::FileChooser>(
         "Analyze an audio file into frame " + juce::String::charToString((juce::juce_wchar)('A' + f)),
@@ -717,8 +718,24 @@ void HarmonicEditor::analyzeSample(int f)
             const int start = juce::jlimit(0, len - 256, len / 4);       // skip the attack
             const int W = juce::jmin(16384, len - start);
             const double fs = rd->sampleRate;
-            const double f0 = basamakDetectPitch(mono.data() + start, W, fs);
-            if (f0 <= 0.0) { frameMsg[f] = "no clear pitch found"; repaint(); return; }
+            double f0 = basamakDetectPitch(mono.data() + start, W, fs);
+            if (f0 <= 0.0)
+            {   // NO CLEAR PITCH (drums/noise/chords): fall back to the STRONGEST SPECTRAL PEAK as
+                // the "fundamental" - the analysis always produces SOMETHING editable (disclosed).
+                double bestF = 110.0, bestM = -1.0;
+                for (int q = 0; q < 60; ++q)
+                {
+                    const double fq = 55.0 * std::pow(2.0, (double) q / 10.0);   // 55 Hz .. ~3.3 kHz, 10/oct
+                    if (fq > fs * 0.45) break;
+                    double S = 0.0, Co = 0.0; const double w = 2.0 * juce::MathConstants<double>::pi * fq / fs;
+                    for (int n = 0; n < W; n += 2) { const double s2 = (double) mono[(size_t)(start + n)];
+                        S += s2 * std::sin(w * n); Co += s2 * std::cos(w * n); }
+                    const double m2 = S * S + Co * Co;
+                    if (m2 > bestM) { bestM = m2; bestF = fq; }
+                }
+                f0 = bestF;
+                frameMsg[f] = "no clear pitch - used the strongest peak (" + juce::String((int) f0) + " Hz)";
+            }
             float* vals = HV(f); float* phsF = HP(f);
             float mag[DrumChannel::ADD_HARM]; float mx = 1.0e-6f;
             for (int k = 0; k < DrumChannel::ADD_HARM; ++k)
@@ -741,7 +758,7 @@ void HarmonicEditor::analyzeSample(int f)
             }
             loadedShape[f] = -1;
             frameLabel[f] = file.getFileNameWithoutExtension();
-            frameMsg[f].clear();
+            if (! frameMsg[f].startsWith("no clear pitch")) frameMsg[f].clear();
             rebuildStrokeFromHarmonics(f);
             if (onChange) onChange();
             if (onDragEnd) onDragEnd();
@@ -800,9 +817,16 @@ juce::String HarmonicEditor::getTooltip()
             return "Load a ready-made wave into frame " + fn + ". Every entry is placed as its "
                    "EXACT harmonic recipe (a stack of sines) - edit any bar afterwards and it becomes Custom.";
         if (smpRect(f).contains(p))
-            return "ANALYZE SAMPLE: pick an audio file - its pitch is detected and its harmonics are "
-                   "measured into frame " + fn + "'s bars. Analyze different files into different frames, "
-                   "then Glide or the WAVE LFO morphs between the real sounds.";
+            return "ANALYZE SAMPLE: pick an audio file - its harmonics become frame " + fn + "'s bars. "
+                   "The RULES:\n\n"
+                   "- Works best on a SUSTAINED, single-pitch sound (one note of a flute, a pad, a string). "
+                   "Chords, drums and noise have no single pitch - those fall back to the strongest "
+                   "frequency peak (the message under the wave says so).\n"
+                   "- Any length from ~0.1 s works; the analysis listens to the SUSTAIN (it skips the first "
+                   "quarter of the file to avoid the attack) for up to ~0.3 s.\n"
+                   "- Stereo files are mixed to mono; re-analyzing the same frame simply replaces it.\n\n"
+                   "Analyze different files into different frames, then Glide or the WAVE LFO morphs "
+                   "between the real sounds.";
         if (clrRect(f).contains(p))
             return "Clear frame " + fn + " (all bars to zero).";
         if (waveStripRect(f).contains(p))
@@ -5713,28 +5737,7 @@ bool DrumSequencerEditor::keyPressed(const juce::KeyPress& k)
     if (k == juce::KeyPress('z', MK::commandModifier, 0))                       { doUndo(); return true; }
     if (k == juce::KeyPress('z', MK::commandModifier | MK::shiftModifier, 0)
         || k == juce::KeyPress('y', MK::commandModifier, 0))                    { doRedo(); return true; }
-    // UP/DOWN = step the selected channel's SOUND through the bank (the picker's order: factory
-    // categories in kSoundCatOrder, then Your Sound Bank; wraps at the ends). Down = next.
-    if (k.getKeyCode() == juce::KeyPress::upKey || k.getKeyCode() == juce::KeyPress::downKey)
-    { stepSoundBank(k.getKeyCode() == juce::KeyPress::downKey ? 1 : -1); return true; }
     return false;
-}
-
-void DrumSequencerEditor::stepSoundBank(int dir)
-{
-    juce::Array<int> order;                                    // the full bank in PICKER order
-    auto facNames = Factory::mixNames();
-    auto facCats  = Factory::mixCategories();
-    for (auto* cat : kSoundCatOrder)
-        for (int i : factoryIndicesFor(cat, facNames, facCats, {}))
-            order.add(FACTORY_MIX_BASE + i);
-    for (int i = 0; i < soundMixFiles.size(); ++i) order.add(i + 1);   // Your Sound Bank (file ids = idx+1)
-    if (order.isEmpty()) return;
-    const int cur = strips[selectedChannel].comboSound.getSelectedId();
-    int pos = order.indexOf(cur);
-    pos = pos < 0 ? (dir > 0 ? 0 : order.size() - 1)           // nothing/Init selected: start at an end
-                  : (pos + dir + order.size()) % order.size(); // wrap
-    applySoundPickId(selectedChannel, order[pos]);
 }
 
 void DrumSequencerEditor::doUndo()
@@ -7548,7 +7551,8 @@ void DrumSequencerEditor::setupComponents()
                     }
                     sl.oscShape = sl.oscShapeB = DrumChannel::WvCustom;
                     ch.rebuildAddTables(); ch.markDspDirty();
-                    refreshDetailPanel();   // the Wave fader jumps to "Custom (draw on wave)"
+                    refreshDetailPanel();
+                    slotEd[b].pushValues();   // the Wave fader itself (refreshDetailPanel alone left it stale)
                 }
             }
             harmEdSlot = b;

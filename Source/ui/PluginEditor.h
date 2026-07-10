@@ -2094,7 +2094,6 @@ private:
     HdrClick revModeClick;
     void refreshReverbModeHeader();
     void openLfoCurveEditor(int dest);   // LFO SHAPER overlay
-    void stepSoundBank(int dir);         // UP/DOWN arrows: previous/next sound in the bank order
     HarmonicEditor harmEd;    // ADDITIVE draw-harmonics overlay (content child)
     LfoCurveEditor lfoCurveEd;             // LFO SHAPER overlay (draw the Custom LFO cycle)
     int            lfoCurveEdDest = 0;     // which LFO tab the overlay edits

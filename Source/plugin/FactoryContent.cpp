@@ -1654,68 +1654,6 @@ static DC::Slot& windBreath(DC& c, float w, float centerHz, float atk, float dec
     n.atk = atk; n.dec = dec; n.sustain = sus; n.release = rel;
     return n;
 }
-static void wtFrame(DC::Slot& s, int f, std::initializer_list<std::pair<int,float>> hs);   // defined with setB below
-
-// Winds v3 (user: "still just noise"): the TONE moves now - every wind is a 3-frame WAVETABLE
-// (dark start > body > bright) with a fast attack BLOOM (glide A>B, hold) and a slow breathing
-// WAVE LFO scanning around the body. Air = the sustaining noise layer; Drift + vibrato on top.
-static void windMotion(DC::Slot& s, float bloomSec, float lfoAmt, float lfoHz)
-{
-    s.addSeg[0] = bloomSec; s.addSeg[1] = 0.0f; s.addSeg[2] = 0.0f;   // bloom A>B, park on the body
-    s.lfoAmt[3] = lfoAmt; s.lfoRate[3] = lfoHz; s.lfoFree[3] = true;  // breath = slow wave scan
-}
-static void aClarinet(DC& c) {     // woody odd pipe: hollow start blooming into the reedy body
-    auto& s = mkAdd(c, {{1,1.0f},{3,0.35f},{5,0.12f}});                              // A: hollow start
-    wtFrame(s, 1, {{1,1.0f},{3,0.75f},{5,0.5f},{7,0.2f},{9,0.35f},{11,0.12f}});      // B: the reedy body
-    wtFrame(s, 2, {{1,0.9f},{2,0.08f},{3,0.85f},{5,0.65f},{7,0.35f},{9,0.45f},{11,0.2f}}); // C: overblown bright
-    wtFrame(s, 3, {{1,0.9f},{2,0.08f},{3,0.85f},{5,0.65f},{7,0.35f},{9,0.45f},{11,0.2f}});
-    s.weight = 0.88f;
-    s.atk = 0.07f; s.dec = 0.5f; s.sustain = 0.85f; s.release = 0.22f;
-    s.filterType = DC::LowPass; s.filterCutoff = 2400.0f; s.filterReso = 0.8f; s.filterKeyTrack = 0.5f;
-    s.fxTone = -0.25f; s.drift = 0.2f; s.vibrato = 0.10f;
-    windMotion(s, 0.09f, 0.14f, 0.6f);
-    windBreath(c, 0.12f, 2600.0f, 0.06f, 0.5f, 0.6f, 0.25f);
-    c.volume = 0.74f;
-}
-static void aFlute(DC& c) {        // soft pure start blooming into a singing body; the tone breathes
-    auto& s = mkAdd(c, {{1,1.0f}});                                                  // A: pure start
-    wtFrame(s, 1, {{1,1.0f},{2,0.3f},{3,0.08f}});                                    // B: singing body
-    wtFrame(s, 2, {{1,1.0f},{2,0.5f},{3,0.16f},{4,0.07f}});                          // C: blown brighter
-    wtFrame(s, 3, {{1,1.0f},{2,0.5f},{3,0.16f},{4,0.07f}});
-    s.weight = 0.8f;
-    s.atk = 0.09f; s.dec = 0.6f; s.sustain = 0.9f; s.release = 0.25f;
-    s.drift = 0.3f; s.vibrato = 0.16f; s.fxTone = 0.1f;
-    windMotion(s, 0.11f, 0.16f, 0.7f);
-    windBreath(c, 0.22f, 3400.0f, 0.07f, 0.6f, 0.75f, 0.28f);
-    c.volume = 0.72f;
-}
-static void aPanFlute(DC& c) {     // breathy pipe: CHIFF of air, hollow body that wavers as you blow
-    auto& s = mkAdd(c, {{1,1.0f},{2,0.3f}});                                         // A: dull start
-    wtFrame(s, 1, {{1,1.0f},{2,0.55f},{3,0.12f}});                                   // B: hollow body
-    wtFrame(s, 2, {{1,0.95f},{2,0.7f},{3,0.2f},{4,0.08f}});                          // C: harder blow
-    wtFrame(s, 3, {{1,0.95f},{2,0.7f},{3,0.2f},{4,0.08f}});
-    s.weight = 0.72f;
-    s.atk = 0.05f; s.dec = 0.8f; s.sustain = 0.75f; s.release = 0.3f;
-    s.drift = 0.35f; s.vibrato = 0.08f;
-    windMotion(s, 0.05f, 0.12f, 0.8f);
-    auto& n = windBreath(c, 0.28f, 2200.0f, 0.008f, 0.3f, 0.45f, 0.3f);   // fast chiff, air stays under the note
-    n.noiseRes = 0.7f;
-    c.volume = 0.7f;
-}
-static void aOboe(DC& c) {         // double-reed bite: warm start snapping into the nasal reedy body
-    auto& s = mkAdd(c, {{1,0.7f},{2,0.6f},{3,0.5f},{4,0.25f}});                      // A: warm pre-bite
-    wtFrame(s, 1, {{1,0.55f},{2,0.85f},{3,1.0f},{4,0.7f},{5,0.45f},{6,0.3f},{8,0.18f}});   // B: the reed
-    wtFrame(s, 2, {{1,0.45f},{2,0.8f},{3,1.0f},{4,0.85f},{5,0.6f},{6,0.45f},{8,0.3f},{10,0.15f}}); // C: pressed
-    wtFrame(s, 3, {{1,0.45f},{2,0.8f},{3,1.0f},{4,0.85f},{5,0.6f},{6,0.45f},{8,0.3f},{10,0.15f}});
-    s.weight = 0.9f;
-    s.atk = 0.05f; s.dec = 0.5f; s.sustain = 0.85f; s.release = 0.2f;
-    s.filterType = DC::BandPass; s.filterCutoff = 1100.0f; s.filterReso = 1.3f; s.filterKeyTrack = 0.35f;
-    s.filterType2 = DC::LowPass; s.filterCutoff2 = 5200.0f; s.filterReso2 = 0.7f;
-    s.drift = 0.22f; s.vibrato = 0.12f;
-    windMotion(s, 0.07f, 0.12f, 0.8f);
-    windBreath(c, 0.12f, 3000.0f, 0.05f, 0.5f, 0.6f, 0.22f);
-    c.volume = 0.7f;
-}
 static void aMusicBox(DC& c) {     // tiny sparkling box: sparse high partials, quick ping
     auto& s = mkAdd(c, {{1,1.0f},{4,0.55f},{9,0.3f},{16,0.12f}});
     s.atk = 0.002f; s.dec = 1.6f; s.sustain = 0.0f; s.release = 0.8f;
@@ -2089,10 +2027,6 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Saw Lead", kSawLead, "Leads" },
     { "Hyper Saw", nHyperSaw, "Leads" },
     { "Acid HP", nAcidHP, "Leads" },
-    { "Clarinet", aClarinet, "Leads" },
-    { "Flute", aFlute, "Leads" },
-    { "Pan Flute", aPanFlute, "Leads" },
-    { "Oboe", aOboe, "Leads" },
     { "Quint Lead", aQuintLead, "Leads" },
     { "Bloom Lead", sBloomLead, "Leads" },
     { "Drift Lead", wDriftLead, "Leads" },
