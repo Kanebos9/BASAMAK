@@ -47,9 +47,8 @@ public:
             case 0: scale *= 0.45f; g *= 0.92f; cutHz *= 0.7f;  modD = 1.0f; break;               // Room: small, tight, darker
             case 2: scale *= 0.7f;  g = juce::jmin(0.95f, g * 1.02f); modD = 0.8f;                // Plate: dense + bright
                     cutHz = 2400.0f + (1.0f - juce::jlimit(0.0f, 1.0f, damp)) * 9000.0f; break;
-            case 3: cutHz = juce::jmax(cutHz * 1.8f, 6000.0f); break;   // Shimmer: open the damping so the
-                                                                        // octave-up passes survive (else the
-                                                                        // brightened tail dies = "way quieter")
+            case 3: cutHz = juce::jmax(cutHz * 1.4f, 4500.0f); break;   // Shimmer: open the damping so the
+                                                                        // octave-up passes survive
             default: break;                                                                        // Hall body
         }
         const float dampC = 1.0f - std::exp(-twoPi * cutHz / (float) sr);
@@ -97,7 +96,10 @@ public:
                     shOut += shBuf[(size_t) rp2] * win * win;
                 }
                 shW = (shW + 1) % shN;
-                hh += 0.6f * shOut;
+                // ENERGY-NEUTRAL: crossfade toward the shifted copy (never add on top - adding pushed
+                // the loop past unity, the +-8 clamps pegged, and the huge wet made the master
+                // soft-clip crush the whole mix = "shimmer breaks everything").
+                hh += 0.45f * (shOut - hh);
             }
             for (int i = 0; i < N; ++i)
             {
@@ -111,9 +113,8 @@ public:
                 buf[i][(size_t) widx[i]] = std::isfinite(v) ? juce::jlimit(-8.0f, 8.0f, v) : 0.0f;
                 widx[i] = (widx[i] + 1) % sz;
             }
-            const float outMk = shimmer ? 0.5f : 0.35f;   // shimmer level make-up (perceived quieter tail)
-            float wl = (dout[0] + dout[2] + dout[4] + dout[6]) * outMk;
-            float wr = (dout[1] + dout[3] + dout[5] + dout[7]) * outMk;
+            float wl = (dout[0] + dout[2] + dout[4] + dout[6]) * 0.35f;
+            float wr = (dout[1] + dout[3] + dout[5] + dout[7]) * 0.35f;
             const float mid = 0.5f * (wl + wr);
             float oL = mid + w * (wl - mid);   // width: 1 = full stereo, 0 = mono
             float oR = mid + w * (wr - mid);

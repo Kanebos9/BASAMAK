@@ -2449,14 +2449,16 @@ juce::String VoiceModDisplay::getTooltip()
                "Chord/Scale notes - which is also when the lines here visibly fan apart.";
     if (hover == 4 && uniOn)
         return "DRIFT (orange dot): makes every note slightly different, like analog hardware - 0% = "
-               "perfectly repeating hits (the drum default).\n\n"
-               "- Scatters the unison voices' start phases per note (wide, blurry stacks - kills the "
-               "fixed comb pattern).\n"
-               "- Adds a tiny random detune (up to ~6 cents) + a slow pitch wander per note.\n"
-               "- Breathes the level a hair per note.\n\n"
-               "TRUE random: each playback pass differs microscopically - that is the point. Keep drums "
-               "at 0% for identical hits; try 20-40% on pads, keys and leads. The voice lines here move "
-               "with the REAL values each hit rolls.";
+               "perfectly repeating hits (the drum default). One knob, fixed recipe (all amounts scale "
+               "with the dot; at 100%):\n\n"
+               "- Unison start phases scatter per note (full blur from ~50% up).\n"
+               "- Each voice gets a random detune up to +-10 cents + a slow +-7 cent wander.\n"
+               "- The FILTER cutoff moves up to +-0.4 octave per note (needs a filter on).\n"
+               "- The level breathes up to +-20% per note.\n\n"
+               "This dot is the ONLY control - the numbers above are the effect's fixed design, like the "
+               "chorus knob's rate. TRUE random: each pass differs microscopically - that is the point. "
+               "The voice lines here move with the REAL pitch values each hit rolls (filter/level dice "
+               "don't draw).";
     juce::String s = "Voice controls for the selected slot. Hover the UNISON / CHORD / SCALE chips for what each mode "
                      "does. ";
     if (vibOn) s += "Vibrato = ~5.5 Hz pitch wobble (works on every engine here).";
@@ -3057,10 +3059,9 @@ void LfoDisplay::paint(juce::Graphics& g)
         g.drawText(s == 0.0f ? "Sync: Off" : (s < 0.0f ? "Sync: Grid" : "Sync: Bar"), sb, juce::Justification::centred, false);
         g.setColour(juce::Colour(0xffaeb8d4)); g.setFont(juce::Font(9.5f, juce::Font::bold));
         const juce::String rd = s == 0.0f
-            ? juce::String(rate_[dest_], rate_[dest_] < 3.0f ? 1 : 0) + " Hz"
-            : (s < 0.0f ? "Grid " + lfoCpbText(gridCpb_) : lfoCpbText(s));
-        g.drawText(rd, (int) sb.getRight() + 6, (int) sb.getY(), getWidth() - (int) sb.getRight() - 10, 13,
-                   juce::Justification::centredRight, false);
+            ? "Speed: " + juce::String(rate_[dest_], rate_[dest_] < 3.0f ? 1 : 0) + " Hz"
+            : (s < 0.0f ? "Speed: Grid " + lfoCpbText(gridCpb_) : "Speed: " + lfoCpbText(s));
+        g.drawText(rd, 6, getHeight() - 15, getWidth() - 12, 12, juce::Justification::centredLeft, false);
     }
 }
 
@@ -6866,6 +6867,7 @@ void DrumSequencerEditor::setupComponents()
         const int next = (juce::jlimit(0, 3, proc.masterFX().reverbMode) + 1) % 4;
         for (auto& p : proc.sequencer.patterns) p.master.reverbMode = next;   // flavour = all patterns
         refreshReverbModeHeader();
+        if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel);   // hear the new mode
     };
     hdrReverb.setTooltip(juce::String("REVERB MODE (click the title to cycle): revoices the shared reverb everything sends into.\n\n")
         + "- Room: small, tight, darker - drums.\n"
@@ -9110,7 +9112,7 @@ void DrumSequencerEditor::refreshKeytrackFader()
     const int fi = freqDisplay.active();
     keytrackFader.setValue01(fi == 0 ? sl.filterKeyTrack : sl.filterKeyTrack2);
     keytrackFader.setAccent(FrequencyDisplay::filtColour(fi));
-    keytrackFader.setLabel(fi == 0 ? "F1 Key" : "F2 Key");
+    keytrackFader.setLabel(fi == 0 ? "F1 Keytrack" : "F2 Keytrack");   // full word ('F1 Key' read as a mystery - user)
 }
 
 void DrumSequencerEditor::refreshDetailPanel()
@@ -10454,7 +10456,7 @@ void DrumSequencerEditor::layoutContent()
         kFx(knobTone, lblTone, 0, row3); kFx(knobPunch, lblPunch, 1, row3); kFx(knobComp, lblComp, 2, row3);
         // LFO visual fills everything left - tempo sync lives INSIDE it (Sync button + snapped drag).
         const int lfoTop = row3 + KSB + kboxH + 16;
-        lfoDisplay.setBounds(fxX, lfoTop, fxW, juce::jmax(60, colTop + colH - hdrH - lfoTop - 2));
+        lfoDisplay.setBounds(fxX, lfoTop, fxW, juce::jmax(74, colTop + colH - lfoTop));   // fill the spare strip below (user)
     }
 
     // DRAW HARMONICS overlay: parked over the amp/pitch columns (opened from the Custom wave preview;

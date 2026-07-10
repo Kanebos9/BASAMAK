@@ -107,10 +107,12 @@ int main()
             return oL;
         };
         auto hall = ir(1), hall2 = ir(1), room = ir(0), plate = ir(2), shim = ir(3);
-        printf("[6] reverb: hall repeat=%.6f (0), room/plate/shimmer vs hall = %.3f/%.3f/%.3f (all >0.001) -> %s\n",
-               maxdiff(hall, hall2), maxdiff(room, hall), maxdiff(plate, hall), maxdiff(shim, hall),
+        auto energy = [](const std::vector<float>& x){ double e = 0; for (float v : x) e += (double) v * v; return e; };
+        const double er = energy(shim) / juce::jmax(1.0e-9, energy(hall));   // blow-up guard: shimmer must
+        printf("[6] reverb: hall repeat=%.6f (0), room/plate/shimmer vs hall = %.3f/%.3f/%.3f, shim/hall energy=%.2f (0.2..4) -> %s\n",
+               maxdiff(hall, hall2), maxdiff(room, hall), maxdiff(plate, hall), maxdiff(shim, hall), er,
                CHK(maxdiff(hall, hall2) == 0.0f && maxdiff(room, hall) > 0.001f && maxdiff(plate, hall) > 0.001f
-                   && maxdiff(shim, hall) > 0.001f && finite(shim)) ? "OK" : "FAIL");
+                   && maxdiff(shim, hall) > 0.001f && finite(shim) && er > 0.2 && er < 4.0) ? "OK" : "FAIL");
     }
     printf(fails == 0 ? ">>> AliveTest PASS\n" : ">>> AliveTest FAIL (%d)\n", fails);
     return fails;
