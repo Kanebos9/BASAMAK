@@ -2448,17 +2448,16 @@ juce::String VoiceModDisplay::getTooltip()
                "offsets give a subtle, static width), but it really opens up with some Detune - or "
                "Chord/Scale notes - which is also when the lines here visibly fan apart.";
     if (hover == 4 && uniOn)
-        return "DRIFT (orange dot): makes every note slightly different, like analog hardware - 0% = "
-               "perfectly repeating hits (the drum default). One knob, fixed recipe (all amounts scale "
-               "with the dot; at 100%):\n\n"
-               "- Unison start phases scatter per note (full blur from ~50% up).\n"
-               "- Each voice gets a random detune up to +-10 cents + a slow +-7 cent wander.\n"
-               "- The FILTER cutoff moves up to +-0.4 octave per note (needs a filter on).\n"
-               "- The level breathes up to +-20% per note.\n\n"
-               "This dot is the ONLY control - the numbers above are the effect's fixed design, like the "
-               "chorus knob's rate. TRUE random: each pass differs microscopically - that is the point. "
-               "The voice lines here move with the REAL pitch values each hit rolls (filter/level dice "
-               "don't draw).";
+        return "DRIFT (orange dot): every note rolls its own dice, like analog hardware - 0% = perfectly "
+               "repeating hits (the drum default). The recipe at 100% (all scale with the dot):\n\n"
+               "- The whole note lands up to +-8 cents off per hit (the clearest cue) + each unison voice "
+               "another +-15 cents + a +-12 cent slow wander.\n"
+               "- Unison start phases scatter (full blur from ~50%).\n"
+               "- The FILTER cutoff moves up to +-0.6 octave per note (needs a filter on).\n"
+               "- The level breathes up to +-30% per note.\n\n"
+               "HOW TO HEAR IT: put Drift at 60%+, press TEST repeatedly - each hit differs. Strongest "
+               "with unison 3+ (blur) and a filter on (tone changes per note). One dot = the whole "
+               "effect; the numbers are its fixed design, like the chorus knob's rate.";
     juce::String s = "Voice controls for the selected slot. Hover the UNISON / CHORD / SCALE chips for what each mode "
                      "does. ";
     if (vibOn) s += "Vibrato = ~5.5 Hz pitch wobble (works on every engine here).";
@@ -7220,12 +7219,23 @@ void DrumSequencerEditor::setupComponents()
         [this](float v){ proc.sequencer.channel(selectedChannel).slots[envTargetSlot()].fxDrive = v; },
         "How hard THIS slot is pushed into distortion (the Drive TYPE is the dropdown beside it).\n\n"
         "- Per slot: slot 1 and slot 2 distort independently.\n- Drag left/right; double-click = off.");
-    setupFxFader(keytrackFader, "Keytrack", 0.0f, [](float v){ return v <= 0.001f ? juce::String("Off") : juce::String(juce::roundToInt(v * 100.0f)) + "%"; },
-        [this](float v){ auto& sl = proc.sequencer.channel(selectedChannel).slots[juce::jlimit(0, DrumChannel::NUM_SLOTS - 1, eqEditTarget - 1)];
-                         if (freqDisplay.active() == 0) sl.filterKeyTrack = v; else sl.filterKeyTrack2 = v; },
-        "Makes the resonant FILTER cutoff FOLLOW the note pitch.\n\n"
-        "- 0 = fixed cutoff. 100% = the cutoff tracks 1:1 (doubles per octave), so high notes stay bright.\n"
-        "- Needs the slot filter ON (pick its type + cutoff on the FILTER display to the left).");
+    const auto ktFmt = [](float v){ return v <= 0.001f ? juce::String("Off") : juce::String(juce::roundToInt(v * 100.0f)) + "%"; };
+    setupFxFader(keytrackFader, "F1 Keytrack", 0.0f, ktFmt,
+        [this](float v){ proc.sequencer.channel(selectedChannel)
+                             .slots[juce::jlimit(0, DrumChannel::NUM_SLOTS - 1, eqEditTarget - 1)].filterKeyTrack = v; },
+        "FILTER 1 KEYTRACK: makes F1's cutoff FOLLOW the note pitch.\n\n"
+        "- 0 = fixed cutoff. 100% = tracks 1:1 (doubles per octave), so high notes stay bright.\n"
+        "- F1/F2 = the TWO FILTERS of this slot (the orange/cyan diamonds) - not the slots.\n"
+        "- Dimmed = filter 1 is Off (enable it: double-click its diamond).");
+    setupFxFader(keytrackFader2, "F2 Keytrack", 0.0f, ktFmt,
+        [this](float v){ proc.sequencer.channel(selectedChannel)
+                             .slots[juce::jlimit(0, DrumChannel::NUM_SLOTS - 1, eqEditTarget - 1)].filterKeyTrack2 = v; },
+        "FILTER 2 KEYTRACK: makes F2's cutoff FOLLOW the note pitch.\n\n"
+        "- 0 = fixed cutoff. 100% = tracks 1:1 (doubles per octave).\n"
+        "- F1/F2 = the TWO FILTERS of this slot (the orange/cyan diamonds) - not the slots.\n"
+        "- Dimmed = filter 2 is Off (enable it: double-click its diamond).");
+    keytrackFader.setAccent(FrequencyDisplay::filtColour(0));
+    keytrackFader2.setAccent(FrequencyDisplay::filtColour(1));
     setupKnob(knobReverbRoom,  lblRevRoom,  "Size",  0.0, 1.0,  0.5,   1.0, fmtPct);
     setupKnob(knobReverbDecay, lblRevDecay, "Decay", 0.0, 1.0,  0.5,   1.0, fmtPct);
     setupKnob(knobReverbWet,   lblRevWet,   "Wet",   0.0, 1.0,  0.4,   1.0, fmtPct);
@@ -9093,7 +9103,7 @@ void DrumSequencerEditor::updateStripParamIds()
 void DrumSequencerEditor::updateFxFaders(const DrumChannel::Slot& sl)
 {
     const juce::Colour acc = envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8);
-    for (auto* fd : { &fxDriveFader, &keytrackFader }) fd->setAccent(acc);
+    fxDriveFader.setAccent(acc);   // keytrack faders keep their F1/F2 filter colours
     fxDriveFader.setValue01(sl.fxDrive);
     // Reverb/Delay/Pan + Chorus are KNOBS now (set here); ignoreKnobCallbacks is on during refresh.
     knobChMix.setValue  (sl.chorusMix,    juce::dontSendNotification);
@@ -9104,15 +9114,15 @@ void DrumSequencerEditor::updateFxFaders(const DrumChannel::Slot& sl)
     refreshKeytrackFader();   // Keytrack follows the ACTIVE filter (F1/F2) with its colour + label
 }
 
-// The Keytrack fader edits the filter you last touched on the display (F1 or F2), coloured to match.
+// BOTH keytrack faders (F1 + F2) push their own filter's value; each dims when its filter is Off.
 void DrumSequencerEditor::refreshKeytrackFader()
 {
     const int si = juce::jlimit(0, DrumChannel::NUM_SLOTS - 1, eqEditTarget - 1);
     auto& sl = proc.sequencer.channel(selectedChannel).slots[si];
-    const int fi = freqDisplay.active();
-    keytrackFader.setValue01(fi == 0 ? sl.filterKeyTrack : sl.filterKeyTrack2);
-    keytrackFader.setAccent(FrequencyDisplay::filtColour(fi));
-    keytrackFader.setLabel(fi == 0 ? "F1 Keytrack" : "F2 Keytrack");   // full word ('F1 Key' read as a mystery - user)
+    keytrackFader.setValue01(sl.filterKeyTrack);
+    keytrackFader2.setValue01(sl.filterKeyTrack2);
+    keytrackFader.setAlpha (sl.filterType  != 0 ? 1.0f : 0.45f);
+    keytrackFader2.setAlpha(sl.filterType2 != 0 ? 1.0f : 0.45f);
 }
 
 void DrumSequencerEditor::refreshDetailPanel()
@@ -10317,10 +10327,11 @@ void DrumSequencerEditor::layoutContent()
           slotSelEq.setBounds (ax + 8, GRAPH_Y + GRAPH_H + 30, ampEqW - 16, 16);
           // The EQ/filter display is shrunk a little to the LEFT so the vertical KEYTRACK fader sits on
           // its right, under the same "FILTER / EQ" title (both control the resonant filter shown here).
-          const int ktW = 30, ktGap = 6, fdY = GRAPH_Y + GRAPH_H + 50, fdH = 124;
-          freqDisplay.setBounds (ax + 8, fdY, ampEqW - 16 - ktW - ktGap, fdH);
-          keytrackFader.setVertical(true);
-          keytrackFader.setBounds(ax + 8 + ampEqW - 16 - ktW, fdY, ktW, fdH); }
+          const int ktW = 19, ktGap = 6, fdY = GRAPH_Y + GRAPH_H + 50, fdH = 124;   // TWO narrow faders (F1 + F2)
+          freqDisplay.setBounds (ax + 8, fdY, ampEqW - 16 - 2 * ktW - 2 - ktGap, fdH);
+          keytrackFader.setVertical(true);  keytrackFader2.setVertical(true);
+          keytrackFader.setBounds (ax + 8 + ampEqW - 16 - 2 * ktW - 2, fdY, ktW, fdH);
+          keytrackFader2.setBounds(ax + 8 + ampEqW - 16 - ktW,         fdY, ktW, fdH); }
 
         // -- PITCH ENVELOPE column: title on TOP, its 1/2 selector BELOW it (matches the amp-env column), graph aligned
         //    with the amp-env graph. Then "UNISON/DETUNE/VIBRATO" with ITS OWN 1/2 selector under it, the voice visual,

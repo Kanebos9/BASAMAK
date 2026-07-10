@@ -2200,7 +2200,8 @@ private:
     SlotDragFader chorusMixFader, chorusRateFader, chorusDepthFader;
     // (The LFO Sync/Rate faders were REMOVED - tempo sync lives INSIDE the LFO visual now: its Sync
     //  button cycles Off/Sync/Grid and dragging the wave snaps through the musical rates.)
-    SlotDragFader keytrackFader;     // filter cutoff keytracking (right of the FILTER/EQ visual)
+    SlotDragFader keytrackFader;     // F1 cutoff keytracking (right of the FILTER/EQ visual)
+    SlotDragFader keytrackFader2;    // F2 keytracking - its own fader (switching via the diamonds was "broken" - user)
     juce::dsp::FFT   fft { SpectrumTap::fftOrder };
     juce::dsp::WindowingFunction<float> fftWindow
         { (size_t) SpectrumTap::fftSize, juce::dsp::WindowingFunction<float>::hann };

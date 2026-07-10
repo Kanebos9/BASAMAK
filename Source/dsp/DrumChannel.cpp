@@ -1312,16 +1312,17 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         {
             const float d = sl.drift;
             const float phScat = juce::jmin(1.0f, d * 2.0f);   // phase blur saturates by ~50% drift
-            for (int u = 0; u <= UNI_MAX; ++u)
-            {
+            const float noteCents = (driftRng.nextFloat() - 0.5f) * 16.0f * d;          // the WHOLE note lands
+            for (int u = 0; u <= UNI_MAX; ++u)                                          // +-8c off per hit - the
+            {                                                                            // clearest audible cue
                 sv.uniPhase[u] += (double) phScat * driftRng.nextDouble() * 2.0 * kPi;  // phase scatter (unison blur)
-                const float cents = (driftRng.nextFloat() - 0.5f) * 20.0f * d;          // fixed +-10 cents per voice
+                const float cents = noteCents + (driftRng.nextFloat() - 0.5f) * 30.0f * d;  // +-15c per voice on top
                 sv.driftMul[u] = std::pow(2.0f, cents / 1200.0f);
             }
             sv.driftWobPh   = driftRng.nextDouble() * 2.0 * kPi;                        // slow wander start
-            sv.driftWobRate = 0.1f + 0.5f * driftRng.nextFloat();                       // 0.1..0.6 Hz
-            sv.driftGain    = 1.0f + (driftRng.nextFloat() - 0.5f) * 0.4f * d;          // level breath (+-20%)
-            sv.driftFiltMul = std::pow(2.0f, (driftRng.nextFloat() - 0.5f) * 0.8f * d); // filter +-0.4 oct per note
+            sv.driftWobRate = 0.15f + 0.85f * driftRng.nextFloat();                     // 0.15..1.0 Hz
+            sv.driftGain    = 1.0f + (driftRng.nextFloat() - 0.5f) * 0.6f * d;          // level breath (+-30%)
+            sv.driftFiltMul = std::pow(2.0f, (driftRng.nextFloat() - 0.5f) * 1.2f * d); // filter +-0.6 oct per note
         }
 
         // SCALE mode (diatonic harmonizer): the chord depends on the played NOTE, so compute this voice's
@@ -2151,7 +2152,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             auto& svd = v.sv[s];
             if (sc[s].drift > 0.001f)
             {
-                svd.driftWobMul = (float) std::pow(2.0, std::sin(svd.driftWobPh) * (double) sc[s].drift * 7.0 / 1200.0);
+                svd.driftWobMul = (float) std::pow(2.0, std::sin(svd.driftWobPh) * (double) sc[s].drift * 12.0 / 1200.0);
                 svd.driftWobPh += 2.0 * kPi * (double) svd.driftWobRate * (double) numSamples / sr;
                 if (svd.driftWobPh > 2.0 * kPi) svd.driftWobPh -= 2.0 * kPi;
             }

@@ -585,7 +585,7 @@ public:
         // sings instead of ringing louder). 0 = bypass = bit-identical clean filter. One flavour.
         float filterDrive = 0.0f;
         int   filterType2   = FilterOff;
-        float filterCutoff2 = 1000.0f, filterReso2 = 0.707f, filterEnvAmt2 = 0.0f;
+        float filterCutoff2 = 2500.0f, filterReso2 = 0.707f, filterEnvAmt2 = 0.0f;
         float filterKeyTrack2 = 0.0f;
         // === PER-SLOT FILTER (end) ===
         // === PER-SLOT CHORUS (insert, after the filter/EQ) - lush multi-voice stereo widener.

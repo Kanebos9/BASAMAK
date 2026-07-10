@@ -44,11 +44,11 @@ public:
         float modD  = 1.5f;                                                // delay-line modulation depth
         switch (mode)
         {   // re-voicings of the same safe network; Hall (1) = the untouched original numbers
-            case 0: scale *= 0.45f; g *= 0.92f; cutHz *= 0.7f;  modD = 1.0f; break;               // Room: small, tight, darker
+            case 0: scale *= 0.32f; g *= 0.90f; cutHz *= 0.55f; modD = 0.6f; break;               // Room: small, boxy, dark
             case 2: scale *= 0.7f;  g = juce::jmin(0.95f, g * 1.02f); modD = 0.8f;                // Plate: dense + bright
                     cutHz = 2400.0f + (1.0f - juce::jlimit(0.0f, 1.0f, damp)) * 9000.0f; break;
-            case 3: cutHz = juce::jmax(cutHz * 1.4f, 4500.0f); break;   // Shimmer: open the damping so the
-                                                                        // octave-up passes survive
+            case 3: cutHz = juce::jmax(cutHz * 1.4f, 4500.0f);          // Shimmer: open the damping so the
+                    g = juce::jmin(0.95f, g * 1.04f); break;            // octave-up passes survive + bloom
             default: break;                                                                        // Hall body
         }
         const float dampC = 1.0f - std::exp(-twoPi * cutHz / (float) sr);
@@ -99,7 +99,7 @@ public:
                 // ENERGY-NEUTRAL: crossfade toward the shifted copy (never add on top - adding pushed
                 // the loop past unity, the +-8 clamps pegged, and the huge wet made the master
                 // soft-clip crush the whole mix = "shimmer breaks everything").
-                hh += 0.45f * (shOut - hh);
+                hh += 0.6f * (shOut - hh);
             }
             for (int i = 0; i < N; ++i)
             {
@@ -109,7 +109,10 @@ public:
                 fb = lp[i];
                 const int sz = (int) buf[i].size();
                 // HARD SAFETY: bound the stored state + kill any NaN/Inf so the network can NEVER run away.
-                const float v = in * sgn[i] * 0.5f + fb;
+                // Room mode: SPARSE input (only half the lines are fed) = boxy, fluttery early field -
+                // a real character change, not just "small hall" (Size already does small).
+                const float inG = (mode == 0 && (i & 1)) ? 0.0f : 0.5f;
+                const float v = in * sgn[i] * inG + fb;
                 buf[i][(size_t) widx[i]] = std::isfinite(v) ? juce::jlimit(-8.0f, 8.0f, v) : 0.0f;
                 widx[i] = (widx[i] + 1) % sz;
             }
