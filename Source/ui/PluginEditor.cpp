@@ -7459,7 +7459,7 @@ void DrumSequencerEditor::setupComponents()
     // stay "1"/"2" so the SlotSelector keeps its yellow/pink slot colours.
     slotSelEq.labels = { "1", "2" };
     content.addAndMakeVisible(slotSelEq);
-    slotSelEq.onSelect = [this](int s) { if (ignoreKnobCallbacks) return; eqEditTarget = s + 1; refreshEqTarget(); };
+    slotSelEq.onSelect = [this](int s) { if (ignoreKnobCallbacks) return; setShapeSlot(s); };   // syncs ALL groups (like the others)
     freqDisplay.onFilterDriveEdit = [this](float v) {   // FILTER DRIVE (selected slot; drives both its SVFs)
         if (ignoreKnobCallbacks) return;
         auto& ch = proc.sequencer.channel(selectedChannel);
@@ -9121,8 +9121,8 @@ void DrumSequencerEditor::refreshKeytrackFader()
     auto& sl = proc.sequencer.channel(selectedChannel).slots[si];
     keytrackFader.setValue01(sl.filterKeyTrack);
     keytrackFader2.setValue01(sl.filterKeyTrack2);
-    keytrackFader.setAlpha (sl.filterType  != 0 ? 1.0f : 0.45f);
-    keytrackFader2.setAlpha(sl.filterType2 != 0 ? 1.0f : 0.45f);
+    keytrackFader.setAlpha (sl.filterType  != 0 ? 1.0f : 0.32f);   // clearly dimmer when its filter is Off
+    keytrackFader2.setAlpha(sl.filterType2 != 0 ? 1.0f : 0.32f);
 }
 
 void DrumSequencerEditor::refreshDetailPanel()
@@ -9404,6 +9404,7 @@ void DrumSequencerEditor::refreshEqTarget()
     freqDisplay.setFilters(fsl.filterType,  fsl.filterCutoff,  fsl.filterReso,  fsl.filterEnvAmt,
                            fsl.filterType2, fsl.filterCutoff2, fsl.filterReso2, fsl.filterEnvAmt2, proc.spectrumRate());
     freqDisplay.setFilterDrive(fsl.filterDrive);
+    refreshKeytrackFader();   // BOTH keytrack faders re-read this slot (stale values read as "slot 2 rose too")
     proc.analysisSlot.store(si);   // spectrum follows the selected slot
     slotSelEq.sel = si; slotSelEq.repaint();
 }
@@ -10467,7 +10468,7 @@ void DrumSequencerEditor::layoutContent()
         kFx(knobTone, lblTone, 0, row3); kFx(knobPunch, lblPunch, 1, row3); kFx(knobComp, lblComp, 2, row3);
         // LFO visual fills everything left - tempo sync lives INSIDE it (Sync button + snapped drag).
         const int lfoTop = row3 + KSB + kboxH + 16;
-        lfoDisplay.setBounds(fxX, lfoTop, fxW, juce::jmax(74, colTop + colH - lfoTop));   // fill the spare strip below (user)
+        lfoDisplay.setBounds(fxX, lfoTop, fxW, juce::jmax(74, colTop + colH - lfoTop - 7));   // stop just above the FX box outline
     }
 
     // DRAW HARMONICS overlay: parked over the amp/pitch columns (opened from the Custom wave preview;
