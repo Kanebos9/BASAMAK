@@ -837,13 +837,6 @@ static void kSoftPad(DC& c) {       // slow airy pad: wide detuned saws, high su
     s.filterType = DC::LowPass; s.filterCutoff = 1400.0f; s.filterReso = 0.9f;
     c.reverbSend = 0.25f; c.volume = 0.68f;
 }
-static void kOrgan(DC& c) {         // drawbar-ish organ: octave-stack wave at FULL sustain (gate on/off)
-    auto& s = mkSlot(c, DC::SrcOsc);
-    s.oscShape = s.oscShapeB = 9;                                    // Organ (additive octave stack)
-    s.oscFreq = 261.63f;
-    s.atk = 0.005f; s.dec = 0.3f; s.sustain = 1.0f; s.release = 0.08f;
-    c.reverbSend = 0.10f; c.volume = 0.72f;
-}
 static void kSquareLead(DC& c) {    // hollow mono lead: detuned squares, holds while a key is down
     auto& s = mkSlot(c, DC::SrcOsc);
     s.oscShape = s.oscShapeB = DC::WvSquare; s.oscFreq = 261.63f;
@@ -1686,19 +1679,8 @@ static void aFlute(DC& c) {        // soft pure start blooming into a singing bo
     windBreath(c, 0.18f, 3400.0f, 0.07f, 0.6f, 0.75f, 0.28f);
     c.volume = 0.72f;
 }
-static void aPanFlute(DC& c) {     // breathy pipe: CHIFF of air, hollow body that wavers as you blow
-    auto& s = mkAdd(c, {{1,1.0f},{2,0.3f}});                                         // A: dull start
-    wtFrame(s, 1, {{1,1.0f},{2,0.55f},{3,0.12f}});                                   // B: hollow body
-    wtFrame(s, 2, {{1,0.95f},{2,0.7f},{3,0.2f},{4,0.08f}});                          // C: harder blow
-    wtFrame(s, 3, {{1,0.95f},{2,0.7f},{3,0.2f},{4,0.08f}});
-    s.atk = 0.05f; s.dec = 0.8f; s.sustain = 0.75f; s.release = 0.3f;
-    s.drift = 0.35f; s.vibrato = 0.08f;
-    windMotion(s, 0.05f, 0.12f, 0.8f);
-    auto& n = windBreath(c, 0.24f, 2200.0f, 0.008f, 0.3f, 0.45f, 0.3f);   // fast chiff, air under the note
-    n.noiseRes = 0.7f;
-    c.volume = 0.7f;
-}
-static void aOboe(DC& c) {         // double-reed bite: warm start snapping into the nasal reedy body
+static void aOboe(DC& c) {         // "Reed Piano" (user: it reads as a piano, not an oboe - renamed):
+                                   // warm start snapping into a nasal reedy body; formant BP + LP pair
     auto& s = mkAdd(c, {{1,0.7f},{2,0.6f},{3,0.5f},{4,0.25f}});                      // A: warm pre-bite
     wtFrame(s, 1, {{1,0.55f},{2,0.85f},{3,1.0f},{4,0.7f},{5,0.45f},{6,0.3f},{8,0.18f}});   // B: the reed
     wtFrame(s, 2, {{1,0.45f},{2,0.8f},{3,1.0f},{4,0.85f},{5,0.6f},{6,0.45f},{8,0.3f},{10,0.15f}}); // C: pressed
@@ -2041,7 +2023,6 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Glue Bass", xGlueBass, "Bass" },
     // ---- Keys ----
     { "E-Piano", kEPiano, "Keys" },
-    { "Organ", kOrgan, "Keys" },
     { "String Keys", kStringKeys, "Keys" },
     { "Toy Piano", kToyPiano, "Keys" },
     { "Harpsichord", kHarpsichord, "Keys" },
@@ -2089,8 +2070,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Drift Lead", wDriftLead, "Leads" },
     { "Clarinet", aClarinet, "Leads" },
     { "Flute", aFlute, "Leads" },
-    { "Pan Flute", aPanFlute, "Leads" },
-    { "Oboe", aOboe, "Leads" },
+    { "Reed Piano", aOboe, "Keys" },
     // ---- Plucks & Strings ----
     { "Pluck", mPluck, "Plucks & Strings" },
     { "Harp", mHarp, "Plucks & Strings" },

@@ -106,6 +106,9 @@ private:
     int    drawNoteCount[NCH] = {};
     int    drawDragCh = -1, drawLastCol = -1;          // channel being line-drawn + last column (interp)
     int    strokeNoteIdx = -1;                          // the note the current ROW line-stroke is extending
+    bool   strokeCreatedNew = false;                    // this stroke APPENDED a note (vs extending an old one)
+    int    tapNoteCh = -1, tapNoteIdx = -1;             // the note a single CLICK just created (a double-click
+                                                        // removes it again before opening the magnifier)
     int    strokeLockSemi = -128;                       // the stroke's pitch = where the press LANDED (locked, like the magnified editor)
     bool   drawErase = false;                          // right-drag erases (removes notes under the stroke)
     float  playBarFrac = 0.0f;                         // current bar position 0..1 (piano-roll playhead)

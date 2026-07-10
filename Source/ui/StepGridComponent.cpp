@@ -482,7 +482,7 @@ void StepGridComponent::drawStrokeTo(int ch, juce::Point<int> pos)
             drawNotes[ch][cnt] = { (int16_t) lo, (int16_t) juce::jmax(1, hi - lo + 1), (int8_t) semi,
                                    (uint8_t) juce::jlimit(0, 255, (int) std::lround(dVel[ch] * 255.0f)),
                                    (uint8_t) prTargetSlot };
-            strokeNoteIdx = cnt; ++cnt;
+            strokeNoteIdx = cnt; ++cnt; strokeCreatedNew = true;
         }
         drawReadSemi = semi;   // live read-out
         if (onRollPreview) onRollPreview(semi);   // hear the drawn pitch
@@ -1029,11 +1029,16 @@ void StepGridComponent::mouseDoubleClick(const juce::MouseEvent& e)
     { const int dch = firstRow + (p.y >= 0 ? p.y / juce::jmax(1, rowH) : -1);
       if (dch >= 0 && dch < NCH && drawMode[dch])
       {
-          const int col = drawColAt(p.x);
-          for (int i = drawNoteCount[dch] - 1; i >= 0; --i)   // topmost note under the cursor column
-              if (col >= drawNotes[dch][i].start && col < drawNotes[dch][i].start + drawNotes[dch][i].len)
-              { for (int j = i; j < drawNoteCount[dch] - 1; ++j) drawNotes[dch][j] = drawNotes[dch][j + 1];
-                --drawNoteCount[dch]; pushNotes(dch); repaint(); break; }
+          // DOUBLE-CLICK on the small row = MAGNIFY (open the big editor) - user redesign; deleting
+          // moved fully into the big editor. The double-click's own FIRST press drew a note - take
+          // exactly that one back (never a pre-existing note the user aimed at).
+          if (tapNoteCh == dch && tapNoteIdx >= 0 && tapNoteIdx < drawNoteCount[dch])
+          {
+              for (int j = tapNoteIdx; j < drawNoteCount[dch] - 1; ++j) drawNotes[dch][j] = drawNotes[dch][j + 1];
+              --drawNoteCount[dch]; pushNotes(dch);
+          }
+          tapNoteCh = -1; tapNoteIdx = -1;
+          drawMagCh = dch; repaint();
           return;
       } }
     if (editMode == ModeSteps) return;   // on/off has no "value" to reset
@@ -1214,7 +1219,10 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
             // so the ROW is pure note drawing: left-drag draws (poly), right-drag erases; lens opens
             // the big editor. Per-note velocity/pan live in the right-click menu.
             if (onLens) { drawMagCh = dch; repaint(); return; }
-            drawDragCh = dch; drawErase = e.mods.isRightButtonDown(); drawLastCol = -1; strokeNoteIdx = -1; strokeLockSemi = -128;
+            if (e.getNumberOfClicks() >= 2) return;   // double-click = magnify (handled in mouseDoubleClick);
+                                                      // the 2nd press must not draw another stroke
+            drawDragCh = dch; drawErase = e.mods.isRightButtonDown(); drawLastCol = -1; strokeNoteIdx = -1;
+            strokeLockSemi = -128; strokeCreatedNew = false;
             drawStrokeTo(dch, p);
             return;
         }
@@ -1401,6 +1409,9 @@ void StepGridComponent::mouseDrag(const juce::MouseEvent& e)
 void StepGridComponent::mouseUp(const juce::MouseEvent&)
 {
     if (onRollPreviewEnd) onRollPreviewEnd();   // any gesture end releases the drawing-audition note
+    if (drawDragCh >= 0 && strokeCreatedNew && strokeNoteIdx >= 0)
+    { tapNoteCh = drawDragCh; tapNoteIdx = strokeNoteIdx; }   // a click just created this note
+    else if (drawDragCh >= 0) { tapNoteCh = -1; tapNoteIdx = -1; }
 
     if (prMode == 5 && drawMagCh >= 0)   // MARQUEE released: select every note inside the band
     {
