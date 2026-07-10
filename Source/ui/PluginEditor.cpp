@@ -804,6 +804,53 @@ juce::String HarmonicEditor::getTooltip()
            "it each note, the WAVE LFO (LFO visual) scans it live.";
 }
 
+void LfoCurveEditor::paint(juce::Graphics& g)
+{
+    auto bb = getLocalBounds().toFloat();
+    g.setColour(juce::Colour(0xf0141428)); g.fillRoundedRectangle(bb, 6.0f);
+    g.setColour(accent); g.drawRoundedRectangle(bb.reduced(0.5f), 6.0f, 1.4f);
+    g.setFont(juce::Font(12.5f, juce::Font::bold)); g.setColour(accent);
+    g.drawText("DRAW LFO SHAPE", 12, 4, 200, 16, juce::Justification::centredLeft, false);
+    g.setColour(juce::Colour(0xffc05050)); g.setFont(juce::Font(13.0f, juce::Font::bold));
+    g.drawText("X", closeRect(), juce::Justification::centred, false);
+    const auto a = strip();
+    g.setColour(juce::Colour(0xff10101f)); g.fillRoundedRectangle(a, 3.0f);
+    g.setColour(accent.withAlpha(0.35f)); g.drawRoundedRectangle(a, 3.0f, 1.0f);
+    g.setColour(juce::Colour(0xff262640));
+    g.drawHorizontalLine((int) a.getCentreY(), a.getX(), a.getRight());
+    for (int q = 1; q < 4; ++q)   // quarter-cycle guides
+        g.drawVerticalLine((int) (a.getX() + a.getWidth() * (float) q / 4.0f), a.getY() + 2.0f, a.getBottom() - 2.0f);
+    juce::Path p;
+    for (int k = 0; k < CVN; ++k)
+    {
+        const float x = a.getX() + 2.0f + (a.getWidth() - 4.0f) * (float) k / (float)(CVN - 1);
+        const float y = a.getCentreY() - juce::jlimit(-1.0f, 1.0f, curve[k]) * (a.getHeight() * 0.5f - 3.0f);
+        if (k == 0) p.startNewSubPath(x, y); else p.lineTo(x, y);
+    }
+    g.setColour(accent); g.strokePath(p, juce::PathStrokeType(1.8f));
+    g.setColour(juce::Colour(0xff6a7290)); g.setFont(juce::Font(9.0f, juce::Font::bold));
+    g.drawText("LEFT-drag = draw - one cycle - Amount scales it - click outside to close",
+               12, getHeight() - 13, getWidth() - 24, 11, juce::Justification::centredLeft, false);
+}
+void LfoCurveEditor::mouseDown(const juce::MouseEvent& e)
+{
+    if (closeRect().contains(e.position)) { setVisible(false); if (onClose) onClose(); return; }
+    lastI = -1; mouseDrag(e);
+}
+void LfoCurveEditor::mouseDrag(const juce::MouseEvent& e)
+{
+    const auto a = strip();
+    const int   i = juce::jlimit(0, CVN - 1, (int) ((e.position.x - a.getX() - 2.0f) / juce::jmax(1.0f, a.getWidth() - 4.0f) * (float)(CVN - 1)));
+    const float v = juce::jlimit(-1.0f, 1.0f, (a.getCentreY() - e.position.y) / juce::jmax(1.0f, a.getHeight() * 0.5f - 3.0f));
+    if (lastI < 0) curve[i] = v;
+    else for (int n = juce::jmin(lastI, i); n <= juce::jmax(lastI, i); ++n)
+    {   const float t = lastI == i ? 1.0f : (float)(n - lastI) / (float)(i - lastI);
+        curve[n] = curve[lastI] + (v - curve[lastI]) * (lastI <= i ? t : 1.0f - t); }
+    lastI = i;
+    if (onChange) onChange(curve);
+    repaint();
+}
+
 juce::String WaveMorphDisplay::getTooltip()
 {
     return "The oscillator's waveform (the picture is the real tone). Pick the wave with the WAVE fader above; "
@@ -1216,10 +1263,11 @@ void SlotEditor::init(int idx, MidiLearnManager& mlm, juce::LookAndFeel* knobLNF
     // Single "Wave" selector: ONE horizontal fader ABOVE the visual that scans every shape (snaps to each;
     // shows "n-Name"). Replaces the old From/To vertical faders + the over-the-note morph (which sounded harsh).
     fromFader = mkFader("wave");   // reuse the fromFader slot as the single Wave fader (toFader retired)
-    fromFader->setTextBoxStyle(juce::Slider::TextBoxRight, true, 92, 16);   // WIDER name read-out (track shrinks) so the shape name fits
+    fromFader->setTextBoxStyle(juce::Slider::TextBoxRight, true, 150, 16);  // WIDE read-out (track shrinks) - Custom explains itself (user)
     fromFader->setColour(juce::Slider::trackColourId, juce::Colour(0xff35c0ff));
     fromFader->setRange(0.0, (double) (DrumChannel::oscShapeCount() - 1), 1.0);
     fromFader->textFromValueFunction = [](double v) { const int i = juce::roundToInt(v);
+        if (i >= DrumChannel::WvCustom) return juce::String("Custom (draw on wave)");   // the invitation (user)
         return juce::String(i + 1) + "-" + juce::String(DrumChannel::oscShapeName(i)); };
     fromFader->setTooltip("Wave: the oscillator's waveform - slide through all shapes (Sine, Hump, Tri, Square, Saw, "
                           "Pulse, Vowel A/O, Formant, Organ, Bell, Glass, Reed, Brass, Custom).\n\n"
@@ -3118,31 +3166,15 @@ void LfoDisplay::mouseDown(const juce::MouseEvent& e)
         if (onDragEnd) onDragEnd();
         repaint(); return;
     }
-    if (shape_[dest_] == 7 && ! e.mods.isRightButtonDown() && ! e.mods.isPopupMenu()
-        && waveArea().contains(e.position))
-    {   // CUSTOM: LEFT-drag DRAWS the cycle (right-drag keeps the rate/amount gesture)
-        curveDrawing_ = true; curveLastI_ = -1; mouseDrag(e); return;
-    }
     dnPos_ = e.position; dnRate_ = rate_[dest_]; dnAmt_ = amt_[dest_]; dragging_ = true;
+    dnMoved_ = false;
     dnSyncIdx_ = sync_[dest_] > 0.0f ? lfoSyncNearestIdx(sync_[dest_]) : 0;
 }
 
 void LfoDisplay::mouseDrag(const juce::MouseEvent& e)
 {
-    if (curveDrawing_)
-    {   // draw the Custom cycle: x = position in ONE cycle, y = -1..1 (full height; Amount scales playback)
-        const auto a = waveArea();
-        const int   i = juce::jlimit(0, CVN - 1, (int) ((e.position.x - a.getX()) / juce::jmax(1.0f, a.getWidth()) * (float) CVN));
-        const float v = juce::jlimit(-1.0f, 1.0f, (a.getCentreY() - e.position.y) / juce::jmax(1.0f, a.getHeight() * 0.5f - 2.0f));
-        if (curveLastI_ < 0) curve_[dest_][i] = v;
-        else for (int n = juce::jmin(curveLastI_, i); n <= juce::jmax(curveLastI_, i); ++n)
-        {   const float t = curveLastI_ == i ? 1.0f : (float)(n - curveLastI_) / (float)(i - curveLastI_);
-            curve_[dest_][n] = curve_[dest_][curveLastI_] + (v - curve_[dest_][curveLastI_]) * (curveLastI_ <= i ? t : 1.0f - t); }
-        curveLastI_ = i;
-        if (onCurveChange) onCurveChange(dest_, curve_[dest_]);
-        repaint(); return;
-    }
     if (! dragging_) return;
+    dnMoved_ = dnMoved_ || e.position.getDistanceFrom(dnPos_) > 3.0f;
     const float dx = e.position.x - dnPos_.x, dy = e.position.y - dnPos_.y;
     const float amt = juce::jlimit(0.0f, 1.0f, dnAmt_ - dy / 70.0f);
     if (amt > 0.001f) lastAmt_[dest_] = amt;
@@ -7256,14 +7288,17 @@ void DrumSequencerEditor::setupComponents()
         }
         ch.markDspDirty();
         refreshDetailPanel();   // push the seeded curve into the display immediately
+        if (sl.lfoShape[d] == 7) openLfoCurveEditor(d);   // picking Custom opens the draw window
     };
-    lfoDisplay.onCurveChange = [this](int dest, const float* cv) {   // the drawn Custom cycle
-        if (ignoreKnobCallbacks) return;
+    lfoDisplay.onOpenCurveEditor = [this](int dest) { openLfoCurveEditor(dest); };   // click the wave in Custom
+    content.addChildComponent(lfoCurveEd);
+    lfoCurveEd.clickIgnore = &lfoDisplay;
+    lfoCurveEd.onChange = [this](const float* cv) {
         auto& ch = proc.sequencer.channel(selectedChannel);
         auto& sl = ch.slots[envTargetSlot()];
-        const int d = juce::jlimit(0, 3, dest);
+        const int d = juce::jlimit(0, 3, lfoCurveEdDest);
         for (int k = 0; k < DrumChannel::Slot::LFO_CURVE_N; ++k) sl.lfoCurve[d][k] = cv[k];
-        ch.markDspDirty();
+        ch.markDspDirty();   // the LFO view follows via the timer's change-gated setValues push
     };
     lfoDisplay.onFreeChange = [this](int dest, bool freeRun) {  // Retrig <-> Free (timeline-anchored)
         if (ignoreKnobCallbacks) return;
@@ -9184,6 +9219,16 @@ void DrumSequencerEditor::updateFxFaders(const DrumChannel::Slot& sl)
     refreshKeytrackFader();   // Keytrack follows the ACTIVE filter (F1/F2) with its colour + label
 }
 
+// LFO SHAPER: open the draw overlay for one LFO tab, loaded with that tab's current curve.
+void DrumSequencerEditor::openLfoCurveEditor(int dest)
+{
+    lfoCurveEdDest = juce::jlimit(0, 3, dest);
+    auto& sl = proc.sequencer.channel(selectedChannel).slots[envTargetSlot()];
+    lfoCurveEd.setCurve(sl.lfoCurve[lfoCurveEdDest]);
+    lfoCurveEd.accent = kLfoDestCol[lfoCurveEdDest];
+    lfoCurveEd.setVisible(true); lfoCurveEd.toFront(false);
+}
+
 // BOTH keytrack faders (F1 + F2) push their own filter's value; each dims when its filter is Off.
 void DrumSequencerEditor::refreshKeytrackFader()
 {
@@ -10158,6 +10203,7 @@ void DrumSequencerEditor::layoutContent()
     if (soundPicker != nullptr && soundPicker->isVisible())
         static_cast<SoundPickerPanel&>(*soundPicker).close();
     harmEd.setVisible(false);   // same rule for the DRAW HARMONICS overlay
+    lfoCurveEd.setVisible(false);   // and the LFO SHAPER overlay
     const int W = DESIGN_W;
     const int gridLeft = STRIP_W + 4;
     const int gridW = W - gridLeft - 12;            // step grid now spans the full width
@@ -10545,6 +10591,7 @@ void DrumSequencerEditor::layoutContent()
     // DRAW HARMONICS overlay: parked over the amp/pitch columns (opened from the Custom wave preview;
     // hidden again at the top of every layoutContent like the sound picker).
     harmEd.setBounds(cxAmp, colTop, ampEqW + gp + pitchW + gp + fxColW, colH);   // covers amp..FX (user-outlined area)
+    lfoCurveEd.setBounds(cxPitch, colTop + 60, pitchW + gp + fxColW, 220);   // LFO SHAPER overlay (near the LFO box)
 
     hdrDrive.setBounds(0, 0, 0, 0);
     lblSampleSel.setBounds(0, 0, 0, 0);

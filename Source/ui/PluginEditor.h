@@ -471,6 +471,53 @@ private:
 };
 
 //==============================================================================
+// LFO SHAPER overlay: draw ONE cycle of the Custom LFO shape on a big strip (the in-view drag
+// clashed with the wave's rate/amount gesture - user). Opened by picking "Custom" in the Shape
+// list or clicking the wave while Custom. Content child + click-outside Closer (the popup rule).
+class LfoCurveEditor : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    static constexpr int CVN = 64;
+    float curve[CVN] = {};
+    juce::Colour accent { 0xffff9a3c };
+    std::function<void(const float*)> onChange;
+    std::function<void()> onClose;
+    juce::Component* clickIgnore = nullptr;
+    ~LfoCurveEditor() override { juce::Desktop::getInstance().removeGlobalMouseListener(&closer); }
+    void visibilityChanged() override
+    {
+        if (isVisible() && ! closerHooked)      { juce::Desktop::getInstance().addGlobalMouseListener(&closer); closerHooked = true; }
+        else if (! isVisible() && closerHooked) { juce::Desktop::getInstance().removeGlobalMouseListener(&closer); closerHooked = false; }
+    }
+    void setCurve(const float* cv) { for (int k = 0; k < CVN; ++k) curve[k] = cv[k]; repaint(); }
+    void paint(juce::Graphics& g) override;
+    void mouseDown(const juce::MouseEvent& e) override;
+    void mouseDrag(const juce::MouseEvent& e) override;
+    void mouseUp(const juce::MouseEvent&) override { lastI = -1; }
+    juce::String getTooltip() override
+    { return "Draw ONE cycle of this LFO's movement (left-drag). It plays at the LFO's speed and is "
+             "scaled by its Amount; Sync / Grid / Retrig / Free all apply. Click outside to close."; }
+private:
+    struct Closer : juce::MouseListener
+    {
+        LfoCurveEditor& ed; explicit Closer(LfoCurveEditor& e) : ed(e) {}
+        void mouseDown(const juce::MouseEvent& e) override
+        {
+            if (! ed.isVisible()) return;
+            const auto p = e.getScreenPosition();
+            if (ed.getScreenBounds().contains(p)) return;
+            if (ed.clickIgnore != nullptr && ed.clickIgnore->getScreenBounds().contains(p)) return;
+            ed.setVisible(false); if (ed.onClose) ed.onClose();
+        }
+    };
+    Closer closer { *this };
+    bool closerHooked = false;
+    int  lastI = -1;
+    juce::Rectangle<float> closeRect() const { return { (float) getWidth() - 24.0f, 4.0f, 20.0f, 16.0f }; }
+    juce::Rectangle<float> strip() const { return getLocalBounds().toFloat().reduced(10.0f).withTrimmedTop(24.0f).withTrimmedBottom(16.0f); }
+};
+
+//==============================================================================
 // A sliding on/off switch: green with the knob to the right when on, grey with
 // the knob to the left when off. (Declared early so SlotEditor can hold one.)
 class ToggleSwitch : public juce::Button
@@ -642,7 +689,7 @@ public:
                                         curve_[d][k] = curves[d][k]; } }
         filtOn_ = filterOn; waveOn_ = waveOn; accent_ = accent; if (ch) repaint();
     }
-    std::function<void(int dest, const float*)> onCurveChange;   // the drawn Custom cycle changed
+    std::function<void(int dest)> onOpenCurveEditor;   // Custom: a plain CLICK on the wave opens the draw window
     std::function<void(int dest, int shape)> onShapeChange;   // Shape button cycled
     std::function<void(int dest, bool freeRun)> onFreeChange; // Retrig/Free toggled
     void setFreeClockSec(double s) { if (std::abs(s - freeSec_) > 1.0e-4) { freeSec_ = s;
@@ -660,7 +707,11 @@ public:
     void paint(juce::Graphics&) override;
     void mouseDown(const juce::MouseEvent&) override;
     void mouseDrag(const juce::MouseEvent&) override;
-    void mouseUp(const juce::MouseEvent&) override { if ((dragging_ || curveDrawing_) && onDragEnd) onDragEnd(); dragging_ = false; curveDrawing_ = false; curveLastI_ = -1; }
+    void mouseUp(const juce::MouseEvent& e) override
+    { const bool wasDrag = dragging_; dragging_ = false;
+      if (wasDrag && ! dnMoved_ && shape_[dest_] == 7 && waveArea().contains(e.position))
+      { if (onOpenCurveEditor) onOpenCurveEditor(dest_); return; }   // plain click in Custom = open the draw window
+      if (wasDrag && dnMoved_ && onDragEnd) onDragEnd(); }
     void mouseDoubleClick(const juce::MouseEvent&) override;
     juce::String getTooltip() override;
 private:
@@ -669,7 +720,7 @@ private:
     int   shape_[4] = {};                          // 0 Sine .. 7 Custom (the drawn curve)
     bool  free_[4]  = {};                          // FREE-RUN (timeline-anchored) vs RETRIG per note
     float curve_[4][CVN] = {};                     // shape 7: the drawn cycle (-1..1)
-    bool  curveDrawing_ = false; int curveLastI_ = -1;
+    bool  dnMoved_ = false;                        // click vs drag (a plain click in Custom opens the editor)
     double freeSec_ = 0.0;                         // live free-run clock (editor timer)
     uint32_t liveCyc_ = 0;                         // the playing note's S&H cycle base (Random draws ITS pattern)
     float barSec_ = 2.0f, gridCpb_ = 16.0f;    // live tempo + grid density (setTempoInfo)
@@ -2039,7 +2090,10 @@ private:
     { std::function<void()> fn; void mouseDown(const juce::MouseEvent&) override { if (fn) fn(); } };
     HdrClick revModeClick;
     void refreshReverbModeHeader();
+    void openLfoCurveEditor(int dest);   // LFO SHAPER overlay
     HarmonicEditor harmEd;    // ADDITIVE draw-harmonics overlay (content child)
+    LfoCurveEditor lfoCurveEd;             // LFO SHAPER overlay (draw the Custom LFO cycle)
+    int            lfoCurveEdDest = 0;     // which LFO tab the overlay edits
     int            harmEdSlot = 0;
 
     LearnableKnob knobReverbRoom { "global_reverbRoom", proc.midiLearn };

@@ -1660,7 +1660,7 @@ static void aClarinet(DC& c) {     // woody odd-harmonic pipe with a nasal 9th b
     s.atk = 0.07f; s.dec = 0.5f; s.sustain = 0.85f; s.release = 0.22f;   // slower start = blown, not struck
     s.filterType = DC::LowPass; s.filterCutoff = 2400.0f; s.filterReso = 0.8f; s.filterKeyTrack = 0.5f;
     s.fxTone = -0.25f; s.drift = 0.25f; s.vibrato = 0.10f;
-    windBreath(c, 0.12f, 2600.0f, 0.05f, 0.4f, 0.5f, 0.2f);
+    windBreath(c, 0.14f, 2600.0f, 0.06f, 0.5f, 0.65f, 0.25f);   // air rides the whole note now
     c.volume = 0.74f;
 }
 static void aFlute(DC& c) {        // nearly pure tone + plenty of air; gentle vibrato carries the note
@@ -1668,7 +1668,7 @@ static void aFlute(DC& c) {        // nearly pure tone + plenty of air; gentle v
     s.weight = 0.8f;
     s.atk = 0.09f; s.dec = 0.6f; s.sustain = 0.9f; s.release = 0.25f;
     s.drift = 0.3f; s.vibrato = 0.16f; s.fxTone = 0.1f;
-    windBreath(c, 0.2f, 3400.0f, 0.06f, 0.5f, 0.6f, 0.22f);
+    windBreath(c, 0.22f, 3400.0f, 0.07f, 0.6f, 0.75f, 0.28f);
     c.volume = 0.72f;
 }
 static void aPanFlute(DC& c) {     // breathy pipe: a CHIFF of air at the attack, hollow body after
@@ -1676,7 +1676,7 @@ static void aPanFlute(DC& c) {     // breathy pipe: a CHIFF of air at the attack
     s.weight = 0.72f;
     s.atk = 0.05f; s.dec = 0.8f; s.sustain = 0.75f; s.release = 0.3f;
     s.drift = 0.35f; s.vibrato = 0.08f;
-    auto& n = windBreath(c, 0.28f, 2200.0f, 0.008f, 0.25f, 0.35f, 0.25f);   // fast chiff, then settles
+    auto& n = windBreath(c, 0.28f, 2200.0f, 0.008f, 0.3f, 0.45f, 0.3f);   // fast chiff, air stays under the note
     n.noiseRes = 0.7f;
     c.volume = 0.7f;
 }
@@ -1687,7 +1687,7 @@ static void aOboe(DC& c) {         // reedy double-reed bite: strong mid partial
     s.filterType = DC::BandPass; s.filterCutoff = 1100.0f; s.filterReso = 1.3f; s.filterKeyTrack = 0.35f;
     s.filterType2 = DC::LowPass; s.filterCutoff2 = 5200.0f; s.filterReso2 = 0.7f;
     s.drift = 0.22f; s.vibrato = 0.12f;
-    windBreath(c, 0.1f, 3000.0f, 0.04f, 0.4f, 0.5f, 0.18f);
+    windBreath(c, 0.12f, 3000.0f, 0.05f, 0.5f, 0.6f, 0.22f);
     c.volume = 0.7f;
 }
 static void aMusicBox(DC& c) {     // tiny sparkling box: sparse high partials, quick ping

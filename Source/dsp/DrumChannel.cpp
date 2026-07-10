@@ -2396,8 +2396,11 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         sv.sinePhase = sv.uniPhase[0];
                         break; }
                     case SrcNoise: {
-                        if (v.gateLen > 0 && c.sustain > 0.01f)   // same gate rule as SrcOsc (Note Length = the gate)
-                            env = keyAdsr(t, v.gateLen, c.atk, c.hold, c.dec, c.sustain, c.release);
+                        // FULL envelope contract, exactly like SrcOsc: a held KEY or a piano-roll
+                        // gate sustains + releases (v.isKey was missing here = noise layers could
+                        // not sustain or release on keys/roll - the broken "wind" breath).
+                        if (v.isKey || (v.gateLen > 0 && c.sustain > 0.01f))
+                            env = keyAdsr(t, v.isKey ? v.keyOff : v.gateLen, c.atk, c.hold, c.dec, c.sustain, c.release);
                         else
                             env = ahdsEnv(t, c.atk, c.hold, sv.gateDec > 0.0f ? sv.gateDec : c.dec, c.sustain, c.release);
                         float w = whiteNoise(sv.noiseState), col;
