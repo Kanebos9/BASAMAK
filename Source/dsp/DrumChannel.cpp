@@ -333,9 +333,12 @@ void DrumChannel::rebuildAddTables()
             bake(slots[sl].addH[f], slots[sl].addPh[f], addTbl[sl][f]);
 }
 // LFO wave value for a shape at phase ph (radians). Shape 0 = sine (the old, exact path);
-// 1 Triangle / 2 Saw down / 3 Square / 4 Random S&H (one hashed value per completed cycle -
-// deterministic: the same cycle index always yields the same value).
-static inline float lfoShapeVal(int shape, double ph, uint32_t cyc) noexcept
+// 1 Triangle / 2 Saw down / 3 Square / 4 Random steps / 5 Saw up / 6 Random glide (interpolated
+// steps) / 7 CUSTOM (the drawn curve, linear-interp). Random values are hashed per cycle index.
+static inline float lfoRand01(uint32_t cyc) noexcept
+{ uint32_t h = cyc * 2654435761u; h ^= h >> 16; h *= 2246822519u; h ^= h >> 13;
+  return (float) h / 2147483648.0f - 1.0f; }
+static inline float lfoShapeVal(int shape, double ph, uint32_t cyc, const float* curve = nullptr) noexcept
 {
     if (shape <= 0) return (float) std::sin(ph);
     const double t = ph / (2.0 * juce::MathConstants<double>::pi);
@@ -345,9 +348,19 @@ static inline float lfoShapeVal(int shape, double ph, uint32_t cyc) noexcept
         case 1: return (float) (f < 0.25 ? 4.0 * f : f < 0.75 ? 2.0 - 4.0 * f : 4.0 * f - 4.0); // Triangle
         case 2: return (float) (1.0 - 2.0 * f);                                                  // Saw (falls)
         case 3: return f < 0.5 ? 1.0f : -1.0f;                                                   // Square
-        default:                                                                                  // Random S&H
-        { uint32_t h = cyc * 2654435761u; h ^= h >> 16; h *= 2246822519u; h ^= h >> 13;
-          return (float) h / 2147483648.0f - 1.0f; }
+        case 4: return lfoRand01(cyc);                                                           // Random steps
+        case 5: return (float) (2.0 * f - 1.0);                                                  // Saw up (ramp)
+        case 6:                                                                                   // Random glide
+        { const float a = lfoRand01(cyc), b = lfoRand01(cyc + 1u);
+          const float sm = (float) (f * f * (3.0 - 2.0 * f));                                    // smoothstep
+          return a + (b - a) * sm; }
+        default:                                                                                  // Custom curve
+        { if (curve == nullptr) return 0.0f;
+          const double sp = f * (double) DrumChannel::Slot::LFO_CURVE_N;
+          const int i0 = juce::jlimit(0, DrumChannel::Slot::LFO_CURVE_N - 1, (int) sp);
+          const int i1 = (i0 + 1) % DrumChannel::Slot::LFO_CURVE_N;
+          const float fr = (float) (sp - (double) i0);
+          return curve[i0] + (curve[i1] - curve[i0]) * fr; }
     }
 }
 
@@ -694,8 +707,13 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
             st.setProperty("lfA" + juce::String(d2), s.lfoAmt[d2], nullptr);
             st.setProperty("lfS" + juce::String(d2), s.lfoSync[d2], nullptr);   // tempo sync base (0 = off)
             st.setProperty("lfSR" + juce::String(d2), s.lfoSyncRate[d2], nullptr);   // sync rate multiplier index
-            st.setProperty("lfSh" + juce::String(d2), s.lfoShape[d2], nullptr);  // wave shape (0 sine .. 4 S&H)
+            st.setProperty("lfSh" + juce::String(d2), s.lfoShape[d2], nullptr);  // wave shape (0 sine .. 7 custom)
             st.setProperty("lfFr" + juce::String(d2), s.lfoFree[d2], nullptr);   // free-run (timeline-anchored)
+            if (s.lfoShape[d2] == 7)                                              // LFO SHAPER drawn curve
+            { juce::String cv;
+              for (int k = 0; k < Slot::LFO_CURVE_N; ++k)
+                  cv << juce::String(s.lfoCurve[d2][k], 3) << (k < Slot::LFO_CURVE_N - 1 ? "," : "");
+              st.setProperty("lfCv" + juce::String(d2), cv, nullptr); }
         }
         st.setProperty("drf", s.drift, nullptr);          // DRIFT (alive) amount
         st.setProperty("flDrv", s.filterDrive, nullptr);  // filter loop saturation
@@ -838,8 +856,12 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
             s.lfoAmt[d2]  = (float)st.getProperty("lfA" + juce::String(d2), d.lfoAmt[d2]);
             s.lfoSync[d2] = (float)st.getProperty("lfS" + juce::String(d2), d.lfoSync[d2]);
             s.lfoSyncRate[d2] = (int)st.getProperty("lfSR" + juce::String(d2), d.lfoSyncRate[d2]);
-            s.lfoShape[d2] = juce::jlimit(0, 4, (int) st.getProperty("lfSh" + juce::String(d2), d.lfoShape[d2]));
+            s.lfoShape[d2] = juce::jlimit(0, 7, (int) st.getProperty("lfSh" + juce::String(d2), d.lfoShape[d2]));
             s.lfoFree[d2]  = (bool) st.getProperty("lfFr" + juce::String(d2), d.lfoFree[d2]);
+            if (st.hasProperty("lfCv" + juce::String(d2)))
+            { juce::StringArray a; a.addTokens(st.getProperty("lfCv" + juce::String(d2)).toString(), ",", "");
+              for (int k = 0; k < Slot::LFO_CURVE_N; ++k)
+                  s.lfoCurve[d2][k] = juce::jlimit(-1.0f, 1.0f, k < a.size() ? a[k].getFloatValue() : 0.0f); }
         }
         s.drift       = juce::jlimit(0.0f, 1.0f, (float) st.getProperty("drf", d.drift));
         s.filterDrive = juce::jlimit(0.0f, 1.0f, (float) st.getProperty("flDrv", d.filterDrive));
@@ -1282,8 +1304,8 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
             ? juce::jmax(0.01f, (float) gateSamples / (float) sr - sl.atk - sl.hold) : 0.0f;
         sv.lfoPhase[0] = sv.lfoPhase[1] = sv.lfoPhase[2] = sv.lfoPhase[3] = 0.0;  // per-hit LFO restart (locks to the groove)
         for (int d2 = 0; d2 < 4; ++d2)
-            sv.lfoCyc[d2] = (sl.lfoShape[d2] == 4 && sl.lfoAmt[d2] > 0.001f && ! sl.lfoFree[d2])
-                ? (uint32_t) driftRng.nextInt() : 0;   // Random shape (Retrig): fresh random pattern per note
+            sv.lfoCyc[d2] = ((sl.lfoShape[d2] == 4 || sl.lfoShape[d2] == 6) && sl.lfoAmt[d2] > 0.001f && ! sl.lfoFree[d2])
+                ? (uint32_t) driftRng.nextInt() : 0;   // Random shapes (Retrig): fresh random pattern per note
         sv.keySemis = 0.0f;
         sv.keyMute = ! ((mask >> s) & 1);          // per-note slot tag: mute the slots this note doesn't play
         sv.sinePhase = 0.0;
@@ -1659,7 +1681,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         // === PER-SLOT FILTER (end) ===
         // Per-slot LFOs (3 independent sines, restart each hit). Index: 0 filter cutoff / 1 pitch / 2 volume.
         float  lfoRate[4] = { 4.0f, 4.0f, 4.0f, 4.0f }, lfoAmt[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-        int    lfoShape[4] = {};            // 0 sine .. 4 S&H
+        int    lfoShape[4] = {};            // 0 sine .. 7 custom
+        const float* lfoCurve[4] = {};      // shape 7: the slot's drawn cycle
         bool   lfoFreeOn[4] = {};           // FREE-RUN: use the timeline-anchored channel phase
         double lfoFreePh[4] = {}, lfoFreeInc[4] = {};   // block-start phase + per-sample increment
         float  drift = 0.0f;                // slot DRIFT amount (wander depth per block)
@@ -1686,7 +1709,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 ? juce::jlimit(0.005f, 40.0f, cpb / juce::jmax(0.05f, lfoBarSeconds))          // cycles/bar -> Hz
                 : juce::jlimit(0.05f, 30.0f, sl.lfoRate[d2]);
             c.lfoAmt[d2]  = juce::jlimit(0.0f, 1.0f, sl.lfoAmt[d2]);
-            c.lfoShape[d2]  = juce::jlimit(0, 4, sl.lfoShape[d2]);
+            c.lfoShape[d2]  = juce::jlimit(0, 7, sl.lfoShape[d2]);
+            c.lfoCurve[d2]  = sl.lfoCurve[d2];
             c.lfoFreeOn[d2] = sl.lfoFree[d2];
             if (c.lfoFreeOn[d2])
             {   // FREE-RUN: anchor the phase to the TIMELINE (bars into the playing unit) so every
@@ -2055,7 +2079,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 {
                     const double ph0 = c.lfoFreeOn[0] ? c.lfoFreePh[0] : nv->sv[s].lfoPhase[0];
                     const uint32_t cy0 = c.lfoFreeOn[0] ? (uint32_t) juce::jmax(0.0, ph0 / (2.0 * kPi)) : nv->sv[s].lfoCyc[0];
-                    lfoMul = std::pow(2.0, (double) lfoShapeVal(c.lfoShape[0], ph0, cy0) * (double) c.lfoAmt[0] * 3.0);
+                    lfoMul = std::pow(2.0, (double) lfoShapeVal(c.lfoShape[0], ph0, cy0, c.lfoCurve[0]) * (double) c.lfoAmt[0] * 3.0);
                 }
             }
             for (int fi = 0; fi < 2; ++fi)
@@ -2228,7 +2252,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 {
                     const double ph1 = c.lfoFreeOn[1] ? c.lfoFreePh[1] + (double) i * c.lfoFreeInc[1] : sv.lfoPhase[1];
                     const uint32_t cy1 = c.lfoFreeOn[1] ? (uint32_t) juce::jmax(0.0, ph1 / (2.0 * kPi)) : sv.lfoCyc[1];
-                    pe3Mul *= std::pow(2.0, (double) lfoShapeVal(c.lfoShape[1], ph1, cy1) * (double) c.lfoAmt[1]);
+                    pe3Mul *= std::pow(2.0, (double) lfoShapeVal(c.lfoShape[1], ph1, cy1, c.lfoCurve[1]) * (double) c.lfoAmt[1]);
                 }
                 // KEYS: skip slots the keyboard can't play; re-tune the rest from their own base
                 // Freq to the pressed note (keySemis rides pe3Mul, so it reaches every pitched
@@ -2331,7 +2355,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                                 {
                                     const double ph3 = c.lfoFreeOn[3] ? c.lfoFreePh[3] + (double) i * c.lfoFreeInc[3] : sv.lfoPhase[3];
                                     const uint32_t cy3 = c.lfoFreeOn[3] ? (uint32_t) juce::jmax(0.0, ph3 / (2.0 * kPi)) : sv.lfoCyc[3];
-                                    wtp += lfoShapeVal(c.lfoShape[3], ph3, cy3) * c.lfoAmt[3] * 0.5f;
+                                    wtp += lfoShapeVal(c.lfoShape[3], ph3, cy3, c.lfoCurve[3]) * c.lfoAmt[3] * 0.5f;
                                 }
                                 wtp = juce::jlimit(0.0f, 1.0f, wtp) * (float)(ADD_FRAMES - 1);
                                 const int   f0 = juce::jmin((int) wtp, ADD_FRAMES - 2);
@@ -2646,7 +2670,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 if (c.lfoAmt[2] > 0.001f) {
                     const double ph2 = c.lfoFreeOn[2] ? c.lfoFreePh[2] + (double) i * c.lfoFreeInc[2] : sv.lfoPhase[2];
                     const uint32_t cy2 = c.lfoFreeOn[2] ? (uint32_t) juce::jmax(0.0, ph2 / (2.0 * kPi)) : sv.lfoCyc[2];
-                    const float g = 1.0f - c.lfoAmt[2] * 0.5f * (1.0f + lfoShapeVal(c.lfoShape[2], ph2, cy2));
+                    const float g = 1.0f - c.lfoAmt[2] * 0.5f * (1.0f + lfoShapeVal(c.lfoShape[2], ph2, cy2, c.lfoCurve[2]));
                     if (stereo) { sL *= g; sR *= g; } else sig *= g;
                 }
                 for (int d2 = 0; d2 < 4; ++d2)

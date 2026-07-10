@@ -627,16 +627,22 @@ public:
     std::function<void()> onDragEnd;
     std::function<void(int dest)> onDestChange;      // a tab was selected
     std::function<void(int dest, float sync)> onSyncChange;   // Sync mode/value edited (0 off / cpb / -1 grid)
+    static constexpr int CVN = 64;   // = DrumChannel::Slot::LFO_CURVE_N (drawn LFO cycle points)
     void setValues(const float* rates, const float* amts, const float* syncs, const int* shapes,
-                   const bool* frees, bool filterOn, bool waveOn, juce::Colour accent)
+                   const bool* frees, const float (*curves)[CVN], bool filterOn, bool waveOn,
+                   juce::Colour accent)
     {
         bool ch = (filterOn != filtOn_) || (waveOn != waveOn_) || (accent != accent_);
         for (int d = 0; d < 4; ++d) { ch = ch || rates[d] != rate_[d] || amts[d] != amt_[d] || syncs[d] != sync_[d]
                                               || shapes[d] != shape_[d] || frees[d] != free_[d];
                                       rate_[d] = rates[d]; amt_[d] = amts[d]; sync_[d] = syncs[d];
-                                      shape_[d] = shapes[d]; free_[d] = frees[d]; }
+                                      shape_[d] = shapes[d]; free_[d] = frees[d];
+                                      for (int k = 0; k < CVN; ++k)
+                                      { ch = ch || std::abs(curves[d][k] - curve_[d][k]) > 1.0e-4f;
+                                        curve_[d][k] = curves[d][k]; } }
         filtOn_ = filterOn; waveOn_ = waveOn; accent_ = accent; if (ch) repaint();
     }
+    std::function<void(int dest, const float*)> onCurveChange;   // the drawn Custom cycle changed
     std::function<void(int dest, int shape)> onShapeChange;   // Shape button cycled
     std::function<void(int dest, bool freeRun)> onFreeChange; // Retrig/Free toggled
     void setFreeClockSec(double s) { if (std::abs(s - freeSec_) > 1.0e-4) { freeSec_ = s;
@@ -654,14 +660,16 @@ public:
     void paint(juce::Graphics&) override;
     void mouseDown(const juce::MouseEvent&) override;
     void mouseDrag(const juce::MouseEvent&) override;
-    void mouseUp(const juce::MouseEvent&) override { if (dragging_ && onDragEnd) onDragEnd(); dragging_ = false; }
+    void mouseUp(const juce::MouseEvent&) override { if ((dragging_ || curveDrawing_) && onDragEnd) onDragEnd(); dragging_ = false; curveDrawing_ = false; curveLastI_ = -1; }
     void mouseDoubleClick(const juce::MouseEvent&) override;
     juce::String getTooltip() override;
 private:
     float rate_[4] = { 4.0f, 4.0f, 4.0f, 4.0f }, amt_[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
     float sync_[4] = { 0.0f, 0.0f, 0.0f, 0.0f };   // per-dest tempo sync: 0 = off (free Hz), > 0 = cycles/bar, -1 = grid
-    int   shape_[4] = {};                          // 0 Sine / 1 Tri / 2 Saw / 3 Square / 4 Random (S&H)
+    int   shape_[4] = {};                          // 0 Sine .. 7 Custom (the drawn curve)
     bool  free_[4]  = {};                          // FREE-RUN (timeline-anchored) vs RETRIG per note
+    float curve_[4][CVN] = {};                     // shape 7: the drawn cycle (-1..1)
+    bool  curveDrawing_ = false; int curveLastI_ = -1;
     double freeSec_ = 0.0;                         // live free-run clock (editor timer)
     uint32_t liveCyc_ = 0;                         // the playing note's S&H cycle base (Random draws ITS pattern)
     float barSec_ = 2.0f, gridCpb_ = 16.0f;    // live tempo + grid density (setTempoInfo)

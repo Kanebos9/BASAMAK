@@ -538,12 +538,17 @@ public:
         //    2 = volume (tremolo). Any mix can run at once. Edited on the LFO visual (FX box). --
         float lfoRate[4] = { 4.0f, 4.0f, 4.0f, 4.0f };   // dest 3 = WAVE (wavetable position scan)
         float lfoAmt[4]  = { 0.0f, 0.0f, 0.0f, 0.0f };
-        // LFO SHAPE per dest (0 Sine / 1 Triangle / 2 Saw down / 3 Square / 4 Random S&H) and
-        // FREE-RUN per dest (false = RETRIG: the wave restarts at every note = the old behaviour;
-        // true = FREE: the LFO runs continuously ANCHORED TO THE TIMELINE - same bar position =
-        // same phase on every playback pass; notes join it mid-flight).
+        // LFO SHAPE per dest (0 Sine / 1 Triangle / 2 Saw down / 3 Square / 4 Random steps /
+        // 5 Saw up / 6 Random glide / 7 CUSTOM = the drawn curve below) and FREE-RUN per dest
+        // (false = RETRIG: the wave restarts at every note = the old behaviour; true = FREE:
+        // the LFO runs continuously ANCHORED TO THE TIMELINE - same bar position = same phase
+        // on every playback pass; notes join it mid-flight).
         int  lfoShape[4] = { 0, 0, 0, 0 };
         bool lfoFree[4]  = { false, false, false, false };
+        // LFO SHAPER (shape 7): one drawn cycle per dest, -1..1, drawn directly ON the LFO wave
+        // view. The curve IS what plays (all-zero = no modulation). Persisted "lfCv0..3".
+        static constexpr int LFO_CURVE_N = 64;
+        float lfoCurve[4][LFO_CURVE_N] = {};
         // TEMPO SYNC per LFO (arp-style TWO faders): lfoSync = the BASE cycles-per-bar (0 = OFF/free Hz,
         // -1 = LOCK TO GRID), lfoSyncRate = a RATE-multiplier index into DrumChannel::arpRateMul (x0.25..x3,
         // default 4 = x1). Effective cycles/bar = base x rateMul, then Hz from the host bar length.
