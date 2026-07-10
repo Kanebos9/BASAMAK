@@ -627,14 +627,20 @@ public:
     std::function<void()> onDragEnd;
     std::function<void(int dest)> onDestChange;      // a tab was selected
     std::function<void(int dest, float sync)> onSyncChange;   // Sync mode/value edited (0 off / cpb / -1 grid)
-    void setValues(const float* rates, const float* amts, const float* syncs, bool filterOn, bool waveOn,
-                   juce::Colour accent)
+    void setValues(const float* rates, const float* amts, const float* syncs, const int* shapes,
+                   const bool* frees, bool filterOn, bool waveOn, juce::Colour accent)
     {
         bool ch = (filterOn != filtOn_) || (waveOn != waveOn_) || (accent != accent_);
-        for (int d = 0; d < 4; ++d) { ch = ch || rates[d] != rate_[d] || amts[d] != amt_[d] || syncs[d] != sync_[d];
-                                      rate_[d] = rates[d]; amt_[d] = amts[d]; sync_[d] = syncs[d]; }
+        for (int d = 0; d < 4; ++d) { ch = ch || rates[d] != rate_[d] || amts[d] != amt_[d] || syncs[d] != sync_[d]
+                                              || shapes[d] != shape_[d] || frees[d] != free_[d];
+                                      rate_[d] = rates[d]; amt_[d] = amts[d]; sync_[d] = syncs[d];
+                                      shape_[d] = shapes[d]; free_[d] = frees[d]; }
         filtOn_ = filterOn; waveOn_ = waveOn; accent_ = accent; if (ch) repaint();
     }
+    std::function<void(int dest, int shape)> onShapeChange;   // Shape button cycled
+    std::function<void(int dest, bool freeRun)> onFreeChange; // Retrig/Free toggled
+    void setFreeClockSec(double s) { if (std::abs(s - freeSec_) > 1.0e-4) { freeSec_ = s;
+        if (free_[dest_] && amt_[dest_] > 0.001f) repaint(); } }   // dot keeps moving between notes
     // Live tempo/grid info so the drawn wave + read-out show the TRUE synced speed (never the ignored
     // free-Hz value - the honesty rule). gridCpb = the channel's grid cells per bar (for Grid mode).
     void setTempoInfo(float barSec, float gridCpb)
@@ -653,6 +659,9 @@ public:
 private:
     float rate_[4] = { 4.0f, 4.0f, 4.0f, 4.0f }, amt_[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
     float sync_[4] = { 0.0f, 0.0f, 0.0f, 0.0f };   // per-dest tempo sync: 0 = off (free Hz), > 0 = cycles/bar, -1 = grid
+    int   shape_[4] = {};                          // 0 Sine / 1 Tri / 2 Saw / 3 Square / 4 Random (S&H)
+    bool  free_[4]  = {};                          // FREE-RUN (timeline-anchored) vs RETRIG per note
+    double freeSec_ = 0.0;                         // live free-run clock (editor timer)
     float barSec_ = 2.0f, gridCpb_ = 16.0f;    // live tempo + grid density (setTempoInfo)
     int dest_ = 0; bool filtOn_ = false, waveOn_ = false;   // waveOn_ = the slot's Wave is Custom (WAVE dest audible)
     double phase_ = -1.0;
@@ -664,7 +673,10 @@ private:
     // The wave's true speed in Hz for dest d (what the DSP actually plays - synced rates included).
     float effHz(int d) const { const float s = sync_[d];
         return s == 0.0f ? rate_[d] : (s < 0.0f ? gridCpb_ : s) / barSec_; }
-    juce::Rectangle<float> syncBtnRect() const { return { 4.0f, (float) getHeight() - 16.0f, 64.0f, 13.0f }; }
+    // Bottom row, LEFT of Sync (user: Sync's read-out lives on its right): [Shape][Retrig][Sync] read-out
+    juce::Rectangle<float> shapeBtnRect() const { return { 4.0f,   (float) getHeight() - 16.0f, 54.0f, 13.0f }; }
+    juce::Rectangle<float> freeBtnRect() const  { return { 62.0f,  (float) getHeight() - 16.0f, 46.0f, 13.0f }; }
+    juce::Rectangle<float> syncBtnRect() const  { return { 112.0f, (float) getHeight() - 16.0f, 64.0f, 13.0f }; }
     juce::Rectangle<float> waveArea() const { return getLocalBounds().toFloat().reduced(2.0f).withTrimmedTop(17.0f).withTrimmedBottom(15.0f); }
     int destAt(juce::Point<float> p) const  // which of the 4 dest tabs (top strip); -1 = none
     {
@@ -1160,11 +1172,14 @@ private:
 class VoiceModDisplay : public juce::Component, public juce::SettableTooltipClient
 {
 public:
-    static constexpr int kMaxUni = 7;
-    void setValues(int unison, int chordUnison, int scaleUnison, float detune, float vibrato, bool centre, int detuneMode, int chordMode, bool scaleOn, int scaleType, int scaleKey, float uniSpread = 0.0f);
+    static constexpr int kMaxUni = 16;   // Osc cap (KS 6 / Modal 3 set via setMaxUni)
+    void setValues(int unison, int chordUnison, int scaleUnison, float detune, float vibrato, bool centre, int detuneMode, int chordMode, bool scaleOn, int scaleType, int scaleKey, float uniSpread = 0.0f, float driftIn = 0.0f);
+    // DRIFT visual honesty: the DSP's real rolled per-voice detunes (cents) from the newest playing
+    // voice - the drawn lines move with what actually just played (change-gated repaint).
+    void setDriftLive(const float* cents, int n);
     void setSupport(bool uniSupported, bool vibSupported, juce::String naReason);
     void setMaxUni(int m) { const int c = juce::jlimit(1, kMaxUni, m); if (c == maxUni) return; maxUni = c; if (uni > maxUni) uni = maxUni; if (uniChord > maxUni) uniChord = maxUni; if (uniScale > maxUni) uniScale = maxUni; repaint(); }  // per-engine unison cap
-    std::function<void(int unison, float detune, float vibrato, bool centre, int detuneMode, int chordMode, bool scaleOn, int scaleType, int scaleKey, float uniSpread)> onChange;
+    std::function<void(int unison, float detune, float vibrato, bool centre, int detuneMode, int chordMode, bool scaleOn, int scaleType, int scaleKey, float uniSpread, float drift)> onChange;
     std::function<void()> onDragEnd;                              // released after editing (for auto-audition)
     void paint(juce::Graphics& g) override;
     void mouseDown(const juce::MouseEvent& e) override;
@@ -1181,6 +1196,8 @@ private:
     int   curUni() const { return scaleOn ? uniScale : chord > 0 ? uniChord : uni; }   // the ACTIVE mode's count
     float det = 0.0f, vib = 0.0f;
     float uniWidth = 0.0f;   // stereo WIDTH of the unison/chord voices (top-left mini bar; NOT 'spread' - paint() has a pixel local by that name)
+    float driftAmt = 0.0f;   // DRIFT: per-note randomness (phase scatter + micro-detune + level breath)
+    float driftLive[17] = {}; int driftLiveN = 0;   // the last hit's REAL rolled detunes (cents)
     bool  centre = false;          // also play the original/undetuned pitch (toggled by double-click on Detune)
     int   mode = 0;                // detune direction: 0 = symmetric (drag right), 1 = up (drag up), 2 = down (drag down)
     bool  uniOn = true, vibOn = true;
@@ -1194,11 +1211,11 @@ private:
     juce::String reason;
     int   drag = -1, hover = -1;   // 0 = Unison, 1 = Detune, 2 = Vibrato
     int   chipHover = -1;          // which mode chip the mouse is over (0=UNISON 1=CHORD 2=SCALE 3=KEY) for per-chip tooltips
-    struct Geo { float left, right, top, bottom, cy, hh, uX, dX, vX, wX;
+    struct Geo { float left, right, top, bottom, cy, hh, uX, dX, vX, wX, xX;   // xX = DRIFT handle
                  float rangeX, rangeY, dPtX, dPtY, rootY, upRange, uniTop; };   // rootY = root line; upRange = room above it; uniTop = unison-dot ceiling (below the chips)
     Geo  geom() const;
     int  nearestHandle(juce::Point<float> p) const;
-    void emit() { if (onChange) onChange(curUni(), det, vib, centre, mode, emitChord, emitScaleOn, emitScaleType, emitScaleKey, uniWidth); }
+    void emit() { if (onChange) onChange(curUni(), det, vib, centre, mode, emitChord, emitScaleOn, emitScaleType, emitScaleKey, uniWidth, driftAmt); }
 };
 
 //==============================================================================
@@ -1230,6 +1247,8 @@ public:
     std::function<void()> onEdit;                // after a drag/wheel/toggle -> updateDSP + hash
     std::function<void()> onDragEnd;             // released after editing (for auto-audition)
     std::function<void(int filterIdx, int type, float cutoff, float reso, float envAmt)> onFilterEdit;
+    std::function<void(float)> onFilterDriveEdit;   // FILTER DRIVE drag-box (one amount, drives BOTH filters)
+    void setFilterDrive(float v) { v = juce::jlimit(0.0f, 1.0f, v); if (std::abs(v - fDrive) > 1.0e-4f) { fDrive = v; repaint(); } }
     int  active() const { return activeFilt; }   // which of the 2 filters the keytrack fader edits (last touched)
     static juce::Colour filtColour(int fi) { return fi == 0 ? juce::Colour(0xffff7a4a) : juce::Colour(0xff35c0ff); }  // F1 orange / F2 cyan
     void pushSpectrum(const float* mags, int n);
@@ -1241,10 +1260,13 @@ public:
     void mouseDoubleClick(const juce::MouseEvent& e) override;
     void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override;
     void mouseExit   (const juce::MouseEvent&) override { hover = -1; repaint(); }
-    void mouseUp     (const juce::MouseEvent&) override { const bool ed = drag >= 0; drag = -1; repaint(); if (ed && onDragEnd) onDragEnd(); }
+    void mouseUp     (const juce::MouseEvent&) override { const bool ed = drag >= 0 || driveDrag; drag = -1; driveDrag = false; repaint(); if (ed && onDragEnd) onDragEnd(); }
     juce::String getTooltip() override;
 
 private:
+    float fDrive = 0.0f;         // FILTER DRIVE (saturation inside both SVF loops; 0 = clean = bit-identical)
+    bool  driveDrag = false;
+    juce::Rectangle<float> driveRect() const { return { (float) getWidth() - 98.0f, 2.0f, 94.0f, 14.0f }; }
     int   fType[2] = { 0, 0 };   // NOLINT
     float fCutoff[2] = { 1000.0f, 1000.0f }, fReso[2] = { 0.707f, 0.707f }, fEnvAmt[2] = { 0.0f, 0.0f };
     int   activeFilt = 0;                         // which filter the diamond drag / keytrack edits (last touched)
@@ -2000,6 +2022,12 @@ private:
     LearnableKnob knobPunch   { "p0_ch0_punch",   proc.midiLearn };   // per-slot PUNCH transient shaper
     LearnableKnob knobComp    { "p0_ch0_comp",    proc.midiLearn };   // per-slot one-knob COMPRESSOR
     juce::Label   lblChMix, lblTone, lblPunch, lblComp;
+    // REVERB MODE: clicking the "REVERB" header cycles Room -> Hall -> Plate -> Shimmer (whole
+    // preset, like the other master flavour controls). A tiny MouseListener makes the Label clickable.
+    struct HdrClick : juce::MouseListener
+    { std::function<void()> fn; void mouseDown(const juce::MouseEvent&) override { if (fn) fn(); } };
+    HdrClick revModeClick;
+    void refreshReverbModeHeader();
     HarmonicEditor harmEd;    // ADDITIVE draw-harmonics overlay (content child)
     int            harmEdSlot = 0;
 

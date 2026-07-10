@@ -345,6 +345,9 @@ public:
     static constexpr int ADD_FRAMES = 4;     // WAVETABLE frames per slot (A/B/C/D), position scans them
     static constexpr int ADD_TBL    = 1024;  // baked custom-wave table length (power of two)
     void rebuildAddTables();                 // addH frames -> addTbl (MESSAGE THREAD; audio reads floats only)
+    // DRIFT visual honesty: the newest voice's REAL rolled detunes (cents) for the editor's unison
+    // view - the drawn lines move with what actually played. Returns voice count (0 = none active).
+    int  getDriftSnapshot(int slot, float* centsOut, int maxN) const;
     // LEGACY encoding: OscShape (0..3) is ONLY for the per-channel layerOscShape field (old
     // projects persist it raw - never renumber). SLOT wave indices use the v5 "Wave" list below;
     // buildSlotsFromLegacy translates between the two.
@@ -418,7 +421,7 @@ public:
     //   slot.engine: -1 = none, else a Source value (SrcSample..SrcPhys).
     //======================================================================
     static constexpr int NUM_SLOTS = 2;
-    static constexpr int UNI_MAX   = 7;      // max unison/chord/scale voices (public: the editor's key-highlight uses it)
+    static constexpr int UNI_MAX   = 16;     // max unison/chord/scale voices (Osc; KS 6 / Modal 3 caps stay - public: key-highlight uses it)
     static constexpr int POLY      = 16;     // simultaneous note events (chords live INSIDE a voice); public: the processor's held stack sizes off it
 
     // SCALE diatonic harmonizer: the semitone offset (from the played note) of chord voice `voiceIdx`
@@ -535,6 +538,12 @@ public:
         //    2 = volume (tremolo). Any mix can run at once. Edited on the LFO visual (FX box). --
         float lfoRate[4] = { 4.0f, 4.0f, 4.0f, 4.0f };   // dest 3 = WAVE (wavetable position scan)
         float lfoAmt[4]  = { 0.0f, 0.0f, 0.0f, 0.0f };
+        // LFO SHAPE per dest (0 Sine / 1 Triangle / 2 Saw down / 3 Square / 4 Random S&H) and
+        // FREE-RUN per dest (false = RETRIG: the wave restarts at every note = the old behaviour;
+        // true = FREE: the LFO runs continuously ANCHORED TO THE TIMELINE - same bar position =
+        // same phase on every playback pass; notes join it mid-flight).
+        int  lfoShape[4] = { 0, 0, 0, 0 };
+        bool lfoFree[4]  = { false, false, false, false };
         // TEMPO SYNC per LFO (arp-style TWO faders): lfoSync = the BASE cycles-per-bar (0 = OFF/free Hz,
         // -1 = LOCK TO GRID), lfoSyncRate = a RATE-multiplier index into DrumChannel::arpRateMul (x0.25..x3,
         // default 4 = x1). Effective cycles/bar = base x rateMul, then Hz from the host bar length.
@@ -567,6 +576,14 @@ public:
         float filterKeyTrack = 0.0f;      // 0..1: how much the cutoff FOLLOWS the note pitch (keyboard tracking)
         // FILTER 2: a SECOND independent resonant filter, applied in SERIES after filter 1 (e.g. HP + LP
         // = a band you shape). Same controls; Off by default. Persisted flT2/flC2/flR2/flE2/flK2.
+        // DRIFT ("alive"): 0 = today's perfectly repeating notes (bit-identical). Above 0 every note
+        // rolls fresh randomness: unison start phases scatter (kills the fixed comb = wide blur),
+        // each voice gets a tiny +-cents offset, a slow pitch wander breathes, and the level varies
+        // a hair. TRUE random (user choice): passes differ microscopically, like any analog synth.
+        float drift = 0.0f;
+        // FILTER DRIVE: soft tanh saturation INSIDE both SVFs' state loop (resonance compresses and
+        // sings instead of ringing louder). 0 = bypass = bit-identical clean filter. One flavour.
+        float filterDrive = 0.0f;
         int   filterType2   = FilterOff;
         float filterCutoff2 = 1000.0f, filterReso2 = 0.707f, filterEnvAmt2 = 0.0f;
         float filterKeyTrack2 = 0.0f;
@@ -597,6 +614,10 @@ public:
     int    chorusW[NUM_SLOTS]  = {};
     double chorusPh[NUM_SLOTS] = {};
     float  addTbl[NUM_SLOTS][ADD_FRAMES][ADD_TBL] = {};  // baked wavetable frames per slot - see rebuildAddTables()
+    juce::Random driftRng { 0x9e3779b9 };    // DRIFT dice (audio thread only)
+    double lfoBarPos  = -1.0;   // set by the Sequencer per block while PLAYING: bars into the playing
+                                // unit (group bar index + fraction); -1 = not playing (free clock)
+    double lfoFreeSec = 0.0;    // free-run LFO clock while NOT playing (accumulated seconds)
     float  compEnv[NUM_SLOTS] = {};           // one-knob compressor envelope per slot
     float  lfoBarSeconds = 2.0f;   // seconds per bar (set by the Sequencer each block) for tempo-synced per-slot LFOs
     int    lfoGridDiv    = 16;      // piano-roll Grid 1/N (set by the Sequencer) - for LFO/arp "Lock to grid" in draw mode
@@ -882,7 +903,7 @@ private:
     struct SlotVoice
     {
         double   sinePhase = 0.0;
-        double   uniPhase[UNI_MAX + 1] = { 0,0,0,0,0,0,0,0 };   // +1 for the optional dry/centre voice
+        double   uniPhase[UNI_MAX + 1] = {};   // +1 for the optional dry/centre voice
         float    uniSemis[UNI_MAX] = {};   // SCALE: per-note diatonic offset (semitones) for each unison/string/bank voice; only read in SCALE mode
         double   fmCarrier = 0.0, fmMod = 0.0, fmSubPhase = 0.0;
         double   wtPhase = 0.0;           // wavetable (SrcWave) phase, 0..1
@@ -923,7 +944,14 @@ private:
         // at trigger - a 303 tie (slideTo) extends the voice's life but never reshapes the decay,
         // so tied chains keep falling naturally (re-gating the env mid-decay would step/pop).
         float    gateDec = 0.0f;
-        double   lfoPhase[4] = {}; // per-slot LFO phases (radians), one per dest (3 = WAVE), reset at trigger (per-hit restart)
+        double   lfoPhase[4] = {}; // per-slot LFO phases (radians), one per dest (3 = WAVE)
+        uint32_t lfoCyc[4]   = {}; // completed cycles (Random/S&H holds one value per cycle)
+        // DRIFT per-note randomness (all 1/neutral when drift = 0 = bit-identical):
+        float    driftMul[UNI_MAX + 1] = {}; // per-unison-voice fixed detune multiplier (rolled per note)
+        float    driftGain   = 1.0f;         // per-note level breath
+        float    driftWobMul = 1.0f;         // slow pitch-wander multiplier (advanced per block)
+        double   driftWobPh  = 0.0;
+        float    driftWobRate = 0.0f;
         // KEYS (on-screen keyboard): this slot re-tuned from its own base freq to the pressed
         // note, in semitones (multiplies pe3Mul, so it reaches every pitched engine incl. the
         // Modal strike-tuning). keyMute = the slot's engine can't be played by keys (Sample/

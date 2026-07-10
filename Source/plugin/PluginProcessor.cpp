@@ -1299,7 +1299,8 @@ void DrumSequencerProcessor::processReverb(juce::AudioBuffer<float>& audio, juce
                 juce::jlimit(0.0f, 1.0f, masterFX().reverbRoom),     // Size -> room
                 decay01,                                             // Decay -> feedback time
                 0.35f,                                               // damping LP (smooth, musical)
-                juce::jlimit(0.0f, 1.0f, masterFX().reverbWidth));   // Width
+                juce::jlimit(0.0f, 1.0f, masterFX().reverbWidth),    // Width
+                juce::jlimit(0, 3, masterFX().reverbMode));          // Room/Hall/Plate/Shimmer voicing
 
     // MAKE-UP: the FDN attenuates ~12 dB internally, so the wet was ~ -46 dB at factory sends and
     // still ~ -26 dB fully cranked = inaudible ("reverb does nothing"). Bring it up to a usable range.
@@ -2032,6 +2033,7 @@ juce::ValueTree DrumSequencerProcessor::captureStateTree()
         patState.setProperty("delTime", m.delayTime,     nullptr);
         patState.setProperty("delFB",   m.delayFeedback, nullptr);
         patState.setProperty("delWet",  m.delayWet,      nullptr);
+        patState.setProperty("revMode", m.reverbMode,     nullptr);
         patState.setProperty("delSync", m.delaySync,     nullptr);
         patState.setProperty("delDiv",  m.delayDivision, nullptr);
         patState.setProperty("delPP",   m.delayPingPong, nullptr);
@@ -2176,6 +2178,7 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
             m.delayTime     = (float)child.getProperty("delTime", 0.375f);
             m.delayFeedback = (float)child.getProperty("delFB",   0.3f);
             m.delayWet      = (float)child.getProperty("delWet",  0.3f);   // 0.3 = the old fixed return level
+            m.reverbMode    = juce::jlimit(0, 3, (int) child.getProperty("revMode", 1));   // default Hall = original
             m.delaySync     = (bool) child.getProperty("delSync", false);
             m.delayDivision = (int)  child.getProperty("delDiv",  4);
             m.delayPingPong = (bool) child.getProperty("delPP",   false);

@@ -111,6 +111,11 @@
 | 55 | Factory mkAdd copies frame 0 into all 4 frames (uniform strip) | moving Position on a factory additive sound must be a predictable no-op, not a surprise sine | my call |
 | 56 | Per-leg glide (round-2, user spec): addSeg[3], 0 = HOLD at that leg's left frame; seg[0]=0 = glide off entirely | user: "choose morphing time individually"; Hold makes the old morph-then-stay a natural case (no x3 migration trick) | user-approved |
 | 57 | Unreachable glide boxes draw dimmed but stay draggable | signal without blocking (user may set legs out of order) | my call |
+| 58 | Drift = TRUE random (not seeded): playback passes differ microscopically | user picked it after full explanation (live take is never reproducible either way - only notes are recorded) | user-approved |
+| 59 | Free-run LFO = TIMELINE-anchored (bar position -> phase), free clock only when stopped | keeps LIVE==RECORDING determinism: every playback pass identical; "free" wall-clock would differ per pass | my call, disclosed in tooltip |
+| 60 | Filter drive = one soft-tanh flavour on v3 inside the SVF loop; no type menu | user: one type like discussed; in-loop = resonance compression (the analog character), types deferred | user-approved |
+| 61 | Reverb mode default = Hall = the exact original FDN numbers; modes are re-voicings of the SAME safe network | factory/old projects sound identical; anti-gunshot clamps stay on every path incl. shimmer | my call |
+| 62 | Reverb stays ONE shared engine (mode is preset-wide); per-slot reverb rejected | 2 slots x 16 channels = 32 reverb instances = CPU cliff; send/return is the industry model | explained, user accepted |
 
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /

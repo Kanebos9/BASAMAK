@@ -104,6 +104,11 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
             auto& chan = patterns[playPattern].channels[ch];
             chan.lfoBarSeconds = (float) blockBarSeconds;   // tempo-synced per-slot LFOs
             chan.lfoGridDiv    = uiGridDiv;                  // "Lock to grid" divisor
+            // FREE-RUN LFO anchor: bars into the playing unit at THIS segment's start (group bar
+            // index + fraction). Same bar position = same phase on every pass (deterministic).
+            chan.lfoBarPos = juce::jmax(0.0,
+                (double)(playPattern - groupHead(playPattern)) + barPosition
+                - (double)(numSamples - segStart) / juce::jmax(1.0, blockBarSeconds * sampleRate));
             const int ob = chan.outputBus;   // 0 = Main; 1..numAux = a discrete aux out
             const bool toMain = ! (ob >= 1 && ob <= numAux && auxBuses != nullptr && auxBuses[ob - 1] != nullptr);
             juce::AudioBuffer<float>* dest = toMain ? &audio : auxBuses[ob - 1];
@@ -127,7 +132,7 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
         {
             auto& fc = patterns[fadeOutPattern].channels[ch];
             fc.lfoBarSeconds = (float) blockBarSeconds; fc.lfoGridDiv = uiGridDiv;
-            if (! fc.midiOut) fc.renderInto(audio, 0, numSamples, soloFade);   // dry tail into Main
+            if (! fc.midiOut) { fc.lfoBarPos = -1.0; fc.renderInto(audio, 0, numSamples, soloFade); }   // dry tail into Main
             if (fc.anyVoiceActive()) anyRinging = true;
         }
         if (! anyRinging) fadeOutPattern = -1;   // all tails finished
@@ -147,7 +152,12 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
             {
                 auto& gc = patterns[p].channels[ch];
                 gc.lfoBarSeconds = (float) blockBarSeconds; gc.lfoGridDiv = uiGridDiv;
-                if (! gc.midiOut && gc.anyVoiceActive()) gc.renderInto(audio, 0, numSamples, soloG);
+                if (! gc.midiOut && gc.anyVoiceActive())
+                {   // ringing group members share the playing unit's timeline anchor
+                    gc.lfoBarPos = juce::jmax(0.0, (double)(playPattern - groupHead(playPattern)) + barPosition
+                                                   - (double) numSamples / juce::jmax(1.0, blockBarSeconds * sampleRate));
+                    gc.renderInto(audio, 0, numSamples, soloG);
+                }
             }
         }
     }
@@ -161,7 +171,9 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
         {
             patterns[currentPattern].channels[ch].lfoBarSeconds = (float) blockBarSeconds;
             patterns[currentPattern].channels[ch].lfoGridDiv    = uiGridDiv;
-            patterns[currentPattern].channels[ch].renderInto(audio, 0, numSamples, soloView);
+            { auto& vc = patterns[currentPattern].channels[ch];
+              vc.lfoBarPos = -1.0;   // viewed-but-not-playing audition: free clock
+              vc.renderInto(audio, 0, numSamples, soloView); }
         }
     }
 

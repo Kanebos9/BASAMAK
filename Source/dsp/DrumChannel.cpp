@@ -291,6 +291,19 @@ float       DrumChannel::oscShapeSample(int shape, float ph01, const float* cust
     return waveShape((double)(ph01 - std::floor(ph01)) * 2.0 * (double) kPi, juce::jmin(shape, NUM_OSC_SHAPES - 1));
 }
 
+// DRIFT visual honesty: report the newest playing voice's rolled per-voice detunes in CENTS.
+int DrumChannel::getDriftSnapshot(int slot, float* centsOut, int maxN) const
+{
+    const Voice* nv = nullptr;
+    for (auto& v : voices) if (v.active() && (nv == nullptr || v.voiceSamples < nv->voiceSamples)) nv = &v;
+    if (nv == nullptr) return 0;
+    const auto& sv = nv->sv[juce::jlimit(0, NUM_SLOTS - 1, slot)];
+    const int n = juce::jmin(maxN, UNI_MAX + 1);
+    for (int u = 0; u < n; ++u)
+        centsOut[u] = 1200.0f * std::log2(juce::jmax(1.0e-6f, sv.driftMul[u] * sv.driftWobMul));
+    return n;
+}
+
 // ADDITIVE "Custom" wave: bake each slot's drawn harmonic levels (addHarm) into a wavetable, the
 // same construction as the factory OscShapeBank shapes (sum of sines, peak-normalised). MESSAGE
 // THREAD only (edits / loads / prepare); the audio thread only reads the float table - a rebuild
@@ -319,6 +332,25 @@ void DrumChannel::rebuildAddTables()
         for (int f = 0; f < ADD_FRAMES; ++f)
             bake(slots[sl].addH[f], slots[sl].addPh[f], addTbl[sl][f]);
 }
+// LFO wave value for a shape at phase ph (radians). Shape 0 = sine (the old, exact path);
+// 1 Triangle / 2 Saw down / 3 Square / 4 Random S&H (one hashed value per completed cycle -
+// deterministic: the same cycle index always yields the same value).
+static inline float lfoShapeVal(int shape, double ph, uint32_t cyc) noexcept
+{
+    if (shape <= 0) return (float) std::sin(ph);
+    const double t = ph / (2.0 * juce::MathConstants<double>::pi);
+    const double f = t - std::floor(t);
+    switch (shape)
+    {
+        case 1: return (float) (f < 0.25 ? 4.0 * f : f < 0.75 ? 2.0 - 4.0 * f : 4.0 * f - 4.0); // Triangle
+        case 2: return (float) (1.0 - 2.0 * f);                                                  // Saw (falls)
+        case 3: return f < 0.5 ? 1.0f : -1.0f;                                                   // Square
+        default:                                                                                  // Random S&H
+        { uint32_t h = cyc * 2654435761u; h ^= h >> 16; h *= 2246822519u; h ^= h >> 13;
+          return (float) h / 2147483648.0f - 1.0f; }
+    }
+}
+
 // Continuous morph between the shapes (pos 0..NUM_OSC_SHAPES-1). At an integer pos it is
 // identical to waveShape(), so Wave A == Wave B reproduces a plain single shape.
 static inline float morphWave(double phase, float pos) noexcept
@@ -655,14 +687,18 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("aSg1", s.addSeg[1], nullptr);
         st.setProperty("aSg2", s.addSeg[2], nullptr);
         st.setProperty("aPos", s.addPos, nullptr);
-        // Per-slot LFOs: one rate+amount(+sync) PER DESTINATION (0=filter 1=pitch 2=vol 3=wave), independent.
+        // Per-slot LFOs: one rate+amount(+sync+shape+free) PER DESTINATION (0=filter 1=pitch 2=vol 3=wave).
         for (int d2 = 0; d2 < 4; ++d2)
         {
             st.setProperty("lfR" + juce::String(d2), s.lfoRate[d2], nullptr);
             st.setProperty("lfA" + juce::String(d2), s.lfoAmt[d2], nullptr);
             st.setProperty("lfS" + juce::String(d2), s.lfoSync[d2], nullptr);   // tempo sync base (0 = off)
             st.setProperty("lfSR" + juce::String(d2), s.lfoSyncRate[d2], nullptr);   // sync rate multiplier index
+            st.setProperty("lfSh" + juce::String(d2), s.lfoShape[d2], nullptr);  // wave shape (0 sine .. 4 S&H)
+            st.setProperty("lfFr" + juce::String(d2), s.lfoFree[d2], nullptr);   // free-run (timeline-anchored)
         }
+        st.setProperty("drf", s.drift, nullptr);          // DRIFT (alive) amount
+        st.setProperty("flDrv", s.filterDrive, nullptr);  // filter loop saturation
         parent.addChild(st, -1, nullptr);
     }
 }
@@ -802,7 +838,11 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
             s.lfoAmt[d2]  = (float)st.getProperty("lfA" + juce::String(d2), d.lfoAmt[d2]);
             s.lfoSync[d2] = (float)st.getProperty("lfS" + juce::String(d2), d.lfoSync[d2]);
             s.lfoSyncRate[d2] = (int)st.getProperty("lfSR" + juce::String(d2), d.lfoSyncRate[d2]);
+            s.lfoShape[d2] = juce::jlimit(0, 4, (int) st.getProperty("lfSh" + juce::String(d2), d.lfoShape[d2]));
+            s.lfoFree[d2]  = (bool) st.getProperty("lfFr" + juce::String(d2), d.lfoFree[d2]);
         }
+        s.drift       = juce::jlimit(0.0f, 1.0f, (float) st.getProperty("drf", d.drift));
+        s.filterDrive = juce::jlimit(0.0f, 1.0f, (float) st.getProperty("flDrv", d.filterDrive));
         if (st.hasProperty("lfD") && ! st.hasProperty("lfA0"))
         {
             const int ld = juce::jlimit(0, 2, (int)st.getProperty("lfD", 0));
@@ -1241,6 +1281,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         sv.gateDec = (gateSamples > 0 && ! keyGate)   // keyGate = natural envelope, never rescaled
             ? juce::jmax(0.01f, (float) gateSamples / (float) sr - sl.atk - sl.hold) : 0.0f;
         sv.lfoPhase[0] = sv.lfoPhase[1] = sv.lfoPhase[2] = sv.lfoPhase[3] = 0.0;  // per-hit LFO restart (locks to the groove)
+        sv.lfoCyc[0] = sv.lfoCyc[1] = sv.lfoCyc[2] = sv.lfoCyc[3] = 0;
         sv.keySemis = 0.0f;
         sv.keyMute = ! ((mask >> s) & 1);          // per-note slot tag: mute the slots this note doesn't play
         sv.sinePhase = 0.0;
@@ -1259,6 +1300,24 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         for (auto& row : sv.modalY2) for (auto& v2 : row) v2 = 0.0f;
         sv.noiseState = 0x1234567u + (uint32_t)(vi * NUM_SLOTS + s) * 2654435761u; // distinct per voice+slot
         for (int u = 0; u <= UNI_MAX; ++u) sv.uniPhase[u] = (2.0 * kPi) * (double) u / (double) UNI_MAX;
+
+        // DRIFT: roll this note's dice (TRUE random - every note breathes differently, like analog
+        // hardware; drift 0 = no rolls = bit-identical deterministic hits, the drum default).
+        sv.driftGain = 1.0f; sv.driftWobMul = 1.0f; sv.driftWobPh = 0.0; sv.driftWobRate = 0.0f;
+        for (int u = 0; u <= UNI_MAX; ++u) sv.driftMul[u] = 1.0f;
+        if (sl.drift > 0.001f)
+        {
+            const float d = sl.drift;
+            for (int u = 0; u <= UNI_MAX; ++u)
+            {
+                sv.uniPhase[u] += (double) d * driftRng.nextDouble() * 2.0 * kPi;      // phase scatter (unison blur)
+                const float cents = (driftRng.nextFloat() - 0.5f) * 12.0f * d;          // fixed +-6 cents per voice
+                sv.driftMul[u] = std::pow(2.0f, cents / 1200.0f);
+            }
+            sv.driftWobPh   = driftRng.nextDouble() * 2.0 * kPi;                        // slow wander start
+            sv.driftWobRate = 0.1f + 0.5f * driftRng.nextFloat();                       // 0.1..0.6 Hz
+            sv.driftGain    = 1.0f + (driftRng.nextFloat() - 0.5f) * 0.25f * d;         // level breath
+        }
 
         // SCALE mode (diatonic harmonizer): the chord depends on the played NOTE, so compute this voice's
         // per-note diatonic offsets now (keySemis is 0 for step/draw hits; keyDown recomputes for held keys).
@@ -1594,6 +1653,11 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         // === PER-SLOT FILTER (end) ===
         // Per-slot LFOs (3 independent sines, restart each hit). Index: 0 filter cutoff / 1 pitch / 2 volume.
         float  lfoRate[4] = { 4.0f, 4.0f, 4.0f, 4.0f }, lfoAmt[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+        int    lfoShape[4] = {};            // 0 sine .. 4 S&H
+        bool   lfoFreeOn[4] = {};           // FREE-RUN: use the timeline-anchored channel phase
+        double lfoFreePh[4] = {}, lfoFreeInc[4] = {};   // block-start phase + per-sample increment
+        float  drift = 0.0f;                // slot DRIFT amount (wander depth per block)
+        float  filtDrive = 0.0f;            // filter loop saturation 0..1 (0 = clean = bit-identical)
     } sc[NUM_SLOTS];
 
     bool anySlotActive = false;
@@ -1615,7 +1679,21 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             c.lfoRate[d2] = (cpb > 0.0f)
                 ? juce::jlimit(0.005f, 40.0f, cpb / juce::jmax(0.05f, lfoBarSeconds))          // cycles/bar -> Hz
                 : juce::jlimit(0.05f, 30.0f, sl.lfoRate[d2]);
-            c.lfoAmt[d2]  = juce::jlimit(0.0f, 1.0f, sl.lfoAmt[d2]); }
+            c.lfoAmt[d2]  = juce::jlimit(0.0f, 1.0f, sl.lfoAmt[d2]);
+            c.lfoShape[d2]  = juce::jlimit(0, 4, sl.lfoShape[d2]);
+            c.lfoFreeOn[d2] = sl.lfoFree[d2];
+            if (c.lfoFreeOn[d2])
+            {   // FREE-RUN: anchor the phase to the TIMELINE (bars into the playing unit) so every
+                // playback pass is identical; when stopped, a free channel clock keeps it moving live.
+                const double cyclesNow = (lfoBarPos >= 0.0 ? lfoBarPos * (double) lfoBarSeconds
+                                                           : lfoFreeSec) * (double) c.lfoRate[d2];
+                c.lfoFreePh[d2]  = 2.0 * kPi * cyclesNow;
+                c.lfoFreeInc[d2] = 2.0 * kPi * (double) c.lfoRate[d2] / sr;
+            } }
+        c.drift     = juce::jlimit(0.0f, 1.0f, sl.drift);
+        c.filtDrive = juce::jlimit(0.0f, 1.0f, sl.filterDrive);
+        if (s == 0)   // once per block: advance the free-run clock when the transport isn't driving us
+        { if (lfoBarPos >= 0.0) lfoFreeSec = 0.0; else lfoFreeSec += (double) numSamples / sr; }
         c.atk = sl.atk; c.hold = sl.hold; c.dec = sl.dec; c.sustain = sl.sustain; c.release = sl.release;
         // Release is FAITHFUL now (it has its own handle in the Strike/Ring editor for Phys/Modal
         // too): whatever the user sets IS the key-up fade. No hidden floor - that was overriding
@@ -1967,7 +2045,12 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             {
                 const Voice* nv = nullptr;
                 for (auto& v : voices) if (v.active() && (nv == nullptr || v.voiceSamples < nv->voiceSamples)) nv = &v;
-                if (nv != nullptr) lfoMul = std::pow(2.0, std::sin(nv->sv[s].lfoPhase[0]) * (double) c.lfoAmt[0] * 3.0);
+                if (nv != nullptr)
+                {
+                    const double ph0 = c.lfoFreeOn[0] ? c.lfoFreePh[0] : nv->sv[s].lfoPhase[0];
+                    const uint32_t cy0 = c.lfoFreeOn[0] ? (uint32_t) juce::jmax(0.0, ph0 / (2.0 * kPi)) : nv->sv[s].lfoCyc[0];
+                    lfoMul = std::pow(2.0, (double) lfoShapeVal(c.lfoShape[0], ph0, cy0) * (double) c.lfoAmt[0] * 3.0);
+                }
             }
             for (int fi = 0; fi < 2; ++fi)
             {
@@ -2056,6 +2139,19 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         for (int s = 0; s < NUM_SLOTS; ++s)
             ksFbGate[s] = (sc[s].engine == SrcPhys && v.sv[s].gateDec > 0.0f)
                 ? std::exp(-3.0f / juce::jmax(0.02f, v.sv[s].gateDec * sc[s].pm->decScale) / (float) sr) : -1.0f;
+        // DRIFT slow pitch wander: one gentle sine per slot-voice, advanced per block (+-4 cents
+        // at full drift; block-rate steps on a sub-Hz wobble are inaudible). driftWobMul = 1 at drift 0.
+        for (int s = 0; s < NUM_SLOTS; ++s)
+        {
+            auto& svd = v.sv[s];
+            if (sc[s].drift > 0.001f)
+            {
+                svd.driftWobMul = (float) std::pow(2.0, std::sin(svd.driftWobPh) * (double) sc[s].drift * 4.0 / 1200.0);
+                svd.driftWobPh += 2.0 * kPi * (double) svd.driftWobRate * (double) numSamples / sr;
+                if (svd.driftWobPh > 2.0 * kPi) svd.driftWobPh -= 2.0 * kPi;
+            }
+            else svd.driftWobMul = 1.0f;
+        }
         // FILTER KEYTRACK (per voice, per block): shift the cutoff TARGET with the note's pitch offset
         // from the slot base (voicePitch = step/roll pitch, keySemis = keyboard). keytrack 1 = cutoff
         // tracks the note 1:1 (doubles per octave). Rides on top of filtCutoffHz (env-follow + LFO).
@@ -2118,7 +2214,11 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 // Per-slot PITCH LFO: sine bend, +/-1 octave at full Amount (sirens, dive wobble,
                 // vibrato at small amounts). Phase advances after the engine renders.
                 if (c.lfoAmt[1] > 0.001f)
-                    pe3Mul *= std::pow(2.0, std::sin(sv.lfoPhase[1]) * (double) c.lfoAmt[1]);
+                {
+                    const double ph1 = c.lfoFreeOn[1] ? c.lfoFreePh[1] + (double) i * c.lfoFreeInc[1] : sv.lfoPhase[1];
+                    const uint32_t cy1 = c.lfoFreeOn[1] ? (uint32_t) juce::jmax(0.0, ph1 / (2.0 * kPi)) : sv.lfoCyc[1];
+                    pe3Mul *= std::pow(2.0, (double) lfoShapeVal(c.lfoShape[1], ph1, cy1) * (double) c.lfoAmt[1]);
+                }
                 // KEYS: skip slots the keyboard can't play; re-tune the rest from their own base
                 // Freq to the pressed note (keySemis rides pe3Mul, so it reaches every pitched
                 // engine including the Modal strike-tuning and the KS varispeed read).
@@ -2189,6 +2289,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             }
                             else if (c.chord > 0 && ! centreVoice)
                                 det *= std::pow(2.0, (double) chordSemis(c.chord, u) / 12.0);
+                            det *= (double) sv.driftMul[juce::jmin(u, UNI_MAX)] * (double) sv.driftWobMul;   // DRIFT (1 = off)
                             const float dt = (float)(freq * det / sr);   // cycles/sample for PolyBLEP
                             // FM active -> plain morphWave (matches the old FM engine exactly, no BLEP under
                             // phase modulation); FM off -> band-limited morphWaveBL (the clean analog path).
@@ -2216,7 +2317,11 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                                 }
                                 else wtp = c.wtPos;
                                 if (c.lfoAmt[3] > 0.001f)
-                                    wtp += (float) std::sin(sv.lfoPhase[3]) * c.lfoAmt[3] * 0.5f;
+                                {
+                                    const double ph3 = c.lfoFreeOn[3] ? c.lfoFreePh[3] + (double) i * c.lfoFreeInc[3] : sv.lfoPhase[3];
+                                    const uint32_t cy3 = c.lfoFreeOn[3] ? (uint32_t) juce::jmax(0.0, ph3 / (2.0 * kPi)) : sv.lfoCyc[3];
+                                    wtp += lfoShapeVal(c.lfoShape[3], ph3, cy3) * c.lfoAmt[3] * 0.5f;
+                                }
                                 wtp = juce::jlimit(0.0f, 1.0f, wtp) * (float)(ADD_FRAMES - 1);
                                 const int   f0 = juce::jmin((int) wtp, ADD_FRAMES - 2);
                                 const float fmix = wtp - (float) f0;
@@ -2350,7 +2455,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             const double f = fBase * (c.scaleOn                     // SCALE: per-string diatonic offset + detune spread
                                 ? std::pow(2.0, (double) sv.uniSemis[k] / 12.0
                                            + (nStr > 1 ? (2.0 * (double) k / (double)(nStr - 1) - 1.0) : 0.0) * (double) c.uniCents / 1200.0)
-                                : c.uniMul[k]);
+                                : c.uniMul[k])
+                                * (double) sv.driftMul[juce::jmin(k, UNI_MAX)] * (double) sv.driftWobMul;   // DRIFT (1 = off)
                             double L = juce::jlimit(2.0, (double)(KS_MAX - 2), sr / juce::jmax(20.0, f) - (double) c.ksApComp);
                             double rp = sv.ksWrite[k] - L; while (rp < 0.0) rp += (double) KS_MAX;
                             const int ri = (int) rp; const float fr = (float)(rp - ri);
@@ -2443,7 +2549,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                                 const double sp = nNotes > 1 ? 2.0 * (double) j / (double)(nNotes - 1) - 1.0 : 0.0;
                                 const double iv = c.scaleOn ? (double) sv.uniSemis[j] : (double) chordSemis(c.chord, j);   // SCALE per-note offset
                                 noteOn[j] = ! (c.scaleOn && sv.uniSemis[j] < -90.0f);   // guitar voicing: missing string
-                                uniMul[j] = noteOn[j] ? std::pow(2.0, iv / 12.0 + sp * (double) c.uniCents / 1200.0) : 1.0;
+                                uniMul[j] = noteOn[j] ? std::pow(2.0, iv / 12.0 + sp * (double) c.uniCents / 1200.0)
+                                                          * (double) sv.driftMul[juce::jmin(j, UNI_MAX)] : 1.0;   // DRIFT
                             }
                             for (int j = 0; j < nNotes; ++j) {
                                 if (! noteOn[j]) continue;
@@ -2526,13 +2633,15 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 // helicopter/chopper at fast rates, pumping at slow). Then advance every ACTIVE
                 // LFO's phase once per sample (the filter LFO's phase is read per block).
                 if (c.lfoAmt[2] > 0.001f) {
-                    const float g = 1.0f - c.lfoAmt[2] * 0.5f * (1.0f + (float) std::sin(sv.lfoPhase[2]));
+                    const double ph2 = c.lfoFreeOn[2] ? c.lfoFreePh[2] + (double) i * c.lfoFreeInc[2] : sv.lfoPhase[2];
+                    const uint32_t cy2 = c.lfoFreeOn[2] ? (uint32_t) juce::jmax(0.0, ph2 / (2.0 * kPi)) : sv.lfoCyc[2];
+                    const float g = 1.0f - c.lfoAmt[2] * 0.5f * (1.0f + lfoShapeVal(c.lfoShape[2], ph2, cy2));
                     if (stereo) { sL *= g; sR *= g; } else sig *= g;
                 }
                 for (int d2 = 0; d2 < 4; ++d2)
                     if (c.lfoAmt[d2] > 0.001f) {
                         sv.lfoPhase[d2] += 2.0 * kPi * (double) c.lfoRate[d2] / sr;
-                        if (sv.lfoPhase[d2] > 2.0 * kPi) sv.lfoPhase[d2] -= 2.0 * kPi;
+                        if (sv.lfoPhase[d2] > 2.0 * kPi) { sv.lfoPhase[d2] -= 2.0 * kPi; ++sv.lfoCyc[d2]; }
                     }
 
                 // === PER-SLOT FILTERS (begin) - TWO resonant TPT/ZDF SVFs IN SERIES on THIS slot's source
@@ -2549,8 +2658,13 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     gm += (tgt - gm) * 0.0025;                           // ~2 ms at 2x-OS engine rates
                     const double a1 = 1.0 / (1.0 + gm * (gm + fc.K)), a2 = gm * a1, a3 = gm * a2;
                     const int fm = fc.mode; const double fk = fc.K;
+                    // FILTER DRIVE: soft tanh on v3 = INSIDE the state loop, so resonance compresses
+                    // and sings instead of ringing louder. drv 0 = the exact old linear path.
+                    const double drv = (double) c.filtDrive;
+                    const double dg = 1.0 + drv * 4.0, dgi = (1.0 + drv * 0.6) / dg;
                     auto svf = [&](double in, int lr) -> double {
-                        const double v3 = in - sv.filtIc2[fi][lr];
+                        double v3 = in - sv.filtIc2[fi][lr];
+                        if (drv > 0.0) v3 = std::tanh(v3 * dg) * dgi;
                         const double v1 = a1 * sv.filtIc1[fi][lr] + a2 * v3;
                         const double v2 = sv.filtIc2[fi][lr] + a2 * sv.filtIc1[fi][lr] + a3 * v3;
                         sv.filtIc1[fi][lr] = 2.0 * v1 - sv.filtIc1[fi][lr];
@@ -2626,7 +2740,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 }
                 vEnv = juce::jmax(vEnv, env);
                 // HUMANIZE velocity jitter: sv.velScale (~1) loosens this slot's level per hit (1 = identical).
-                const float wEff = c.weight * sv.velScale;
+                const float wEff = c.weight * sv.velScale * sv.driftGain;   // driftGain = per-note breath (1 = off)
                 const float cL = (stereo ? sL : sig) * wEff;
                 const float cR = (stereo ? sR : sig) * wEff;
                 // BUS slots (chorus and/or comp on) are pulled OUT of the main mix (fully gained here)
