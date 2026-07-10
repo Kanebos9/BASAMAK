@@ -1281,7 +1281,9 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         sv.gateDec = (gateSamples > 0 && ! keyGate)   // keyGate = natural envelope, never rescaled
             ? juce::jmax(0.01f, (float) gateSamples / (float) sr - sl.atk - sl.hold) : 0.0f;
         sv.lfoPhase[0] = sv.lfoPhase[1] = sv.lfoPhase[2] = sv.lfoPhase[3] = 0.0;  // per-hit LFO restart (locks to the groove)
-        sv.lfoCyc[0] = sv.lfoCyc[1] = sv.lfoCyc[2] = sv.lfoCyc[3] = 0;
+        for (int d2 = 0; d2 < 4; ++d2)
+            sv.lfoCyc[d2] = (sl.lfoShape[d2] == 4 && sl.lfoAmt[d2] > 0.001f && ! sl.lfoFree[d2])
+                ? (uint32_t) driftRng.nextInt() : 0;   // Random shape (Retrig): fresh random pattern per note
         sv.keySemis = 0.0f;
         sv.keyMute = ! ((mask >> s) & 1);          // per-note slot tag: mute the slots this note doesn't play
         sv.sinePhase = 0.0;
@@ -1304,19 +1306,22 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         // DRIFT: roll this note's dice (TRUE random - every note breathes differently, like analog
         // hardware; drift 0 = no rolls = bit-identical deterministic hits, the drum default).
         sv.driftGain = 1.0f; sv.driftWobMul = 1.0f; sv.driftWobPh = 0.0; sv.driftWobRate = 0.0f;
+        sv.driftFiltMul = 1.0f;
         for (int u = 0; u <= UNI_MAX; ++u) sv.driftMul[u] = 1.0f;
         if (sl.drift > 0.001f)
         {
             const float d = sl.drift;
+            const float phScat = juce::jmin(1.0f, d * 2.0f);   // phase blur saturates by ~50% drift
             for (int u = 0; u <= UNI_MAX; ++u)
             {
-                sv.uniPhase[u] += (double) d * driftRng.nextDouble() * 2.0 * kPi;      // phase scatter (unison blur)
-                const float cents = (driftRng.nextFloat() - 0.5f) * 12.0f * d;          // fixed +-6 cents per voice
+                sv.uniPhase[u] += (double) phScat * driftRng.nextDouble() * 2.0 * kPi;  // phase scatter (unison blur)
+                const float cents = (driftRng.nextFloat() - 0.5f) * 20.0f * d;          // fixed +-10 cents per voice
                 sv.driftMul[u] = std::pow(2.0f, cents / 1200.0f);
             }
             sv.driftWobPh   = driftRng.nextDouble() * 2.0 * kPi;                        // slow wander start
             sv.driftWobRate = 0.1f + 0.5f * driftRng.nextFloat();                       // 0.1..0.6 Hz
-            sv.driftGain    = 1.0f + (driftRng.nextFloat() - 0.5f) * 0.25f * d;         // level breath
+            sv.driftGain    = 1.0f + (driftRng.nextFloat() - 0.5f) * 0.4f * d;          // level breath (+-20%)
+            sv.driftFiltMul = std::pow(2.0f, (driftRng.nextFloat() - 0.5f) * 0.8f * d); // filter +-0.4 oct per note
         }
 
         // SCALE mode (diatonic harmonizer): the chord depends on the played NOTE, so compute this voice's
@@ -2146,7 +2151,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             auto& svd = v.sv[s];
             if (sc[s].drift > 0.001f)
             {
-                svd.driftWobMul = (float) std::pow(2.0, std::sin(svd.driftWobPh) * (double) sc[s].drift * 4.0 / 1200.0);
+                svd.driftWobMul = (float) std::pow(2.0, std::sin(svd.driftWobPh) * (double) sc[s].drift * 7.0 / 1200.0);
                 svd.driftWobPh += 2.0 * kPi * (double) svd.driftWobRate * (double) numSamples / sr;
                 if (svd.driftWobPh > 2.0 * kPi) svd.driftWobPh -= 2.0 * kPi;
             }
@@ -2159,12 +2164,17 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             for (int fi = 0; fi < 2; ++fi)
             {
                 auto& f = sc[s].filt[fi];
-                if (f.on && f.keyTrack > 0.0f)
+                const bool kt  = f.on && f.keyTrack > 0.0f;
+                const bool dfm = f.on && std::abs(v.sv[s].driftFiltMul - 1.0f) > 1.0e-4f;   // DRIFT per-note cutoff
+                if (kt || dfm)
                 {
-                    const double noteSemis = (double) v.voicePitch + (double) v.sv[s].keySemis;
-                    const double hz = juce::jlimit(20.0, sr * 0.49,
-                        f.cutoffHz * std::pow(2.0, (double) f.keyTrack * noteSemis / 12.0));
-                    v.sv[s].filtGkt[fi] = std::tan(kPi * hz / sr);
+                    double hz = f.cutoffHz * (double) v.sv[s].driftFiltMul;
+                    if (kt)
+                    {
+                        const double noteSemis = (double) v.voicePitch + (double) v.sv[s].keySemis;
+                        hz *= std::pow(2.0, (double) f.keyTrack * noteSemis / 12.0);
+                    }
+                    v.sv[s].filtGkt[fi] = std::tan(kPi * juce::jlimit(20.0, sr * 0.49, hz) / sr);
                 }
                 else v.sv[s].filtGkt[fi] = -1.0;
             }
@@ -2653,7 +2663,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     const auto& fc = c.filt[fi];
                     if (! fc.on) continue;
                     double& gm = sv.filtGm[fi];
-                    const double tgt = (fc.keyTrack > 0.0f && sv.filtGkt[fi] > 0.0) ? sv.filtGkt[fi] : fc.G;
+                    const double tgt = (sv.filtGkt[fi] > 0.0) ? sv.filtGkt[fi] : fc.G;   // keytrack and/or drift per-note cutoff
                     if (gm < 0.0) gm = tgt;
                     gm += (tgt - gm) * 0.0025;                           // ~2 ms at 2x-OS engine rates
                     const double a1 = 1.0 / (1.0 + gm * (gm + fc.K)), a2 = gm * a1, a3 = gm * a2;
@@ -2661,7 +2671,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     // FILTER DRIVE: soft tanh on v3 = INSIDE the state loop, so resonance compresses
                     // and sings instead of ringing louder. drv 0 = the exact old linear path.
                     const double drv = (double) c.filtDrive;
-                    const double dg = 1.0 + drv * 4.0, dgi = (1.0 + drv * 0.6) / dg;
+                    // Gain up to 10x with only sqrt make-down = clearly audible colour by ~30%.
+                    const double dg = 1.0 + drv * 9.0, dgi = 1.0 / std::sqrt(dg);
                     auto svf = [&](double in, int lr) -> double {
                         double v3 = in - sv.filtIc2[fi][lr];
                         if (drv > 0.0) v3 = std::tanh(v3 * dg) * dgi;

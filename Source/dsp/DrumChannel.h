@@ -948,6 +948,7 @@ private:
         uint32_t lfoCyc[4]   = {}; // completed cycles (Random/S&H holds one value per cycle)
         // DRIFT per-note randomness (all 1/neutral when drift = 0 = bit-identical):
         float    driftMul[UNI_MAX + 1] = {}; // per-unison-voice fixed detune multiplier (rolled per note)
+        float    driftFiltMul = 1.0f;        // per-note FILTER cutoff variation (needs a filter on)
         float    driftGain   = 1.0f;         // per-note level breath
         float    driftWobMul = 1.0f;         // slow pitch-wander multiplier (advanced per block)
         double   driftWobPh  = 0.0;

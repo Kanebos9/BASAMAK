@@ -2696,13 +2696,16 @@ void FrequencyDisplay::paint(juce::Graphics& g)
     auto bb = getLocalBounds().toFloat();
     g.setColour(juce::Colour(0xff101022)); g.fillRoundedRectangle(bb, 4.0f);
     g.setColour(juce::Colour(0xff33335a)); g.drawRoundedRectangle(bb.reduced(0.5f), 4.0f, 1.0f);
-    {   // FILTER DRIVE drag-box (top-right): saturation INSIDE both filter loops, one amount
+    {   // FILTER DRIVE drag-box (top-right): saturation INSIDE both filter loops, one amount.
+        // DIMMED when no filter is on (it would do nothing - honesty rule).
         auto dr = driveRect();
-        g.setColour(juce::Colour(0xff26264a)); g.fillRoundedRectangle(dr, 3.0f);
+        const bool anyF = fType[0] > 0 || fType[1] > 0;
+        const float al = anyF ? 1.0f : 0.4f;
+        g.setColour(juce::Colour(0xff26264a).withAlpha(al)); g.fillRoundedRectangle(dr, 3.0f);
         if (fDrive > 0.001f)
-        { g.setColour(juce::Colour(0xffff7a4a).withAlpha(0.30f));
+        { g.setColour(juce::Colour(0xffff7a4a).withAlpha(0.30f * al));
           g.fillRoundedRectangle(dr.withWidth(juce::jmax(5.0f, fDrive * dr.getWidth())), 3.0f); }
-        g.setColour(juce::Colour(0xffd8e0f0)); g.setFont(juce::Font(10.0f, juce::Font::bold));
+        g.setColour(juce::Colour(0xffd8e0f0).withAlpha(al)); g.setFont(juce::Font(10.0f, juce::Font::bold));
         g.drawText(fDrive > 0.001f ? "Drive " + juce::String(juce::roundToInt(fDrive * 100.0f)) + "%"
                                    : "Drive: Off", dr, juce::Justification::centred, false);
     }
@@ -2882,6 +2885,7 @@ juce::String FrequencyDisplay::getTooltip()
                "- The distortion happens INSIDE the filter loop, so the resonance compresses and SINGS "
                "instead of just ringing louder.\n"
                "- One amount drives both filters (they run in series).\n"
+               "- NEEDS A FILTER ON (a diamond enabled) - it is dimmed and silent otherwise.\n"
                "- Off = the exact clean filter you had before.\n\n"
                "Tip: turn resonance up and Drive to ~40% on a bass - it growls instead of whistling.";
     static const char* tn[6] = { "Off", "Low-pass", "High-pass", "Band-pass", "Notch", "Formant" };
@@ -3132,7 +3136,9 @@ juce::String LfoDisplay::getTooltip()
                "- Tri: even, linear back-and-forth.\n"
                "- Saw: ramps then drops - rhythmic falling wobbles.\n"
                "- Square: jumps between two values - trills and on/off gates.\n"
-               "- Random: holds a new random value each cycle (stepped, unpredictable movement).\n\n"
+               "- Random: NOT a random pick of the other shapes - it holds a NEW random value each cycle "
+               "(stepped, sample-and-hold movement). Every note rolls a fresh pattern; with Free on, the "
+               "pattern follows the timeline instead (repeatable on playback).\n\n"
                "The drawn wave is exactly what plays.";
     if (freeBtnRect().contains(getMouseXYRelative().toFloat()))
         return "RETRIG / FREE (click to switch): where the wave starts on each note.\n\n"
@@ -7272,6 +7278,17 @@ void DrumSequencerEditor::setupComponents()
     knobReverbWidth.onValueChange = [this, allM] { allM([this](Sequencer::MasterFX& m){ m.reverbWidth = (float)knobReverbWidth.getValue(); }); };
     knobDelayFB.onValueChange     = [this, allM] { allM([this](Sequencer::MasterFX& m){ m.delayFeedback = (float)knobDelayFB.getValue(); }); };
     knobDelayWet.onValueChange    = [this, allM] { allM([this](Sequencer::MasterFX& m){ m.delayWet = (float)knobDelayWet.getValue(); }); };
+    // AUTO TEST for the master REVERB + DELAY rows: fire a test hit on release so send/tail edits are
+    // heard immediately (the per-slot knobs always did this; the master rows were silent - user).
+    {
+        auto masterAudition = [this] { if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel); };
+        for (juce::Slider* k : { (juce::Slider*) &knobReverbRoom, (juce::Slider*) &knobReverbDecay,
+                                 (juce::Slider*) &knobReverbWet,  (juce::Slider*) &knobReverbPre,
+                                 (juce::Slider*) &knobReverbWidth,
+                                 (juce::Slider*) &knobDelayTime,  (juce::Slider*) &knobDelayFB,
+                                 (juce::Slider*) &knobDelayWet })
+            k->onDragEnd = masterAudition;
+    }
     // Volume / Pan / Limiter are MASTER-level too now (write ALL patterns) - the whole master section
     // is preset-wide, so it doesn't change as the chain moves between patterns.
     knobMasterVol.onValueChange   = [this, allM] { allM([this](Sequencer::MasterFX& m){ m.volume = (float)knobMasterVol.getValue(); }); };

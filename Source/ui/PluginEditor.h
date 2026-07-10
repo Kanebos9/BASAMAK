@@ -673,11 +673,12 @@ private:
     // The wave's true speed in Hz for dest d (what the DSP actually plays - synced rates included).
     float effHz(int d) const { const float s = sync_[d];
         return s == 0.0f ? rate_[d] : (s < 0.0f ? gridCpb_ : s) / barSec_; }
-    // Bottom row, LEFT of Sync (user: Sync's read-out lives on its right): [Shape][Retrig][Sync] read-out
-    juce::Rectangle<float> shapeBtnRect() const { return { 4.0f,   (float) getHeight() - 16.0f, 54.0f, 13.0f }; }
-    juce::Rectangle<float> freeBtnRect() const  { return { 62.0f,  (float) getHeight() - 16.0f, 46.0f, 13.0f }; }
-    juce::Rectangle<float> syncBtnRect() const  { return { 112.0f, (float) getHeight() - 16.0f, 64.0f, 13.0f }; }
-    juce::Rectangle<float> waveArea() const { return getLocalBounds().toFloat().reduced(2.0f).withTrimmedTop(17.0f).withTrimmedBottom(15.0f); }
+    // TWO bottom rows (the one-row version squeezed the Sync read-out to nothing - user):
+    // upper row = [Shape][Retrig], lower row = [Sync] + its read-out on the right, as always.
+    juce::Rectangle<float> shapeBtnRect() const { return { 4.0f,  (float) getHeight() - 31.0f, 58.0f, 13.0f }; }
+    juce::Rectangle<float> freeBtnRect() const  { return { 66.0f, (float) getHeight() - 31.0f, 52.0f, 13.0f }; }
+    juce::Rectangle<float> syncBtnRect() const  { return { 4.0f,  (float) getHeight() - 16.0f, 64.0f, 13.0f }; }
+    juce::Rectangle<float> waveArea() const { return getLocalBounds().toFloat().reduced(2.0f).withTrimmedTop(17.0f).withTrimmedBottom(32.0f); }
     int destAt(juce::Point<float> p) const  // which of the 4 dest tabs (top strip); -1 = none
     {
         const float w = (float) getWidth();
