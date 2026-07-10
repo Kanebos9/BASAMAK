@@ -699,6 +699,7 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("aSg0", s.addSeg[0], nullptr);   // per-leg glide times (0 = hold)
         st.setProperty("aSg1", s.addSeg[1], nullptr);
         st.setProperty("aSg2", s.addSeg[2], nullptr);
+        st.setProperty("aLp",  s.addLoop, nullptr);   // glide LOOP (ping-pong)
         st.setProperty("aPos", s.addPos, nullptr);
         // Per-slot LFOs: one rate+amount(+sync+shape+free) PER DESTINATION (0=filter 1=pitch 2=vol 3=wave).
         for (int d2 = 0; d2 < 4; ++d2)
@@ -835,6 +836,7 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
                     const float m = (float) st.getProperty("aMt", 0.0f);
                     if (m > 0.001f) s.addSeg[0] = s.addSeg[1] = s.addSeg[2] = m / 3.0f;
                 }
+                s.addLoop = (bool) st.getProperty("aLp", d.addLoop);
                 s.addPos = juce::jlimit(0.0f, 1.0f, (float) st.getProperty("aPos", d.addPos));
             }
             else if (st.hasProperty("aH"))
@@ -1671,6 +1673,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         const float* wtFrm[ADD_FRAMES] = {};  // ADDITIVE WAVETABLE: the slot's 4 baked frame tables (null = not Custom)
         float wtPos = 0.0f;                   // static position 0..1 (addPos)
         bool  wtGlide = false;                // per-note glide on (addSeg[0] > 0) - overrides wtPos
+        bool  wtLoop  = false;                // ping-pong the glide forever (out and back)
+        float wtLoopEnd = 1.0f;               // journey end time (samples) = travel to the first hold
         // piecewise position clock (samples): leg k runs [wtT(k-1), wtTk) at slope wtInvk; a HOLD
         // leg has boundary 1e18 + slope 0, so the position parks at that leg's left frame.
         float wtT1 = 0.0f, wtT2 = 0.0f, wtT3 = 0.0f;
@@ -1957,6 +1961,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             for (int f = 0; f < ADD_FRAMES; ++f) c.wtFrm[f] = addTbl[s][f];
             c.wtPos   = juce::jlimit(0.0f, 1.0f, sl.addPos);
             c.wtGlide = sl.addSeg[0] > 0.001f;
+            c.wtLoop  = c.wtGlide && sl.addLoop;
             if (c.wtGlide)
             {   // bake the piecewise clock: leg k covers a third of the strip over addSeg[k] sec;
                 // a 0 leg = HOLD (boundary pushed to infinity, slope 0 = park at its left frame)
@@ -1972,6 +1977,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     else { c.wtT3 = INF; c.wtInv2 = 0.0f; }
                 }
                 else { c.wtT2 = INF; c.wtInv1 = 0.0f; c.wtT3 = INF; c.wtInv2 = 0.0f; }
+                // journey end = the last FINITE boundary (where a hold parks / the strip ends)
+                c.wtLoopEnd = c.wtT3 < INF ? c.wtT3 : (c.wtT2 < INF ? c.wtT2 : c.wtT1);
             }
         }
         else { for (int f = 0; f < ADD_FRAMES; ++f) c.wtFrm[f] = nullptr; c.wtPos = 0.0f; c.wtGlide = false; }
@@ -2344,7 +2351,13 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                                 float wtp;
                                 if (c.wtGlide)
                                 {
-                                    const float tf = (float) t;
+                                    float tf = (float) t;
+                                    if (c.wtLoop)
+                                    {   // LOOP: travel out then back (ping-pong = no snap), forever
+                                        const float L2 = 2.0f * c.wtLoopEnd;
+                                        tf = std::fmod(tf, L2);
+                                        if (tf > c.wtLoopEnd) tf = L2 - tf;
+                                    }
                                     if      (tf < c.wtT1) wtp = tf * c.wtInv0;
                                     else if (tf < c.wtT2) wtp = 1.0f / 3.0f + (tf - c.wtT1) * c.wtInv1;
                                     else if (tf < c.wtT3) wtp = 2.0f / 3.0f + (tf - c.wtT2) * c.wtInv2;

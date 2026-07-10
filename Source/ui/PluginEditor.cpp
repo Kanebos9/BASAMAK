@@ -305,8 +305,9 @@ void WaveMorphDisplay::paint(juce::Graphics& g)
 void WaveMorphDisplay::mouseDown(const juce::MouseEvent& e)
 {
     juce::ignoreUnused(e);
-    auto* s = getSlot ? getSlot() : nullptr;   // Wave = Custom -> clicking the drawing opens the harmonic editor
-    if (s != nullptr && s->oscShape >= DrumChannel::WvCustom && onOpenCustom) onOpenCustom();
+    // Clicking the drawing ALWAYS opens the harmonic editor now - if the Wave isn't Custom yet, the
+    // handler switches it (seeding the frames from the outgoing shape so the tone doesn't jump).
+    if (getSlot && getSlot() != nullptr && onOpenCustom) onOpenCustom();
 }
 
 //==============================================================================
@@ -472,9 +473,10 @@ void HarmonicEditor::paint(juce::Graphics& g)
         }
         if (gliding)
         {   const int endF = seg[1] <= 0.001f ? 1 : (seg[2] <= 0.001f ? 2 : 3);   // where the journey stops
+            const juce::String eF = juce::String::charToString((juce::juce_wchar)('A' + endF));
             g.setColour(juce::Colour(0xffaeb8d4)); g.setFont(juce::Font(9.5f, juce::Font::bold));
-            g.drawText("glide runs A > " + juce::String::charToString((juce::juce_wchar)('A' + endF))
-                       + " each note", pr, juce::Justification::centred, false); }
+            g.drawText(loopOn ? "glide loops A <> " + eF + " forever" : "glide runs A > " + eF + " each note",
+                       pr, juce::Justification::centred, false); }
         else
         {   const float hx = pr.getX() + 6.0f + (pr.getWidth() - 12.0f) * juce::jlimit(0.0f, 1.0f, wtPos);
             g.setColour(accent.withAlpha(0.30f));
@@ -499,9 +501,15 @@ void HarmonicEditor::paint(juce::Graphics& g)
                                    : leg + (k == 0 ? " Off" : " Hold"),
                    mr, juce::Justification::centred, false);
     }
+    {   // LOOP toggle: the glide travels out and BACK, forever (ping-pong - no snap)
+        auto lr = loopRect();
+        g.setColour(loopOn ? accent : juce::Colour(0xff26264a)); g.fillRoundedRectangle(lr, 3.0f);
+        g.setColour(loopOn ? juce::Colours::black : juce::Colour(0xff9aa6c0)); g.setFont(juce::Font(10.0f, juce::Font::bold));
+        g.drawText("Loop", lr, juce::Justification::centred, false);
+    }
     g.setColour(juce::Colour(0xff6a7290)); g.setFont(juce::Font(9.0f, juce::Font::bold));
     g.drawText("4 frames A > D - Position picks the mix; the A>B / B>C / C>D boxes = per-leg glide times "
-               "(left = hold) - the WAVE LFO scans live - LEFT-drag = draw, RIGHT-drag = erase",
+               "(left = hold); Loop = out and back forever - LEFT-drag = draw, RIGHT-drag = erase",
                12, getHeight() - 13, getWidth() - 24, 11, juce::Justification::centredLeft, false);
 }
 
@@ -523,6 +531,8 @@ void HarmonicEditor::applyAt(const juce::MouseEvent& e, bool erase, int f)
 void HarmonicEditor::mouseDown(const juce::MouseEvent& e)
 {
     if (closeRect().contains(e.position)) { if (onClose) onClose(); return; }
+    if (loopRect().contains(e.position))
+    { loopOn = ! loopOn; if (onChange) onChange(); if (onDragEnd) onDragEnd(); repaint(); return; }
     if (posRect().contains(e.position))   { posDragging = true; mouseDrag(e); return; }
     for (int k = 0; k < NF - 1; ++k)
         if (segRect(k).contains(e.position)) { segDragging = k; mouseDrag(e); return; }
@@ -769,6 +779,9 @@ juce::String HarmonicEditor::getTooltip()
         return "POSITION: where in the A > D strip the sound sits. The two neighbouring frames "
                "crossfade; the handle SNAPS onto the letters (a letter = purely that frame - hold "
                "SHIFT for free placement). Greyed while glide is on (the note travels instead).";
+    if (loopRect().contains(p))
+        return "LOOP: the glide travels its legs OUT and then BACK, forever (ping-pong, so there is "
+               "no snap) - a breathing, evolving tone instead of settling on the last frame.";
     for (int k = 0; k < NF - 1; ++k)
         if (segRect(k).contains(p))
         {
@@ -4895,7 +4908,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
             for (int k = 0; k < DrumChannel::ADD_HARM; ++k)
             { h = mix(h, f(sl.addH[fr][k])); h = mix(h, f(sl.addPh[fr][k])); }   // wavetable frames
         for (int sg = 0; sg < DrumChannel::ADD_FRAMES - 1; ++sg) h = mix(h, f(sl.addSeg[sg]));
-        h = mix(h, f(sl.addPos));
+        h = mix(h, sl.addLoop ? 1 : 0); h = mix(h, f(sl.addPos));
         for (int d2 = 0; d2 < 4; ++d2) { h = mix(h, f(sl.lfoRate[d2])); h = mix(h, f(sl.lfoAmt[d2])); h = mix(h, f(sl.lfoSync[d2])); h = mix(h, sl.lfoSyncRate[d2]);
                                          h = mix(h, sl.lfoShape[d2]); h = mix(h, sl.lfoFree[d2] ? 1 : 0);
                                          if (sl.lfoShape[d2] == 7)   // the drawn LFO cycle IS the sound
@@ -5700,7 +5713,28 @@ bool DrumSequencerEditor::keyPressed(const juce::KeyPress& k)
     if (k == juce::KeyPress('z', MK::commandModifier, 0))                       { doUndo(); return true; }
     if (k == juce::KeyPress('z', MK::commandModifier | MK::shiftModifier, 0)
         || k == juce::KeyPress('y', MK::commandModifier, 0))                    { doRedo(); return true; }
+    // UP/DOWN = step the selected channel's SOUND through the bank (the picker's order: factory
+    // categories in kSoundCatOrder, then Your Sound Bank; wraps at the ends). Down = next.
+    if (k.getKeyCode() == juce::KeyPress::upKey || k.getKeyCode() == juce::KeyPress::downKey)
+    { stepSoundBank(k.getKeyCode() == juce::KeyPress::downKey ? 1 : -1); return true; }
     return false;
+}
+
+void DrumSequencerEditor::stepSoundBank(int dir)
+{
+    juce::Array<int> order;                                    // the full bank in PICKER order
+    auto facNames = Factory::mixNames();
+    auto facCats  = Factory::mixCategories();
+    for (auto* cat : kSoundCatOrder)
+        for (int i : factoryIndicesFor(cat, facNames, facCats, {}))
+            order.add(FACTORY_MIX_BASE + i);
+    for (int i = 0; i < soundMixFiles.size(); ++i) order.add(i + 1);   // Your Sound Bank (file ids = idx+1)
+    if (order.isEmpty()) return;
+    const int cur = strips[selectedChannel].comboSound.getSelectedId();
+    int pos = order.indexOf(cur);
+    pos = pos < 0 ? (dir > 0 ? 0 : order.size() - 1)           // nothing/Init selected: start at an end
+                  : (pos + dir + order.size()) % order.size(); // wrap
+    applySoundPickId(selectedChannel, order[pos]);
 }
 
 void DrumSequencerEditor::doUndo()
@@ -7494,12 +7528,35 @@ void DrumSequencerEditor::setupComponents()
             return proc.sequencer.channel(selectedChannel)
                        .addTbl[b][juce::jlimit(0, DrumChannel::ADD_FRAMES - 1, f)]; };
         slotEd[b].morphView.onOpenCustom = [this, b] {
+            {   // not on Custom yet? switch to it, seeding the 4 frames from the CURRENT shape's
+                // recipe (only when the frames are still the untouched default) - same tone, now drawable
+                auto& ch = proc.sequencer.channel(selectedChannel);
+                auto& sl = ch.slots[b];
+                if (sl.oscShape < DrumChannel::WvCustom)
+                {
+                    bool untouched = true;
+                    for (int f = 0; f < DrumChannel::ADD_FRAMES && untouched; ++f)
+                        for (int k = 0; k < DrumChannel::ADD_HARM && untouched; ++k)
+                            untouched = std::abs(sl.addH[f][k] - (k == 0 ? 1.0f : 0.0f)) < 1.0e-4f
+                                     && std::abs(sl.addPh[f][k]) < 1.0e-4f;
+                    if (untouched)
+                    {   float mg[DrumChannel::ADD_HARM], phr[DrumChannel::ADD_HARM];
+                        addShapeRecipe(juce::jlimit(0, DrumChannel::WvCustom - 1, sl.oscShape), mg, phr);
+                        for (int f = 0; f < DrumChannel::ADD_FRAMES; ++f)
+                            for (int k = 0; k < DrumChannel::ADD_HARM; ++k)
+                            { sl.addH[f][k] = mg[k]; sl.addPh[f][k] = phr[k]; }
+                    }
+                    sl.oscShape = sl.oscShapeB = DrumChannel::WvCustom;
+                    ch.rebuildAddTables(); ch.markDspDirty();
+                    refreshDetailPanel();   // the Wave fader jumps to "Custom (draw on wave)"
+                }
+            }
             harmEdSlot = b;
             harmEd.slotIdx = b;
             harmEd.clickIgnore = &slotEd[b].morphView;   // the preview's own click re-opens, never toggle-fights
             harmEd.accent = b == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8);
             { auto& sl = proc.sequencer.channel(selectedChannel).slots[b];
-              harmEd.setValues(sl.addH, sl.addPh, sl.addSeg, sl.addPos); }
+              harmEd.setValues(sl.addH, sl.addPh, sl.addSeg, sl.addPos, sl.addLoop); }
             harmEd.setVisible(true); harmEd.toFront(false);
         };
     }
@@ -7512,6 +7569,7 @@ void DrumSequencerEditor::setupComponents()
             for (int f = 0; f < DrumChannel::ADD_FRAMES; ++f)
             { sl.addH[f][k] = harmEd.vals[f][k]; sl.addPh[f][k] = harmEd.phs[f][k]; }
         for (int k = 0; k < DrumChannel::ADD_FRAMES - 1; ++k) sl.addSeg[k] = harmEd.seg[k];
+        sl.addLoop = harmEd.loopOn;
         sl.addPos = harmEd.wtPos;
         ch.rebuildAddTables(); ch.markDspDirty();
         slotEd[harmEdSlot].morphView.repaint();

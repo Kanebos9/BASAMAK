@@ -530,6 +530,7 @@ public:
         float addH [ADD_FRAMES][ADD_HARM] = { { 1.0f }, { 1.0f }, { 1.0f }, { 1.0f } }; // each frame h1=1 = sine
         float addPh[ADD_FRAMES][ADD_HARM] = {};
         float addSeg[ADD_FRAMES - 1] = {};   // per-leg glide seconds (0 = hold); [0] == 0 = glide off
+        bool  addLoop = false;               // LOOP the glide: travel out then back (ping-pong), forever
         float addPos = 0.0f;                 // static wavetable position 0..1 (used when glide is off)
         // -- Per-slot LFOs ("wobble"): THREE independent sines, one per destination, each with its
         //    own rate + amount, all RESTARTING on every hit (locked to the groove, no tempo-sync UI

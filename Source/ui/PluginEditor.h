@@ -393,13 +393,14 @@ public:
     float vals[NF][DrumChannel::ADD_HARM] = { { 1.0f }, { 1.0f }, { 1.0f }, { 1.0f } };
     float phs [NF][DrumChannel::ADD_HARM] = {};
     float seg[NF - 1] = {};                       // per-leg glide seconds (0 = HOLD); [0] == 0 = glide off
+    bool  loopOn = false;                         // ping-pong the glide forever
     float wtPos = 0.0f;                           // static wavetable position 0..1
     void setValues(const float (*h)[DrumChannel::ADD_HARM], const float (*p)[DrumChannel::ADD_HARM],
-                   const float* segs, float pos)
+                   const float* segs, float pos, bool loopIn)
     { for (int f = 0; f < NF; ++f) for (int i = 0; i < DrumChannel::ADD_HARM; ++i)
       { vals[f][i] = h[f][i]; phs[f][i] = p[f][i]; }
       for (int k = 0; k < NF - 1; ++k) seg[k] = segs[k];
-      wtPos = pos;
+      wtPos = pos; loopOn = loopIn;
       for (int f = 0; f < NF; ++f) { frameLabel[f].clear(); rebuildStrokeFromHarmonics(f); detectLoadedShape(f); }
       repaint(); }
     void paint(juce::Graphics& g) override;
@@ -459,9 +460,11 @@ private:
     // POSITION band (between the rows): the scan strip + THREE per-leg glide time boxes
     // (A>B / B>C / C>D; hard left = HOLD = the note stops at that leg's left frame)
     juce::Rectangle<float> posRect() const
-    { return { 78.0f, rowY(0) + rowH() + 6.0f, (float) getWidth() - 78.0f - 310.0f, 18.0f }; }
+    { return { 78.0f, rowY(0) + rowH() + 6.0f, (float) getWidth() - 78.0f - 364.0f, 18.0f }; }
     juce::Rectangle<float> segRect(int k) const
-    { return { (float) getWidth() - 302.0f + (float) k * 100.0f, rowY(0) + rowH() + 6.0f, 94.0f, 18.0f }; }
+    { return { (float) getWidth() - 356.0f + (float) k * 100.0f, rowY(0) + rowH() + 6.0f, 94.0f, 18.0f }; }
+    juce::Rectangle<float> loopRect() const   // LOOP toggle, right of the C>D box (user placement)
+    { return { (float) getWidth() - 52.0f, rowY(0) + rowH() + 6.0f, 44.0f, 18.0f }; }
     void applyAt(const juce::MouseEvent& e, bool erase, int f);
     void strokeToHarmonics(int f);                // DFT the drawn cycle -> vals + phs (32 partials)
     void rebuildStrokeFromHarmonics(int f);       // vals + phs -> wavePts (band-limited reconstruction)
@@ -2091,6 +2094,7 @@ private:
     HdrClick revModeClick;
     void refreshReverbModeHeader();
     void openLfoCurveEditor(int dest);   // LFO SHAPER overlay
+    void stepSoundBank(int dir);         // UP/DOWN arrows: previous/next sound in the bank order
     HarmonicEditor harmEd;    // ADDITIVE draw-harmonics overlay (content child)
     LfoCurveEditor lfoCurveEd;             // LFO SHAPER overlay (draw the Custom LFO cycle)
     int            lfoCurveEdDest = 0;     // which LFO tab the overlay edits
