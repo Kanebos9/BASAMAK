@@ -696,7 +696,7 @@ void HarmonicEditor::analyzeSample(int f)
             std::unique_ptr<juce::AudioFormatReader> rd (afm.createReaderFor(file));
             if (rd == nullptr || rd->lengthInSamples < 512 || rd->numChannels < 1)
             { frameMsg[f] = "can't read that file"; repaint(); return; }
-            const int len = (int) juce::jmin<juce::int64>(rd->lengthInSamples, 1 << 21);
+            const int len = (int) juce::jmin(rd->lengthInSamples, (juce::int64) (1 << 21));   // no explicit jmin<int64> (Linux GCC pulls the SIMD overload in)
             juce::AudioBuffer<float> tmp((int) rd->numChannels, len);
             rd->read(&tmp, 0, len, 0, true, true);
             std::vector<float> mono((size_t) len, 0.0f);
