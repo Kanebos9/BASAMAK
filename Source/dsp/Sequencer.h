@@ -71,6 +71,8 @@ public:
     int   timeSigNum     = 4;     // standalone time signature (used when not DAW-synced)
     int   timeSigDen     = 4;
     bool  playing        = false; // standalone mode only
+    double blockBarSeconds = 2.0; // seconds per bar this block (for tempo-synced per-slot LFOs; DAW overrides)
+    int    uiGridDiv       = 16;  // piano-roll Grid 1/N (the editor sets it) - for LFO/arp "Lock to grid"
 
     // Raised when the sequencer auto-changes the current pattern (next/stop),
     // so the editor can re-sync its UI.

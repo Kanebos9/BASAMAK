@@ -73,7 +73,7 @@ static void mFMKick(DC& c)     // trap/808-style sub kick: FM knock + heavy sub 
     c.fmPitchEnvAmt = 24.0f; c.fmPitchEnvTime = 0.03f;   // the knock (it had NO pitch drop before = a dull blip)
     c.legacyFmEnvFollow = true;   // bright FM knock melts into a CLEAN sub tail (user-approved re-voice)
     c.srcDec[DC::SrcFM] = 0.55f;
-    c.driveType = DC::SoftClip; c.driveAmount = 0.26f;
+    c.driveType = DC::SoftClip; c.driveAmount = 0.51f;
     c.volume = 0.95f;
 }
 static void mSubBass(DC& c)    // round sine sub-bass
@@ -97,7 +97,7 @@ static void mNoiseSnare(DC& c) // classic synth snare: bright noise crack + a kn
     c.layerSinePEnvAmt = 6.0f; c.layerSinePEnvTime = 0.04f;                     // drum-body pitch knock
     c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 0.15f;
     c.eqBand[DC::EQ_HP] = { true, 140.0f, 0.0f, 0.707f };                       // keep the low mud out
-    c.driveType = DC::Tube; c.driveAmount = 0.12f;
+    c.driveType = DC::Tube; c.driveAmount = 0.346f;
     c.reverbSend = 0.10f; c.volume = 0.86f;
 }
 static void mClap(DC& c)   // tight modern clap: short, mid-bright, dry-ish
@@ -166,7 +166,7 @@ static void m808Bass(DC& c)    // long FM sub-bass with a pitch-drop click (uses
     c.fmPitch = -24.0f; c.fmSpread = 0.0f; c.fmDepth = 0.25f;
     c.fmPitchEnvAmt = 20.0f; c.fmPitchEnvTime = 0.04f;          // quick drop = the "click"
     c.srcAtk[DC::SrcFM] = 0.001f; c.srcDec[DC::SrcFM] = 1.6f;   // long sub tail
-    c.driveType = DC::SoftClip; c.driveAmount = 0.15f; c.volume = 0.85f;
+    c.driveType = DC::SoftClip; c.driveAmount = 0.387f; c.volume = 0.85f;
 }
 static void mShaker(DC& c)     // short bright noise tick
 {
@@ -209,7 +209,7 @@ static void mSubDrop(DC& c)     // sine sub with a delayed pitch drop (P.Offset)
     c.layerOscShape = DC::OscSine; c.layerSineFreq = 48.0f;
     c.layerSinePEnvAmt = 36.0f; c.layerSinePEnvTime = 0.18f; c.layerSinePOffset = 0.12f;
     c.srcDec[DC::SrcOsc] = 0.7f;
-    c.driveType = DC::SoftClip; c.driveAmount = 0.12f; c.volume = 0.88f;
+    c.driveType = DC::SoftClip; c.driveAmount = 0.346f; c.volume = 0.88f;
 }
 static void mNoiseSweep(DC& c)  // airy noise with a downward filter sweep
 {
@@ -231,7 +231,7 @@ static void m808Kick(DC& c) {   // long boomy 808: lower sine, longer tail, warm
     c.layerOscShape = DC::OscSine; c.layerSineFreq = 45.0f;
     c.layerSinePEnvAmt = 14.0f; c.layerSinePEnvTime = 0.075f;
     c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 1.35f;
-    c.driveType = DC::SoftClip; c.driveAmount = 0.20f; c.volume = 0.97f;
+    c.driveType = DC::SoftClip; c.driveAmount = 0.447f; c.volume = 0.97f;
 }
 static void m808Snare(DC& c) {   // 808: snappy noise + tuned body knock
     clearSound(c);
@@ -244,7 +244,7 @@ static void m808Snare(DC& c) {   // 808: snappy noise + tuned body knock
     c.layerSinePEnvAmt = 4.0f; c.layerSinePEnvTime = 0.035f;
     c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 0.11f;
     c.eqBand[DC::EQ_HP] = { true, 150.0f, 0.0f, 0.707f };
-    c.driveType = DC::SoftClip; c.driveAmount = 0.10f;
+    c.driveType = DC::SoftClip; c.driveAmount = 0.316f;
     c.reverbSend = 0.10f; c.volume = 0.86f;
 }
 static void m808Clap(DC& c) {
@@ -284,7 +284,7 @@ static void m808HiTom(DC& c) {
 static void m808Rimshot(DC& c) {
     clearSound(c); c.srcOn[DC::SrcOsc] = true; c.srcWeight[DC::SrcOsc] = 1.0f;
     c.layerOscShape = DC::OscTriangle; c.layerSineFreq = 440.0f; c.srcDec[DC::SrcOsc] = 0.05f;
-    c.driveType = DC::HardClip; c.driveAmount = 0.25f; c.volume = 0.7f;
+    c.driveType = DC::HardClip; c.driveAmount = 0.5f; c.volume = 0.7f;
 }
 static void m808Conga(DC& c) {
     clearSound(c); c.srcOn[DC::SrcOsc] = true; c.srcWeight[DC::SrcOsc] = 1.0f;
@@ -308,7 +308,7 @@ static void m909Kick(DC& c) {   // 909: punchy sine + a real attack click, tube-
     c.layerOscShape = DC::OscSine; c.layerSineFreq = 54.0f; c.layerSinePEnvAmt = 26.0f; c.layerSinePEnvTime = 0.032f;
     c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 0.42f;
     c.noiseType = 0; c.layerNoiseCenter = 4000.0f; c.srcAtk[DC::SrcNoise] = 0.001f; c.srcDec[DC::SrcNoise] = 0.018f;
-    c.driveType = DC::Tube; c.driveAmount = 0.28f; c.volume = 0.97f;
+    c.driveType = DC::Tube; c.driveAmount = 0.529f; c.volume = 0.97f;
 }
 static void m909Snare(DC& c) {   // 909: big crack, short tuned knock, tube edge
     clearSound(c);
@@ -321,7 +321,7 @@ static void m909Snare(DC& c) {   // 909: big crack, short tuned knock, tube edge
     c.layerSinePEnvAmt = 7.0f; c.layerSinePEnvTime = 0.03f;
     c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 0.10f;
     c.eqBand[DC::EQ_HP] = { true, 250.0f, 0.0f, 0.707f };
-    c.driveType = DC::Tube; c.driveAmount = 0.15f;
+    c.driveType = DC::Tube; c.driveAmount = 0.387f;
     c.reverbSend = 0.12f; c.volume = 0.86f;
 }
 static void m909Clap(DC& c) {   // big roomy 909 clap: longer + wetter than the tight Clap / darker 808
@@ -370,7 +370,7 @@ static void m909HiTom(DC& c) {
 static void m909Rim(DC& c) {
     clearSound(c); c.srcOn[DC::SrcOsc] = true; c.srcWeight[DC::SrcOsc] = 1.0f;
     c.layerOscShape = DC::OscTriangle; c.layerSineFreq = 1700.0f; c.srcDec[DC::SrcOsc] = 0.03f;
-    c.driveType = DC::HardClip; c.driveAmount = 0.2f; c.volume = 0.7f;
+    c.driveType = DC::HardClip; c.driveAmount = 0.447f; c.volume = 0.7f;
 }
 // -- TR-606 --
 static void m606Snare(DC& c) {   // 606: short papery snap
@@ -428,13 +428,13 @@ static void mFMBass(DC& c) {
 static void mGrowlBass(DC& c) {
     clearSound(c); c.srcOn[DC::SrcFM] = true; c.srcWeight[DC::SrcFM] = 1.0f;
     c.fmPitch = -12.0f; c.fmSpread = 0.3f; c.fmDepth = 0.6f; c.fmFeedback = 0.6f; c.fmSub = 0.3f;
-    c.srcDec[DC::SrcFM] = 0.5f; c.driveType = DC::SoftClip; c.driveAmount = 0.2f; c.volume = 0.75f;
+    c.srcDec[DC::SrcFM] = 0.5f; c.driveType = DC::SoftClip; c.driveAmount = 0.447f; c.volume = 0.75f;
 }
 static void mAcidBass(DC& c) {
     clearSound(c); c.srcOn[DC::SrcOsc] = true; c.srcWeight[DC::SrcOsc] = 1.0f;
     c.layerOscShape = DC::OscSaw; c.layerSineFreq = 60.0f; c.srcDec[DC::SrcOsc] = 0.3f;
     c.filterType = DC::LowPass; c.filterCutoff = 600.0f; c.filterReso = 4.0f; c.filterEnvAmt = 0.6f;
-    c.driveType = DC::Tube; c.driveAmount = 0.2f; c.volume = 0.78f;
+    c.driveType = DC::Tube; c.driveAmount = 0.447f; c.volume = 0.78f;
 }
 // -- Kicks --
 static void mPunchKick(DC& c) {   // HARD short club/rave punch - all attack, no boom.
@@ -444,13 +444,13 @@ static void mPunchKick(DC& c) {   // HARD short club/rave punch - all attack, no
     c.layerOscShape = DC::OscSine; c.layerSineFreq = 62.0f;
     c.layerSinePEnvAmt = 36.0f; c.layerSinePEnvTime = 0.02f;   // ~3-octave snap in 20 ms = the punch IS the attack
     c.srcAtk[DC::SrcOsc] = 0.0005f; c.srcDec[DC::SrcOsc] = 0.22f;
-    c.driveType = DC::HardClip; c.driveAmount = 0.32f; c.volume = 0.97f;
+    c.driveType = DC::HardClip; c.driveAmount = 0.566f; c.volume = 0.97f;
 }
 static void mDistKick(DC& c) {   // gnarly distorted kick with a proper knock
     clearSound(c); c.srcOn[DC::SrcFM] = true; c.srcWeight[DC::SrcFM] = 1.0f;
     c.fmPitch = -20.0f; c.fmSpread = 0.12f; c.fmDepth = 0.5f; c.fmSub = 0.45f;
     c.fmPitchEnvAmt = 20.0f; c.fmPitchEnvTime = 0.035f;
-    c.srcDec[DC::SrcFM] = 0.40f; c.driveType = DC::Fuzz; c.driveAmount = 0.35f; c.volume = 0.92f;
+    c.srcDec[DC::SrcFM] = 0.40f; c.driveType = DC::Fuzz; c.driveAmount = 0.592f; c.volume = 0.92f;
 }
 // ---- Kicks batch 1 (v1.3.4 taxonomy fill). Roles, so the family stays distinct:
 // 808 = long boom | 909 = click+tube | Punch = hard rave | Dist = fuzz | FM = trap sub |
@@ -461,7 +461,7 @@ static void mSubKick(DC& c) {   // pure 38 Hz layering sub: NO knock at all, sof
     clearSound(c); c.srcOn[DC::SrcOsc] = true; c.srcWeight[DC::SrcOsc] = 1.0f;
     c.layerOscShape = DC::OscSine; c.layerSineFreq = 38.0f;
     c.srcAtk[DC::SrcOsc] = 0.004f; c.srcDec[DC::SrcOsc] = 0.75f;
-    c.driveType = DC::SoftClip; c.driveAmount = 0.10f; c.volume = 0.97f;
+    c.driveType = DC::SoftClip; c.driveAmount = 0.316f; c.volume = 0.97f;
 }
 static void mBreakKick(DC& c) {   // tight boxy breakbeat kick: mid-forward, small knock, very short
     clearSound(c); c.srcOn[DC::SrcOsc] = true; c.srcWeight[DC::SrcOsc] = 1.0f;
@@ -469,7 +469,7 @@ static void mBreakKick(DC& c) {   // tight boxy breakbeat kick: mid-forward, sma
     c.layerSinePEnvAmt = 8.0f; c.layerSinePEnvTime = 0.025f;
     c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 0.16f;
     c.eqBand[DC::EQ_HP] = { true, 55.0f, 0.0f, 0.707f };   // boxy = no sub weight
-    c.driveType = DC::Tube; c.driveAmount = 0.22f; c.volume = 0.93f;
+    c.driveType = DC::Tube; c.driveAmount = 0.469f; c.volume = 0.93f;
 }
 static void mRumbleKick(DC& c) {   // hard-techno: clipped knock + a LONG dark noise rumble tail
     clearSound(c);
@@ -482,14 +482,14 @@ static void mRumbleKick(DC& c) {   // hard-techno: clipped knock + a LONG dark n
     c.noiseType = 2; c.layerNoiseCenter = 1400.0f; c.layerNoiseWidth = 0.35f;   // brown = the dark rumble
     c.srcAtk[DC::SrcNoise] = 0.002f; c.srcDec[DC::SrcNoise] = 0.70f;
     c.eqBand[DC::EQ_HP] = { true, 40.0f, 0.0f, 0.707f };
-    c.driveType = DC::HardClip; c.driveAmount = 0.38f; c.volume = 0.90f;
+    c.driveType = DC::HardClip; c.driveAmount = 0.616f; c.volume = 0.90f;
 }
 static void mCrunchKick(DC& c) {   // foldback grit (the only kick on Foldback): harmonics bite mid-band
     clearSound(c); c.srcOn[DC::SrcOsc] = true; c.srcWeight[DC::SrcOsc] = 1.0f;
     c.layerOscShape = DC::OscSine; c.layerSineFreq = 60.0f;
     c.layerSinePEnvAmt = 18.0f; c.layerSinePEnvTime = 0.030f;
     c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 0.30f;
-    c.driveType = DC::Foldback; c.driveAmount = 0.40f; c.volume = 0.90f;
+    c.driveType = DC::Foldback; c.driveAmount = 0.632f; c.volume = 0.90f;
 }
 static void mAcousticKick(DC& c) {   // organic: Modal membrane head + a felt-beater noise tick
     clearSound(c);
@@ -516,7 +516,7 @@ static void mTrapSnare(DC& c) {   // sharp trap crack
     c.layerSinePEnvAmt = 6.0f; c.layerSinePEnvTime = 0.028f;
     c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 0.09f;
     c.eqBand[DC::EQ_HP] = { true, 350.0f, 0.0f, 0.707f };
-    c.driveType = DC::Tube; c.driveAmount = 0.15f;
+    c.driveType = DC::Tube; c.driveAmount = 0.387f;
     c.reverbSend = 0.12f; c.volume = 0.86f;
 }
 static void mModSnare(DC& c) {   // realistic snare: Modal membrane body + resonant noise "wires"
@@ -646,7 +646,6 @@ static DC::Slot& mkModal(DC& c)   // clean channel + one Modal slot
     s.engine = DC::SrcModal; s.weight = 1.0f;
     return s;
 }
-static void moMarimba(DC& c)   { auto& s = mkModal(c); s.modalMaterial = 0; s.oscFreq = 262.0f; s.modalDecay = 0.32f; s.modalTone = 0.45f; s.modalStruct = 0.5f; c.volume = 0.9f; }
 static void moTubular(DC& c)   { auto& s = mkModal(c); s.modalMaterial = 1; s.oscFreq = 330.0f; s.modalDecay = 0.85f; s.modalTone = 0.6f;  s.modalStruct = 0.5f; c.reverbSend = 0.25f; c.volume = 0.7f; }
 static void moGlass(DC& c)     { auto& s = mkModal(c); s.modalMaterial = 2; s.oscFreq = 520.0f; s.modalDecay = 0.55f; s.modalTone = 0.8f;  s.modalStruct = 0.55f; c.reverbSend = 0.2f; c.volume = 0.72f; }
 static void moTomDrum(DC& c)   { auto& s = mkModal(c); s.modalMaterial = 3; s.oscFreq = 110.0f; s.modalDecay = 0.3f;  s.modalTone = 0.5f;  s.modalStruct = 0.5f; c.volume = 0.88f; }   // membrane = tom/drum
@@ -692,7 +691,7 @@ static void bStationBass(DC& c) {   // the flagship: detuned saw + square sub, c
     s.oscUnison = 2; s.oscDetune = 0.22f;
     s.atk = 0.002f; s.dec = 0.5f;
     s.filterType = DC::LowPass; s.filterCutoff = 500.0f; s.filterReso = 1.8f; s.filterEnvAmt = 0.55f;
-    s.fxDriveType = DC::Tube; s.fxDrive = 0.18f;
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.424f;
     auto& b = mkSlot2(c, DC::SrcOsc, 0.58f);
     b.oscShape = b.oscShapeB = DC::WvSquare; b.oscFreq = 27.5f;   // sub: -1 octave, square = BS2 style
     c.keysSlot2Down = 12;   // DECLARE the octave (sub already lives an octave down in the base):
@@ -706,7 +705,7 @@ static void bLadderBass(DC& c) {    // warm funk: saw through a low, barely-reso
     s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 55.0f;
     s.atk = 0.002f; s.dec = 0.32f;
     s.filterType = DC::LowPass; s.filterCutoff = 420.0f; s.filterReso = 1.1f; s.filterEnvAmt = 0.4f;
-    s.fxDriveType = DC::SoftClip; s.fxDrive = 0.12f;
+    s.fxDriveType = DC::SoftClip; s.fxDrive = 0.346f;
     auto& b = mkSlot2(c, DC::SrcOsc, 0.55f);
     b.oscShape = b.oscShapeB = DC::WvSine; b.oscFreq = 27.5f;
     c.keysSlot2Down = 12;   // DECLARE the octave (sub already lives an octave down in the base):
@@ -721,7 +720,7 @@ static void bRubberBass(DC& c) {    // FM electric bass: sine carrier, env-follo
     s.fmEnvFollow = true; s.fmSub = 0.5f;                          // built-in sub sine, half the carrier
     s.atk = 0.002f; s.dec = 0.4f;
     s.filterType = DC::LowPass; s.filterCutoff = 1200.0f; s.filterReso = 0.9f; s.filterEnvAmt = 0.3f;
-    s.fxDriveType = DC::SoftClip; s.fxDrive = 0.10f;
+    s.fxDriveType = DC::SoftClip; s.fxDrive = 0.316f;
     c.volume = 0.85f;
 }
 static void bNeuroBass(DC& c) {     // modern growl: folded+FM'd saw with a swept resonant LP, CLEAN sine sub under it
@@ -732,7 +731,7 @@ static void bNeuroBass(DC& c) {     // modern growl: folded+FM'd saw with a swep
     s.atk = 0.002f; s.dec = 0.6f;
     s.filterType = DC::LowPass; s.filterCutoff = 900.0f; s.filterReso = 2.8f; s.filterEnvAmt = 0.65f;
     s.lfoRate[0] = 3.5f; s.lfoAmt[0] = 0.4f;   // filter-LFO wobble on top of the env sweep = "talking" growl
-    s.fxDriveType = DC::Foldback; s.fxDrive = 0.22f;
+    s.fxDriveType = DC::Foldback; s.fxDrive = 0.469f;
     auto& b = mkSlot2(c, DC::SrcOsc, 0.60f);
     b.oscShape = b.oscShapeB = DC::WvSine; b.oscFreq = 27.5f;     // untouched low end - growl stays on top
     c.keysSlot2Down = 12;   // DECLARE the octave (sub already lives an octave down in the base):
@@ -748,7 +747,7 @@ static void bHooverBass(DC& c) {    // rave hoover: wide 5-voice saw that RISES 
     s.oscPEnvAmt = -12.0f; s.oscPEnvTime = 0.09f;                  // starts -1 oct, sweeps up into the note
     s.atk = 0.002f; s.dec = 0.7f;
     s.filterType = DC::LowPass; s.filterCutoff = 2500.0f; s.filterReso = 1.4f; s.filterEnvAmt = 0.3f;
-    s.fxDriveType = DC::Tube; s.fxDrive = 0.15f;
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.387f;
     auto& b = mkSlot2(c, DC::SrcOsc, 0.65f);
     b.oscShape = b.oscShapeB = DC::WvSquare; b.oscFreq = 32.7f;   // C1 sub keeps the bottom solid
     c.keysSlot2Down = 12;   // DECLARE the octave (sub already lives an octave down in the base):
@@ -763,7 +762,7 @@ static void bReedBass(DC& c) {      // hollow house bass: odd-harmonic "reed" wa
     s.oscFreq = 65.41f;
     s.atk = 0.002f; s.dec = 0.28f;
     s.filterType = DC::LowPass; s.filterCutoff = 700.0f; s.filterReso = 0.9f; s.filterEnvAmt = 0.35f;
-    s.fxDriveType = DC::SoftClip; s.fxDrive = 0.08f;
+    s.fxDriveType = DC::SoftClip; s.fxDrive = 0.283f;
     auto& b = mkSlot2(c, DC::SrcOsc, 0.58f);
     b.oscShape = b.oscShapeB = DC::WvSine; b.oscFreq = 32.7f;
     c.keysSlot2Down = 12;   // DECLARE the octave (sub already lives an octave down in the base):
@@ -779,7 +778,7 @@ static void bWobbleBass(DC& c) {    // dubstep wobble: LFO drives the resonant L
     s.atk = 0.002f; s.dec = 1.2f;                                    // long body - meant for LONG per-step Lengths
     s.filterType = DC::LowPass; s.filterCutoff = 500.0f; s.filterReso = 3.5f;
     s.lfoRate[0] = 2.0f; s.lfoAmt[0] = 0.8f;                         // THE wobble (~1/8 feel at 120)
-    s.fxDriveType = DC::Tube; s.fxDrive = 0.2f;
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.447f;
     auto& b = mkSlot2(c, DC::SrcOsc, 0.62f);
     b.oscShape = b.oscShapeB = DC::WvSine; b.oscFreq = 27.5f;      // steady sub - the wobble lives on top
     c.keysSlot2Down = 12;   // DECLARE the octave (sub already lives an octave down in the base):
@@ -812,7 +811,7 @@ static void kKeysBass(DC& c) {      // mono-synth keys bass: saw + square sub, h
     s.oscUnison = 2; s.oscDetune = 0.18f;
     s.atk = 0.002f; s.dec = 0.5f; s.sustain = 0.55f; s.release = 0.12f;
     s.filterType = DC::LowPass; s.filterCutoff = 520.0f; s.filterReso = 1.6f; s.filterEnvAmt = 0.5f;
-    s.fxDriveType = DC::Tube; s.fxDrive = 0.15f;
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.387f;
     auto& b = mkSlot2(c, DC::SrcOsc, 0.58f);
     b.oscShape = b.oscShapeB = DC::WvSquare; b.oscFreq = 55.0f;      // same base: use Slot-2 pitch in KEYS for the sub
     b.atk = 0.002f; b.dec = 0.55f; b.sustain = 0.55f; b.release = 0.12f;
@@ -887,7 +886,7 @@ static void kClav(DC& c) {          // funky clavinet: bright pulse + snappy fil
     s.oscShape = s.oscShapeB = DC::WvPulse; s.oscFreq = 261.63f;
     s.atk = 0.001f; s.dec = 0.5f; s.sustain = 0.22f; s.release = 0.08f;
     s.filterType = DC::LowPass; s.filterCutoff = 1600.0f; s.filterReso = 2.2f; s.filterEnvAmt = 0.6f;
-    s.fxDriveType = DC::Tube; s.fxDrive = 0.14f;
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.374f;
     c.volume = 0.76f;
 }
 static void kSynthBrass(DC& c) {    // analog synth-brass ensemble: filter-swept detuned saws, swells + sustains
@@ -896,7 +895,7 @@ static void kSynthBrass(DC& c) {    // analog synth-brass ensemble: filter-swept
     s.oscUnison = 3; s.oscDetune = 0.16f;
     s.atk = 0.06f; s.dec = 0.7f; s.sustain = 0.75f; s.release = 0.2f; // slow-ish brass swell
     s.filterType = DC::LowPass; s.filterCutoff = 900.0f; s.filterReso = 1.4f; s.filterEnvAmt = 0.55f;
-    s.fxDriveType = DC::Tube; s.fxDrive = 0.1f;
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.316f;
     c.reverbSend = 0.12f; c.volume = 0.7f;
 }
 static void kChoir(DC& c) {         // vocal "aah" pad: formant vowel shape, slow swell, lush + a touch of vibrato
@@ -948,14 +947,14 @@ static void kSawLead(DC& c) {       // bright cutting saw lead for solos, holds 
     s.oscUnison = 2; s.oscDetune = 0.1f;
     s.atk = 0.004f; s.dec = 0.5f; s.sustain = 0.8f; s.release = 0.12f;
     s.filterType = DC::LowPass; s.filterCutoff = 2600.0f; s.filterReso = 1.5f; s.filterEnvAmt = 0.3f;
-    s.fxDriveType = DC::Tube; s.fxDrive = 0.12f;
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.346f;
     c.volume = 0.72f;
 }
 static void kSubBass(DC& c) {       // clean pure-sine sub bass, holds while a key is down (vs the fuller Keys Bass)
     auto& s = mkSlot(c, DC::SrcOsc);
     s.oscShape = s.oscShapeB = DC::WvSine; s.oscFreq = 55.0f;
     s.atk = 0.004f; s.dec = 0.6f; s.sustain = 0.85f; s.release = 0.1f;
-    s.fxDriveType = DC::Tube; s.fxDrive = 0.1f;                      // a little warmth so it reads on small speakers
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.316f;                      // a little warmth so it reads on small speakers
     c.volume = 0.85f;
 }
 static void kSynthPluck(DC& c) {    // bright synth pluck: fast resonant filter decay, snappy + melodic (plucks out even if held)
@@ -975,7 +974,7 @@ static void kPowerKeys(DC& c) {     // power-chord synth: the FIFTH is now slot 
     s.oscUnison = 2; s.oscDetune = 0.08f;                            // slight width on the root saw
     s.atk = 0.004f; s.dec = 0.6f; s.sustain = 0.82f; s.release = 0.14f;
     s.filterType = DC::LowPass; s.filterCutoff = 2400.0f; s.filterReso = 1.4f; s.filterEnvAmt = 0.3f;
-    s.fxDriveType = DC::Tube; s.fxDrive = 0.12f;
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.346f;
     auto& b = mkSlot2(c, DC::SrcOsc, 0.62f);
     b.oscShape = b.oscShapeB = DC::WvSaw; b.oscFreq = 261.63f;       // the power FIFTH (4th below = inverted 5th)
     b.filterType = DC::LowPass; b.filterCutoff = 2000.0f; b.filterReso = 0.8f;
@@ -1080,7 +1079,7 @@ static void mRoomSnare(DC& c) {    // big wet room: mid body + darker noise, hea
     c.noiseType = 0; c.layerNoiseCenter = 1700.0f; c.layerNoiseWidth = 0.3f;
     c.srcAtk[DC::SrcNoise] = 0.001f; c.srcDec[DC::SrcNoise] = 0.3f;
     c.eqBand[DC::EQ_HP] = { true, 140.0f, 0.0f, 0.707f };
-    c.driveType = DC::Tube; c.driveAmount = 0.15f;
+    c.driveType = DC::Tube; c.driveAmount = 0.387f;
     c.reverbSend = 0.45f; c.volume = 0.85f;
 }
 static void mClackSnare(DC& c) {   // woody clack: HIGH-tuned membrane + a pinch of noise (timbale-ish snare)
@@ -1138,7 +1137,7 @@ static void mChina(DC& c) {        // trashy china: wide fuzzy purple noise, exp
     c.noiseType = 4; c.layerNoiseCenter = 8800.0f; c.layerNoiseWidth = 0.5f;
     c.srcAtk[DC::SrcNoise] = 0.0005f; c.srcDec[DC::SrcNoise] = 0.85f;
     c.eqBand[DC::EQ_HP] = { true, 800.0f, 0.0f, 0.707f };
-    c.driveType = DC::Fuzz; c.driveAmount = 0.22f; c.volume = 0.62f;
+    c.driveType = DC::Fuzz; c.driveAmount = 0.469f; c.volume = 0.62f;
 }
 static void mBellRide(DC& c) {     // ride BELL ping: inharmonic struck metal, none of the noise wash
     auto& s = mkModal(c);
@@ -1180,7 +1179,7 @@ static void mBuzzHit(DC& c) {      // 8-bit buzz stab: low square driven hard, n
     clearSound(c); c.srcOn[DC::SrcOsc] = true; c.srcWeight[DC::SrcOsc] = 1.0f;
     c.layerOscShape = DC::OscSquare; c.layerSineFreq = 110.0f;
     c.srcAtk[DC::SrcOsc] = 0.0005f; c.srcDec[DC::SrcOsc] = 0.1f;
-    c.driveType = DC::HardClip; c.driveAmount = 0.45f; c.volume = 0.78f;
+    c.driveType = DC::HardClip; c.driveAmount = 0.671f; c.volume = 0.78f;
 }
 static void mGlitchTick(DC& c) {   // 4 ms digital tick (way shorter + lower than Tight Hat)
     clearSound(c); c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 1.0f;
@@ -1221,17 +1220,12 @@ static void kAccordion(DC& c) {    // musette accordion: detuned reed pair, brea
     s.atk = 0.06f; s.dec = 0.4f; s.sustain = 1.0f; s.release = 0.12f;
     c.volume = 0.7f;
 }
-static void kHonkyTonk(DC& c) {    // saloon piano: two piano voices a few cents apart (barroom shimmer)
-    auto& s = mkSlot(c, DC::SrcOsc);
-    s.oscShape = s.oscShapeB = 10; s.oscFreq = 261.63f;              // Bell-ish hammer tone
-    s.fmDepth = 0.12f; s.fmPitch = 0.5f; s.fmEnvFollow = true;
-    s.atk = 0.002f; s.dec = 1.3f; s.sustain = 0.2f; s.release = 0.25f;
-    s.oscUnison = 2; s.oscDetune = 0.06f;                            // each "string pair" a few cents apart -
-    auto& b = mkSlot2(c, DC::SrcOsc, 0.5f);
-    b.oscShape = b.oscShapeB = 10; b.oscFreq = 261.63f;              // EQUAL base (the old 263.4 was a hard-wired
-    b.oscUnison = 2; b.oscDetune = 0.12f;                            // mistune: live keys collapsed it) - the
-    b.fmDepth = 0.12f; b.fmPitch = 0.5f; b.fmEnvFollow = true;       // honky beat now comes from unison detune,
-    b.atk = 0.002f; b.dec = 1.3f; b.sustain = 0.2f; b.release = 0.25f;   // identical live and sequenced
+static void kHonkyTonk(DC& c) {    // saloon piano: detuned "string pairs" beating (barroom shimmer)
+    auto& s = mkSlot(c, DC::SrcOsc);                                 // ONE slot now - the old 2nd slot was
+    s.oscShape = s.oscShapeB = 10; s.oscFreq = 261.63f;              // near-identical (only its detune differed),
+    s.fmDepth = 0.12f; s.fmPitch = 0.5f; s.fmEnvFollow = true;       // so the honky beat comes from 4 detuned
+    s.atk = 0.002f; s.dec = 1.3f; s.sustain = 0.2f; s.release = 0.25f;   // unison voices in a single slot instead.
+    s.oscUnison = 4; s.oscDetune = 0.10f;
     c.volume = 0.72f;
 }
 // ---- Pads & Choirs (+5) ----
@@ -1312,7 +1306,7 @@ static void kHouseStab(DC& c) {    // classic house piano-organ stab: Min7 voici
     // C plays Cm7 exactly like the old fixed Min7 chord - but SCALE mode has UI (chordMode has
     // none since the redesign), so the voicing is fully user-replicable + editable (user rule).
     s.atk = 0.002f; s.dec = 0.4f; s.sustain = 0.0f; s.release = 0.08f;
-    s.fxDriveType = DC::Tube; s.fxDrive = 0.1f;
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.316f;
     c.eqBand[DC::EQ_HP] = { true, 160.0f, 0.0f, 0.707f };
     c.reverbSend = 0.15f; c.volume = 0.78f;
 }
@@ -1323,7 +1317,7 @@ static void kRaveStab(DC& c) {     // hoover-adjacent rave stab: detuned saws vo
     // same as the old fixed Maj chord on the root; SCALE has UI, chordMode does not - user rule)
     s.oscDetune = 0.2f; s.uniSpread = 0.4f;
     s.atk = 0.002f; s.dec = 0.5f; s.sustain = 0.0f; s.release = 0.1f;
-    s.fxDriveType = DC::Foldback; s.fxDrive = 0.25f;
+    s.fxDriveType = DC::Foldback; s.fxDrive = 0.5f;
     c.eqBand[DC::EQ_HP] = { true, 120.0f, 0.0f, 0.707f };
     c.volume = 0.72f;
 }
@@ -1342,7 +1336,7 @@ static void kAcidArp(DC& c) {      // DEDICATED ARP: mono acid line hopping octa
     s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 130.81f;       // C3 bass register
     s.atk = 0.001f; s.dec = 0.3f; s.sustain = 0.0f; s.release = 0.05f;
     s.filterType = DC::LowPass; s.filterCutoff = 700.0f; s.filterReso = 2.6f; s.filterEnvAmt = 0.6f;
-    s.fxDriveType = DC::Tube; s.fxDrive = 0.2f;
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.447f;
     c.keysPolyMode = false;                                          // acid is a MONO instrument
     c.arpOn = true; c.arpLen = 4; c.arpSync = 8; c.arpRate = 8;
     c.arpOffset[0] = 0; c.arpOffset[1] = 12; c.arpOffset[2] = -12;   // root/root/+oct/-oct
@@ -1377,7 +1371,7 @@ static void mTapeStop(DC& c) {     // tape-stop fall: a held tone that suddenly 
     c.layerOscShape = DC::OscSaw; c.layerSineFreq = 330.0f;
     c.layerSinePEnvAmt = 36.0f; c.layerSinePEnvTime = 0.4f; c.layerSinePOffset = 0.08f;
     c.srcAtk[DC::SrcOsc] = 0.002f; c.srcDec[DC::SrcOsc] = 0.55f;
-    c.driveType = DC::Tube; c.driveAmount = 0.18f; c.volume = 0.72f;
+    c.driveType = DC::Tube; c.driveAmount = 0.424f; c.volume = 0.72f;
 }
 static void mDive(DC& c) {         // long whistling dive-bomb: high square falling for a full second
     clearSound(c); c.srcOn[DC::SrcOsc] = true; c.srcWeight[DC::SrcOsc] = 1.0f;
@@ -1391,7 +1385,7 @@ static void mSubRise(DC& c) {      // felt-not-heard sub swell rising an octave 
     c.layerOscShape = DC::OscSine; c.layerSineFreq = 40.0f;
     c.layerSinePEnvAmt = -12.0f; c.layerSinePEnvTime = 1.3f;
     c.srcAtk[DC::SrcOsc] = 0.4f; c.srcDec[DC::SrcOsc] = 1.3f;
-    c.driveType = DC::SoftClip; c.driveAmount = 0.1f; c.volume = 0.85f;
+    c.driveType = DC::SoftClip; c.driveAmount = 0.316f; c.volume = 0.85f;
 }
 // ---- Impacts & Booms (+5) ----
 static void mBoom(DC& c) {         // cinematic boom: deep hit blooming into a wet tail
@@ -1399,7 +1393,7 @@ static void mBoom(DC& c) {         // cinematic boom: deep hit blooming into a w
     c.layerOscShape = DC::OscSine; c.layerSineFreq = 42.0f;
     c.layerSinePEnvAmt = 10.0f; c.layerSinePEnvTime = 0.06f;
     c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 1.2f;
-    c.driveType = DC::SoftClip; c.driveAmount = 0.2f;
+    c.driveType = DC::SoftClip; c.driveAmount = 0.447f;
     c.reverbSend = 0.5f; c.volume = 0.9f;
 }
 static void mSlam(DC& c) {         // door slam: broadband smack + a low thump, clipped
@@ -1412,7 +1406,7 @@ static void mSlam(DC& c) {         // door slam: broadband smack + a low thump, 
     c.srcAtk[DC::SrcOsc] = 0.0005f; c.srcDec[DC::SrcOsc] = 0.3f;
     c.noiseType = 0; c.layerNoiseCenter = 900.0f; c.layerNoiseWidth = 0.45f;
     c.srcAtk[DC::SrcNoise] = 0.0005f; c.srcDec[DC::SrcNoise] = 0.25f;
-    c.driveType = DC::HardClip; c.driveAmount = 0.35f;
+    c.driveType = DC::HardClip; c.driveAmount = 0.592f;
     c.reverbSend = 0.3f; c.volume = 0.85f;
 }
 static void mThud(DC& c) {         // dead body-blow thud: low knock, zero ring, bone dry
@@ -1431,7 +1425,7 @@ static void mBlast(DC& c) {        // distorted FM blast: mid-band explosion, fu
     c.fmPitch = -12.0f; c.fmSpread = 0.3f; c.fmDepth = 0.7f; c.fmSub = 0.3f;
     c.fmPitchEnvAmt = 26.0f; c.fmPitchEnvTime = 0.05f;
     c.srcDec[DC::SrcFM] = 0.6f;
-    c.driveType = DC::Fuzz; c.driveAmount = 0.5f;
+    c.driveType = DC::Fuzz; c.driveAmount = 0.707f;
     c.reverbSend = 0.25f; c.volume = 0.8f;
 }
 static void mBraam(DC& c) {        // trailer BRAAM: detuned saw wall, foldback, slow bloom
@@ -1440,7 +1434,7 @@ static void mBraam(DC& c) {        // trailer BRAAM: detuned saw wall, foldback,
     s.oscUnison = 5; s.oscDetune = 0.5f; s.uniSpread = 0.5f;
     s.atk = 0.02f; s.dec = 1.6f; s.sustain = 0.0f; s.release = 0.4f;
     s.filterType = DC::LowPass; s.filterCutoff = 950.0f; s.filterReso = 1.2f;
-    s.fxDriveType = DC::Foldback; s.fxDrive = 0.4f;
+    s.fxDriveType = DC::Foldback; s.fxDrive = 0.632f;
     c.reverbSend = 0.35f; c.volume = 0.72f;
 }
 // ---- Noise & Texture (+2) ----
@@ -1485,17 +1479,17 @@ static void gFingerBass(DC& c) {   // fingered electric bass: warm, round, playe
 }
 static void gPickBass(DC& c) {     // picked bass: brighter attack, close to the bridge = twang
     auto& s = mkGtr(c, 65.41f, 0.72f, 0.12f, 0.8f);
-    s.fxDriveType = DC::Tube; s.fxDrive = 0.10f;
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.316f;
     c.volume = 0.85f;
 }
 static void gMutedBass(DC& c) {    // palm-muted bass: short thump, all fundamental
     auto& s = mkGtr(c, 65.41f, 0.4f, 0.25f, 0.18f);
-    s.fxDriveType = DC::SoftClip; s.fxDrive = 0.15f;
+    s.fxDriveType = DC::SoftClip; s.fxDrive = 0.387f;
     c.volume = 0.9f;
 }
 static void gFuzzBass(DC& c) {     // fuzz bass: KS string into heavy fuzz - gnarly sustain
     auto& s = mkGtr(c, 65.41f, 0.6f, 0.2f, 0.7f);
-    s.fxDriveType = DC::Fuzz; s.fxDrive = 0.45f;
+    s.fxDriveType = DC::Fuzz; s.fxDrive = 0.671f;
     s.filterType = DC::LowPass; s.filterCutoff = 1600.0f; s.filterReso = 0.8f;
     c.volume = 0.78f;
 }
@@ -1509,7 +1503,7 @@ static void gSteelGuitar(DC& c) {  // steel-string acoustic: bright, singing, a 
 static void gElecGuitar(DC& c) {   // clean electric: rounder pickup tone, drier
     auto& s = mkGtr(c, 130.81f, 0.52f, 0.28f, 1.3f);
     s.scaleOn = true; s.scaleType = 10; s.scaleKey = 0;  // guitar voicing by default (user order)
-    s.fxDriveType = DC::Tube; s.fxDrive = 0.08f;
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.283f;
     c.strumAmt = 0.4f;    // stepped strum grid (0/20/40/60/80/100%)
     c.volume = 0.8f;
 }
@@ -1527,9 +1521,340 @@ static void gStrumAcoustic(DC& c) {   // GUITAR-VOICED chords (E-shape barre, 6 
 static void gStrumElectric(DC& c) {   // minor-voiced electric strum (same shape, minor third)
     auto& s = mkGtr(c, 130.81f, 0.5f, 0.28f, 1.3f);
     s.scaleOn = true; s.scaleType = 11; s.scaleKey = 0;  // Gtr Minor, AUTO string count
-    s.fxDriveType = DC::Tube; s.fxDrive = 0.08f;
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.283f;
     c.strumAmt = 0.6f;
     c.volume = 0.72f;
+}
+
+//==============================================================================
+// v1.3.5 SHOWCASE batch - the new per-slot FILTER MODES (HP/BP/Notch) + cutoff KEYTRACK, the
+// multi-voice STEREO CHORUS, and TEMPO-SYNCED LFOs (incl. Lock-to-grid). Slot-authored -> never
+// referenced from presets. At least half also use the shared reverb/delay.
+//==============================================================================
+static void nChorusPad(DC& c) {     // lush wide pad: detuned saws under a soft LP, drenched in stereo chorus + reverb
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
+    s.oscUnison = 5; s.oscDetune = 0.28f; s.uniSpread = 0.5f;
+    s.atk = 0.22f; s.dec = 1.6f; s.sustain = 0.85f; s.release = 0.9f;
+    s.filterType = DC::LowPass; s.filterCutoff = 1600.0f; s.filterReso = 0.8f;
+    s.chorusMix = 0.7f;   // slow, deep ensemble
+    c.reverbSend = 0.3f; c.volume = 0.58f;
+}
+static void nChorusEP(DC& c) {      // chorused electric piano: FM tine + a sine body, classic chorus + slap-back delay
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSine; s.oscFreq = 261.63f;
+    s.fmDepth = 0.55f; s.fmPitch = 14.0f; s.fmEnvFollow = true;       // bell-ish tine attack
+    s.atk = 0.003f; s.dec = 1.4f; s.sustain = 0.35f; s.release = 0.5f;
+    s.chorusMix = 0.55f;
+    auto& b = mkSlot2(c, DC::SrcOsc, 0.5f);
+    b.oscShape = b.oscShapeB = DC::WvSine; b.oscFreq = 261.63f;
+    b.atk = 0.003f; b.dec = 1.6f; b.sustain = 0.3f; b.release = 0.5f;
+    c.delaySend = 0.18f; c.reverbSend = 0.1f; c.volume = 0.64f;
+}
+static void nHyperSaw(DC& c) {      // huge trance lead: 7-voice saw, a tempo-synced 1/8 filter pulse, chorus + delay
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
+    s.oscUnison = 7; s.oscDetune = 0.35f; s.uniSpread = 0.7f;
+    s.atk = 0.01f; s.dec = 1.0f; s.sustain = 0.8f; s.release = 0.3f;
+    s.filterType = DC::LowPass; s.filterCutoff = 2200.0f; s.filterReso = 1.4f;
+    s.lfoAmt[0] = 0.5f; s.lfoSync[0] = 8.0f;    // 8 cycles/bar = 1/8-note filter pulse (tempo-synced)
+    s.chorusMix = 0.5f;
+    c.delaySend = 0.2f; c.volume = 0.56f;
+}
+static void nDreamPluck(DC& c) {    // bright pluck that stays even across the keyboard (KEYTRACK), chorus + reverb
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
+    s.atk = 0.002f; s.dec = 0.5f; s.sustain = 0.0f; s.release = 0.35f;
+    s.filterType = DC::LowPass; s.filterCutoff = 1200.0f; s.filterReso = 2.5f; s.filterEnvAmt = 0.5f;
+    s.filterKeyTrack = 0.8f;                    // cutoff tracks the note -> high notes stay bright, lows stay warm
+    s.chorusMix = 0.6f;
+    c.reverbSend = 0.28f; c.volume = 0.66f;
+}
+static void nNotchBass(DC& c) {     // phaser-ish bass: a swept NOTCH + keytrack, tempo-synced 1/2-note notch motion
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 65.41f;         // C2
+    s.atk = 0.004f; s.dec = 0.8f; s.sustain = 0.7f; s.release = 0.2f;
+    s.filterType = DC::Notch; s.filterCutoff = 500.0f; s.filterReso = 3.0f;
+    s.filterKeyTrack = 0.5f;
+    s.lfoAmt[0] = 0.6f; s.lfoSync[0] = 2.0f;    // 1/2-note notch sweep (tempo-synced) = phaser motion
+    c.volume = 0.82f;
+}
+static void nAcidHP(DC& c) {        // thin, buzzy acid lead: HIGH-PASS + resonance, cutoff tracks the note
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSquare; s.oscFreq = 130.81f;     // C3
+    s.atk = 0.003f; s.dec = 0.4f; s.sustain = 0.5f; s.release = 0.15f;
+    s.filterType = DC::HighPass; s.filterCutoff = 300.0f; s.filterReso = 5.0f; s.filterEnvAmt = 0.6f;
+    s.filterKeyTrack = 0.7f;
+    c.delaySend = 0.15f; c.volume = 0.72f;
+}
+static void nVoxBP(DC& c) {         // vocal-ish tone via a resonant BAND-PASS + full keytrack, softened with chorus
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
+    s.atk = 0.05f; s.dec = 1.0f; s.sustain = 0.7f; s.release = 0.4f;
+    s.filterType = DC::BandPass; s.filterCutoff = 900.0f; s.filterReso = 4.0f;
+    s.filterKeyTrack = 1.0f;                    // the formant band tracks the note = a consistent 'vowel'
+    s.chorusMix = 0.5f;
+    c.reverbSend = 0.2f; c.volume = 0.62f;
+}
+static void nSyncSweep(DC& c) {     // rhythmic band-pass sweep pad: LFO LOCKED TO THE GRID, big reverb
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
+    s.oscUnison = 3; s.oscDetune = 0.2f;
+    s.atk = 0.12f; s.dec = 1.4f; s.sustain = 0.85f; s.release = 0.8f;
+    s.filterType = DC::BandPass; s.filterCutoff = 800.0f; s.filterReso = 2.2f;
+    s.lfoAmt[0] = 0.85f; s.lfoSync[0] = -1.0f;  // LOCK TO GRID: one sweep per grid cell (step count / piano-roll grid)
+    c.reverbSend = 0.35f; c.volume = 0.6f;
+}
+static void nChorusBells(DC& c) {   // shimmering tuned bells: modal body + chorus, long reverb + delay tail
+    auto& s = mkModal(c); s.modalMaterial = 1; s.oscFreq = 523.25f;  // C5, Tubular
+    s.modalDecay = 0.8f; s.modalTone = 0.7f; s.modalStruct = 0.45f;
+    s.chorusMix = 0.45f;
+    c.reverbSend = 0.35f; c.delaySend = 0.2f; c.volume = 0.58f;
+}
+static void nAmbientWash(DC& c) {   // evolving ambient bed: soft saw pad + a filtered noise texture, huge chorus,
+    auto& s = mkSlot(c, DC::SrcOsc);                                 // slow tempo-synced volume swell + long verb/delay
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
+    s.oscUnison = 5; s.oscDetune = 0.25f;
+    s.atk = 0.4f; s.dec = 2.0f; s.sustain = 0.9f; s.release = 1.4f;
+    s.filterType = DC::LowPass; s.filterCutoff = 1000.0f; s.filterReso = 0.7f;
+    s.chorusMix = 0.75f;
+    s.lfoAmt[2] = 0.4f; s.lfoSync[2] = 1.0f;    // 1 cycle/bar volume swell (tempo-synced)
+    auto& b = mkSlot2(c, DC::SrcNoise, 0.22f);  // airy noise bed (texture) under the pad
+    b.noiseType = 1;                            // pink
+    b.atk = 0.6f; b.dec = 2.0f; b.sustain = 0.8f; b.release = 1.4f;
+    b.filterType = DC::BandPass; b.filterCutoff = 2500.0f; b.filterReso = 1.2f;
+    c.reverbSend = 0.4f; c.delaySend = 0.25f; c.volume = 0.54f;
+}
+
+
+//==============================================================================
+// v1.3.5 ADDITIVE batch - 10 sounds whose Wave = Custom (drawn harmonics, addH). Each recipe is
+// deliberately different from the factory bank shapes (Reed = pure odd 1/h, Organ = octaves, ...).
+// + 6 sounds showcasing the new per-slot Tone / Punch / Comp knobs. All slot-authored.
+//==============================================================================
+static DC::Slot& mkAdd(DC& c, std::initializer_list<std::pair<int,float>> hs)
+{   // one SrcOsc slot playing a DRAWN additive wave (harmonic number, level)
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvCustom;
+    s.oscFreq = 261.63f;                             // C4 base so STEP pitch 0 = middle C (basses override)
+    for (auto& h : hs) if (h.first >= 1 && h.first <= DC::ADD_HARM) s.addH[0][h.first - 1] = h.second;
+    s.addH[0][0] = juce::jmax(s.addH[0][0], 0.0f);   // (h1 default 1 unless the recipe overrides)
+    for (int f = 1; f < DC::ADD_FRAMES; ++f)         // static sound: all 4 frames identical (position = no-op)
+        for (int k = 0; k < DC::ADD_HARM; ++k) { s.addH[f][k] = s.addH[0][k]; s.addPh[f][k] = s.addPh[0][k]; }
+    return s;
+}
+static void aClarinet(DC& c) {     // woody odd-harmonic pipe with a nasal 9th bump (NOT the plain Reed 1/h)
+    auto& s = mkAdd(c, {{1,1.0f},{3,0.75f},{5,0.5f},{7,0.2f},{9,0.35f},{11,0.12f}});
+    s.atk = 0.03f; s.dec = 0.5f; s.sustain = 0.8f; s.release = 0.15f;
+    s.filterType = DC::LowPass; s.filterCutoff = 2400.0f; s.filterReso = 0.8f; s.filterKeyTrack = 0.5f;
+    s.fxTone = -0.25f; c.volume = 0.74f;
+}
+static void aMusicBox(DC& c) {     // tiny sparkling box: sparse high partials, quick ping
+    auto& s = mkAdd(c, {{1,1.0f},{4,0.55f},{9,0.3f},{16,0.12f}});
+    s.atk = 0.002f; s.dec = 1.6f; s.sustain = 0.0f; s.release = 0.8f;
+    s.fxPunch = 0.2f; s.fxReverbSend = 0.3f; c.volume = 0.7f;
+}
+static void aHollowBass(DC& c) {   // fundamental + a lonely 3rd = hollow, woody bass
+    auto& s = mkAdd(c, {{1,1.0f},{3,0.45f},{5,0.12f}});
+    s.atk = 0.004f; s.dec = 0.7f; s.sustain = 0.7f; s.release = 0.12f;
+    s.oscFreq = 65.41f;
+    s.filterType = DC::LowPass; s.filterCutoff = 900.0f; s.filterReso = 1.2f; s.filterKeyTrack = 0.6f;
+    s.fxComp = 0.4f; c.volume = 0.82f;
+}
+static void aQuintLead(DC& c) {    // strong 3rd harmonic = a built-in fifth colour (organ-quint trick)
+    auto& s = mkAdd(c, {{1,1.0f},{2,0.6f},{3,0.85f},{4,0.25f},{6,0.35f}});
+    s.atk = 0.006f; s.dec = 0.5f; s.sustain = 0.75f; s.release = 0.2f;
+    s.fxDelaySend = 0.18f; c.volume = 0.7f;
+}
+static void aCombPad(DC& c) {      // every 3rd harmonic only = a comb-like, airy pad spectrum
+    auto& s = mkAdd(c, {{1,1.0f},{4,0.7f},{7,0.5f},{10,0.35f},{13,0.25f},{16,0.18f}});
+    s.atk = 0.25f; s.dec = 1.6f; s.sustain = 0.85f; s.release = 1.0f;
+    s.chorusMix = 0.6f; s.fxReverbSend = 0.3f; c.volume = 0.6f;
+}
+static void aNasalPluck(DC& c) {   // formant bump at h5-7, weak fundamental = kalimba-meets-banjo honk
+    auto& s = mkAdd(c, {{1,0.5f},{2,0.2f},{5,1.0f},{6,0.8f},{7,0.6f}});
+    s.atk = 0.002f; s.dec = 0.35f; s.sustain = 0.0f; s.release = 0.25f;
+    s.fxPunch = 0.3f; s.fxDelaySend = 0.15f; c.volume = 0.76f;
+}
+static void aGlassHarp(DC& c) {    // octave-dominant, slow-bowed glass rim (h2 > h1)
+    auto& s = mkAdd(c, {{1,0.7f},{2,1.0f},{5,0.5f},{7,0.25f},{12,0.1f}});
+    s.atk = 0.05f; s.dec = 1.4f; s.sustain = 0.5f; s.release = 1.2f;
+    s.chorusMix = 0.3f; s.fxReverbSend = 0.35f; c.volume = 0.62f;
+}
+static void aDulcimer(DC& c) {     // full 1/h series with every 4th harmonic REMOVED = hammered zither
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvCustom;
+    for (int h = 1; h <= 16; ++h) s.addH[0][h - 1] = (h % 4 == 0) ? 0.0f : 1.0f / (float) h;
+    for (int f = 1; f < DC::ADD_FRAMES; ++f)         // uniform strip (static sound, like mkAdd)
+        for (int k = 0; k < DC::ADD_HARM; ++k) s.addH[f][k] = s.addH[0][k];
+    s.atk = 0.002f; s.dec = 0.8f; s.sustain = 0.0f; s.release = 0.4f;
+    s.fxTone = 0.2f; s.fxDelaySend = 0.1f; c.volume = 0.75f;
+}
+static void aOctaveSub(DC& c) {    // sine + half-strength octave = a sub that reads on small speakers
+    auto& s = mkAdd(c, {{1,1.0f},{2,0.5f}});
+    s.atk = 0.004f; s.dec = 0.8f; s.sustain = 0.9f; s.release = 0.15f;
+    s.oscFreq = 55.0f;
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.35f; s.fxComp = 0.3f; c.volume = 0.84f;
+}
+static void aBellPad(DC& c) {      // sparse inharmonic-feel partials swelling slowly = bells-as-a-pad
+    auto& s = mkAdd(c, {{1,0.8f},{3,0.5f},{8,0.4f},{13,0.25f}});
+    s.atk = 0.35f; s.dec = 1.8f; s.sustain = 0.8f; s.release = 1.3f;
+    s.chorusMix = 0.5f; s.fxReverbSend = 0.4f; c.volume = 0.58f;
+}
+// ---- Tone / Punch / Comp showcases ----
+static void xSnapKick(DC& c) {     // the transient IS the click: Punch shapes a clean sine knock
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSine; s.oscFreq = 52.0f;
+    s.pEnvP[0] = 26.0f; s.pEnvT[0] = 0.012f; s.pEnvP[1] = 8.0f; s.pEnvT[1] = 0.05f;   // fast knock
+    s.atk = 0.001f; s.dec = 0.42f; s.sustain = 0.0f; s.release = 0.05f;
+    s.fxPunch = 0.7f; s.fxComp = 0.4f; c.volume = 0.95f;
+}
+static void xSquashClap(DC& c) {   // compressor slammed on a clap = long sizzling sustain tail
+    auto& s = mkSlot(c, DC::SrcNoise);
+    s.noiseType = 0; s.atk = 0.002f; s.hold = 0.02f; s.dec = 0.35f; s.sustain = 0.0f;
+    s.filterType = DC::BandPass; s.filterCutoff = 1400.0f; s.filterReso = 1.4f;
+    s.fxComp = 0.8f; s.fxTone = 0.3f; c.volume = 0.8f;
+}
+static void xFeltPiano(DC& c) {    // softened attack + dark tilt = the felt-piano intimacy
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = 10; s.oscFreq = 261.63f;              // Bell hammer tone
+    s.fmDepth = 0.1f; s.fmPitch = 0.5f; s.fmEnvFollow = true;
+    s.atk = 0.004f; s.dec = 1.6f; s.sustain = 0.25f; s.release = 0.4f;
+    s.fxPunch = -0.6f; s.fxTone = -0.5f; s.fxComp = 0.2f;
+    s.fxReverbSend = 0.15f; c.volume = 0.78f;
+}
+static void xTightSnare(DC& c) {   // punch + comp = a dry, in-your-face snare crack
+    auto& s = mkSlot(c, DC::SrcNoise);
+    s.noiseType = 0; s.atk = 0.001f; s.dec = 0.16f; s.sustain = 0.0f;
+    s.filterType = DC::HighPass; s.filterCutoff = 250.0f; s.filterReso = 0.8f;
+    s.fxPunch = 0.5f; s.fxComp = 0.5f;
+    auto& b = mkSlot2(c, DC::SrcOsc, 0.62f);
+    b.oscShape = b.oscShapeB = DC::WvSine; b.oscFreq = 185.0f;
+    b.pEnvP[0] = 6.0f; b.pEnvT[0] = 0.03f;
+    b.atk = 0.001f; b.dec = 0.12f; b.sustain = 0.0f;
+    c.volume = 0.9f;
+}
+static void xGlueBass(DC& c) {     // heavy one-knob comp holding a saw+sub together
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 55.0f;
+    s.atk = 0.004f; s.dec = 0.6f; s.sustain = 0.75f; s.release = 0.12f;
+    s.filterType = DC::LowPass; s.filterCutoff = 800.0f; s.filterReso = 1.0f; s.filterKeyTrack = 0.5f;
+    s.fxComp = 0.7f; s.fxTone = -0.2f;
+    auto& b = mkSlot2(c, DC::SrcOsc, 0.6f);
+    b.oscShape = b.oscShapeB = DC::WvSine; b.oscFreq = 55.0f;
+    b.atk = 0.004f; b.dec = 0.6f; b.sustain = 0.8f; b.release = 0.12f;
+    c.volume = 0.8f;
+}
+static void xCrispHat(DC& c) {     // bright tilt + snap on purple noise = pristine tight hat
+    auto& s = mkSlot(c, DC::SrcNoise);
+    s.noiseType = 3; s.atk = 0.001f; s.dec = 0.06f; s.sustain = 0.0f;
+    s.filterType = DC::HighPass; s.filterCutoff = 5000.0f; s.filterReso = 0.8f;
+    s.fxTone = 0.6f; s.fxPunch = 0.4f; c.volume = 0.72f;
+}
+
+
+// ---- SPECTRUM MOTION showcases (A -> B morph over the note; the additive-native movement) ----
+static void wtFrame(DC::Slot& s, int f, std::initializer_list<std::pair<int,float>> hs)
+{   // author ONE wavetable frame (0..3) from a harmonic list
+    for (int k = 0; k < DC::ADD_HARM; ++k) { s.addH[f][k] = 0.0f; s.addPh[f][k] = 0.0f; }
+    for (auto& h : hs) if (h.first >= 1 && h.first <= DC::ADD_HARM) s.addH[f][h.first - 1] = h.second;
+}
+static void setB(DC::Slot& s, std::initializer_list<std::pair<int,float>> hs, float morphSec)
+{   // the ORIGINAL 2-spectrum morph: frames B..D = the target, travel the FIRST leg in the
+    // authored time, then HOLD = the per-segment model's {morphSec, 0, 0} - audibly identical.
+    for (int f = 1; f < DC::ADD_FRAMES; ++f) wtFrame(s, f, hs);
+    s.addSeg[0] = morphSec; s.addSeg[1] = 0.0f; s.addSeg[2] = 0.0f;
+}
+static void sMorphPad(DC& c) {     // dark swell that blossoms into an airy comb over ~2.5 s
+    auto& s = mkAdd(c, {{1,1.0f},{2,0.5f}});
+    setB(s, {{1,0.6f},{4,0.8f},{7,0.6f},{10,0.45f},{13,0.3f}}, 2.5f);
+    s.atk = 0.3f; s.dec = 1.8f; s.sustain = 0.85f; s.release = 1.0f;
+    s.chorusMix = 0.5f; s.fxReverbSend = 0.35f; c.volume = 0.6f;
+}
+static void sBloomLead(DC& c) {    // starts a pure sine, BLOOMS into a full saw-bright spectrum
+    auto& s = mkAdd(c, {{1,1.0f}});
+    setB(s, {{1,1.0f},{2,0.5f},{3,0.33f},{4,0.25f},{5,0.2f},{6,0.17f},{7,0.14f},{8,0.12f},{10,0.1f},{12,0.08f}}, 1.2f);
+    s.atk = 0.005f; s.dec = 0.6f; s.sustain = 0.8f; s.release = 0.2f;
+    s.fxDelaySend = 0.18f; c.volume = 0.7f;
+}
+static void sMorphKeys(DC& c) {    // bright hammer spectrum melting into a soft body (~0.6 s) = living keys
+    auto& s = mkAdd(c, {{1,1.0f},{2,0.6f},{3,0.8f},{5,0.5f},{7,0.3f}});
+    setB(s, {{1,1.0f},{3,0.25f}}, 0.6f);
+    s.atk = 0.003f; s.dec = 1.5f; s.sustain = 0.3f; s.release = 0.35f;
+    s.fxComp = 0.25f; s.fxReverbSend = 0.12f; c.volume = 0.72f;
+}
+static void sAuroraBells(DC& c) {  // one sparse bell colour drifting into ANOTHER (inharmonic-feel shimmer)
+    auto& s = mkAdd(c, {{1,0.8f},{5,0.6f},{12,0.35f}});
+    setB(s, {{2,1.0f},{8,0.5f},{13,0.3f}}, 1.6f);
+    s.atk = 0.004f; s.dec = 2.0f; s.sustain = 0.3f; s.release = 1.2f;
+    s.fxReverbSend = 0.4f; c.volume = 0.62f;
+}
+static void sEvolver(DC& c) {      // slow drone: hollow odd start evolving into a full bright series (~3.5 s)
+    auto& s = mkAdd(c, {{1,1.0f},{3,0.6f},{5,0.4f},{7,0.25f}});
+    setB(s, {{1,1.0f},{2,0.7f},{3,0.55f},{4,0.45f},{5,0.38f},{6,0.32f},{8,0.25f},{10,0.2f},{12,0.16f},{16,0.12f}}, 3.5f);
+    s.atk = 0.5f; s.dec = 2.0f; s.sustain = 0.9f; s.release = 1.5f;
+    s.chorusMix = 0.6f; s.fxReverbSend = 0.4f; c.volume = 0.56f;
+}
+
+// ---- 4-FRAME WAVETABLE showcases (w*): four DISTINCT frames + per-leg glide times (0 = hold),
+//      the static Position, and the WAVE LFO scanning - the full v1.3.5 wavetable feature set. ----
+static void wOdysseyPad(DC& c) {   // the full A>D journey: dark -> hollow -> organ -> bright, ~5.5 s
+    auto& s = mkAdd(c, {{1,1.0f},{2,0.35f}});                               // A: dark warmth
+    wtFrame(s, 1, {{1,1.0f},{3,0.6f},{5,0.4f},{7,0.25f}});                  // B: hollow odd
+    wtFrame(s, 2, {{1,1.0f},{2,0.7f},{4,0.5f},{8,0.35f},{16,0.15f}});       // C: organ octaves
+    wtFrame(s, 3, {{1,1.0f},{2,0.6f},{3,0.45f},{4,0.35f},{5,0.3f},{6,0.25f},{8,0.2f},{10,0.15f},{13,0.1f}}); // D: full bloom
+    s.addSeg[0] = 1.2f; s.addSeg[1] = 1.8f; s.addSeg[2] = 2.5f;
+    s.atk = 0.4f; s.dec = 2.0f; s.sustain = 0.9f; s.release = 1.4f;
+    s.chorusMix = 0.45f; s.fxReverbSend = 0.35f; c.volume = 0.58f;
+}
+static void wTalkingPad(DC& c) {   // vowel frames + a slow synced WAVE LFO scanning them = it TALKS
+    auto& s = mkAdd(c, {{2,0.7f},{3,1.0f},{4,0.8f},{7,0.3f}});              // A: "ah" (low formant)
+    wtFrame(s, 1, {{1,0.6f},{2,1.0f},{3,0.5f},{5,0.7f},{6,0.4f}});          // B: "oh" (round)
+    wtFrame(s, 2, {{1,0.5f},{6,0.9f},{7,1.0f},{8,0.6f},{12,0.25f}});        // C: "ee" (high formant)
+    wtFrame(s, 3, {{2,0.8f},{4,1.0f},{5,0.7f},{9,0.5f},{11,0.3f}});         // D: nasal "ay"
+    s.addPos = 0.5f;                                                        // park mid-strip...
+    s.lfoAmt[3] = 0.65f; s.lfoSync[3] = 0.5f;                               // ...LFO sweeps the mouth (2-bar cycle)
+    s.atk = 0.15f; s.dec = 1.5f; s.sustain = 0.85f; s.release = 0.8f;
+    s.fxReverbSend = 0.3f; c.volume = 0.6f;
+}
+static void wCascadeKeys(DC& c) {  // 3-STAGE piano-ish hit: bright strike > warm bloom > hollow tail (holds C)
+    auto& s = mkAdd(c, {{1,1.0f},{2,0.7f},{3,0.9f},{5,0.6f},{8,0.45f},{12,0.3f}}); // A: strike
+    wtFrame(s, 1, {{1,1.0f},{2,0.5f},{3,0.3f},{5,0.15f}});                  // B: warm body
+    wtFrame(s, 2, {{1,1.0f},{3,0.2f},{7,0.08f}});                           // C: hollow tail
+    wtFrame(s, 3, {{1,1.0f},{3,0.2f},{7,0.08f}});                           // D = C (journey ends at C)
+    s.addSeg[0] = 0.06f; s.addSeg[1] = 0.5f; s.addSeg[2] = 0.0f;            // fast strike leg, slow bloom, HOLD
+    s.atk = 0.002f; s.dec = 1.8f; s.sustain = 0.25f; s.release = 0.4f;
+    s.fxComp = 0.2f; s.fxReverbSend = 0.14f; c.volume = 0.7f;
+}
+static void wScanBass(DC& c) {     // the WAVE LFO scans sub > nasal > hollow per bar = spectral wobble bass
+    auto& s = mkAdd(c, {{1,1.0f},{2,0.4f}});                                // A: sub weight
+    wtFrame(s, 1, {{1,0.8f},{3,1.0f},{4,0.6f},{6,0.3f}});                   // B: nasal push
+    wtFrame(s, 2, {{1,1.0f},{5,0.8f},{7,0.5f}});                            // C: hollow growl
+    wtFrame(s, 3, {{1,0.9f},{2,0.6f},{3,0.5f},{4,0.45f},{6,0.3f}});         // D: gritty top
+    s.oscFreq = 55.0f;                                                      // A1 bass register
+    s.addPos = 0.35f;
+    s.lfoAmt[3] = 0.6f; s.lfoSync[3] = 1.0f;                                // one scan per bar, on the groove
+    s.atk = 0.003f; s.dec = 0.8f; s.sustain = 0.7f; s.release = 0.12f;
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.35f; c.volume = 0.72f;
+}
+static void wDriftLead(DC& c) {    // parked mid-strip, a SLOW free-run WAVE drift = a lead that never sits still
+    auto& s = mkAdd(c, {{1,1.0f},{2,0.5f},{3,0.35f},{4,0.2f}});             // A: soft saw-ish
+    wtFrame(s, 1, {{1,1.0f},{3,0.6f},{5,0.35f},{9,0.15f}});                 // B: square-ish
+    wtFrame(s, 2, {{1,1.0f},{2,0.25f},{5,0.5f},{8,0.3f}});                  // C: glassy
+    wtFrame(s, 3, {{1,0.9f},{2,0.7f},{4,0.5f},{7,0.35f},{11,0.2f}});        // D: brassy
+    s.addPos = 0.5f;
+    s.lfoAmt[3] = 0.18f; s.lfoRate[3] = 0.3f;                               // small slow drift (free Hz)
+    s.atk = 0.01f; s.dec = 0.7f; s.sustain = 0.8f; s.release = 0.18f;
+    s.fxDelaySend = 0.2f; c.volume = 0.68f;
+}
+static void wSwellOrgan(DC& c) {   // drawbars pulled WHILE you hold: octaves > +quint > full mixture (holds C)
+    auto& s = mkAdd(c, {{1,1.0f},{2,0.6f},{4,0.3f}});                       // A: flutes 8'+4'
+    wtFrame(s, 1, {{1,1.0f},{2,0.7f},{3,0.55f},{4,0.4f},{6,0.3f}});         // B: + the quint rank
+    wtFrame(s, 2, {{1,1.0f},{2,0.75f},{3,0.6f},{4,0.55f},{6,0.45f},{8,0.4f},{12,0.3f},{16,0.2f}}); // C: full mixture
+    wtFrame(s, 3, {{1,1.0f},{2,0.75f},{3,0.6f},{4,0.55f},{6,0.45f},{8,0.4f},{12,0.3f},{16,0.2f}}); // D = C
+    s.addSeg[0] = 0.8f; s.addSeg[1] = 2.0f; s.addSeg[2] = 0.0f;             // swell in two stages, then HOLD
+    s.atk = 0.05f; s.dec = 1.2f; s.sustain = 1.0f; s.release = 0.25f;
+    s.chorusMix = 0.35f; c.volume = 0.62f;
 }
 
 static const struct { const char* name; Builder build; const char* cat; } kMixes[] = {
@@ -1546,6 +1871,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Rumble Kick", mRumbleKick, "Kicks" },
     { "Crunch Kick", mCrunchKick, "Kicks" },
     { "Acoustic Kick", mAcousticKick, "Kicks" },
+    { "Snap Kick", xSnapKick, "Kicks" },
     // ---- Snares ----
     { "Noise Snare", mNoiseSnare, "Snares" },
     { "808 Snare", m808Snare, "Snares" },
@@ -1557,6 +1883,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Snap Snare", mSnapSnare, "Snares" },
     { "Room Snare", mRoomSnare, "Snares" },
     { "Clack Snare", mClackSnare, "Snares" },
+    { "Tight Snare", xTightSnare, "Snares" },
     // ---- Claps ----
     { "Clap", mClap, "Claps" },
     { "808 Clap", m808Clap, "Claps" },
@@ -1565,6 +1892,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Big Clap", mBigClap, "Claps" },
     { "Lofi Clap", mLofiClap, "Claps" },
     { "Analog Clap", mAnalogClap, "Claps" },
+    { "Squash Clap", xSquashClap, "Claps" },
     // ---- Hi-Hats ----
     { "Closed Hat", mClosedHat, "Hi-Hats" },
     { "Open Hat", mOpenHat, "Hi-Hats" },
@@ -1576,6 +1904,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Metal Hat", mMetalHat, "Hi-Hats" },
     { "Tight Hat", mTightHat, "Hi-Hats" },
     { "Foot Hat", mFootHat, "Hi-Hats" },
+    { "Crisp Hat", xCrispHat, "Hi-Hats" },
     // ---- Cymbals ----
     { "Crash", mCrash, "Cymbals" },
     { "909 Ride", m909Ride, "Cymbals" },
@@ -1643,6 +1972,11 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Fuzz Bass", gFuzzBass, "Bass" },
     { "Keys Bass", kKeysBass, "Bass" },
     { "Deep Sub", kSubBass, "Bass" },
+    { "Notch Bass", nNotchBass, "Bass" },
+    { "Hollow Bass", aHollowBass, "Bass" },
+    { "Scan Bass", wScanBass, "Bass" },
+    { "Octave Sub", aOctaveSub, "Bass" },
+    { "Glue Bass", xGlueBass, "Bass" },
     // ---- Keys ----
     { "E-Piano", kEPiano, "Keys" },
     { "Organ", kOrgan, "Keys" },
@@ -1655,6 +1989,11 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Grand Piano", kGrandPiano, "Keys" },
     { "Wurli", kWurli, "Keys" },
     { "Clavinet", kClav, "Keys" },
+    { "Chorus EP", nChorusEP, "Keys" },
+    { "Felt Piano", xFeltPiano, "Keys" },
+    { "Morph Keys", sMorphKeys, "Keys" },
+    { "Cascade Keys", wCascadeKeys, "Keys" },
+    { "Swell Organ", wSwellOrgan, "Keys" },
     // ---- Pads & Choirs ----
     { "Soft Pad", kSoftPad, "Pads & Choirs" },
     { "Choir Aah", kChoir, "Pads & Choirs" },
@@ -1664,6 +2003,14 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Shimmer Pad", kShimmerPad, "Pads & Choirs" },
     { "Motion Pad", kMotionPad, "Pads & Choirs" },
     { "Brass Pad", kBrassPad, "Pads & Choirs" },
+    { "Chorus Pad", nChorusPad, "Pads & Choirs" },
+    { "Vox Pad", nVoxBP, "Pads & Choirs" },
+    { "Sync Sweep", nSyncSweep, "Pads & Choirs" },
+    { "Comb Pad", aCombPad, "Pads & Choirs" },
+    { "Morph Pad", sMorphPad, "Pads & Choirs" },
+    { "Odyssey Pad", wOdysseyPad, "Pads & Choirs" },
+    { "Talking Pad", wTalkingPad, "Pads & Choirs" },
+    { "Bell Pad", aBellPad, "Pads & Choirs" },
     // ---- Leads ----
     { "Vox", mVox, "Leads" },
     { "Talkbox", mTalkbox, "Leads" },
@@ -1673,6 +2020,12 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Square Lead", kSquareLead, "Leads" },
     { "Synth Brass", kSynthBrass, "Leads" },
     { "Saw Lead", kSawLead, "Leads" },
+    { "Hyper Saw", nHyperSaw, "Leads" },
+    { "Acid HP", nAcidHP, "Leads" },
+    { "Clarinet", aClarinet, "Leads" },
+    { "Quint Lead", aQuintLead, "Leads" },
+    { "Bloom Lead", sBloomLead, "Leads" },
+    { "Drift Lead", wDriftLead, "Leads" },
     // ---- Plucks & Strings ----
     { "Pluck", mPluck, "Plucks & Strings" },
     { "Harp", mHarp, "Plucks & Strings" },
@@ -1688,6 +2041,9 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Pizzicato", mPizzicato, "Plucks & Strings" },
     { "Banjo", mBanjo, "Plucks & Strings" },
     { "Sitar", mSitar, "Plucks & Strings" },
+    { "Dream Pluck", nDreamPluck, "Plucks & Strings" },
+    { "Nasal Pluck", aNasalPluck, "Plucks & Strings" },
+    { "Dulcimer", aDulcimer, "Plucks & Strings" },
     // ---- Bells & Mallets ----
     { "Glass Bell", mGlassBell, "Bells & Mallets" },
     { "Vibraphone", mVibraphone, "Bells & Mallets" },
@@ -1696,13 +2052,16 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Marimba Keys", kMarimbaKeys, "Bells & Mallets" },
     { "Steel Drum", moSteelDrum, "Bells & Mallets" },
     { "Hand Bell", moHandBell, "Bells & Mallets" },
-    { "Mod Marimba", moMarimba, "Bells & Mallets" },
     { "Mod Tubular Bell", moTubular, "Bells & Mallets" },
     { "Mod Glass", moGlass, "Bells & Mallets" },
     { "Mod Kalimba", moKalimba, "Bells & Mallets" },
     { "Mod Tuned Bell", moBellTuned, "Bells & Mallets" },
     { "Glockenspiel", mGlockenspiel, "Bells & Mallets" },
     { "Celesta", mCelesta, "Bells & Mallets" },
+    { "Chorus Bells", nChorusBells, "Bells & Mallets" },
+    { "Music Box", aMusicBox, "Bells & Mallets" },
+    { "Glass Harp", aGlassHarp, "Bells & Mallets" },
+    { "Aurora Bells", sAuroraBells, "Bells & Mallets" },
     // ---- Chords & Arps ----
     { "Power Keys", kPowerKeys, "Chords & Arps" },
     { "Octave Bells", kOctaveBells, "Chords & Arps" },
@@ -1738,6 +2097,8 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Chopper", eChopper, "Noise & Texture" },
     { "Rain", mRain, "Noise & Texture" },
     { "Ocean", mOcean, "Noise & Texture" },
+    { "Ambient Wash", nAmbientWash, "Noise & Texture" },
+    { "Evolver", sEvolver, "Noise & Texture" },
 };
 static constexpr int kNumMixes = (int) (sizeof(kMixes) / sizeof(kMixes[0]));
 
@@ -1761,27 +2122,28 @@ juce::String mixSourceTag(int index)
     DC tmp; kMixes[index].build(tmp);
     // Sounds that author slots[] directly (Modal / Physical / Analog+FM / Synth ...) -> derive the tag from
     // the slot ENGINE, not the legacy srcOn[] flags (which are empty for them -> they all showed "(Synth)").
-    // Oscillator sounds are tagged by what they USE: any slot with the FM section engaged
-    // (fmDepth > 0) = "Analog+FM", pure = "Analog" (user: sounds that don't touch FM shouldn't
-    // say "+FM"). Two OSC slots (e.g. lead + sub) are still one engine family, NOT "Hybrid".
-    static const char* eng[] = { "Sample", "Noise", "Analog", "FM", "Karplus-Strong", "Synth", "Wave", "Modal" };
-    int firstEng = -1; bool sameEng = true, anyEng = false, allOsc = true, anyFM = false;
+    // Oscillator sounds are tagged by what they USE (engine renamed "Oscillator", 2026-07-10):
+    // a slot playing the drawn Custom wave = "Additive"; any FM engaged = "Oscillator+FM"; pure =
+    // "Oscillator". Two OSC slots (e.g. lead + sub) are still one engine family, NOT "Hybrid".
+    static const char* eng[] = { "Sample", "Noise", "Oscillator", "FM", "Karplus-Strong", "Synth", "Wave", "Modal" };
+    int firstEng = -1; bool sameEng = true, anyEng = false, allOsc = true, anyFM = false, anyAdd = false;
     for (auto& sl : tmp.slots)
         if (sl.engine >= 0 && sl.weight > 0.001f)
         {
             anyEng = true;
             if (sl.engine != DC::SrcOsc) allOsc = false;
-            else if (sl.fmDepth > 0.001f) anyFM = true;
+            else { if (sl.fmDepth > 0.001f) anyFM = true;
+                   if (sl.oscShape >= DC::WvCustom) anyAdd = true; }
             if (firstEng < 0) firstEng = sl.engine; else if (sl.engine != firstEng) sameEng = false;
         }
     if (anyEng) {
-        if (allOsc) return anyFM ? "Analog+FM" : "Analog";
+        if (allOsc) return anyAdd ? "Additive" : (anyFM ? "Oscillator+FM" : "Oscillator");
         if (sameEng && firstEng >= 0 && firstEng < (int) (sizeof(eng) / sizeof(eng[0]))) return eng[firstEng];
         return "Hybrid";
     }
     // Legacy per-engine authoring (factory drum sounds): read the srcOn[] flags. Legacy "FM"
     // sounds run on the merged Analog+FM engine after conversion, so tag them that way.
-    static const char* names[DC::NUM_SOURCES] = { "Sample", "Noise", "Analog", "Analog+FM", "Karplus-Strong" };
+    static const char* names[DC::NUM_SOURCES] = { "Sample", "Noise", "Oscillator", "Oscillator+FM", "Karplus-Strong" };
     int count = 0, last = -1;
     for (int s = 0; s < DC::NUM_SOURCES; ++s)
         if (tmp.srcOn[s] && tmp.srcWeight[s] > 0.001f) { ++count; last = s; }
@@ -1820,10 +2182,25 @@ static void finishSound(DC& ch)
             ch.driveType = DC::DriveOff; ch.driveAmount = 0.0f;
         }
     }
+    // === NO HIDDEN PARAMETERS (user rule, EMPHATIC) ===================================
+    // A factory sound's tone MUST be fully VISIBLE + editable in the UI - never applied in the
+    // background. The old drum "clean the low mud" high-pass lived on the CHANNEL EQ, which only
+    // showed as a faint gain-0 handle under the "All" tab = effectively invisible. Move it onto
+    // each audible slot's VISIBLE resonant FILTER (High-Pass mode), then clear the channel EQ.
+    // The slot SVF is 12 dB/oct vs the EQ's 24, so the mud-cut is a touch gentler (accepted).
+    for (int b = 0; b < DC::NUM_EQ_BANDS; ++b)
+        if (ch.eqBand[b].on && b == DC::EQ_HP)
+        {
+            for (auto& sl : ch.slots)
+                if (sl.engine >= 0 && sl.weight > 0.001f && sl.filterType == DC::FilterOff)
+                { sl.filterType = DC::HighPass; sl.filterCutoff = ch.eqBand[b].freq; sl.filterReso = 0.707f; }
+            ch.eqBand[b] = DC::defaultEqBand(b);   // off the (now removed) channel EQ
+        }
     // Slot-authored KS sounds (e.g. String Keys = Physical) never hit buildSlotsFromLegacy, so
     // allocate the lazy KS delay lines here too - else the audio thread gates them to SILENCE
     // (ksReady == false) until a later prepareToPlay happens to allocate them.
     ch.ensureKsBuffers();
+    ch.rebuildAddTables();   // additive (Custom-wave) sounds: bake the drawn harmonics (message thread)
 }
 
 void applyMix(DC& ch, int index)

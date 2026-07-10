@@ -445,6 +445,13 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             tgtCh = secondCh; return juce::jlimit(0, 127, fc.keysSplitW2 + (n - 12));
         };
         bool arpKicked = false;   // this key just STARTED the transport (isCurrentlyPlaying turns true next block)
+        // Effective Notes-per-bar x Rate. arpSync -1 = LOCK TO GRID: Notes/bar follows the channel's
+        // grid (piano-roll Grid 1/N, else the step count), so the arp always lands on the sequencer grid.
+        auto arpNPB = [&](const DrumChannel& c) {
+            const int sync = c.arpSync < 0 ? (c.drawMode ? juce::jmax(1, sequencer.uiGridDiv) : juce::jmax(1, c.numSteps))
+                                           : juce::jmax(1, c.arpSync);
+            return (double) sync * DrumChannel::arpRateMul(c.arpRate);
+        };
         auto fireArp = [&](int step)
         {
             const int note = DrumChannel::arpNoteAt(arpKc.arpOffset, arpKc.arpLen, arpRoot, step);
@@ -470,7 +477,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             if (rec && drawRec && (sequencer.isCurrentlyPlaying || arpKicked)
                 && std::abs(note - 60) <= DrumChannel::PITCH_RANGE)    // arp notes beyond the roll's range: skip
             {
-                const double gridPerBar = (double) juce::jmax(1, arpKc.arpSync) * DrumChannel::arpRateMul(arpKc.arpRate);
+                const double gridPerBar = arpNPB(arpKc);
                 const int colLen = juce::jmax(1, (int) ((double) DrumChannel::DRAW_RES / gridPerBar));
                 // FREE (unquantised) stamping - recording captures what actually played:
                 // gated notes of len = cell x GATE (exactly when the live keyUp happens), the
@@ -505,7 +512,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             // still fires immediately). Both clocks advance by the same sample count = no drift.
             if (arpKc.arpAlign && sequencer.isCurrentlyPlaying)
             {
-                const double npb = (double) juce::jmax(1, arpKc.arpSync) * DrumChannel::arpRateMul(arpKc.arpRate);
+                const double npb = arpNPB(arpKc);
                 const double barSec = (60.0 / juce::jmax(1.0, currentBpm)) * juce::jmax(1, currentTimeSigNum)
                                       * (4.0 / juce::jmax(1, currentTimeSigDen));
                 const double noteSamp = juce::jmax(1.0, barSec / npb * currentSampleRate);
@@ -730,8 +737,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             {
                 const double barSec = (60.0 / juce::jmax(1.0, currentBpm)) * juce::jmax(1, currentTimeSigNum)
                                       * (4.0 / juce::jmax(1, currentTimeSigDen));
-                const double noteSec = barSec / ((double) juce::jmax(1, arpKc.arpSync)   // the arp's OWN grid (Notes/bar fader)
-                                                 * DrumChannel::arpRateMul(arpKc.arpRate));   // x the Rate multiplier
+                const double noteSec = barSec / arpNPB(arpKc);   // the arp's OWN grid (Notes/bar fader) x Rate; -1 sync = lock to grid
                 const double noteSamp = juce::jmax(1.0, noteSec * currentSampleRate);
                 // GATE: cut the ringing note after that fraction of the step (1.0 = never = old behaviour)
                 if (arpSounding >= 0 && arpKc.arpGate < 0.999f
@@ -1551,6 +1557,7 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
     chState.setProperty("fEnvAmt",  ch.filterEnvAmt,   nullptr);
     chState.setProperty("drvType",  ch.driveType,      nullptr);
     chState.setProperty("drvAmt",   ch.driveAmount,    nullptr);
+    chState.setProperty("v6ch", 1, nullptr);   // drive taper era (channel-level drvAmt stored for the squared law)
     chState.setProperty("pEnvAmt",  ch.pitchEnvAmt,    nullptr);
     chState.setProperty("pEnvTime", ch.pitchEnvTime,   nullptr);
     chState.setProperty("pEnvOff",  ch.pitchOffset,    nullptr);
@@ -1709,6 +1716,10 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
     ch.filterEnvAmt = (float)child.getProperty("fEnvAmt", 0.0f);
     ch.driveType    = (int)  child.getProperty("drvType", 0);
     ch.driveAmount  = (float)child.getProperty("drvAmt",  0.0f);
+    // v6 drive-taper migration (channel-level stage, multi-slot sounds): pre-v6 files stored amounts
+    // for the linear gain law; sqrt = the identical gain under the squared law (Bitcrush excluded).
+    if (! child.hasProperty("v6ch") && ch.driveType != DrumChannel::Bitcrush && ch.driveAmount > 0.0f)
+        ch.driveAmount = std::sqrt(juce::jlimit(0.0f, 1.0f, ch.driveAmount));
     ch.pitchEnvAmt      = (float)child.getProperty("pEnvAmt",  0.0f);
     ch.pitchEnvTime     = (float)child.getProperty("pEnvTime", 0.05f);
     ch.pitchOffset      = (float)child.getProperty("pEnvOff",  0.0f);
@@ -1768,8 +1779,9 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
     ch.keysSplitW2 = juce::jlimit(12, 60, (int) child.getProperty("splitW2", 12));
     ch.arpOn   = (bool) child.getProperty("arpOn", false);
     ch.arpLen  = juce::jlimit(1, 1 + DrumChannel::ARP_ROWS, (int) child.getProperty("arpLen", 2));
-    ch.arpSync = DrumChannel::arpSnapSync((int) child.getProperty("arpSync", 8));
-    ch.arpRate = juce::jlimit(0, DrumChannel::ARP_RATES - 1, (int) child.getProperty("arpRate", 8));
+    { const int rawSync = (int) child.getProperty("arpSync", 8);   // -1 = LOCK TO GRID (preserved); else snap to a detent
+      ch.arpSync = rawSync < 0 ? -1 : DrumChannel::arpSnapSync(rawSync); }
+    ch.arpRate = juce::jlimit(0, DrumChannel::ARP_RATES - 1, (int) child.getProperty("arpRate", 4));
     ch.arpAlign = (bool) child.getProperty("arpAlign", true);
     ch.arpHold  = (bool) child.getProperty("arpHold", false);
     ch.arpGate  = juce::jlimit(0.1f, 1.0f, (float) child.getProperty("arpGate", 1.0f));

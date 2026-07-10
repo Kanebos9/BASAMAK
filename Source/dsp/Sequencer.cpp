@@ -27,6 +27,11 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
     juce::Array<TriggerEvent> events;
     if (numSamples <= 0) return events;
 
+    // Bar length for tempo-synced per-slot LFOs: default from the standalone tempo (also covers
+    // stopped/DAW-not-playing); advanceDaw overrides it with the live host BPM while playing.
+    blockBarSeconds = (juce::jmax(1, timeSigNum) * 4.0 / juce::jmax(1, timeSigDen))
+                      * 60.0 / juce::jmax(1.0f, standaloneBpm);
+
     if (dawSync)
         advanceDaw(playHead, sampleRate, numSamples, events);
     else if (playing)
@@ -97,6 +102,8 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
         for (int ch = 0; ch < NUM_CHANNELS; ++ch)
         {
             auto& chan = patterns[playPattern].channels[ch];
+            chan.lfoBarSeconds = (float) blockBarSeconds;   // tempo-synced per-slot LFOs
+            chan.lfoGridDiv    = uiGridDiv;                  // "Lock to grid" divisor
             const int ob = chan.outputBus;   // 0 = Main; 1..numAux = a discrete aux out
             const bool toMain = ! (ob >= 1 && ob <= numAux && auxBuses != nullptr && auxBuses[ob - 1] != nullptr);
             juce::AudioBuffer<float>* dest = toMain ? &audio : auxBuses[ob - 1];
@@ -119,6 +126,7 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
         for (int ch = 0; ch < NUM_CHANNELS; ++ch)
         {
             auto& fc = patterns[fadeOutPattern].channels[ch];
+            fc.lfoBarSeconds = (float) blockBarSeconds; fc.lfoGridDiv = uiGridDiv;
             if (! fc.midiOut) fc.renderInto(audio, 0, numSamples, soloFade);   // dry tail into Main
             if (fc.anyVoiceActive()) anyRinging = true;
         }
@@ -138,6 +146,7 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
             for (int ch = 0; ch < NUM_CHANNELS; ++ch)
             {
                 auto& gc = patterns[p].channels[ch];
+                gc.lfoBarSeconds = (float) blockBarSeconds; gc.lfoGridDiv = uiGridDiv;
                 if (! gc.midiOut && gc.anyVoiceActive()) gc.renderInto(audio, 0, numSamples, soloG);
             }
         }
@@ -149,7 +158,11 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
     {
         const bool soloView = anySoloIn(patterns[currentPattern]);
         for (int ch = 0; ch < NUM_CHANNELS; ++ch)
+        {
+            patterns[currentPattern].channels[ch].lfoBarSeconds = (float) blockBarSeconds;
+            patterns[currentPattern].channels[ch].lfoGridDiv    = uiGridDiv;
             patterns[currentPattern].channels[ch].renderInto(audio, 0, numSamples, soloView);
+        }
     }
 
     return events;
@@ -241,6 +254,7 @@ void Sequencer::advanceDaw(juce::AudioPlayHead* dawHead, double sampleRate, int 
     const auto bpm = posInfo->getBpm();
     const double ppqPos  = ppq.hasValue() ? *ppq : 0.0;
     const double hostBpm = (bpm.hasValue() && *bpm > 1.0) ? *bpm : 120.0;
+    blockBarSeconds = quartersPerBar * 60.0 / hostBpm;   // live host tempo -> synced LFOs
 
     double oldPos = std::fmod(ppqPos / quartersPerBar, 1.0);
     if (oldPos < 0.0) oldPos += 1.0;

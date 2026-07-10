@@ -96,6 +96,22 @@
 | 24 | Take names use the wall clock (same-second duplicates possible) | known gap, never prioritised | OPEN |
 | 25 | ~~Old SrcSynth/SrcWave load silent~~ **FIXED (#36): they now migrate to SrcOsc on load** | no reliance on obsolete code | RESOLVED |
 
+| 45 | ADDITIVE = a "Custom" wave INSIDE the Oscillator engine (drawn 32-harmonic table), not a new Source engine | every existing control (envs/filters/unison/FM/FX) works on it for free; band-limiting matches the factory bank shapes | overnight batch (user: "go on, dont ask") |
+| 46 | Harmonic editor = in-editor overlay, 32 bars, presets Sine/Saw/Odd/Clear, opened by clicking the Custom wave preview | popup rule (never an OS window); presets give starting points | overnight batch |
+| 47 | The 3 new FX params = Tone (tilt +-6 dB @800 Hz) / Punch (transient shaper) / Comp (one-knob, on the slot BUS not per voice) | most useful gaps after the EQ removal (tone fix, drum snap, glue); industry-standard per-cell trio (Battery/TR-8S) | overnight batch |
+| 48 | Comp runs on the slot's summed bus (the chorus pull-out buffer), fixed 0.30 threshold / 4 ms / 120 ms, makeup 1+0.8a | true bus compression, not per-voice; constants = effect design like chorus rate | overnight batch |
+| 49 | Chorus effect constants: rate 0.36 Hz, depth +-3.5 ms; drive anti-fizz LP = 8 kHz 1-pole on Hard/Fold/Fuzz; punch followers 1.5/50 ms | picked by ear/convention; not exposed (macro-knob philosophy) | overnight batch |
+| 50 | Additive factory sounds base = C4 (basses 55/65.41) | step pitch 0 = middle C like the keys/bells families | overnight batch |
+
+| 51 | Spectrum motion = per-note A->B crossfade driven by TIME (log 0.05-4 s), not env/LFO | simplest musical model; env/LFO motion already exists via filter/FM; per-voice restart keeps notes consistent | user-ordered feature, driver choice mine |
+
+| 52 | Wavetable = 4 frames INSIDE the Custom wave (not a new engine); legacy A/B files migrate to {A,B,B,B} + morph x3 (bit-identical crossfade) | user picked 4 frames + in-place growth; the x3 keeps every authored/saved A->B time exact | user-approved plan |
+| 53 | WAVE (4th LFO dest) scans +/- half the strip around the base position; per-note GLIDE overrides the static Position while it runs | LFO scan = the classic wavetable wobble; "glide wins" is the simplest audible precedence | my call inside the approved feature |
+| 54 | Analyze sample: window starts 25% in (captures the SUSTAIN, skips the attack), Goertzel mag+phase at k*f0, unpitched files report "no clear pitch found" | a frame holds a steady spectrum; report-not-guess = the honesty rule | my call |
+| 55 | Factory mkAdd copies frame 0 into all 4 frames (uniform strip) | moving Position on a factory additive sound must be a predictable no-op, not a surprise sine | my call |
+| 56 | Per-leg glide (round-2, user spec): addSeg[3], 0 = HOLD at that leg's left frame; seg[0]=0 = glide off entirely | user: "choose morphing time individually"; Hold makes the old morph-then-stay a natural case (no x3 migration trick) | user-approved |
+| 57 | Unreachable glide boxes draw dimmed but stay draggable | signal without blocking (user may set legs out of order) | my call |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

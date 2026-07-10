@@ -340,12 +340,17 @@ public:
     // Analog+FM oscillator shapes (the single "Wave" fader scans these; 14, incl. Vowel/Formant/etc.).
     static int         oscShapeCount();
     static const char* oscShapeName(int s);
-    static float       oscShapeSample(int shape, float phase01);
+    static float       oscShapeSample(int shape, float phase01, const float* customTbl = nullptr);
+    static constexpr int ADD_HARM   = 32;    // drawable additive harmonics per slot
+    static constexpr int ADD_FRAMES = 4;     // WAVETABLE frames per slot (A/B/C/D), position scans them
+    static constexpr int ADD_TBL    = 1024;  // baked custom-wave table length (power of two)
+    void rebuildAddTables();                 // addH frames -> addTbl (MESSAGE THREAD; audio reads floats only)
     // LEGACY encoding: OscShape (0..3) is ONLY for the per-channel layerOscShape field (old
     // projects persist it raw - never renumber). SLOT wave indices use the v5 "Wave" list below;
     // buildSlotsFromLegacy translates between the two.
     enum OscShape { OscSine = 0, OscTriangle, OscSquare, OscSaw };
-    enum Wave { WvSine = 0, WvHump, WvTri, WvSquare, WvSaw, WvPulse };   // analytic v5 slot indices (bank follows at 6)
+    enum Wave { WvSine = 0, WvHump, WvTri, WvSquare, WvSaw, WvPulse,     // analytic v5 slot indices (bank follows at 6)
+                WvCustom = 14 };   // ADDITIVE: user-drawn harmonics (addHarm) baked into a per-slot table
 
     bool  srcOn[NUM_SOURCES]     = { true, true, true, true, false };       // Physical off by default
     float srcWeight[NUM_SOURCES] = { 0.25f, 0.25f, 0.25f, 0.25f, 0.0f };    // even blend (4 on)
@@ -507,13 +512,34 @@ public:
         //    SEND amount into the shared reverb/delay engines (character set in the FX box). --
         int   fxDriveType = 0;                  // DrumChannel::DriveType
         float fxDrive = 0.0f, fxReverbSend = 0.0f, fxDelaySend = 0.0f;
+        // -- 3 one-knob per-slot FX (v1.3.5; all 0 = bypass = bit-identical) --
+        float fxTone  = 0.0f;                   // tilt EQ -1 dark .. +1 bright (~800 Hz pivot, +/-6 dB)
+        float fxPunch = 0.0f;                   // transient shaper -1 soften .. +1 punch (per hit)
+        float fxComp  = 0.0f;                   // one-knob compressor 0..1 (squash + makeup, per slot)
+        // -- ADDITIVE WAVETABLE (Wave = "Custom"): FOUR user-DRAWN harmonic frames (A/B/C/D), each
+        //    baked to a table; addPos (0..1) scans across them (0 = A, 1 = D, linear crossfade of
+        //    the two neighbours). addPh = each harmonic's phase (radians) - set by the freehand WAVE
+        //    drawing (a drawn shape needs phases to reconstruct); bar drawing leaves phases alone.
+        //    PER-SEGMENT GLIDE (user spec): addSeg[k] = the travel time of leg k (0 = A>B,
+        //    1 = B>C, 2 = C>D) in seconds; 0 = HOLD = the note STOPS at that leg's left frame.
+        //    addSeg[0] > 0 = glide is ON (overrides addPos while the note runs); the old
+        //    "morph A -> B then stay" = {time, 0, 0}. The WAVE LFO (dest 3) wobbles the position. --
+        float addH [ADD_FRAMES][ADD_HARM] = { { 1.0f }, { 1.0f }, { 1.0f }, { 1.0f } }; // each frame h1=1 = sine
+        float addPh[ADD_FRAMES][ADD_HARM] = {};
+        float addSeg[ADD_FRAMES - 1] = {};   // per-leg glide seconds (0 = hold); [0] == 0 = glide off
+        float addPos = 0.0f;                 // static wavetable position 0..1 (used when glide is off)
         // -- Per-slot LFOs ("wobble"): THREE independent sines, one per destination, each with its
         //    own rate + amount, all RESTARTING on every hit (locked to the groove, no tempo-sync UI
         //    needed). amt 0 = that LFO off (all-default = bit-identical). Dest index: 0 = the slot
         //    FILTER's cutoff (+/-3 oct; needs the slot filter ON), 1 = pitch (+/-1 octave),
         //    2 = volume (tremolo). Any mix can run at once. Edited on the LFO visual (FX box). --
-        float lfoRate[3] = { 4.0f, 4.0f, 4.0f };
-        float lfoAmt[3]  = { 0.0f, 0.0f, 0.0f };
+        float lfoRate[4] = { 4.0f, 4.0f, 4.0f, 4.0f };   // dest 3 = WAVE (wavetable position scan)
+        float lfoAmt[4]  = { 0.0f, 0.0f, 0.0f, 0.0f };
+        // TEMPO SYNC per LFO (arp-style TWO faders): lfoSync = the BASE cycles-per-bar (0 = OFF/free Hz,
+        // -1 = LOCK TO GRID), lfoSyncRate = a RATE-multiplier index into DrumChannel::arpRateMul (x0.25..x3,
+        // default 4 = x1). Effective cycles/bar = base x rateMul, then Hz from the host bar length.
+        float lfoSync[4]     = { 0.0f, 0.0f, 0.0f, 0.0f };
+        int   lfoSyncRate[4] = { 4, 4, 4, 4 };   // index into arpRateMul (4 = x1) - DORMANT, never applied
         // -- legacy unified-engine (SrcSynth, retired) section extras, still read by nothing but
         //    kept as dormant fields so old-project persistence/migration stays graceful:
         //   oscFold = wavefold amount   oscLevel = osc section level   noiseLevel = noise section level
@@ -536,9 +562,20 @@ public:
         // === PER-SLOT FILTER (begin) - a resonant LowPass on THIS slot's signal (before its EQ),
         //     so a filtered sound (e.g. Acid Bass) doesn't filter the OTHER slot's engine. Edited on
         //     the slot's EQ display (F diamond). Off by default = identical to before. ===
-        int   filterType   = FilterOff;   // Off / LowPass (Formant reserved for the channel filter)
+        int   filterType   = FilterOff;   // Off / LowPass / HighPass / BandPass / Notch (Formant = channel-only)
         float filterCutoff = 1000.0f, filterReso = 0.707f, filterEnvAmt = 0.0f;
+        float filterKeyTrack = 0.0f;      // 0..1: how much the cutoff FOLLOWS the note pitch (keyboard tracking)
+        // FILTER 2: a SECOND independent resonant filter, applied in SERIES after filter 1 (e.g. HP + LP
+        // = a band you shape). Same controls; Off by default. Persisted flT2/flC2/flR2/flE2/flK2.
+        int   filterType2   = FilterOff;
+        float filterCutoff2 = 1000.0f, filterReso2 = 0.707f, filterEnvAmt2 = 0.0f;
+        float filterKeyTrack2 = 0.0f;
         // === PER-SLOT FILTER (end) ===
+        // === PER-SLOT CHORUS (insert, after the filter/EQ) - lush multi-voice stereo widener.
+        //     ONE macro control (user): mix only. Rate/depth are EFFECT CONSTANTS in the DSP (like
+        //     the reverb's diffusion); the retired chRt/chDp file keys are ignored on load. ===
+        float chorusMix = 0.0f;           // 0 = OFF (dry, bit-identical) .. 1 = full wet
+        // === PER-SLOT CHORUS (end) ===
     };
     Slot slots[NUM_SLOTS];
     // Effective BASE frequency for a pitched slot. In PIANO ROLL every pitched engine plays a
@@ -553,6 +590,16 @@ public:
         return (s == 1 && keysSlot2Down != 0) ? c4 * std::pow(2.0, -(double) keysSlot2Down / 12.0) : c4;
     }
     float slotFiltEnv[NUM_SLOTS] = {}; // runtime: per-slot amp-env level from the PREVIOUS block, feeds the per-slot filter's env-follow sweep
+    float chDrvLp[2] = {}, chDrvDcX[2] = {}, chDrvDcY[2] = {};   // channel drive post-smoothing + Fuzz DC blocker (legacy multi-slot drive stage)
+    // PER-SLOT CHORUS runtime: a stereo delay line + 3 LFO phases per slot (lazy-sized in renderInto);
+    // the insert runs on the slot's summed output AFTER the voice loop, so it never touches the other slot.
+    std::vector<float> chorusDL[NUM_SLOTS], chorusDR[NUM_SLOTS];
+    int    chorusW[NUM_SLOTS]  = {};
+    double chorusPh[NUM_SLOTS] = {};
+    float  addTbl[NUM_SLOTS][ADD_FRAMES][ADD_TBL] = {};  // baked wavetable frames per slot - see rebuildAddTables()
+    float  compEnv[NUM_SLOTS] = {};           // one-knob compressor envelope per slot
+    float  lfoBarSeconds = 2.0f;   // seconds per bar (set by the Sequencer each block) for tempo-synced per-slot LFOs
+    int    lfoGridDiv    = 16;      // piano-roll Grid 1/N (set by the Sequencer) - for LFO/arp "Lock to grid" in draw mode
     // Legacy-authoring bridge: factory sounds built via buildSlotsFromLegacy can't set slot fields
     // directly (applyPreset re-runs the build and would wipe them) - this channel-level flag is
     // copied onto the built FM slot instead, so FM sounds keep env-follow inside presets too.
@@ -562,7 +609,7 @@ public:
     {
         const Voice* nv = nullptr;
         for (auto& v : voices) if (v.active() && (nv == nullptr || v.voiceSamples < nv->voiceSamples)) nv = &v;
-        return nv != nullptr ? nv->sv[juce::jlimit(0, NUM_SLOTS - 1, slot)].lfoPhase[juce::jlimit(0, 2, dest)] : -1.0;
+        return nv != nullptr ? nv->sv[juce::jlimit(0, NUM_SLOTS - 1, slot)].lfoPhase[juce::jlimit(0, 3, dest)] : -1.0;
     }
 
     // PER-SLOT sample storage: each Sample slot has its OWN buffer + region + speed + reverse, so both
@@ -685,8 +732,8 @@ public:
     //   Its OWN value (not the channel's numSteps) so it stays meaningful in Piano Roll mode. The odd
     //   entries (7/9/11/13) give polyrhythmic grids; 12/16/24 are reached via Rate (e.g. 8 x 2 = 16).
     //   arpRate multiplies it: {1/3, 1/2, 1, 1.5, 2, 3}. Default 8 x 2 = classic 16ths.
-    int    arpSync = 8;
-    int    arpRate = 8;                       // index into the multiplier table; 8 = x2
+    int    arpSync = 8;   // -1 = LOCK TO GRID (Notes/bar follows the channel's grid: piano-roll Grid 1/N, else step count)
+    int    arpRate = 4;                       // index into the multiplier table; 4 = x1 (default)
     //   arpAlign = while the TRANSPORT plays, phase-lock the arp's steps to the bar grid (press mid-cell
     //   and the next notes land ON the groove); stopped = free-run from the keypress. Default ON.
     //   arpHold  = LATCH: releasing the key keeps the arp looping; press the same key again (or turn
@@ -864,15 +911,19 @@ private:
         float    eqZ1[7][2] = {}, eqZ2[7][2] = {};
         // === PER-SLOT EQ (end) ===
         // === PER-SLOT FILTER (begin) - resonant LP state (stereo); coeffs live in SC ===
-        double   filtIc1[2] = {}, filtIc2[2] = {};   // TPT/ZDF SVF integrator states (per stereo side)
-        double   filtGm = -1.0;                       // per-sample smoothed cutoff coefficient (-1 = snap to target)
+        float    drvLp[2] = {}, drvDcX[2] = {}, drvDcY[2] = {};   // drive post-smoothing (~8 kHz, harsh types) + Fuzz DC blocker
+        float    toneZ[2] = {};                       // per-slot TONE tilt (1-pole split state)
+        float    pFast[2] = {}, pSlow[2] = {};        // per-slot PUNCH transient followers (fast/slow)
+        double   filtIc1[2][2] = {}, filtIc2[2][2] = {};   // TPT/ZDF SVF integrators [filter 0/1][stereo side]
+        double   filtGm[2]  = { -1.0, -1.0 };              // per-sample smoothed cutoff coeff per filter (-1 = snap)
+        double   filtGkt[2] = { -1.0, -1.0 };              // per-voice KEYTRACK target per filter (tan coeff; -1 = off)
         // === PER-SLOT FILTER (end) ===
         // Per-step LENGTH: effective decay (seconds) replacing this slot's dec so the note's fall
         // FILLS the note length (attack/hold untouched). 0 = no gate = the authored decay. FROZEN
         // at trigger - a 303 tie (slideTo) extends the voice's life but never reshapes the decay,
         // so tied chains keep falling naturally (re-gating the env mid-decay would step/pop).
         float    gateDec = 0.0f;
-        double   lfoPhase[3] = {}; // per-slot LFO phases (radians), one per dest, reset at trigger (per-hit restart)
+        double   lfoPhase[4] = {}; // per-slot LFO phases (radians), one per dest (3 = WAVE), reset at trigger (per-hit restart)
         // KEYS (on-screen keyboard): this slot re-tuned from its own base freq to the pressed
         // note, in semitones (multiplies pe3Mul, so it reaches every pitched engine incl. the
         // Modal strike-tuning). keyMute = the slot's engine can't be played by keys (Sample/
@@ -1000,6 +1051,7 @@ private:
     // Temp render buffer
     juce::AudioBuffer<float> renderBuf;
     juce::AudioBuffer<float> fxSendBuf;   // per-slot reverb/delay send sums (ch 0/1 = reverb L/R, 2/3 = delay L/R)
+    juce::AudioBuffer<float> chorusInBuf; // per-slot dry sum for the CHORUS insert (ch 2s/2s+1 = slot s L/R); only used when a slot's chorus is on
 
     void applyEQ(juce::AudioBuffer<float>& buf, int numSamples);
 };

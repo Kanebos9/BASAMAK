@@ -106,6 +106,7 @@ private:
     int    drawNoteCount[NCH] = {};
     int    drawDragCh = -1, drawLastCol = -1;          // channel being line-drawn + last column (interp)
     int    strokeNoteIdx = -1;                          // the note the current ROW line-stroke is extending
+    int    strokeLockSemi = -128;                       // the stroke's pitch = where the press LANDED (locked, like the magnified editor)
     bool   drawErase = false;                          // right-drag erases (removes notes under the stroke)
     float  playBarFrac = 0.0f;                         // current bar position 0..1 (piano-roll playhead)
     int    drawMagCh = -1;                             // channel whose BIG piano-roll OVERLAY is open (-1 = none)
@@ -352,12 +353,121 @@ class WaveMorphDisplay : public juce::Component, public juce::SettableTooltipCli
 public:
     std::function<DrumChannel::Slot*()> getSlot;   // -> the slot this edits
     std::function<void()> onEdit;                  // after cycling a wave (mark DSP dirty)
+    std::function<void()> onOpenCustom;            // Wave = Custom: click the drawing = open the harmonic editor
+    std::function<const float*()> getCustomTbl;        // -> the STATIC preview table (the position blend)
+    std::function<const float*(int)> getCustomFrame;   // -> one baked frame table (0..3) for the in-motion split view
+    void mouseEnter(const juce::MouseEvent&) override { hoverEd = true; repaint(); }
+    void mouseExit (const juce::MouseEvent&) override { hoverEd = false; repaint(); }
+    bool hoverEd = false;                          // hover = show the "click to edit" affordance (Custom only)
     bool fmMode = false;                           // FM: apply phase modulation to the drawing
     bool compact = false;                          // short form (no A/B label strip) when the box is tight
     void paint(juce::Graphics& g) override;
     void mouseDown(const juce::MouseEvent& e) override;
     juce::String getTooltip() override;
     static float basicWave(int shape, float ph01);
+};
+
+//==============================================================================
+// ADDITIVE WAVETABLE (Wave = "Custom"): the DRAW HARMONICS overlay, now FOUR frames (A/B/C/D)
+// in a 2x2 grid with a POSITION strip between the rows. Each frame = 32 harmonic bars + a freehand
+// wave strip + a shape-recipe dropdown + "Analyze sample" (pitch-detect a file -> its harmonics).
+// Position scans A -> D (the two neighbouring frames crossfade); the Glide box = per-note travel
+// 0 -> 1 over N seconds; the WAVE LFO (LFO visual, 4th tab) scans position live. An in-editor
+// overlay (a `content` child, never an OS popup - the popup rule), closed by its X or layoutContent.
+class HarmonicEditor : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    std::function<void()> onChange;               // read vals/phs/morphSec/wtPos back into the slot
+    std::function<void()> onDragEnd;              // released (audition + undo hash)
+    std::function<void()> onClose;
+    juce::Component* clickIgnore = nullptr;       // the wave preview that opened us (its click re-opens)
+    juce::Colour accent { 0xffe8bf4d };           // slot colour (yellow 1 / pink 2)
+    int slotIdx = 0;                              // which slot is being drawn (title)
+    ~HarmonicEditor() override { juce::Desktop::getInstance().removeGlobalMouseListener(&closer); }
+    void visibilityChanged() override             // click-outside closes, like every other dropdown/popup
+    {
+        if (isVisible() && ! closerHooked)      { juce::Desktop::getInstance().addGlobalMouseListener(&closer); closerHooked = true; }
+        else if (! isVisible() && closerHooked) { juce::Desktop::getInstance().removeGlobalMouseListener(&closer); closerHooked = false; }
+    }
+    static constexpr int NF = DrumChannel::ADD_FRAMES;   // 4 frames
+    float vals[NF][DrumChannel::ADD_HARM] = { { 1.0f }, { 1.0f }, { 1.0f }, { 1.0f } };
+    float phs [NF][DrumChannel::ADD_HARM] = {};
+    float seg[NF - 1] = {};                       // per-leg glide seconds (0 = HOLD); [0] == 0 = glide off
+    float wtPos = 0.0f;                           // static wavetable position 0..1
+    void setValues(const float (*h)[DrumChannel::ADD_HARM], const float (*p)[DrumChannel::ADD_HARM],
+                   const float* segs, float pos)
+    { for (int f = 0; f < NF; ++f) for (int i = 0; i < DrumChannel::ADD_HARM; ++i)
+      { vals[f][i] = h[f][i]; phs[f][i] = p[f][i]; }
+      for (int k = 0; k < NF - 1; ++k) seg[k] = segs[k];
+      wtPos = pos;
+      for (int f = 0; f < NF; ++f) { frameLabel[f].clear(); rebuildStrokeFromHarmonics(f); detectLoadedShape(f); }
+      repaint(); }
+    void paint(juce::Graphics& g) override;
+    void mouseDown(const juce::MouseEvent& e) override;
+    void mouseDrag(const juce::MouseEvent& e) override;
+    void mouseUp(const juce::MouseEvent&) override
+    { if ((drawing || waveDrawing || segDragging >= 0 || posDragging) && onDragEnd) onDragEnd();
+      drawing = false; waveDrawing = false; segDragging = -1; posDragging = false; waveLastI = -1; }
+    juce::String getTooltip() override;
+private:
+    static constexpr int WPTS = 256;              // freehand wave stroke resolution (one cycle)
+    float wavePts[NF][WPTS] = {};
+    bool  drawing = false, waveDrawing = false, posDragging = false;
+    int   segDragging = -1;                       // which leg's time box is being dragged (-1 = none)
+    int   dragFrame = 0, waveLastI = -1;
+    struct Closer : juce::MouseListener
+    {
+        HarmonicEditor& ed; explicit Closer(HarmonicEditor& e) : ed(e) {}
+        void mouseDown(const juce::MouseEvent& e) override
+        {
+            if (! ed.isVisible() || ed.menuOpen) return;   // a shape menu / file chooser must not close the editor
+            const auto p = e.getScreenPosition();
+            if (ed.getScreenBounds().contains(p)) return;
+            if (ed.clickIgnore != nullptr && ed.clickIgnore->getScreenBounds().contains(p)) return;
+            ed.setVisible(false);
+        }
+    };
+    Closer closer { *this };
+    bool closerHooked = false;
+    bool menuOpen = false;                        // a shape PopupMenu / file chooser is up - the closer waits
+    std::unique_ptr<juce::FileChooser> chooser;   // "Analyze sample" file picker (async, member = stays alive)
+    juce::String frameLabel[NF];                  // analyzed-sample name shown in the dropdown ("" = shape/Custom)
+    juce::String frameMsg[NF];                    // transient per-frame notice ("no clear pitch found")
+    int  loadedShape[NF] = { -1, -1, -1, -1 };    // factory shape index this frame holds (-1 = Custom)
+    float* HV(int f) { return vals[f]; }
+    float* HP(int f) { return phs[f]; }
+    float* WP(int f) { return wavePts[f]; }
+    juce::Colour frameCol(int f) const            // A = slot accent, B cyan, C violet, D green
+    { const juce::Colour c[NF - 1] = { juce::Colour(0xff35c0ff), juce::Colour(0xffb46bff), juce::Colour(0xff35b56a) };
+      return f == 0 ? accent : c[f - 1]; }
+    // ---- 2x2 geometry: header row / frame row / POSITION band / frame row / footer hint ----
+    static constexpr float HDR = 20.0f, BAND = 30.0f, FOOT = 14.0f;
+    float colW() const { return ((float) getWidth() - 24.0f) / 2.0f; }
+    float colX(int c2) const { return 8.0f + (float) c2 * (colW() + 8.0f); }
+    float rowH() const { return ((float) getHeight() - HDR - BAND - FOOT) * 0.5f; }
+    float rowY(int r) const { return HDR + (float) r * (rowH() + BAND); }
+    juce::Rectangle<float> frameRect(int f) const { return { colX(f & 1), rowY(f >> 1), colW(), rowH() }; }
+    int frameAt(juce::Point<float> p) const
+    { for (int f = 0; f < NF; ++f) if (frameRect(f).contains(p)) return f; return -1; }
+    juce::Rectangle<float> closeRect() const { return { (float) getWidth() - 24.0f, 2.0f, 20.0f, 16.0f }; }
+    juce::Rectangle<float> shapeBtnRect(int f) const { auto r = frameRect(f); return { r.getX() + 16.0f, r.getY(), 128.0f, 15.0f }; }
+    juce::Rectangle<float> smpRect(int f) const      { auto r = frameRect(f); return { r.getX() + 148.0f, r.getY(), 96.0f, 15.0f }; }
+    juce::Rectangle<float> clrRect(int f) const      { auto r = frameRect(f); return { r.getX() + 248.0f, r.getY(), 40.0f, 15.0f }; }
+    juce::Rectangle<float> waveStripRect(int f) const { auto r = frameRect(f); return { r.getX(), r.getY() + 18.0f, r.getWidth(), 46.0f }; }
+    juce::Rectangle<float> barArea(int f) const
+    { auto r = frameRect(f); return { r.getX(), r.getY() + 66.0f, r.getWidth(), r.getHeight() - 66.0f - 12.0f }; }
+    // POSITION band (between the rows): the scan strip + THREE per-leg glide time boxes
+    // (A>B / B>C / C>D; hard left = HOLD = the note stops at that leg's left frame)
+    juce::Rectangle<float> posRect() const
+    { return { 78.0f, rowY(0) + rowH() + 6.0f, (float) getWidth() - 78.0f - 310.0f, 18.0f }; }
+    juce::Rectangle<float> segRect(int k) const
+    { return { (float) getWidth() - 302.0f + (float) k * 100.0f, rowY(0) + rowH() + 6.0f, 94.0f, 18.0f }; }
+    void applyAt(const juce::MouseEvent& e, bool erase, int f);
+    void strokeToHarmonics(int f);                // DFT the drawn cycle -> vals + phs (32 partials)
+    void rebuildStrokeFromHarmonics(int f);       // vals + phs -> wavePts (band-limited reconstruction)
+    void loadShapeSpectrum(int f, int shape);     // place a factory recipe into this frame
+    void detectLoadedShape(int f);                // name the frame if its bars match a factory shape
+    void analyzeSample(int f);                    // file chooser -> pitch detect -> harmonics into frame f
 };
 
 //==============================================================================
@@ -447,6 +557,63 @@ public:
 // chosen engine's parameters, all editing a single DrumChannel::Slot. Three of
 // these make up the new SOUND BLEND row (each fully editable, duplicates allowed).
 //==============================================================================
+// A compact horizontal DRAG-FADER in the Arp Rate-fader style: a rounded box, a coloured fill up
+// to the thumb, "Name  value" centred/left inside. Click or drag maps X absolutely to 0..1.
+// Reused for the per-slot FX (Drive / Reverb / Delay sends), the Chorus (Mix / Rate / Depth), the
+// filter Keytrack and the LFO tempo-Sync. The accent colour follows the edited slot (yellow / pink).
+class SlotDragFader : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    std::function<void(float)> onChange;             // value 0..1 (the handler maps to the real range)
+    std::function<void()>      onDragEnd;
+    std::function<juce::String(float)> format;       // 0..1 -> display text (e.g. "42%", "Off", "2 /bar")
+    void setAccent(juce::Colour c)  { if (c != accent_) { accent_ = c; repaint(); } }
+    void setValue01(float v)        { v = juce::jlimit(0.0f, 1.0f, v); if (std::abs(v - val_) > 1.0e-4f) { val_ = v; repaint(); } }
+    void setLabel(const juce::String& s) { if (s != name_) { name_ = s; repaint(); } }
+    void setDefault(float d)        { dflt_ = juce::jlimit(0.0f, 1.0f, d); }
+    void setVertical(bool v)        { vertical_ = v; }   // vertical fills bottom->top; drag maps Y
+    float value01() const           { return val_; }
+    void paint(juce::Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat().reduced(0.5f);
+        g.setColour(juce::Colour(0xff26264a)); g.fillRoundedRectangle(r, 4.0f);
+        g.setColour(accent_.withAlpha(0.30f));
+        if (vertical_) g.fillRoundedRectangle(r.withTop(r.getBottom() - juce::jmax(5.0f, val_ * r.getHeight())), 4.0f);
+        else           g.fillRoundedRectangle(r.withWidth(juce::jmax(5.0f, val_ * r.getWidth())), 4.0f);
+        g.setColour(accent_.withAlpha(0.55f)); g.drawRoundedRectangle(r, 4.0f, 1.0f);
+        g.setColour(juce::Colour(0xffeaf0fa)); g.setFont(juce::Font(11.5f, juce::Font::bold));
+        juce::String t = name_; if (format) t += "  " + format(val_);
+        if (vertical_)
+        {   // draw the label rotated 90 deg so it reads up the narrow column
+            juce::Graphics::ScopedSaveState ss(g);
+            g.addTransform(juce::AffineTransform::rotation(-juce::MathConstants<float>::halfPi,
+                                                           (float) getWidth() * 0.5f, (float) getHeight() * 0.5f));
+            const int hw = getHeight(), hh = getWidth();
+            g.drawText(t, (getWidth() - hw) / 2, (getHeight() - hh) / 2, hw, hh, juce::Justification::centred, false);
+        }
+        else g.drawText(t, getLocalBounds().reduced(7, 0), juce::Justification::centredLeft, false);
+    }
+    void mouseDown(const juce::MouseEvent& e) override { drag_ = true; apply(e); }
+    void mouseDrag(const juce::MouseEvent& e) override { apply(e); }
+    void mouseUp  (const juce::MouseEvent&)   override { if (drag_ && onDragEnd) onDragEnd(); drag_ = false; }
+    void mouseDoubleClick(const juce::MouseEvent&) override
+    { setValue01(dflt_); if (onChange) onChange(val_); if (onDragEnd) onDragEnd(); }
+private:
+    void apply(const juce::MouseEvent& e)
+    {
+        const float v = vertical_
+            ? juce::jlimit(0.0f, 1.0f, 1.0f - (float) e.position.y / juce::jmax(1.0f, (float) getHeight()))
+            : juce::jlimit(0.0f, 1.0f,        (float) e.position.x / juce::jmax(1.0f, (float) getWidth()));
+        if (std::abs(v - val_) > 1.0e-4f) { val_ = v; repaint(); if (onChange) onChange(val_); }
+    }
+    bool vertical_ = false;
+    juce::String name_;
+    float val_ = 0.0f, dflt_ = 0.0f;
+    juce::Colour accent_ { 0xff35c0ff };
+    bool drag_ = false;
+};
+
+//==============================================================================
 // LfoDisplay: the per-slot LFOs as an INTERACTIVE visual (same family as the env/EQ editors -
 // the drawn wave IS the parameters). THREE fully independent LFOs, one per target (FILT / PITCH /
 // VOL) - the top tabs pick WHICH one you're editing (dragging never touches the other two), and
@@ -458,14 +625,24 @@ class LfoDisplay : public juce::Component, public juce::SettableTooltipClient
 public:
     std::function<void(int dest, float rate, float amt)> onChange;
     std::function<void()> onDragEnd;
-    void setValues(const float* rates, const float* amts, bool filterOn, juce::Colour accent)
+    std::function<void(int dest)> onDestChange;      // a tab was selected
+    std::function<void(int dest, float sync)> onSyncChange;   // Sync mode/value edited (0 off / cpb / -1 grid)
+    void setValues(const float* rates, const float* amts, const float* syncs, bool filterOn, bool waveOn,
+                   juce::Colour accent)
     {
-        bool ch = (filterOn != filtOn_) || (accent != accent_);
-        for (int d = 0; d < 3; ++d) { ch = ch || rates[d] != rate_[d] || amts[d] != amt_[d];
-                                      rate_[d] = rates[d]; amt_[d] = amts[d]; }
-        filtOn_ = filterOn; accent_ = accent; if (ch) repaint();
+        bool ch = (filterOn != filtOn_) || (waveOn != waveOn_) || (accent != accent_);
+        for (int d = 0; d < 4; ++d) { ch = ch || rates[d] != rate_[d] || amts[d] != amt_[d] || syncs[d] != sync_[d];
+                                      rate_[d] = rates[d]; amt_[d] = amts[d]; sync_[d] = syncs[d]; }
+        filtOn_ = filterOn; waveOn_ = waveOn; accent_ = accent; if (ch) repaint();
     }
+    // Live tempo/grid info so the drawn wave + read-out show the TRUE synced speed (never the ignored
+    // free-Hz value - the honesty rule). gridCpb = the channel's grid cells per bar (for Grid mode).
+    void setTempoInfo(float barSec, float gridCpb)
+    { barSec = juce::jmax(0.05f, barSec); gridCpb = juce::jmax(1.0f, gridCpb);
+      if (std::abs(barSec - barSec_) > 1e-4f || std::abs(gridCpb - gridCpb_) > 1e-4f)
+      { barSec_ = barSec; gridCpb_ = gridCpb; repaint(); } }
     int  selDest() const { return dest_; }   // the tab being edited (the timer feeds ITS phase)
+    void setFilterOn(bool on) { if (on != filtOn_) { filtOn_ = on; repaint(); } }   // live update of the FILT-off warning
     void setPhase(double ph) { if (std::abs(ph - phase_) > 1.0e-3) { phase_ = ph; repaint(); } }
     void paint(juce::Graphics&) override;
     void mouseDown(const juce::MouseEvent&) override;
@@ -474,19 +651,26 @@ public:
     void mouseDoubleClick(const juce::MouseEvent&) override;
     juce::String getTooltip() override;
 private:
-    float rate_[3] = { 4.0f, 4.0f, 4.0f }, amt_[3] = { 0.0f, 0.0f, 0.0f };
-    int dest_ = 0; bool filtOn_ = false;
+    float rate_[4] = { 4.0f, 4.0f, 4.0f, 4.0f }, amt_[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    float sync_[4] = { 0.0f, 0.0f, 0.0f, 0.0f };   // per-dest tempo sync: 0 = off (free Hz), > 0 = cycles/bar, -1 = grid
+    float barSec_ = 2.0f, gridCpb_ = 16.0f;    // live tempo + grid density (setTempoInfo)
+    int dest_ = 0; bool filtOn_ = false, waveOn_ = false;   // waveOn_ = the slot's Wave is Custom (WAVE dest audible)
     double phase_ = -1.0;
     juce::Colour accent_ { 0xffe8bf4d };
     float dnRate_ = 4.0f, dnAmt_ = 0.0f; bool dragging_ = false;
-    float lastAmt_[3] = { 0.5f, 0.5f, 0.5f };  // restore values for the double-click off/on toggle
+    int   dnSyncIdx_ = 0;                      // detent index at drag start (Sync mode X-snapping)
+    float lastAmt_[4] = { 0.5f, 0.5f, 0.5f, 0.5f };  // restore values for the double-click off/on toggle
     juce::Point<float> dnPos_;
-    juce::Rectangle<float> waveArea() const { return getLocalBounds().toFloat().reduced(2.0f).withTrimmedTop(17.0f); }
-    int destAt(juce::Point<float> p) const  // which of the 3 dest tabs (top strip); -1 = none
+    // The wave's true speed in Hz for dest d (what the DSP actually plays - synced rates included).
+    float effHz(int d) const { const float s = sync_[d];
+        return s == 0.0f ? rate_[d] : (s < 0.0f ? gridCpb_ : s) / barSec_; }
+    juce::Rectangle<float> syncBtnRect() const { return { 4.0f, (float) getHeight() - 16.0f, 64.0f, 13.0f }; }
+    juce::Rectangle<float> waveArea() const { return getLocalBounds().toFloat().reduced(2.0f).withTrimmedTop(17.0f).withTrimmedBottom(15.0f); }
+    int destAt(juce::Point<float> p) const  // which of the 4 dest tabs (top strip); -1 = none
     {
         const float w = (float) getWidth();
-        if (p.y > 16.0f || p.x < w * 0.22f) return -1;   // below the strip / over the "LFO" title
-        return juce::jlimit(0, 2, (int) ((p.x - w * 0.22f) / (w * 0.26f)));
+        if (p.y > 16.0f || p.x < w * 0.17f) return -1;   // below the strip / over the "LFO" title
+        return juce::jlimit(0, 3, (int) ((p.x - w * 0.17f) / (w * 0.2075f)));
     }
 };
 
@@ -1040,12 +1224,14 @@ public:
     static constexpr float kMaxDb = 18.0f;       // vertical range +/- dB
     // Point the display at a channel's EQ bands (drawn + dragged in place) + the channel's
     // resonant FILTER (drawn/edited here too when showFilt - i.e. on the "All"/channel target).
-    void setBands(DrumChannel::EqBand* b, int filterType, float cutoff, float reso, float envAmt,
-                  double sr, bool showFilt);
+    // TWO independent per-slot filters (series). type = DrumChannel::FilterType.
+    void setFilters(int t0, float c0, float r0, float e0,
+                    int t1, float c1, float r1, float e1, double sr);
     std::function<void()> onEdit;                // after a drag/wheel/toggle -> updateDSP + hash
     std::function<void()> onDragEnd;             // released after editing (for auto-audition)
-    // The FILTER handle writes back through this (type = DrumChannel::FilterType).
-    std::function<void(int type, float cutoff, float reso, float envAmt)> onFilterEdit;
+    std::function<void(int filterIdx, int type, float cutoff, float reso, float envAmt)> onFilterEdit;
+    int  active() const { return activeFilt; }   // which of the 2 filters the keytrack fader edits (last touched)
+    static juce::Colour filtColour(int fi) { return fi == 0 ? juce::Colour(0xffff7a4a) : juce::Colour(0xff35c0ff); }  // F1 orange / F2 cyan
     void pushSpectrum(const float* mags, int n);
     void decayTick();                            // call on a timer to fade slowly
     void paint(juce::Graphics& g) override;
@@ -1059,39 +1245,36 @@ public:
     juce::String getTooltip() override;
 
 private:
-    DrumChannel::EqBand* bands = nullptr;         // -> selected channel's eqBand[5]
-    int   fType = 0;
-    float fCutoff = 1000.0f, fReso = 0.707f, fEnvAmt = 0.0f;
-    bool  showFilter = false;                     // filter handle only on the channel ("All") target
-    static constexpr int kFilt = 100, kFiltEnv = 101;   // pseudo-band ids for the filter handles
+    int   fType[2] = { 0, 0 };   // NOLINT
+    float fCutoff[2] = { 1000.0f, 1000.0f }, fReso[2] = { 0.707f, 0.707f }, fEnvAmt[2] = { 0.0f, 0.0f };
+    int   activeFilt = 0;                         // which filter the diamond drag / keytrack edits (last touched)
+    bool  showFilter = true;
+    // Handle ids: diamond of filter fi = 100+fi ; envelope end handle = 102+fi.
+    static int kFilt(int fi)    { return 100 + fi; }
+    static int kFiltEnv(int fi) { return 102 + fi; }
     float resoToNorm(float q) const { return juce::jlimit(0.0f, 1.0f, std::log(juce::jmax(0.31f, q) / 0.3f) / std::log(12.0f / 0.3f)); }
     float normToReso(float n) const { return 0.3f * std::pow(12.0f / 0.3f, juce::jlimit(0.0f, 1.0f, n)); }
-    float filtEnvEndHz() const { return juce::jlimit(20.0f, 20000.0f, fCutoff * std::pow(2.0f, fEnvAmt * 5.0f)); }
-    juce::Point<float> filtPos(juce::Rectangle<float> a) const
-    { return { xForFreq(a, fCutoff), a.getBottom() - resoToNorm(fReso) * a.getHeight() * 0.85f - a.getHeight() * 0.06f }; }
-    juce::Point<float> filtEnvPos(juce::Rectangle<float> a) const
+    float filtEnvEndHz(int fi) const { return juce::jlimit(20.0f, 20000.0f, fCutoff[fi] * std::pow(2.0f, fEnvAmt[fi] * 5.0f)); }
+    juce::Point<float> filtPos(juce::Rectangle<float> a, int fi) const
+    { return { xForFreq(a, fCutoff[fi]), a.getBottom() - resoToNorm(fReso[fi]) * a.getHeight() * 0.85f - a.getHeight() * 0.06f }; }
+    juce::Point<float> filtEnvPos(juce::Rectangle<float> a, int fi) const
     {
-        auto m = filtPos(a);
-        // env == 0: PARK the handle beside the diamond (visible + grabbable). With the old
-        // "handle sits at the sweep end" mapping it landed exactly UNDER the diamond, so once
-        // the envelope was zeroed there was no visible way to ever drag one up again.
-        if (std::abs(fEnvAmt) <= 0.02f)
+        auto m = filtPos(a, fi);
+        if (std::abs(fEnvAmt[fi]) <= 0.02f)   // env 0: park beside the diamond so a sweep is always grabbable
             return { m.x + 20.0f <= a.getRight() - 6.0f ? m.x + 20.0f : m.x - 20.0f, m.y };
-        return { xForFreq(a, filtEnvEndHz()), m.y };
+        return { xForFreq(a, filtEnvEndHz(fi)), m.y };
     }
     double sampleRate = 44100.0;
     float scope[scopeSize]  = {}; // spectrum outline (peak-hold for consistency)
     bool  hasSpectrum = false;
-    int   drag = -1, hover = -1;  // EQ band index being dragged / hovered
+    int   drag = -1, hover = -1;  // filter handle id being dragged / hovered
 
     float xForFreq(juce::Rectangle<float> a, float f) const { return a.getX() + freqToNorm(f) * a.getWidth(); }
     float freqForX(juce::Rectangle<float> a, float x) const { return normToFreq((x - a.getX()) / juce::jmax(1.0f, a.getWidth())); }
     float yForDb (juce::Rectangle<float> a, float db) const { return a.getCentreY() - juce::jlimit(-1.0f, 1.0f, db / kMaxDb) * a.getHeight() * 0.5f; }
     float dbForY (juce::Rectangle<float> a, float y)  const { return juce::jlimit(-kMaxDb, kMaxDb, (a.getCentreY() - y) / (a.getHeight() * 0.5f) * kMaxDb); }
-    float responseDb(float f) const;              // combined EQ magnitude at f (dB)
     int   nearestBand(juce::Point<float> p) const;
-    juce::Point<float> handlePos(juce::Rectangle<float> a, int b) const;
-    juce::Rectangle<float> plotArea() const { return getLocalBounds().toFloat().reduced(6.0f); }
+    juce::Rectangle<float> plotArea() const { return getLocalBounds().toFloat().withTrimmedTop(11.0f).reduced(6.0f, 4.0f); }
 };
 
 //==============================================================================
@@ -1812,6 +1995,13 @@ private:
     void refreshRouting();           // recolour the channel strips + Route button by routing
     LearnableKnob knobReverb  { "p0_ch0_reverb",  proc.midiLearn };
     LearnableKnob knobDelay   { "p0_ch0_delay",   proc.midiLearn };
+    LearnableKnob knobChMix   { "p0_ch0_chMix",   proc.midiLearn };   // CHORUS - one macro knob (rate/depth = effect constants)
+    LearnableKnob knobTone    { "p0_ch0_tone",    proc.midiLearn };   // per-slot TONE tilt (dark..bright)
+    LearnableKnob knobPunch   { "p0_ch0_punch",   proc.midiLearn };   // per-slot PUNCH transient shaper
+    LearnableKnob knobComp    { "p0_ch0_comp",    proc.midiLearn };   // per-slot one-knob COMPRESSOR
+    juce::Label   lblChMix, lblTone, lblPunch, lblComp;
+    HarmonicEditor harmEd;    // ADDITIVE draw-harmonics overlay (content child)
+    int            harmEdSlot = 0;
 
     LearnableKnob knobReverbRoom { "global_reverbRoom", proc.midiLearn };
     LearnableKnob knobDelayTime  { "global_delayTime",  proc.midiLearn };
@@ -1841,7 +2031,7 @@ private:
     juce::Label      hdrAmpEnv, hdrEqBox, hdrVoice;   // box/section titles (row 1)
     // === PER-SLOT EQ (begin) - target picker: 0 = All (channel EQ), 1/2/3 = that slot's EQ ===
     SlotSelector     slotSelEq;
-    int              eqEditTarget = 0;
+    int              eqEditTarget = 1;   // which SLOT's filter is shown (1 or 2; "All" was removed v1.3.5)
     void             refreshEqTarget();          // point freqDisplay at the chosen EQ
     // === PER-SLOT EQ (end) ===
     int   envTargetSlot() const;               // 0/1/2 (the shared selected slot)
@@ -1975,6 +2165,13 @@ private:
     //-- Visuals
     FrequencyDisplay freqDisplay;
     LfoDisplay       lfoDisplay;     // per-slot LFO visual (FX box bottom; follows the FX slot selector)
+    // Per-slot FX + Chorus as Arp-style drag-faders (replaced the Drive/Reverb/Delay knobs; the knobs
+    // stay as hidden MIDI-learn shims). Accent = the edited slot's colour (yellow / pink).
+    SlotDragFader fxDriveFader, fxReverbFader, fxDelayFader;      // Drive amount + Reverb/Delay sends
+    SlotDragFader chorusMixFader, chorusRateFader, chorusDepthFader;
+    // (The LFO Sync/Rate faders were REMOVED - tempo sync lives INSIDE the LFO visual now: its Sync
+    //  button cycles Off/Sync/Grid and dragging the wave snaps through the musical rates.)
+    SlotDragFader keytrackFader;     // filter cutoff keytracking (right of the FILTER/EQ visual)
     juce::dsp::FFT   fft { SpectrumTap::fftOrder };
     juce::dsp::WindowingFunction<float> fftWindow
         { (size_t) SpectrumTap::fftSize, juce::dsp::WindowingFunction<float>::hann };
@@ -2073,6 +2270,8 @@ private:
     void updateKnobParamIds();
     void updateStripParamIds();
     void refreshDetailPanel();
+    void updateFxFaders(const DrumChannel::Slot& sl);   // push FX/Chorus/Keytrack/Sync fader values + slot accent
+    void refreshKeytrackFader();                         // Keytrack fader follows the active filter (F1/F2)
     void refreshChannelStrips();
     void refreshPatternButtons();
 

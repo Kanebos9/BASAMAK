@@ -38,6 +38,9 @@ static juce::String noteNameFor(double hz)
     return note;
 }
 
+// (The LFO Sync/Rate FADERS + their fader-mapping helpers were removed - tempo sync lives INSIDE the
+//  LfoDisplay now: kLfoSyncCPB + the Sync button + the snapped wave drag, see the LfoDisplay section.)
+
 static juce::String fmtSlot(const SlotParam& p, double v)
 {
     if (p.choices.size() > 0)
@@ -233,30 +236,571 @@ void WaveMorphDisplay::paint(juce::Graphics& g)
         const float folded = std::sin(v * (1.0f + warp * 4.0f) * 1.5707963f);
         return v + warp * (folded - v);
     };
-    juce::Path path; const int NP = 320;
-    for (int i = 0; i < NP; ++i) {
-        const float fx = (float) i / (float)(NP - 1);
-        float ph = fx * CYC;
-        if (fmMode) ph += (fmIndex / twoPi) * std::sin(ph * fmRatio * twoPi);
-        const float v  = fold(DrumChannel::oscShapeSample(wave, ph));   // all 14 shapes + wavefold warp
-        const float x  = in.getX() + fx * in.getWidth();
-        const float y  = cy - juce::jlimit(-1.0f, 1.0f, v) * hh;
-        if (i == 0) path.startNewSubPath(x, y); else path.lineTo(x, y);
+    const bool custom = wave >= DrumChannel::WvCustom;
+    const bool morphOn = custom && s != nullptr && getCustomFrame
+                      && (s->addSeg[0] > 0.001f || s->lfoAmt[3] > 0.001f);   // in MOTION: glide or WAVE LFO
+    auto drawWave = [&](juce::Rectangle<float> r, const float* tbl, juce::Colour col) {
+        juce::Path path; const int NP = 200;
+        const float rcy = r.getCentreY(), rhh = r.getHeight() * 0.5f - 1.0f;
+        for (int i = 0; i < NP; ++i) {
+            const float fx = (float) i / (float)(NP - 1);
+            float ph = fx * CYC;
+            if (fmMode) ph += (fmIndex / twoPi) * std::sin(ph * fmRatio * twoPi);
+            const float v = fold(DrumChannel::oscShapeSample(wave, ph, tbl));
+            const float x = r.getX() + fx * r.getWidth();
+            const float y = rcy - juce::jlimit(-1.0f, 1.0f, v) * rhh;
+            if (i == 0) path.startNewSubPath(x, y); else path.lineTo(x, y);
+        }
+        g.setColour(col); g.strokePath(path, juce::PathStrokeType(1.6f));
+    };
+    if (morphOn)
+    {   // WAVETABLE MOTION preview: EVERY frame the journey/LFO can actually reach, side by side
+        // with little arrows (user: "i should be able to see all enabled ones"). Glide = frames
+        // A..the first HOLD; a WAVE-LFO scan = the frames inside pos +/- half the LFO depth.
+        int f0 = 0, f1 = 3;
+        if (s->addSeg[0] > 0.001f)
+            f1 = s->addSeg[1] <= 0.001f ? 1 : (s->addSeg[2] <= 0.001f ? 2 : 3);
+        else
+        {   const float lo = juce::jlimit(0.0f, 1.0f, s->addPos - s->lfoAmt[3] * 0.5f);
+            const float hi = juce::jlimit(0.0f, 1.0f, s->addPos + s->lfoAmt[3] * 0.5f);
+            f0 = (int) std::floor(lo * 3.0f); f1 = (int) std::ceil(hi * 3.0f);
+            f1 = juce::jmax(f1, f0 + 1);   // always at least a 2-frame span while scanning
+        }
+        static const juce::Colour fc[4] = { juce::Colour(0xff35c0ff), juce::Colour(0xff7fd4ff),
+                                            juce::Colour(0xffb46bff), juce::Colour(0xff35b56a) };
+        const int   n   = f1 - f0 + 1;
+        const float gap = 11.0f;
+        const float ww  = (in.getWidth() - gap * (float)(n - 1)) / (float) n;
+        for (int f = f0; f <= f1; ++f)
+        {
+            auto rf = juce::Rectangle<float>(in.getX() + (float)(f - f0) * (ww + gap), in.getY(), ww, in.getHeight());
+            drawWave(rf, getCustomFrame(f), fc[f]);
+            if (f < f1)
+            {   const float ax = rf.getRight() + gap * 0.5f, ay = in.getCentreY();   // drawn arrow, never unicode
+                juce::Path ar; ar.addTriangle(ax + 4.0f, ay, ax - 2.5f, ay - 3.5f, ax - 2.5f, ay + 3.5f);
+                g.setColour(juce::Colour(0xffe8bf4d)); g.fillPath(ar);
+                g.drawLine(ax - 5.5f, ay, ax - 2.5f, ay, 1.2f);
+            }
+        }
     }
-    g.setColour(juce::Colour(0xff35c0ff)); g.strokePath(path, juce::PathStrokeType(1.7f));
+    else
+        drawWave(in, (custom && getCustomTbl) ? getCustomTbl() : nullptr, juce::Colour(0xff35c0ff));
 
-    // Wave name under it (the fader shows it too; this confirms what's drawn).
+    // Wave name under it - for Custom the INVITATION lives here too, so nothing ever covers the
+    // wave drawing itself (the old floating pill blocked the B wave in the morph split view).
     if (! compact) {
         g.setFont(juce::Font(10.5f, juce::Font::bold));
-        g.setColour(juce::Colour(0xff8aa0c8));
-        g.drawText(juce::String(wave + 1) + "-" + DrumChannel::oscShapeName(wave), labelRow,
+        g.setColour(custom ? juce::Colour(0xffe8bf4d) : juce::Colour(0xff8aa0c8));
+        g.drawText(custom ? juce::String(wave + 1) + "-Custom - CLICK to draw harmonics"
+                          : juce::String(wave + 1) + "-" + DrumChannel::oscShapeName(wave), labelRow,
                    juce::Justification::centred, false);
+    }
+    if (custom && hoverEd) {   // hover = the whole preview reads as a button (accent frame)
+        g.setColour(juce::Colour(0xffe8bf4d).withAlpha(0.8f));
+        g.drawRoundedRectangle(b.reduced(1.0f), 4.0f, 1.6f);
     }
 }
 
 void WaveMorphDisplay::mouseDown(const juce::MouseEvent& e)
 {
-    juce::ignoreUnused(e);   // From/To are now chosen with the faders flanking the wave (not click-to-cycle)
+    juce::ignoreUnused(e);
+    auto* s = getSlot ? getSlot() : nullptr;   // Wave = Custom -> clicking the drawing opens the harmonic editor
+    if (s != nullptr && s->oscShape >= DrumChannel::WvCustom && onOpenCustom) onOpenCustom();
+}
+
+//==============================================================================
+// HarmonicEditor (ADDITIVE Custom wave) - SIDE-BY-SIDE spectra: A (left, the note's start) and
+// B (right, where Morph travels to). Each half: presets | freehand WAVE strip | 32 harmonic bars
+// with interval watermarks. The Morph fader lives in the header between the title and the X.
+//==============================================================================
+void HarmonicEditor::strokeToHarmonics(int f)
+{
+    float* vals = HV(f); float* phs = HP(f); const float* w0 = WP(f);
+    float mx = 1.0e-6f;
+    float mag[DrumChannel::ADD_HARM];
+    for (int k = 0; k < DrumChannel::ADD_HARM; ++k)
+    {
+        double S = 0.0, C = 0.0;
+        const double w = 2.0 * juce::MathConstants<double>::pi * (double)(k + 1) / (double) WPTS;
+        for (int n = 0; n < WPTS; ++n) { S += w0[n] * std::sin(w * n); C += w0[n] * std::cos(w * n); }
+        mag[k] = (float)(2.0 / WPTS * std::sqrt(S * S + C * C));
+        phs[k] = (float) std::atan2(C, S);
+        mx = juce::jmax(mx, mag[k]);
+    }
+    for (int k = 0; k < DrumChannel::ADD_HARM; ++k)
+    {
+        vals[k] = juce::jlimit(0.0f, 1.0f, mag[k] / mx);
+        if (vals[k] < 0.02f) { vals[k] = 0.0f; phs[k] = 0.0f; }   // tidy the bar view (inaudible bins)
+    }
+}
+
+void HarmonicEditor::rebuildStrokeFromHarmonics(int f)
+{
+    float* vals = HV(f); float* phs = HP(f); float* wp = WP(f);
+    float pk = 1.0e-6f;
+    for (int n = 0; n < WPTS; ++n)
+    {
+        double v = 0.0;
+        for (int k = 0; k < DrumChannel::ADD_HARM; ++k)
+            if (vals[k] > 0.001f)
+                v += vals[k] * std::sin(2.0 * juce::MathConstants<double>::pi * (double)(k + 1) * n / (double) WPTS + phs[k]);
+        wp[n] = (float) v; pk = juce::jmax(pk, std::abs(wp[n]));
+    }
+    for (int n = 0; n < WPTS; ++n) wp[n] /= pk;
+}
+
+void HarmonicEditor::paint(juce::Graphics& g)
+{
+    auto bb = getLocalBounds().toFloat();
+    g.setColour(juce::Colour(0xf0141428)); g.fillRoundedRectangle(bb, 6.0f);
+    g.setColour(accent); g.drawRoundedRectangle(bb.reduced(0.5f), 6.0f, 1.4f);
+    g.setFont(juce::Font(12.5f, juce::Font::bold)); g.setColour(accent);
+    g.drawText("ADDITIVE WAVETABLE - SLOT " + juce::String(slotIdx + 1), 12, 2, 260, 16,
+               juce::Justification::centredLeft, false);
+    g.setColour(juce::Colour(0xffc05050)); g.setFont(juce::Font(13.0f, juce::Font::bold));
+    g.drawText("X", closeRect(), juce::Justification::centred, false);
+
+    static const char* iv[12] = { "Root", "b2", "2nd", "m3", "3rd", "4th", "b5", "5th", "m6", "6th", "b7", "7th" };
+    static const char* fl[NF] = { "A", "B", "C", "D" };
+    for (int f = 0; f < NF; ++f)
+    {
+        float* vals = HV(f);
+        const juce::Colour fc = frameCol(f);
+        g.setColour(fc); g.setFont(juce::Font(13.0f, juce::Font::bold));
+        g.drawText(fl[f], (int) frameRect(f).getX(), (int) frameRect(f).getY(), 14, 15,
+                   juce::Justification::centred, false);
+        {   // shape DROPDOWN: what this frame holds ("Bell", an analyzed file's name, or "Custom")
+            auto r = shapeBtnRect(f);
+            g.setColour(juce::Colour(0xff223046)); g.fillRoundedRectangle(r, 3.0f);
+            g.setColour(juce::Colour(0xff9fd1ff)); g.setFont(juce::Font(10.5f, juce::Font::bold));
+            const juce::String nm = frameLabel[f].isNotEmpty() ? frameLabel[f]
+                                  : (loadedShape[f] >= 0 ? juce::String(DrumChannel::oscShapeName(loadedShape[f]))
+                                                         : juce::String("Custom"));
+            g.drawText(nm, r.reduced(8.0f, 0.0f), juce::Justification::centredLeft, false);
+            juce::Path tri; const float tx = r.getRight() - 12.0f, ty = r.getCentreY();   // drawn triangle, never unicode
+            tri.addTriangle(tx - 4.0f, ty - 2.5f, tx + 4.0f, ty - 2.5f, tx, ty + 3.5f);
+            g.fillPath(tri);
+        }
+        {   // ANALYZE SAMPLE = a command cell (blue, like the picker's command rows)
+            auto r = smpRect(f);
+            g.setColour(juce::Colour(0xff223046)); g.fillRoundedRectangle(r, 3.0f);
+            g.setColour(juce::Colour(0xff9fd1ff)); g.setFont(juce::Font(10.0f, juce::Font::bold));
+            g.drawText("Analyze sample", r, juce::Justification::centred, false);
+        }
+        {   // Clear = an ACTION (red), wipes this frame
+            auto r = clrRect(f);
+            g.setColour(juce::Colour(0xff4a2430)); g.fillRoundedRectangle(r, 3.0f);
+            g.setColour(juce::Colour(0xffe08a8a)); g.setFont(juce::Font(10.5f, juce::Font::bold));
+            g.drawText("Clear", r, juce::Justification::centred, false);
+        }
+        {   // freehand WAVE strip (the actual playable cycle, band-limited)
+            auto wr = waveStripRect(f);
+            g.setColour(juce::Colour(0xff10101f)); g.fillRoundedRectangle(wr, 3.0f);
+            g.setColour(fc.withAlpha(0.35f)); g.drawRoundedRectangle(wr, 3.0f, 1.0f);
+            g.setColour(juce::Colour(0xff262640)); g.drawHorizontalLine((int) wr.getCentreY(), wr.getX(), wr.getRight());
+            const float* wp = WP(f);
+            juce::Path path;
+            for (int n = 0; n < WPTS; ++n)
+            {
+                const float x = wr.getX() + 2.0f + (wr.getWidth() - 4.0f) * (float) n / (float)(WPTS - 1);
+                const float y = wr.getCentreY() - juce::jlimit(-1.0f, 1.0f, wp[n]) * (wr.getHeight() * 0.5f - 3.0f);
+                if (n == 0) path.startNewSubPath(x, y); else path.lineTo(x, y);
+            }
+            g.setColour(fc); g.strokePath(path, juce::PathStrokeType(1.5f));
+            g.setColour(juce::Colour(0xff6a7290)); g.setFont(juce::Font(8.5f, juce::Font::bold));
+            g.drawText("draw the WAVE", wr.reduced(4.0f, 1.0f), juce::Justification::topRight, false);
+            if (frameMsg[f].isNotEmpty())
+            { g.setColour(juce::Colour(0xffff9a3c)); g.setFont(juce::Font(9.5f, juce::Font::bold));
+              g.drawText(frameMsg[f], wr.reduced(4.0f, 1.0f), juce::Justification::bottomLeft, false); }
+        }
+        auto a = barArea(f);
+        const float bw = a.getWidth() / (float) DrumChannel::ADD_HARM;
+        for (int i = 0; i < DrumChannel::ADD_HARM; ++i)
+        {
+            auto br = juce::Rectangle<float>(a.getX() + i * bw + 0.5f, a.getY(), bw - 1.0f, a.getHeight());
+            g.setColour(juce::Colour(0xff1c1c34)); g.fillRect(br);
+            if (i == 0) { g.setColour(fc.withAlpha(0.5f)); g.drawRect(br, 1.0f); }   // Root = the anchor bar
+            const float v = juce::jlimit(0.0f, 1.0f, vals[i]);
+            if (v > 0.001f) { g.setColour(fc.withAlpha(0.85f));
+                              g.fillRect(br.withTop(br.getBottom() - v * br.getHeight())); }
+            {   // rotated interval watermark (what this bar ADDS to the played note)
+                const int semis = juce::roundToInt(12.0 * std::log2((double)(i + 1)));
+                const juce::String lbl = i == 0 ? juce::String("Root")
+                                       : (semis % 12 == 0 ? "Oct" + juce::String(semis / 12)
+                                                          : juce::String(iv[semis % 12]));
+                juce::Graphics::ScopedSaveState ss(g);
+                g.addTransform(juce::AffineTransform::rotation(-juce::MathConstants<float>::halfPi,
+                                                               br.getCentreX(), br.getCentreY()));
+                g.setColour(v > 0.4f ? juce::Colours::black.withAlpha(0.55f) : juce::Colour(0x60aeb8d4));
+                g.setFont(juce::Font(7.5f, juce::Font::bold));
+                g.drawText(lbl, (int)(br.getCentreX() - br.getHeight() * 0.5f), (int)(br.getCentreY() - 5.0f),
+                           (int) br.getHeight(), 10, juce::Justification::centred, false);
+            }
+            if ((i % 8) == 0 || i == DrumChannel::ADD_HARM - 1)
+            { g.setColour(juce::Colour(0xff7d86a8)); g.setFont(juce::Font(8.0f, juce::Font::bold));
+              g.drawText(juce::String(i + 1), (int) br.getX() - 6, (int) a.getBottom() + 1, (int) bw + 12, 10,
+                         juce::Justification::centred, false); }
+        }
+        {   // pitch warning per frame: the heard pitch = the lowest STRONG bar
+            int lowIdx = -1; float mx2 = 0.0f;
+            for (int i = 0; i < DrumChannel::ADD_HARM; ++i) { mx2 = juce::jmax(mx2, vals[i]);
+                if (lowIdx < 0 && vals[i] > 0.05f) lowIdx = i; }
+            if (mx2 > 0.05f && lowIdx > 0)
+            {
+                g.setColour(juce::Colour(0xffff9a3c)); g.setFont(juce::Font(9.0f, juce::Font::bold));
+                g.drawText("Root empty - pitch = bar " + juce::String(lowIdx + 1),
+                           (int) a.getX(), (int) a.getY() + 1, (int) a.getWidth(), 11, juce::Justification::centred, false);
+            }
+        }
+    }
+    {   // ---- POSITION band (between the rows): where in A..D the sound sits ----
+        auto pr = posRect();
+        g.setColour(juce::Colour(0xffd8e0f0)); g.setFont(juce::Font(10.5f, juce::Font::bold));
+        g.drawText("Position", 8, (int) pr.getY(), 66, (int) pr.getHeight(), juce::Justification::centredLeft, false);
+        g.setColour(juce::Colour(0xff26264a)); g.fillRoundedRectangle(pr, 3.0f);
+        const bool gliding = seg[0] > 0.001f;
+        for (int f = 0; f < NF; ++f)   // A/B/C/D ticks: short STUBS top+bottom, the letter clear between
+        {
+            const float tx = pr.getX() + 6.0f + (pr.getWidth() - 12.0f) * (float) f / (float)(NF - 1);
+            g.setColour(frameCol(f).withAlpha(gliding ? 0.4f : 0.9f));
+            g.drawVerticalLine((int) tx, pr.getY() + 1.0f, pr.getY() + 4.0f);
+            g.drawVerticalLine((int) tx, pr.getBottom() - 4.0f, pr.getBottom() - 1.0f);
+            g.setFont(juce::Font(9.0f, juce::Font::bold));
+            g.drawText(fl[f], (int) tx - 6, (int) pr.getY() + 1, 12, (int) pr.getHeight() - 2,
+                       juce::Justification::centred, false);
+        }
+        if (gliding)
+        {   const int endF = seg[1] <= 0.001f ? 1 : (seg[2] <= 0.001f ? 2 : 3);   // where the journey stops
+            g.setColour(juce::Colour(0xffaeb8d4)); g.setFont(juce::Font(9.5f, juce::Font::bold));
+            g.drawText("glide runs A > " + juce::String::charToString((juce::juce_wchar)('A' + endF))
+                       + " each note", pr, juce::Justification::centred, false); }
+        else
+        {   const float hx = pr.getX() + 6.0f + (pr.getWidth() - 12.0f) * juce::jlimit(0.0f, 1.0f, wtPos);
+            g.setColour(accent.withAlpha(0.30f));
+            g.fillRoundedRectangle(pr.withRight(hx), 3.0f);
+            g.setColour(juce::Colours::white); g.fillEllipse(hx - 4.0f, pr.getCentreY() - 4.0f, 8.0f, 8.0f); }
+    }
+    for (int k = 0; k < NF - 1; ++k)
+    {   // THREE per-leg GLIDE boxes (A>B / B>C / C>D): drag = travel time, hard left = HOLD.
+        // A leg the journey can't reach (an earlier leg holds) draws dimmed.
+        auto mr = segRect(k);
+        const bool reachable = k == 0 || (seg[0] > 0.001f && (k == 1 || seg[1] > 0.001f));
+        const float al = reachable ? 1.0f : 0.4f;
+        g.setColour(juce::Colour(0xff26264a).withAlpha(al)); g.fillRoundedRectangle(mr, 3.0f);
+        if (seg[k] > 0.001f)
+        {   const float p = juce::jlimit(0.0f, 1.0f, std::log(seg[k] / 0.05f) / std::log(8.0f / 0.05f));
+            g.setColour(frameCol(k + 1).withAlpha(0.30f * al));
+            g.fillRoundedRectangle(mr.withWidth(juce::jmax(5.0f, (0.12f + 0.88f * p) * mr.getWidth())), 3.0f); }
+        g.setColour(juce::Colour(0xffd8e0f0).withAlpha(al)); g.setFont(juce::Font(10.0f, juce::Font::bold));
+        const juce::String leg = juce::String::charToString((juce::juce_wchar)('A' + k)) + ">"
+                               + juce::String::charToString((juce::juce_wchar)('B' + k));
+        g.drawText(seg[k] > 0.001f ? leg + " " + juce::String(seg[k], 2) + " s"
+                                   : leg + (k == 0 ? " Off" : " Hold"),
+                   mr, juce::Justification::centred, false);
+    }
+    g.setColour(juce::Colour(0xff6a7290)); g.setFont(juce::Font(9.0f, juce::Font::bold));
+    g.drawText("4 frames A > D - Position picks the mix; the A>B / B>C / C>D boxes = per-leg glide times "
+               "(left = hold) - the WAVE LFO scans live - LEFT-drag = draw, RIGHT-drag = erase",
+               12, getHeight() - 13, getWidth() - 24, 11, juce::Justification::centredLeft, false);
+}
+
+void HarmonicEditor::applyAt(const juce::MouseEvent& e, bool erase, int f)
+{
+    float* vals = HV(f); float* phs = HP(f);
+    auto a = barArea(f);
+    const int i = juce::jlimit(0, DrumChannel::ADD_HARM - 1,
+                               (int) ((e.position.x - a.getX()) / (a.getWidth() / (float) DrumChannel::ADD_HARM)));
+    const float lvl = erase ? 0.0f : juce::jlimit(0.0f, 1.0f, (a.getBottom() - e.position.y) / a.getHeight());
+    if (std::abs(lvl - vals[i]) < 1.0e-3f) return;
+    vals[i] = lvl;
+    if (lvl <= 0.001f) phs[i] = 0.0f;             // an erased bar forgets its phase
+    rebuildStrokeFromHarmonics(f);                 // the wave strip follows the bars
+    if (onChange) onChange();
+    repaint();
+}
+
+void HarmonicEditor::mouseDown(const juce::MouseEvent& e)
+{
+    if (closeRect().contains(e.position)) { if (onClose) onClose(); return; }
+    if (posRect().contains(e.position))   { posDragging = true; mouseDrag(e); return; }
+    for (int k = 0; k < NF - 1; ++k)
+        if (segRect(k).contains(e.position)) { segDragging = k; mouseDrag(e); return; }
+    const int f = frameAt(e.position);
+    if (f < 0) return;
+    if (shapeBtnRect(f).contains(e.position))
+    {   // shape dropdown: every entry is a RECIPE (built from sine harmonics, exact by construction)
+        juce::PopupMenu m;
+        for (int i = 0; i < DrumChannel::oscShapeCount() - 1; ++i)   // 0..13 (Custom itself excluded)
+            m.addItem(i + 1, juce::String(DrumChannel::oscShapeName(i)), true, loadedShape[f] == i);
+        menuOpen = true;
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(
+                            localAreaToGlobal(shapeBtnRect(f).getSmallestIntegerContainer())),
+            [this, f](int r) {
+                menuOpen = false;
+                if (r > 0) { frameLabel[f].clear(); frameMsg[f].clear(); loadShapeSpectrum(f, r - 1); }
+            });
+        return;
+    }
+    if (smpRect(f).contains(e.position)) { analyzeSample(f); return; }
+    if (clrRect(f).contains(e.position))
+    {   // Clear this frame (bars to zero; phases forgotten)
+        float* vals = HV(f); float* phs = HP(f);
+        for (int k = 0; k < DrumChannel::ADD_HARM; ++k) { vals[k] = 0.0f; phs[k] = 0.0f; }
+        loadedShape[f] = -1; frameLabel[f].clear(); frameMsg[f].clear();
+        rebuildStrokeFromHarmonics(f);
+        if (onChange) onChange();
+        if (onDragEnd) onDragEnd();
+        repaint(); return;
+    }
+    if (waveStripRect(f).contains(e.position))
+    { waveDrawing = true; dragFrame = f; waveLastI = -1; loadedShape[f] = -1; frameLabel[f].clear(); mouseDrag(e); return; }
+    if (barArea(f).contains(e.position))
+    { drawing = true; dragFrame = f; loadedShape[f] = -1; frameLabel[f].clear();
+      applyAt(e, e.mods.isRightButtonDown() || e.mods.isPopupMenu(), f); }
+}
+
+void HarmonicEditor::mouseDrag(const juce::MouseEvent& e)
+{
+    if (posDragging)
+    {   // POSITION: where in the A..D strip the (static) sound sits. SNAPS onto the exact frame
+        // ticks when close (a letter = purely that frame - there is no per-frame on/off, the
+        // position IS the selector); hold SHIFT for free placement (the FM-Ratio convention).
+        auto pr = posRect();
+        float p = juce::jlimit(0.0f, 1.0f, (e.position.x - pr.getX() - 6.0f) / juce::jmax(1.0f, pr.getWidth() - 12.0f));
+        if (! e.mods.isShiftDown())
+            for (int f = 0; f < NF; ++f)
+            {   const float tick = (float) f / (float)(NF - 1);
+                if (std::abs(p - tick) < 0.035f) { p = tick; break; }
+            }
+        wtPos = p;
+        if (onChange) onChange();
+        repaint(); return;
+    }
+    if (segDragging >= 0)
+    {   // per-leg glide time: hard left = HOLD (leg 0 = glide Off), then log 0.05 .. 8 s
+        auto mr = segRect(segDragging);
+        const float f = juce::jlimit(0.0f, 1.0f, (e.position.x - mr.getX()) / juce::jmax(1.0f, mr.getWidth()));
+        seg[segDragging] = f < 0.06f ? 0.0f : 0.05f * std::pow(8.0f / 0.05f, (f - 0.06f) / 0.94f);
+        if (onChange) onChange();
+        repaint(); return;
+    }
+    if (waveDrawing)
+    {
+        const int f = dragFrame;
+        float* wp = WP(f);
+        auto wr = waveStripRect(f);
+        const int   i = juce::jlimit(0, WPTS - 1,
+                        (int) ((e.position.x - wr.getX() - 2.0f) / (wr.getWidth() - 4.0f) * (float)(WPTS - 1)));
+        const float v = juce::jlimit(-1.0f, 1.0f, (wr.getCentreY() - e.position.y) / (wr.getHeight() * 0.5f - 3.0f));
+        // Smooth BRUSH, never a needle: a single click used to write a 1-sample impulse - which
+        // contains EVERY frequency (all 32 bars jumped to full; correct Fourier, terrible UX).
+        auto stamp = [&](int centre, float val, int radius)
+        {
+            for (int off = -radius; off <= radius; ++off)
+            {
+                const int n = centre + off;
+                if (n < 0 || n >= WPTS) continue;
+                const float w = 0.5f * (1.0f + std::cos(juce::MathConstants<float>::pi * (float) off / (float)(radius + 1)));
+                wp[n] += (val - wp[n]) * w;
+            }
+        };
+        if (waveLastI < 0) stamp(i, v, 6);                       // first touch = a soft bump
+        else
+        {
+            for (int n = juce::jmin(waveLastI, i); n <= juce::jmax(waveLastI, i); ++n)   // connect the swept span
+            {
+                const float t = waveLastI == i ? 1.0f : (float)(n - waveLastI) / (float)(i - waveLastI);
+                wp[n] = wp[waveLastI] + (v - wp[waveLastI]) * (waveLastI <= i ? t : 1.0f - t);
+            }
+            stamp(i, v, 3);                                      // soften the stroke's leading edge
+        }
+        waveLastI = i;
+        strokeToHarmonics(f);                      // stroke -> bars + phases, live
+        if (onChange) onChange();
+        repaint();
+        return;
+    }
+    if (drawing) applyAt(e, e.mods.isRightButtonDown() || e.mods.isPopupMenu(), dragFrame);
+}
+
+// RECIPES (user direction B): every factory shape expressed as WHAT IT IS - a stack of sine
+// harmonics (magnitude + phase per bar). The 8 bank shapes mirror OscShapeBank's authored recipes
+// EXACTLY (keep in sync with DrumChannel.cpp - the mirror rule, like kUiScaleTab); the analytic
+// shapes use their textbook Fourier series. Identity is BY CONSTRUCTION: the dropdown names what
+// it just placed - no measuring, no tolerance-matching, no untruthful visuals.
+static void addShapeRecipe(int shape, float* mag, float* ph)
+{
+    constexpr int N = DrumChannel::ADD_HARM;
+    for (int k = 0; k < N; ++k) { mag[k] = 0.0f; ph[k] = 0.0f; }
+    auto g = [](int h, float c, float w){ return std::exp(-((h - c) * (h - c)) / (2.0f * w * w)); };
+    for (int k = 1; k <= N; ++k)
+    {
+        float m = 0.0f, p = 0.0f;
+        switch (shape)
+        {
+            case 0: m = (k == 1) ? 1.0f : 0.0f; break;                                   // Sine
+            case 1: m = 1.0f / (float)(4 * k * k - 1); p = -juce::MathConstants<float>::halfPi; break;   // Hump (half-sine bump)
+            case 2: if (k & 1) { m = 1.0f / (float)(k * k);                              // Triangle
+                                 p = (((k - 1) / 2) & 1) ? juce::MathConstants<float>::pi : 0.0f; } break;
+            case 3: if (k & 1) m = 1.0f / (float) k; break;                              // Square (odd 1/k)
+            case 4: m = 1.0f / (float) k; p = juce::MathConstants<float>::pi; break;     // Saw (ramp up)
+            case 5: {                                                                     // Pulse (25% duty)
+                const float d = 0.25f, kk = (float) k, tp = juce::MathConstants<float>::twoPi;
+                const float A = (1.0f - std::cos(tp * kk * d)) / kk;                     // sin component
+                const float B = std::sin(tp * kk * d) / kk;                              // cos component
+                m = std::sqrt(A * A + B * B); p = std::atan2(B, A); break; }
+            case 6:  m = g(k, 3, 1.2f) + 0.6f * g(k, 7, 2.0f); break;                    // Vowel A
+            case 7:  m = g(k, 2, 1.0f) + 0.6f * g(k, 5, 1.5f); break;                    // Vowel O
+            case 8:  m = g(k, 6, 1.4f); break;                                           // Formant
+            case 9:  if ((k & (k - 1)) == 0) m = 1.0f / (std::log2((float) k) + 1.0f); break;   // Organ (octaves)
+            case 10: { static const int pr[] = { 1, 2, 3, 5, 7, 11 };                    // Bell (prime partials)
+                       for (int q : pr) if (q == k) m = 1.0f / (float) k; break; }
+            case 11: if (k & 1) m = 1.0f / std::sqrt((float) k); break;                  // Glass (bright odd)
+            case 12: if ((k & 1) && k <= 24) m = 1.0f / (float) k; break;                // Reed (clarinet)
+            case 13: m = (1.0f / (float) k) * (1.0f + 1.5f * g(k, 5, 2.0f)); break;      // Brass (saw + formant)
+            default: break;
+        }
+        mag[k - 1] = m; ph[k - 1] = p;
+    }
+    float mx = 1.0e-6f; for (int k = 0; k < N; ++k) mx = juce::jmax(mx, mag[k]);
+    for (int k = 0; k < N; ++k) { mag[k] /= mx; if (mag[k] < 0.005f) { mag[k] = 0.0f; ph[k] = 0.0f; } }
+}
+
+void HarmonicEditor::loadShapeSpectrum(int f, int shape)
+{
+    addShapeRecipe(shape, HV(f), HP(f));           // the recipe IS the spectrum (exact, deterministic)
+    loadedShape[f] = shape;                        // identity by construction, not by matching
+    rebuildStrokeFromHarmonics(f);                 // show the reconstructed cycle in the strip
+    if (onChange) onChange();
+    if (onDragEnd) onDragEnd();
+    repaint();
+}
+
+// ANALYZE SAMPLE: pick an audio file, pitch-detect it (the tuner's shared NSDF detector), then
+// measure its 32 harmonics (Goertzel at k*f0, magnitude + phase) into this frame's bars. The
+// analysis window skips the attack (starts 25% in) so the SUSTAIN's spectrum is captured.
+// MESSAGE THREAD (async chooser callback); unpitched material reports instead of guessing.
+void HarmonicEditor::analyzeSample(int f)
+{
+    menuOpen = true;   // the OS file dialog must not trip the outside-click closer
+    chooser = std::make_unique<juce::FileChooser>(
+        "Analyze an audio file into frame " + juce::String::charToString((juce::juce_wchar)('A' + f)),
+        UserPaths::samples(), "*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3");
+    chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+        [this, f](const juce::FileChooser& fc)
+        {
+            menuOpen = false;
+            const juce::File file = fc.getResult();
+            if (file == juce::File()) return;
+            juce::AudioFormatManager afm; afm.registerBasicFormats();
+            std::unique_ptr<juce::AudioFormatReader> rd (afm.createReaderFor(file));
+            if (rd == nullptr || rd->lengthInSamples < 512 || rd->numChannels < 1)
+            { frameMsg[f] = "can't read that file"; repaint(); return; }
+            const int len = (int) juce::jmin<juce::int64>(rd->lengthInSamples, 1 << 21);
+            juce::AudioBuffer<float> tmp((int) rd->numChannels, len);
+            rd->read(&tmp, 0, len, 0, true, true);
+            std::vector<float> mono((size_t) len, 0.0f);
+            for (int c2 = 0; c2 < (int) rd->numChannels; ++c2)
+            {   const float* src = tmp.getReadPointer(c2);
+                for (int n = 0; n < len; ++n) mono[(size_t) n] += src[n] / (float) rd->numChannels; }
+            const int start = juce::jlimit(0, len - 256, len / 4);       // skip the attack
+            const int W = juce::jmin(16384, len - start);
+            const double fs = rd->sampleRate;
+            const double f0 = basamakDetectPitch(mono.data() + start, W, fs);
+            if (f0 <= 0.0) { frameMsg[f] = "no clear pitch found"; repaint(); return; }
+            float* vals = HV(f); float* phsF = HP(f);
+            float mag[DrumChannel::ADD_HARM]; float mx = 1.0e-6f;
+            for (int k = 0; k < DrumChannel::ADD_HARM; ++k)
+            {
+                const double fk = f0 * (double)(k + 1);
+                mag[k] = 0.0f; phsF[k] = 0.0f;
+                if (fk > fs * 0.45) continue;                            // above the file's usable band
+                double S = 0.0, Co = 0.0; const double w = 2.0 * juce::MathConstants<double>::pi * fk / fs;
+                for (int n = 0; n < W; ++n)
+                { const double s2 = (double) mono[(size_t)(start + n)];
+                  S += s2 * std::sin(w * n); Co += s2 * std::cos(w * n); }
+                mag[k] = (float) std::sqrt(S * S + Co * Co);
+                phsF[k] = (float) std::atan2(Co, S);
+                mx = juce::jmax(mx, mag[k]);
+            }
+            for (int k = 0; k < DrumChannel::ADD_HARM; ++k)
+            {
+                vals[k] = juce::jlimit(0.0f, 1.0f, mag[k] / mx);
+                if (vals[k] < 0.02f) { vals[k] = 0.0f; phsF[k] = 0.0f; }
+            }
+            loadedShape[f] = -1;
+            frameLabel[f] = file.getFileNameWithoutExtension();
+            frameMsg[f].clear();
+            rebuildStrokeFromHarmonics(f);
+            if (onChange) onChange();
+            if (onDragEnd) onDragEnd();
+            repaint();
+        });
+}
+
+// Name a half on OPEN if its saved bars equal a factory recipe (so a sound saved as "Bell" reopens
+// saying Bell). Hand-drawn spectra match nothing -> "Custom".
+void HarmonicEditor::detectLoadedShape(int f)
+{
+    const float* vals = HV(f); const float* phs = HP(f);
+    loadedShape[f] = -1;
+    float rm[DrumChannel::ADD_HARM], rp[DrumChannel::ADD_HARM];
+    for (int sh = 0; sh < DrumChannel::oscShapeCount() - 1; ++sh)
+    {
+        addShapeRecipe(sh, rm, rp);
+        bool ok = true;
+        for (int k = 0; k < DrumChannel::ADD_HARM && ok; ++k)
+        {
+            if (std::abs(vals[k] - rm[k]) > 0.01f) ok = false;
+            else if (rm[k] > 0.05f)
+            {   float dp = std::abs(phs[k] - rp[k]);
+                while (dp > juce::MathConstants<float>::pi) dp = std::abs(dp - juce::MathConstants<float>::twoPi);
+                if (dp > 0.2f) ok = false; }
+        }
+        if (ok) { loadedShape[f] = sh; return; }
+    }
+}
+
+juce::String HarmonicEditor::getTooltip()
+{
+    const auto p = getMouseXYRelative().toFloat();
+    if (posRect().contains(p))
+        return "POSITION: where in the A > D strip the sound sits. The two neighbouring frames "
+               "crossfade; the handle SNAPS onto the letters (a letter = purely that frame - hold "
+               "SHIFT for free placement). Greyed while glide is on (the note travels instead).";
+    for (int k = 0; k < NF - 1; ++k)
+        if (segRect(k).contains(p))
+        {
+            const juce::String from = juce::String::charToString((juce::juce_wchar)('A' + k));
+            const juce::String to   = juce::String::charToString((juce::juce_wchar)('B' + k));
+            return "GLIDE " + from + ">" + to + ": how long each note takes to travel this leg of the "
+                   "strip. Hard left = " + (k == 0 ? juce::String("OFF (no glide - the sound sits at Position)")
+                                                   : "HOLD (the journey stops at " + from + " and stays)") + ". "
+                   "Example: A>B 0.1 s + B>C 2 s + C>D Hold = a fast strike colour, a slow bloom, then it sits on C.";
+        }
+    const int f = frameAt(p);
+    if (f >= 0)
+    {
+        const juce::String fn = juce::String::charToString((juce::juce_wchar)('A' + f));
+        if (shapeBtnRect(f).contains(p))
+            return "Load a ready-made wave into frame " + fn + ". Every entry is placed as its "
+                   "EXACT harmonic recipe (a stack of sines) - edit any bar afterwards and it becomes Custom.";
+        if (smpRect(f).contains(p))
+            return "ANALYZE SAMPLE: pick an audio file - its pitch is detected and its harmonics are "
+                   "measured into frame " + fn + "'s bars. Analyze different files into different frames, "
+                   "then Glide or the WAVE LFO morphs between the real sounds.";
+        if (clrRect(f).contains(p))
+            return "Clear frame " + fn + " (all bars to zero).";
+        if (waveStripRect(f).contains(p))
+            return "Draw ONE CYCLE of frame " + fn + "'s wave freehand - it is analysed into the "
+                   "bars below automatically.";
+        if (barArea(f).contains(p))
+            return "Frame " + fn + ": each bar = one harmonic of the note you play; its label "
+                   "says what it adds (Root, Oct, 5th, 3rd...). LEFT-drag = draw, RIGHT-drag = erase. "
+                   "The lowest strong bar sets the pitch you hear.";
+    }
+    return "Additive WAVETABLE: four drawable frames (A > D). Position picks the mix, Glide travels "
+           "it each note, the WAVE LFO (LFO visual) scans it live.";
 }
 
 juce::String WaveMorphDisplay::getTooltip()
@@ -677,7 +1221,10 @@ void SlotEditor::init(int idx, MidiLearnManager& mlm, juce::LookAndFeel* knobLNF
     fromFader->textFromValueFunction = [](double v) { const int i = juce::roundToInt(v);
         return juce::String(i + 1) + "-" + juce::String(DrumChannel::oscShapeName(i)); };
     fromFader->setTooltip("Wave: the oscillator's waveform - slide through all shapes (Sine, Hump, Tri, Square, Saw, "
-                          "Pulse, Vowel A/O, Formant, Organ, Bell, Glass, Reed, Brass).");
+                          "Pulse, Vowel A/O, Formant, Organ, Bell, Glass, Reed, Brass, Custom).\n\n"
+                          "- CUSTOM (last) = ADDITIVE: click the wave drawing to open DRAW HARMONICS and paint "
+                          "your own harmonic levels. The drawn wave is saved with the sound and works with every "
+                          "control (envelopes, filters, unison, FM, Warp, FX).");
     fromFader->onValueChange = [this] {
         if (auto* s = getSlot ? getSlot() : nullptr) {
             s->oscShape = (int) std::lround(fromFader->getValue()); s->oscShapeB = s->oscShape;   // single wave (no morph)
@@ -2067,19 +2614,12 @@ void VoiceModDisplay::mouseDoubleClick(const juce::MouseEvent&)
 //==============================================================================
 // FrequencyDisplay
 //==============================================================================
-static const juce::Colour kEqCols[DrumChannel::NUM_EQ_BANDS] = {
-    juce::Colour(0xff35c0ff),  // HP
-    juce::Colour(0xff5ad17a),  // bell 1
-    juce::Colour(0xffffc23a),  // bell 2
-    juce::Colour(0xffff7ab0),  // bell 3
-    juce::Colour(0xffb98cff),  // LP
-};
-
-void FrequencyDisplay::setBands(DrumChannel::EqBand* b, int filterType, float cutoff, float reso, float envAmt,
-                                double sr, bool showFilt)
+void FrequencyDisplay::setFilters(int t0, float c0, float r0, float e0,
+                                  int t1, float c1, float r1, float e1, double sr)
 {
-    bands = b; fType = filterType; fCutoff = cutoff; fReso = reso; fEnvAmt = envAmt;
-    sampleRate = sr; showFilter = showFilt;
+    fType[0] = t0; fCutoff[0] = c0; fReso[0] = r0; fEnvAmt[0] = e0;
+    fType[1] = t1; fCutoff[1] = c1; fReso[1] = r1; fEnvAmt[1] = e1;
+    sampleRate = sr; showFilter = true;
     repaint();
 }
 
@@ -2098,61 +2638,24 @@ void FrequencyDisplay::decayTick()
     repaint();
 }
 
-// Combined EQ magnitude (dB) at frequency f from the enabled bands.
-float FrequencyDisplay::responseDb(float f) const
-{
-    if (bands == nullptr || sampleRate <= 0.0) return 0.0f;
-    const double nyq = sampleRate * 0.49;
-    double m = 1.0;
-    if (bands[DrumChannel::EQ_HP].on) {
-        const double fr = juce::jlimit(20.0, nyq, (double) bands[DrumChannel::EQ_HP].freq);
-        Biquad h; h.highpass(sampleRate, fr, 0.5412); m *= h.magnitudeAt(f, sampleRate);
-                  h.highpass(sampleRate, fr, 1.3066); m *= h.magnitudeAt(f, sampleRate);
-    }
-    for (int b = 0; b < 3; ++b) {
-        const auto& bd = bands[DrumChannel::EQ_B1 + b];
-        if (! bd.on) continue;
-        Biquad pk; pk.peaking(sampleRate, juce::jlimit(20.0, nyq, (double) bd.freq),
-                              juce::jlimit(0.2, 12.0, (double) bd.q), (double) bd.gainDb);
-        m *= pk.magnitudeAt(f, sampleRate);
-    }
-    if (bands[DrumChannel::EQ_LP].on) {
-        const double fr = juce::jlimit(20.0, nyq, (double) bands[DrumChannel::EQ_LP].freq);
-        Biquad l; l.lowpass(sampleRate, fr, 0.5412); m *= l.magnitudeAt(f, sampleRate);
-                  l.lowpass(sampleRate, fr, 1.3066); m *= l.magnitudeAt(f, sampleRate);
-    }
-    return juce::Decibels::gainToDecibels((float) m);
-}
-
-juce::Point<float> FrequencyDisplay::handlePos(juce::Rectangle<float> a, int b) const
-{
-    if (bands == nullptr) return {};
-    const float x = xForFreq(a, bands[b].freq);
-    // HP/LP handles ride the response curve at their freq; bells use their gain.
-    const float y = (b == DrumChannel::EQ_HP || b == DrumChannel::EQ_LP)
-                    ? yForDb(a, juce::jlimit(-kMaxDb, kMaxDb, responseDb(bands[b].freq)))
-                    : yForDb(a, bands[b].gainDb);
-    return { x, y };
-}
 
 int FrequencyDisplay::nearestBand(juce::Point<float> p) const
 {
-    if (bands == nullptr) return -1;
+    // TWO filters, each with a cutoff/reso DIAMOND + an envelope end handle (grabbable when the filter
+    // is ON). Pick the NEAREST handle across both filters; the active filter's diamond wins close ties.
     const auto a = plotArea();
     int best = -1; float bd = 16.0f * 16.0f;
-    for (int b = 0; b < DrumChannel::NUM_EQ_BANDS; ++b) {
-        const float d = p.getDistanceSquaredFrom(handlePos(a, b));
-        if (d < bd) { bd = d; best = b; }
+    for (int fi = 0; fi < 2; ++fi)
+    {
+        const bool fOn = (fType[fi] >= DrumChannel::LowPass && fType[fi] <= DrumChannel::Notch);
+        if (fOn) { const float de = p.getDistanceSquaredFrom(filtEnvPos(a, fi)); if (de < bd) { bd = de; best = kFiltEnv(fi); } }
+        const float dm = p.getDistanceSquaredFrom(filtPos(a, fi));
+        const float bias = (fi == activeFilt) ? 6.0f : 0.0f;   // small pull toward the active filter's diamond
+        if (dm - bias < bd) { bd = dm - bias; best = kFilt(fi); }
     }
-    if (showFilter) {
-        // Filter main handle wins ties. The env handle is grabbable whenever the filter is ON -
-        // at env 0 it PARKS beside the diamond (filtEnvPos), so an envelope can always be dragged up.
-        const float dm = p.getDistanceSquaredFrom(filtPos(a));
-        const float de = p.getDistanceSquaredFrom(filtEnvPos(a));
-        if (fType == DrumChannel::LowPass && de < bd && de < dm) { bd = de; best = kFiltEnv; }
-        if (dm < bd) { bd = dm; best = kFilt; }
-    }
-    return best;
+    if (best >= 0) return best;
+    if (a.contains(p)) return kFilt(activeFilt);   // empty graph area = drag the active filter's cutoff/reso
+    return -1;
 }
 
 void FrequencyDisplay::paint(juce::Graphics& g)
@@ -2190,63 +2693,38 @@ void FrequencyDisplay::paint(juce::Graphics& g)
         g.setColour(juce::Colour(0xff33ddff)); g.strokePath(ol, juce::PathStrokeType(1.4f));
     }
 
-    // Combined EQ response curve.
-    if (bands != nullptr && sampleRate > 0.0)
+    // === TWO per-slot resonant FILTERS in series (F1 = orange, F2 = cyan). Each is just a DIAMOND
+    //     (drag = cutoff X / reso Y). DOUBLE-CLICK a diamond = enable/disable it; RIGHT-CLICK = change
+    //     its type (LP -> HP -> BP -> Notch). The type name sits on the diamond. No buttons, no menu. ===
+    static const char* tn[6] = { "OFF", "LP", "HP", "BP", "NOTCH", "FORMANT" };
+    if (sampleRate > 0.0)
     {
-        juce::Path resp; bool started = false;
-        for (float px = 0; px <= w; px += 2.0f) {
-            const float y = yForDb(a, responseDb(normToFreq(px / w)));
-            if (! started) { resp.startNewSubPath(left + px, y); started = true; } else resp.lineTo(left + px, y);
-        }
-        g.setColour(juce::Colour(0xffffaa33)); g.strokePath(resp, juce::PathStrokeType(1.9f));
-
-        // Band handles: solid when enabled, hollow/dim when off. Double-click toggles.
-        const int active = drag >= 0 ? drag : hover;
-        for (int b = 0; b < DrumChannel::NUM_EQ_BANDS; ++b) {
-            const auto p = handlePos(a, b);
-            const float r = (b == active) ? 6.5f : 5.0f;
-            const auto col = kEqCols[b];
-            if (bands[b].on) {
-                if (b == active) { g.setColour(juce::Colours::white); g.drawEllipse(p.x - r - 2, p.y - r - 2, (r + 2) * 2, (r + 2) * 2, 1.2f); }
-                g.setColour(col); g.fillEllipse(p.x - r, p.y - r, r * 2, r * 2);
-                g.setColour(juce::Colours::black); g.drawEllipse(p.x - r, p.y - r, r * 2, r * 2, 1.0f);
-            } else {
-                g.setColour(col.withAlpha(0.45f)); g.drawEllipse(p.x - r, p.y - r, r * 2, r * 2, 1.4f);
-            }
-            g.setColour(bands[b].on ? juce::Colours::black : col.withAlpha(0.6f));
-            g.setFont(juce::Font(8.5f, juce::Font::bold));
-            const char* tag = (b == DrumChannel::EQ_HP) ? "H" : (b == DrumChannel::EQ_LP) ? "L" : juce::String(b).toRawUTF8();
-            g.drawText(tag, juce::Rectangle<float>(p.x - r, p.y - r, r * 2, r * 2), juce::Justification::centred, false);
-        }
-    }
-
-    // The RESONANT FILTER (channel target only): the classic bass tool, edited right here.
-    // Diamond handle: X = cutoff, Y = resonance. The dashed ARROW shows the envelope sweep -
-    // where the cutoff opens to (or closes down to) on each hit; drag its end to set the amount.
-    if (showFilter && sampleRate > 0.0)
-    {
-        const auto  fcol = juce::Colour(0xffff7a4a);
-        const bool  fOn  = (fType == DrumChannel::LowPass);
-        const auto  mp   = filtPos(a);
-        const int   act  = drag >= 0 ? drag : hover;
-
-        if (fOn)
+        const int act = drag >= 0 ? drag : hover;
+        for (int fi = 0; fi < 2; ++fi)
         {
-            // The filter's real magnitude response.
-            Biquad lp; lp.lowpass(sampleRate, juce::jlimit(20.0, sampleRate * 0.49, (double) fCutoff),
-                                  juce::jlimit(0.3, 12.0, (double) fReso));
-            juce::Path resp; bool started = false;
-            for (float px = 0; px <= w; px += 2.0f) {
-                const float db = juce::Decibels::gainToDecibels((float) lp.magnitudeAt(normToFreq(px / w), sampleRate));
-                const float y  = yForDb(a, juce::jlimit(-kMaxDb, kMaxDb, db));
-                if (! started) { resp.startNewSubPath(left + px, y); started = true; } else resp.lineTo(left + px, y);
+            const auto fcol = filtColour(fi);
+            const bool fOn  = (fType[fi] >= DrumChannel::LowPass && fType[fi] <= DrumChannel::Notch);
+            const auto mp   = filtPos(a, fi);
+            {   // response curve for this filter's type (dim when off)
+                Biquad bq; const double fc = juce::jlimit(20.0, sampleRate * 0.49, (double) fCutoff[fi]);
+                const double q = juce::jlimit(0.3, 12.0, (double) fReso[fi]);
+                switch (fType[fi]) {
+                    case DrumChannel::HighPass: bq.highpass(sampleRate, fc, q); break;
+                    case DrumChannel::BandPass: bq.bandpass(sampleRate, fc, q); break;
+                    case DrumChannel::Notch:    bq.notch   (sampleRate, fc, q); break;
+                    default:                    bq.lowpass (sampleRate, fc, q); break;
+                }
+                juce::Path resp; bool started = false;
+                for (float px = 0; px <= w; px += 2.0f) {
+                    const float db = fOn ? juce::Decibels::gainToDecibels((float) bq.magnitudeAt(normToFreq(px / w), sampleRate)) : 0.0f;
+                    const float y = yForDb(a, juce::jlimit(-kMaxDb, kMaxDb, db));
+                    if (! started) { resp.startNewSubPath(left + px, y); started = true; } else resp.lineTo(left + px, y);
+                }
+                if (fOn) { g.setColour(fcol.withAlpha(0.9f)); g.strokePath(resp, juce::PathStrokeType(2.0f)); }
             }
-            g.setColour(fcol.withAlpha(0.85f)); g.strokePath(resp, juce::PathStrokeType(1.6f));
-
-            // Envelope sweep arrow (dashed) + its end handle.
-            if (std::abs(fEnvAmt) > 0.02f)
+            if (fOn && std::abs(fEnvAmt[fi]) > 0.02f)   // envelope sweep arrow
             {
-                const auto ep = filtEnvPos(a);
+                const auto ep = filtEnvPos(a, fi);
                 const float dash[2] = { 4.0f, 3.0f };
                 g.setColour(fcol.withAlpha(0.8f));
                 g.drawDashedLine(juce::Line<float>(mp, ep), dash, 2, 1.4f);
@@ -2254,150 +2732,109 @@ void FrequencyDisplay::paint(juce::Graphics& g)
                 juce::Path tri; tri.addTriangle(ep.x + dir * 5.0f, ep.y, ep.x - dir * 2.0f, ep.y - 4.0f, ep.x - dir * 2.0f, ep.y + 4.0f);
                 g.fillPath(tri);
             }
-            {   // env end handle (small diamond). At env 0 it PARKS beside the main diamond with a
-                // dashed stub + "env" label, so there is always a visible thing to drag an envelope from.
-                const auto ep = filtEnvPos(a);
-                const bool parked = std::abs(fEnvAmt) <= 0.02f;
-                if (parked)
-                {
-                    const float dash[2] = { 2.0f, 2.0f };
-                    g.setColour(fcol.withAlpha(0.45f));
-                    g.drawDashedLine(juce::Line<float>(mp, ep), dash, 2, 1.0f);
-                    g.setFont(juce::Font(8.0f, juce::Font::bold));
-                    g.drawText("env", ep.x - 12.0f, ep.y + 5.0f, 24.0f, 10.0f, juce::Justification::centred, false);
-                }
-                const float er = (act == kFiltEnv) ? 5.0f : 3.8f;
+            if (fOn)   // env end handle (parks beside the diamond at env 0)
+            {
+                const auto ep = filtEnvPos(a, fi);
+                const bool parked = std::abs(fEnvAmt[fi]) <= 0.02f;
+                if (parked) { const float dash[2] = { 2.0f, 2.0f }; g.setColour(fcol.withAlpha(0.4f));
+                              g.drawDashedLine(juce::Line<float>(mp, ep), dash, 2, 1.0f); }
+                const float er = (act == kFiltEnv(fi)) ? 5.0f : 3.6f;
                 juce::Path d2; d2.addQuadrilateral(ep.x, ep.y - er, ep.x + er, ep.y, ep.x, ep.y + er, ep.x - er, ep.y);
-                g.setColour(fcol.withAlpha(act == kFiltEnv ? 1.0f : parked ? 0.45f : 0.65f)); g.fillPath(d2);
+                g.setColour(fcol.withAlpha(act == kFiltEnv(fi) ? 1.0f : parked ? 0.4f : 0.65f)); g.fillPath(d2);
                 g.setColour(juce::Colours::white.withAlpha(parked ? 0.5f : 0.8f)); g.strokePath(d2, juce::PathStrokeType(1.0f));
             }
+            // The DIAMOND: filled + type name when ON, hollow/dim when OFF (still there to double-click).
+            const float r = (act == kFilt(fi)) ? 8.0f : 6.5f;
+            if (fi == activeFilt && fOn) { g.setColour(juce::Colours::white.withAlpha(0.6f)); g.drawEllipse(mp.x - r - 2, mp.y - r - 2, (r + 2) * 2, (r + 2) * 2, 1.2f); }
+            juce::Path dia; dia.addQuadrilateral(mp.x, mp.y - r, mp.x + r, mp.y, mp.x, mp.y + r, mp.x - r, mp.y);
+            if (fOn) { g.setColour(fcol); g.fillPath(dia); g.setColour(juce::Colours::black); g.strokePath(dia, juce::PathStrokeType(1.0f)); }
+            else     { g.setColour(fcol.withAlpha(0.45f)); g.strokePath(dia, juce::PathStrokeType(1.5f)); }
+            // Type name ON the diamond (a small tag just above it): the user always sees F1/F2's type.
+            g.setColour(fOn ? fcol : fcol.withAlpha(0.6f)); g.setFont(juce::Font(9.5f, juce::Font::bold));
+            g.drawText(juce::String("F") + juce::String(fi + 1) + " " + tn[juce::jlimit(0, 5, fType[fi])],
+                       juce::jlimit(left, right - 52.0f, mp.x - 26.0f), mp.y - r - 13.0f, 52.0f, 11.0f, juce::Justification::centred, false);
         }
-
-        // Main filter handle: a diamond (distinct from the round EQ dots). Hollow when off.
-        const float r = (act == kFilt) ? 7.5f : 6.0f;
-        juce::Path dia; dia.addQuadrilateral(mp.x, mp.y - r, mp.x + r, mp.y, mp.x, mp.y + r, mp.x - r, mp.y);
-        if (fOn) { g.setColour(fcol); g.fillPath(dia); g.setColour(juce::Colours::black); g.strokePath(dia, juce::PathStrokeType(1.0f)); }
-        else     { g.setColour(fcol.withAlpha(0.5f)); g.strokePath(dia, juce::PathStrokeType(1.5f)); }
-        g.setColour(fOn ? juce::Colours::black : fcol.withAlpha(0.7f));
-        g.setFont(juce::Font(8.0f, juce::Font::bold));
-        g.drawText("F", juce::Rectangle<float>(mp.x - r, mp.y - r, r * 2, r * 2), juce::Justification::centred, false);
-        if (! fOn)   // discoverability: the envelope arrow only exists once the filter is ON
-        {
-            g.setColour(fcol.withAlpha(0.55f)); g.setFont(juce::Font(8.0f, juce::Font::bold));
-            g.drawText("off - dbl-click", mp.x + r + 3.0f, mp.y - 5.0f, 70.0f, 10.0f,
-                       juce::Justification::centredLeft, false);
-        }
+        // one-line gesture hint (no buttons to discover from)
+        g.setColour(juce::Colour(0xff6a7290)); g.setFont(juce::Font(9.0f, juce::Font::bold));
+        g.drawText("drag = cutoff/reso - double-click = on/off - right-click = type",
+                   juce::Rectangle<int>((int) left, (int) top - 1, (int) w, 11), juce::Justification::topLeft, false);
     }
-
-    g.setColour(juce::Colour(0xff8090b0)); g.setFont(juce::Font(9.0f, juce::Font::bold));
-    g.drawText(showFilter ? "EQ + FILTER  (F diamond = filter: X cutoff, Y reso, arrow = envelope - dbl-click = on/off)"
-                          : "EQ  (drag bands - wheel = width - double-click = on/off)",
-               getLocalBounds().reduced(4), juce::Justification::topLeft, false);
 }
 
 void FrequencyDisplay::mouseMove(const juce::MouseEvent& e) { int b = nearestBand(e.position); if (b != hover) { hover = b; repaint(); } }
 
-void FrequencyDisplay::mouseDown(const juce::MouseEvent& e) { drag = nearestBand(e.position); if (drag >= 0) mouseDrag(e); }
+void FrequencyDisplay::mouseDown(const juce::MouseEvent& e)
+{
+    const int b = nearestBand(e.position);
+    if (b < 0) return;
+    const int fi = b % 2;
+    activeFilt = fi;   // grabbing a handle selects its filter (Keytrack fader follows it)
+    if (e.mods.isRightButtonDown() || e.mods.isPopupMenu())
+    {   // RIGHT-CLICK a diamond = cycle its type: Off -> LP -> HP -> BP -> Notch -> Off (no menu)
+        int nt = fType[fi] + 1; if (nt > DrumChannel::Notch) nt = DrumChannel::FilterOff;   // skip Formant (legacy)
+        fType[fi] = nt;
+        if (onFilterEdit) onFilterEdit(fi, fType[fi], fCutoff[fi], fReso[fi], fEnvAmt[fi]);
+        if (onEdit) onEdit(); if (onDragEnd) onDragEnd();
+        repaint(); return;
+    }
+    drag = b; mouseDrag(e);
+}
 
 void FrequencyDisplay::mouseDrag(const juce::MouseEvent& e)
 {
-    if (drag < 0 || bands == nullptr) return;
+    if (drag < 0) return;
     const auto a = plotArea();
-    if (drag == kFilt)
-    {   // X = cutoff, Y = resonance; dragging turns the filter ON (LowPass).
-        fType   = DrumChannel::LowPass;
-        fCutoff = juce::jlimit(20.0f, 20000.0f, freqForX(a, e.position.x));
-        fReso   = normToReso((a.getBottom() - a.getHeight() * 0.06f - e.position.y) / (a.getHeight() * 0.85f));
-        if (onFilterEdit) onFilterEdit(fType, fCutoff, fReso, fEnvAmt);
-        repaint(); return;
-    }
-    if (drag == kFiltEnv)
-    {   // The arrow end = where the envelope sweeps the cutoff to: amt = log2(end/cutoff)/5 (+/-1 = +/-5 oct).
+    const int fi = drag % 2;   // handle id encodes the filter (kFilt/kFiltEnv = 100/102 + fi)
+    if (drag == kFiltEnv(fi))
+    {   // arrow end = where the envelope sweeps the cutoff to: amt = log2(end/cutoff)/5 (+/-1 = +/-5 oct)
         const float endHz = juce::jlimit(20.0f, 20000.0f, freqForX(a, e.position.x));
-        float amt = std::log2(juce::jmax(1.0e-3f, endHz / juce::jmax(20.0f, fCutoff))) / 5.0f;
-        if (std::abs(amt) < 0.04f) amt = 0.0f;           // snap to "no sweep" near the handle
-        fEnvAmt = juce::jlimit(-1.0f, 1.0f, amt);
-        if (onFilterEdit) onFilterEdit(fType, fCutoff, fReso, fEnvAmt);
+        float amt = std::log2(juce::jmax(1.0e-3f, endHz / juce::jmax(20.0f, fCutoff[fi]))) / 5.0f;
+        if (std::abs(amt) < 0.04f) amt = 0.0f;
+        fEnvAmt[fi] = juce::jlimit(-1.0f, 1.0f, amt);
+        if (onFilterEdit) onFilterEdit(fi, fType[fi], fCutoff[fi], fReso[fi], fEnvAmt[fi]);
         repaint(); return;
     }
-    auto& bd = bands[drag];
-    bd.on = true;                                   // dragging a band turns it on
-    bd.freq = juce::jlimit(20.0f, 20000.0f, freqForX(a, e.position.x));
-    if (drag != DrumChannel::EQ_HP && drag != DrumChannel::EQ_LP)
-        bd.gainDb = dbForY(a, e.position.y);         // bells: vertical = gain
-    if (onEdit) onEdit();
+    // diamond: X = cutoff, Y = resonance. Dragging an OFF filter turns it on (LowPass).
+    if (fType[fi] < DrumChannel::LowPass || fType[fi] > DrumChannel::Notch) fType[fi] = DrumChannel::LowPass;
+    fCutoff[fi] = juce::jlimit(20.0f, 20000.0f, freqForX(a, e.position.x));
+    fReso[fi]   = normToReso((a.getBottom() - a.getHeight() * 0.06f - e.position.y) / (a.getHeight() * 0.85f));
+    if (onFilterEdit) onFilterEdit(fi, fType[fi], fCutoff[fi], fReso[fi], fEnvAmt[fi]);
     repaint();
 }
 
 void FrequencyDisplay::mouseDoubleClick(const juce::MouseEvent& e)
 {
-    if (bands == nullptr) return;
-    int b = nearestBand(e.position);
-    if (b == kFilt) {   // toggle the resonant filter on/off
-        fType = (fType == DrumChannel::LowPass) ? DrumChannel::FilterOff : DrumChannel::LowPass;
-        if (onFilterEdit) onFilterEdit(fType, fCutoff, fReso, fEnvAmt);
-        repaint(); return;
-    }
-    if (b == kFiltEnv) {   // reset the envelope sweep
-        fEnvAmt = 0.0f;
-        if (onFilterEdit) onFilterEdit(fType, fCutoff, fReso, fEnvAmt);
-        repaint(); return;
-    }
-    if (b < 0) {   // empty space -> reset ALL bands to their defaults (all off) + the filter
-        for (int i = 0; i < DrumChannel::NUM_EQ_BANDS; ++i) bands[i] = DrumChannel::defaultEqBand(i);
-        if (showFilter) { fType = DrumChannel::FilterOff; fEnvAmt = 0.0f;
-                          if (onFilterEdit) onFilterEdit(fType, fCutoff, fReso, fEnvAmt); }
-        if (onEdit) onEdit();
-        repaint();
-        return;
-    }
-    bands[b].on = ! bands[b].on;   // on a handle -> toggle that band on/off
-    if (onEdit) onEdit();
+    const int b = nearestBand(e.position);
+    if (b < 0) return;
+    const int fi = b % 2;
+    if (b == kFiltEnv(fi)) { fEnvAmt[fi] = 0.0f; if (onFilterEdit) onFilterEdit(fi, fType[fi], fCutoff[fi], fReso[fi], fEnvAmt[fi]); repaint(); return; }
+    activeFilt = fi;   // toggle that filter on/off
+    fType[fi] = (fType[fi] >= DrumChannel::LowPass && fType[fi] <= DrumChannel::Notch) ? DrumChannel::FilterOff : DrumChannel::LowPass;
+    if (onFilterEdit) onFilterEdit(fi, fType[fi], fCutoff[fi], fReso[fi], fEnvAmt[fi]);
     repaint();
 }
 
 void FrequencyDisplay::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wd)
-{
-    if (bands == nullptr) return;
-    int b = nearestBand(e.position);
-    if (b == kFilt) {   // wheel on the filter = resonance
-        fReso = juce::jlimit(0.3f, 12.0f, fReso * (wd.deltaY > 0 ? 1.12f : 1.0f / 1.12f));
-        if (onFilterEdit) onFilterEdit(fType, fCutoff, fReso, fEnvAmt);
-        repaint(); return;
-    }
-    if (b < 0 || b == DrumChannel::EQ_HP || b == DrumChannel::EQ_LP) return;   // Q only for bells
-    auto& bd = bands[b];
-    bd.q = juce::jlimit(0.2f, 12.0f, bd.q * (wd.deltaY > 0 ? 1.12f : 1.0f / 1.12f));
-    if (onEdit) onEdit();
+{   // wheel over a diamond = its resonance
+    const int b = nearestBand(e.position); if (b < 0) return;
+    const int fi = b % 2;
+    fReso[fi] = juce::jlimit(0.3f, 12.0f, fReso[fi] * (wd.deltaY > 0 ? 1.12f : 1.0f / 1.12f));
+    if (onFilterEdit) onFilterEdit(fi, fType[fi], fCutoff[fi], fReso[fi], fEnvAmt[fi]);
     repaint();
 }
 
 juce::String FrequencyDisplay::getTooltip()
 {
+    static const char* tn[6] = { "Off", "Low-pass", "High-pass", "Band-pass", "Notch", "Formant" };
     const int b = drag >= 0 ? drag : hover;
-    if (b == kFilt)
-        return "FILTER (resonant low-pass - the bass tool): drag X = cutoff ("
-               + juce::String(juce::roundToInt(fCutoff)) + " Hz), Y or wheel = resonance (Q "
-               + juce::String(fReso, 2) + "). Double-click = on/off. The dashed arrow is the ENVELOPE: "
-               "each hit sweeps the cutoff from the arrow's end to the diamond - drag the small end handle.";
-    if (b == kFiltEnv)
-        return "Filter ENVELOPE amount: the cutoff opens/closes by this much on every hit ("
-               + juce::String(fEnvAmt * 5.0f, 1) + " octaves; right of the diamond = sweep DOWN into the note, "
-               "left = sweep UP). Double-click resets.";
-    if (b < 0 || bands == nullptr)
-        return juce::String("Channel EQ: drag a band to move it, mouse-wheel a bell for width (Q), double-click to "
-               "enable/disable. H = high-pass, L = low-pass (both 24 dB/oct), 1/2/3 = bells.")
-               + (showFilter ? " The orange F diamond is the resonant FILTER (with an envelope arrow)."
-                               " NOTE: 'All' shows the channel's FINAL mix - on some 2-slot factory sounds that"
-                               " includes a channel-level drive stage, so it can look hotter than the slots."
-                             : " This SLOT's spectrum is its own signal BEFORE the slots are mixed.");
-    const auto& bd = bands[b];
-    const juce::String nm = (b == DrumChannel::EQ_HP) ? "High-pass" : (b == DrumChannel::EQ_LP) ? "Low-pass" : ("Bell " + juce::String(b));
-    juce::String fs = bd.freq >= 1000.0f ? juce::String(bd.freq / 1000.0f, 2) + " kHz" : juce::String((int) bd.freq) + " Hz";
-    juce::String s = nm + (bd.on ? "  " : " (off)  ") + fs;
-    if (b != DrumChannel::EQ_HP && b != DrumChannel::EQ_LP)
-        s += "  " + juce::String(bd.gainDb, 1) + " dB  Q " + juce::String(bd.q, 2);
-    return s;
+    if (b == kFiltEnv(0) || b == kFiltEnv(1))
+    { const int fi = b % 2; return juce::String("Filter ") + juce::String(fi + 1) + " ENVELOPE: the cutoff opens/closes by "
+           + juce::String(fEnvAmt[fi] * 5.0f, 1) + " octaves each hit (right of the diamond = sweep DOWN, left = UP). Double-click resets."; }
+    if (b == kFilt(0) || b == kFilt(1))
+    { const int fi = b % 2; return juce::String("Filter ") + juce::String(fi + 1) + " (" + tn[juce::jlimit(0, 5, fType[fi])] + "): DRAG the diamond = cutoff ("
+           + juce::String(juce::roundToInt(fCutoff[fi])) + " Hz) + reso (Q " + juce::String(fReso[fi], 2) + "). RIGHT-CLICK = change type, DOUBLE-CLICK = on/off, wheel = reso."; }
+    return "TWO resonant filters in series (F1 orange, F2 cyan). Each is a DIAMOND: drag = cutoff/reso, double-click "
+           "= on/off, right-click = type. Stack e.g. High-Pass + Low-Pass = a band. The Keytrack fader tracks the note.";
 }
 
 //==============================================================================
@@ -2411,7 +2848,20 @@ static float lfoCyclesShown(float rate)   // rate (log 0.1..20 Hz) -> how many s
 
 // Fixed per-destination hues so the three INDEPENDENT LFOs read apart at a glance
 // (FILT = the EQ diamond's orange, PITCH = the pitch/slide violet, VOL = the level green).
-static const juce::Colour kLfoDestCol[3] = { juce::Colour(0xffff9a3c), juce::Colour(0xffc77dff), juce::Colour(0xff35d07a) };
+static const juce::Colour kLfoDestCol[4] = { juce::Colour(0xffff9a3c), juce::Colour(0xffc77dff), juce::Colour(0xff35d07a), juce::Colour(0xff35c0ff) };
+
+// Tempo-sync detents in CYCLES PER BAR, stepped through by DRAGGING THE WAVE while Sync is on
+// (the wave is the ONE rate control - the old Sync/Rate faders duplicated it and were removed).
+// Spans slow sweeps (0.25 = one cycle per 4 bars) to 16th wobble, incl. ODD values for odd meters.
+static const float kLfoSyncCPB[18] = { 0.25f, 0.5f, 0.75f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f,
+                                       7.0f, 8.0f, 9.0f, 10.0f, 11.0f, 12.0f, 13.0f, 16.0f };
+static constexpr int kLfoSyncN = 18;
+static int lfoSyncNearestIdx(float cpb)
+{ int b = 0; float bd = 1.0e9f;
+  for (int i = 0; i < kLfoSyncN; ++i) { const float d = std::abs(kLfoSyncCPB[i] - cpb); if (d < bd) { bd = d; b = i; } }
+  return b; }
+static juce::String lfoCpbText(float cpb)   // "8 /bar", "0.25 /bar"
+{ return (cpb == (int) cpb ? juce::String((int) cpb) : juce::String(cpb, 2)) + " /bar"; }
 
 void LfoDisplay::paint(juce::Graphics& g)
 {
@@ -2423,11 +2873,11 @@ void LfoDisplay::paint(juce::Graphics& g)
     g.setFont(juce::Font(9.0f, juce::Font::bold));
     g.setColour(juce::Colour(0xff8090b0));
     g.drawText("LFO", 6, 3, 40, 12, juce::Justification::centredLeft, false);
-    static const char* dn[3] = { "FILT", "PITCH", "VOL" };
-    const float bw = bb.getWidth() * 0.26f;
-    for (int d = 0; d < 3; ++d)
+    static const char* dn[4] = { "FILT", "PITCH", "VOL", "WAVE" };
+    const float bw = bb.getWidth() * 0.2075f;
+    for (int d = 0; d < 4; ++d)
     {
-        juce::Rectangle<float> br(bb.getWidth() * 0.22f + d * bw + 1.0f, 2.0f, bw - 2.0f, 13.0f);
+        juce::Rectangle<float> br(bb.getWidth() * 0.17f + d * bw + 1.0f, 2.0f, bw - 2.0f, 13.0f);
         const bool sel = (d == dest_), on = amt_[d] > 0.001f;
         g.setColour(sel ? kLfoDestCol[d] : juce::Colour(0xff2a2a4a)); g.fillRoundedRectangle(br, 3.0f);
         g.setColour(sel ? juce::Colours::black : (on ? kLfoDestCol[d] : juce::Colours::lightgrey));
@@ -2452,11 +2902,13 @@ void LfoDisplay::paint(juce::Graphics& g)
         }
         return w;
     };
-    for (int d = 0; d < 3; ++d)
+    // Ghost + selected waves draw at effHz() - the TRUE speed the DSP plays (synced/grid rates
+    // included), never the ignored free-Hz value (the honesty rule).
+    for (int d = 0; d < 4; ++d)
         if (d != dest_ && amt_[d] > 0.001f)
         {
             g.setColour(kLfoDestCol[d].withAlpha(0.30f));
-            g.strokePath(wavePath(rate_[d], amt_[d]), juce::PathStrokeType(1.2f));
+            g.strokePath(wavePath(effHz(d), amt_[d]), juce::PathStrokeType(1.2f));
         }
 
     if (amt_[dest_] <= 0.001f)
@@ -2468,10 +2920,10 @@ void LfoDisplay::paint(juce::Graphics& g)
     }
     else
     {
-        // The selected LFO's wave: N cycles wide (rate), amplitude = Amount, in its own hue.
-        const float cyc = lfoCyclesShown(rate_[dest_]);
+        // The selected LFO's wave: N cycles wide (true speed), amplitude = Amount, in its own hue.
+        const float cyc = lfoCyclesShown(effHz(dest_));
         const float amp = amt_[dest_] * (a.getHeight() * 0.5f - 2.0f);
-        g.setColour(kLfoDestCol[dest_]); g.strokePath(wavePath(rate_[dest_], amt_[dest_]), juce::PathStrokeType(1.8f));
+        g.setColour(kLfoDestCol[dest_]); g.strokePath(wavePath(effHz(dest_), amt_[dest_]), juce::PathStrokeType(1.8f));
 
         // Live dot: the REAL phase of the newest playing voice (fed by the editor timer).
         if (phase_ >= 0.0)
@@ -2481,9 +2933,6 @@ void LfoDisplay::paint(juce::Graphics& g)
             const float py = cy - amp * std::sin(frac * juce::MathConstants<float>::twoPi);
             g.setColour(juce::Colours::white); g.fillEllipse(px - 2.4f, py - 2.4f, 4.8f, 4.8f);
         }
-        g.setFont(juce::Font(9.0f)); g.setColour(juce::Colour(0xff8090b0));
-        g.drawText(juce::String(rate_[dest_], rate_[dest_] < 3.0f ? 1 : 0) + " Hz", a.reduced(3.0f, 1.0f),
-                   juce::Justification::bottomRight, false);
     }
     // The FILT tab is selected but this slot's filter is off = silent no-op: say so (only on
     // that tab - the warning on PITCH/VOL confused the user).
@@ -2493,22 +2942,72 @@ void LfoDisplay::paint(juce::Graphics& g)
         g.drawText("slot FILTER is off (EQ: F diamond)", a.reduced(3.0f, 1.0f),
                    juce::Justification::bottomLeft, false);
     }
+    if (! waveOn_ && dest_ == 3)
+    {   // WAVE scans the additive wavetable position - meaningless unless the Wave IS Custom
+        g.setColour(juce::Colour(0xffff7a4a)); g.setFont(juce::Font(9.0f));
+        g.drawText("Wave is not Custom - nothing to scan", a.reduced(3.0f, 1.0f),
+                   juce::Justification::bottomLeft, false);
+    }
+    // Bottom row: the SYNC button (click = Off -> Sync -> Grid) + the honest speed read-out.
+    // Off = drag the wave for free Hz; Sync = dragging SNAPS through musical cycles/bar; Grid =
+    // the rate follows the channel's grid automatically.
+    {
+        auto sb = syncBtnRect();
+        const float s = sync_[dest_];
+        const bool on = s != 0.0f;
+        g.setColour(on ? kLfoDestCol[dest_] : juce::Colour(0xff2a2a4a)); g.fillRoundedRectangle(sb, 3.0f);
+        g.setColour(on ? juce::Colours::black : juce::Colour(0xff9aa6c0)); g.setFont(juce::Font(9.5f, juce::Font::bold));
+        g.drawText(s == 0.0f ? "Sync: Off" : (s < 0.0f ? "Sync: Grid" : "Sync: Bar"), sb, juce::Justification::centred, false);
+        g.setColour(juce::Colour(0xffaeb8d4)); g.setFont(juce::Font(9.5f, juce::Font::bold));
+        const juce::String rd = s == 0.0f
+            ? juce::String(rate_[dest_], rate_[dest_] < 3.0f ? 1 : 0) + " Hz"
+            : (s < 0.0f ? "Grid " + lfoCpbText(gridCpb_) : lfoCpbText(s));
+        g.drawText(rd, (int) sb.getRight() + 6, (int) sb.getY(), getWidth() - (int) sb.getRight() - 10, 13,
+                   juce::Justification::centredRight, false);
+    }
 }
 
 void LfoDisplay::mouseDown(const juce::MouseEvent& e)
 {
     const int d = destAt(e.position);
-    if (d >= 0) { if (d != dest_) { dest_ = d; repaint(); } return; }   // tab = pure UI selection
+    if (d >= 0) { if (d != dest_) { dest_ = d; repaint(); if (onDestChange) onDestChange(d); } return; }   // tab = pure UI selection
+    if (syncBtnRect().contains(e.position))
+    {   // cycle the selected LFO's sync mode: Off -> Sync (bar) -> Grid -> Off
+        float& s = sync_[dest_];
+        if (s == 0.0f)      s = kLfoSyncCPB[lfoSyncNearestIdx(rate_[dest_] * barSec_)];   // keep ~the same speed
+        else if (s > 0.0f)  s = -1.0f;    // grid
+        else                s = 0.0f;     // back to free Hz
+        if (onSyncChange) onSyncChange(dest_, s);
+        if (onDragEnd) onDragEnd();
+        repaint(); return;
+    }
     dnPos_ = e.position; dnRate_ = rate_[dest_]; dnAmt_ = amt_[dest_]; dragging_ = true;
+    dnSyncIdx_ = sync_[dest_] > 0.0f ? lfoSyncNearestIdx(sync_[dest_]) : 0;
 }
 
 void LfoDisplay::mouseDrag(const juce::MouseEvent& e)
 {
     if (! dragging_) return;
     const float dx = e.position.x - dnPos_.x, dy = e.position.y - dnPos_.y;
-    const float rate = juce::jlimit(0.1f, 20.0f, dnRate_ * std::exp(dx * 0.02f));   // log drag
-    const float amt  = juce::jlimit(0.0f, 1.0f, dnAmt_ - dy / 70.0f);
+    const float amt = juce::jlimit(0.0f, 1.0f, dnAmt_ - dy / 70.0f);
     if (amt > 0.001f) lastAmt_[dest_] = amt;
+    const float s = sync_[dest_];
+    if (s > 0.0f)
+    {   // SYNC mode: the X-drag SNAPS through the musical cycles/bar detents (the wave IS the rate control)
+        const int idx = juce::jlimit(0, kLfoSyncN - 1, dnSyncIdx_ + juce::roundToInt(dx / 16.0f));
+        if (kLfoSyncCPB[idx] != sync_[dest_])
+        {   // repaint HERE: the editor's setValues below is change-gated and sync_ is already updated
+            // locally, so without this the wave + read-out froze while the value moved ("always 9/bar").
+            sync_[dest_] = kLfoSyncCPB[idx];
+            if (onSyncChange) onSyncChange(dest_, sync_[dest_]);
+            repaint();
+        }
+        if (onChange) onChange(dest_, rate_[dest_], amt);   // Y still edits Amount
+        return;
+    }
+    if (s < 0.0f)                                            // GRID mode: rate is automatic; only Amount drags
+    { if (onChange) onChange(dest_, rate_[dest_], amt); return; }
+    const float rate = juce::jlimit(0.1f, 20.0f, dnRate_ * std::exp(dx * 0.02f));   // free Hz: log drag
     if (onChange) onChange(dest_, rate, amt);   // edits ONLY the selected LFO
 }
 
@@ -2520,19 +3019,32 @@ void LfoDisplay::mouseDoubleClick(const juce::MouseEvent& e)
 
 juce::String LfoDisplay::getTooltip()
 {
-    juce::String s ("LFOs (per slot): THREE independent sine wobbles - one per target (FILT / PITCH / VOL) - that "
+    if (syncBtnRect().contains(getMouseXYRelative().toFloat()))
+        return "SYNC (click to cycle): Off -> Sync -> Grid, for the selected LFO tab.\n\n"
+               "- Off = free speed in Hz (drag the wave left/right).\n"
+               "- Sync = tempo-synced: dragging the wave SNAPS through musical cycles-per-bar values "
+               "(0.25 = a 4-bar sweep ... 4 = quarters, 8 = 8ths, 16 = 16ths; odd values fit odd meters).\n"
+               "- Grid = follows the channel's grid automatically (piano-roll Grid 1/N, else the step count) - "
+               "one cycle per grid cell, even odd grids like 1/23.\n"
+               "The wave always draws the TRUE speed; the read-out beside this button shows it.";
+    juce::String s ("LFOs (per slot): FOUR independent sine wobbles - one per target (FILT / PITCH / VOL / WAVE) - that "
                     "RESTART on every hit, so they always lock to the groove. The tabs pick which one you're "
                     "editing (the others show as dim ghost waves; any mix can run at once). Drag LEFT/RIGHT = "
-                    "speed (0.1-20 Hz), UP/DOWN = amount (wave height; 0 = off). Double-click = off/restore.\n\n"
+                    "speed (free Hz, or SNAPPED to musical rates when Sync is on - see the Sync button below), "
+                    "UP/DOWN = amount (wave height; 0 = off). Double-click = off/restore.\n\n"
                     "RECIPES:  Wobble bass = FILT, 1-3 Hz, high amount, slot filter ON with some resonance, long "
                     "per-step Length (at 120 BPM ~2 Hz feels like 1/8th notes, ~4 Hz like 1/16ths).  Siren/alarm = "
                     "PITCH, ~1 Hz, full amount on a long bright sound.  Vibrato = PITCH, 4-6 Hz, TINY amount "
                     "(5-10%).  Helicopter = VOL, 10-14 Hz, full amount on noise.  Slow pump = VOL, 1-2 Hz, half "
-                    "amount.  Shimmering hats/cymbals = FILT, 6-10 Hz, low amount.  Stack them: wobble (FILT) + "
-                    "slow pump (VOL) = dubstep growl.");
+                    "amount.  Shimmering hats/cymbals = FILT, 6-10 Hz, low amount.  Talking wavetable = WAVE, 1-4 Hz "
+                    "(Sync!) on a Custom wave - it scans the 4 drawn frames around the Position.  Stack them: "
+                    "wobble (FILT) + slow pump (VOL) = dubstep growl.");
     if (! filtOn_ && dest_ == 0)
         s << "\n\nNOTE: this slot's FILTER is OFF, so the FILT target does nothing right now - enable it with the "
              "orange F diamond on this slot's EQ (double-click it).";
+    if (! waveOn_ && dest_ == 3)
+        s << "\n\nNOTE: this slot's Wave is not CUSTOM, so the WAVE target has nothing to scan - set the Wave "
+             "fader to Custom (the drawable additive wavetable).";
     return s;
 }
 
@@ -2824,6 +3336,9 @@ KeysPanel::KeysPanel()
     // options so live playing and a per-note override can never subtly differ). The other feel
     // knobs stay continuous (they're amounts/times, not a value the roll also edits per-note).
     strumKnob.setRange(0.0, 1.0, 0.2);
+    // SLOT OFFSET reads in MILLISECONDS (0..100 ms), CONSISTENT per hit (user: "use ms, not percentage").
+    humanKnob.textFromValueFunction = [](double v) { return juce::String(juce::roundToInt(v * 100.0)) + " ms"; };
+    humanKnob.valueFromTextFunction = [](const juce::String& t) { return t.getDoubleValue() / 100.0; };
     maxVelKnob.setValue(1.0);   // default full
     addAndMakeVisible(btnRec);
     btnRec.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
@@ -2837,7 +3352,7 @@ KeysPanel::KeysPanel()
         l.setColour(juce::Label::textColourId, juce::Colour(0xffaebadA));
     };
     lab(lblRecMode, "Record mode"); lab(lblSlot2, "Slot 2 pitch");
-    lab(lblHuman, "Humanize"); lab(lblStrum, "Strum"); lab(lblMinVel, "Min vel"); lab(lblMaxVel, "Max vel");
+    lab(lblHuman, "Slot offset"); lab(lblStrum, "Strum"); lab(lblMinVel, "Min vel"); lab(lblMaxVel, "Max vel");
     lab(lblPoly, "Poly"); lab(lblGlide, "Glide");
     addAndMakeVisible(polySwitch);
     addAndMakeVisible(btnArp);
@@ -2908,14 +3423,15 @@ void ArpEditor::paint(juce::Graphics& g)
         g.setColour(juce::Colour(0xffc8d0e0).withAlpha(0.85f)); g.setFont(juce::Font(12.0f, juce::Font::bold));
         g.drawText(juce::String("Rate ") + kArpRateName11(rate), rr, juce::Justification::centred, false);
     }
-    { // NOTES/BAR: a drag-fader box like Rate ("Notes/bar x8"; fill = position among the 6 detents)
+    { // NOTES/BAR: a drag-fader box like Rate ("Notes/bar x8"; fill = position among the 6 detents +
+      //           the MAX = "Grid" = LOCK TO GRID, following the channel's grid division)
         auto f = faderRect();
         g.setColour(juce::Colour(0xff26264a)); g.fillRoundedRectangle(f.toFloat(), 4.0f);
-        int selIdx = 0; for (int i = 0; i < 6; ++i) if (DrumChannel::ARP_SYNCS[i] == sync) selIdx = i;
+        int selIdx = 6; for (int i = 0; i < 6; ++i) if (DrumChannel::ARP_SYNCS[i] == sync) selIdx = i;   // 6 = grid lock
         g.setColour(juce::Colour(0xffe8bf4d).withAlpha(0.22f));
-        g.fillRoundedRectangle(f.toFloat().withWidth(juce::jmax(6.0f, (float)(selIdx + 1) / 6.0f * (float) f.getWidth())), 4.0f);
+        g.fillRoundedRectangle(f.toFloat().withWidth(juce::jmax(6.0f, (float)(selIdx + 1) / 7.0f * (float) f.getWidth())), 4.0f);
         g.setColour(juce::Colour(0xffd8e0f0).withAlpha(0.85f)); g.setFont(juce::Font(12.0f, juce::Font::bold));
-        g.drawText("Notes/bar x" + juce::String(sync), f, juce::Justification::centred, false);
+        g.drawText(sync < 0 ? juce::String("Notes/bar Grid") : ("Notes/bar x" + juce::String(sync)), f, juce::Justification::centred, false);
     }
     auto stepBtn = [&](juce::Rectangle<int> rr, const juce::String& t) {
         g.setColour(juce::Colour(0xff26264a)); g.fillRoundedRectangle(rr.toFloat(), 4.0f);
@@ -2980,7 +3496,9 @@ juce::String ArpEditor::getTooltip()
                "16 notes per bar (classic 16ths).";
     if (faderRect().contains(p))
         return "NOTES/BAR (drag, 7-13): the arp's base grid - how many notes fill one bar at Rate x1. "
-               "Odd values (7/9/11/13) give polyrhythms; get 12/16/24 via Rate (8 x 1.5 = 12, 8 x 2 = 16).";
+               "Odd values (7/9/11/13) give polyrhythms; get 12/16/24 via Rate (8 x 1.5 = 12, 8 x 2 = 16).\n\n"
+               "- All the way RIGHT = LOCK TO GRID: Notes/bar follows the channel's grid automatically "
+               "(piano-roll Grid 1/N, else the step count) - so odd grids like 1/23 just work.";
     if (alignRect().contains(p))
         return "ALIGN BAR: while the beat plays, the riff plays as if you had pressed the key EXACTLY on the "
                "bar start - notes land on the arp's OWN grid (Notes/bar x Rate), in time with the pattern.\n\n"
@@ -3058,11 +3576,12 @@ void ArpEditor::mouseDrag(const juce::MouseEvent& e)
         return;
     }
     if (dragFader)
-    {   // Notes/bar box: absolute position picks one of the 6 detents
+    {   // Notes/bar box: absolute position picks one of the 6 detents, or the MAX = LOCK TO GRID (-1)
         auto tr = faderRect();
         const float f = juce::jlimit(0.0f, 1.0f, (float) (e.getPosition().x - tr.getX()) / (float) juce::jmax(1, tr.getWidth()));
-        const int idx = juce::jlimit(0, 5, (int) (f * 6.0f));
-        if (DrumChannel::ARP_SYNCS[idx] != sync) { sync = DrumChannel::ARP_SYNCS[idx]; if (onChange) onChange(); repaint(); }
+        const int idx = juce::jlimit(0, 6, (int) (f * 7.0f));
+        const int ns  = idx >= 6 ? -1 : DrumChannel::ARP_SYNCS[idx];
+        if (ns != sync) { sync = ns; if (onChange) onChange(); repaint(); }
         return;
     }
     if (dragCell < 0) return;
@@ -4164,8 +4683,16 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         h = mix(h, sl.modalMaterial); h = mix(h, f(sl.modalDecay)); h = mix(h, f(sl.modalTone)); h = mix(h, f(sl.modalStruct)); h = mix(h, f(sl.modalHit)); h = mix(h, f(sl.modalDamp));
         for (int k = 0; k < DrumChannel::Slot::NPE; ++k) { h = mix(h, f(sl.pEnvP[k])); h = mix(h, f(sl.pEnvT[k])); }
         for (int e = 0; e < DrumChannel::NUM_EQ_BANDS; ++e) { const auto& eb = sl.eqBand[e]; h = mix(h, eb.on ? 1 : 0); h = mix(h, f(eb.freq)); h = mix(h, f(eb.gainDb)); h = mix(h, f(eb.q)); }
-        h = mix(h, sl.filterType); h = mix(h, f(sl.filterCutoff)); h = mix(h, f(sl.filterReso)); h = mix(h, f(sl.filterEnvAmt));   // per-slot filter
-        for (int d2 = 0; d2 < 3; ++d2) { h = mix(h, f(sl.lfoRate[d2])); h = mix(h, f(sl.lfoAmt[d2])); }   // per-slot LFOs
+        h = mix(h, sl.filterType); h = mix(h, f(sl.filterCutoff)); h = mix(h, f(sl.filterReso)); h = mix(h, f(sl.filterEnvAmt)); h = mix(h, f(sl.filterKeyTrack));   // per-slot filter 1
+        h = mix(h, sl.filterType2); h = mix(h, f(sl.filterCutoff2)); h = mix(h, f(sl.filterReso2)); h = mix(h, f(sl.filterEnvAmt2)); h = mix(h, f(sl.filterKeyTrack2));   // filter 2
+        h = mix(h, f(sl.chorusMix));   // chorus (one macro; rate/depth are effect constants)
+        h = mix(h, f(sl.fxTone)); h = mix(h, f(sl.fxPunch)); h = mix(h, f(sl.fxComp));   // Tone/Punch/Comp
+        for (int fr = 0; fr < DrumChannel::ADD_FRAMES; ++fr)
+            for (int k = 0; k < DrumChannel::ADD_HARM; ++k)
+            { h = mix(h, f(sl.addH[fr][k])); h = mix(h, f(sl.addPh[fr][k])); }   // wavetable frames
+        for (int sg = 0; sg < DrumChannel::ADD_FRAMES - 1; ++sg) h = mix(h, f(sl.addSeg[sg]));
+        h = mix(h, f(sl.addPos));
+        for (int d2 = 0; d2 < 4; ++d2) { h = mix(h, f(sl.lfoRate[d2])); h = mix(h, f(sl.lfoAmt[d2])); h = mix(h, f(sl.lfoSync[d2])); h = mix(h, sl.lfoSyncRate[d2]); }   // per-slot LFOs
     }
     h = mix(h, c.layerOscShape); h = mix(h, f(c.layerSineFreq)); h = mix(h, f(c.layerSinePEnvAmt)); h = mix(h, f(c.layerSinePEnvTime)); h = mix(h, f(c.layerSinePOffset));
     h = mix(h, c.oscUnison); h = mix(h, f(c.oscDetune)); h = mix(h, f(c.oscSustain)); h = mix(h, f(c.fmSustain)); h = mix(h, f(c.physSustain));
@@ -4409,6 +4936,7 @@ void DrumSequencerEditor::writeChannelMix(juce::ValueTree& t, const DrumChannel&
     t.setProperty("fType", ch.filterType, nullptr); t.setProperty("fCut", ch.filterCutoff, nullptr);
     t.setProperty("fReso", ch.filterReso, nullptr); t.setProperty("fEnv", ch.filterEnvAmt, nullptr);
     t.setProperty("drvT", ch.driveType, nullptr); t.setProperty("drvA", ch.driveAmount, nullptr);
+    t.setProperty("v6ch", 1, nullptr);   // drive taper era (channel drvA stored for the squared law)
     t.setProperty("rev", ch.reverbSend, nullptr); t.setProperty("dly", ch.delaySend, nullptr);
     ch.writeSlots(t);   // 3-slot model (duplicate engines survive Save/Load)
 }
@@ -4420,8 +4948,9 @@ void DrumSequencerEditor::readChannelMix(const juce::ValueTree& t, DrumChannel& 
     {   // the sound brings its OWN arp -> apply it; sounds without one keep the channel's arp
         ch.arpOn   = true;
         ch.arpLen  = juce::jlimit(1, 1 + DrumChannel::ARP_ROWS, (int) t.getProperty("arpLen", 2));
-        ch.arpSync = DrumChannel::arpSnapSync((int) t.getProperty("arpSync", 8));
-        ch.arpRate = juce::jlimit(0, DrumChannel::ARP_RATES - 1, (int) t.getProperty("arpRate", 8));
+        { const int rawSync = (int) t.getProperty("arpSync", 8);   // -1 = LOCK TO GRID (preserved)
+          ch.arpSync = rawSync < 0 ? -1 : DrumChannel::arpSnapSync(rawSync); }
+        ch.arpRate = juce::jlimit(0, DrumChannel::ARP_RATES - 1, (int) t.getProperty("arpRate", 4));
         ch.arpAlign = (bool) t.getProperty("arpAlign", true);
         ch.arpHold  = (bool) t.getProperty("arpHold", false);
         ch.arpGate  = juce::jlimit(0.1f, 1.0f, (float) t.getProperty("arpGate", 1.0f));
@@ -4494,6 +5023,8 @@ void DrumSequencerEditor::readChannelMix(const juce::ValueTree& t, DrumChannel& 
     ch.filterType = (int)t.getProperty("fType", 0); ch.filterCutoff = (float)t.getProperty("fCut", 20000.0f);
     ch.filterReso = (float)t.getProperty("fReso", 0.707f); ch.filterEnvAmt = (float)t.getProperty("fEnv", 0.0f);
     ch.driveType = (int)t.getProperty("drvT", 0); ch.driveAmount = (float)t.getProperty("drvA", 0.0f);
+    if (! t.hasProperty("v6ch") && ch.driveType != DrumChannel::Bitcrush && ch.driveAmount > 0.0f)   // v6 taper migration
+        ch.driveAmount = std::sqrt(juce::jlimit(0.0f, 1.0f, ch.driveAmount));
     ch.reverbSend = (float)t.getProperty("rev", 0.0f); ch.delaySend = (float)t.getProperty("dly", 0.0f);
 
     ch.loadDefaultSound();   // clear all slot sample buffers
@@ -5559,9 +6090,10 @@ void DrumSequencerEditor::setupComponents()
     };
     // HUMANIZE / STRUM knobs (per pattern/channel feel). Both greyed + untouchable when they'd do
     // nothing (Humanize needs 2 audible slots; Strum needs a slot in Chord or Scale mode).
-    keysPanel.humanKnob.setTooltip("HUMANIZE (needs 2 sound slots): loosens the two slots so they don't hit "
-        "machine-perfectly - each hit gives slot 2 a tiny random timing offset and both slots a small random "
-        "level change. Like a real player layering two sounds. 0 = locked/off. Faded when only one slot is used.");
+    keysPanel.humanKnob.setTooltip("SLOT OFFSET (0-100 ms, needs 2 sound slots): fires SLOT 2 a fixed amount "
+        "AFTER slot 1 on every hit - a consistent flam/layering delay (thicken a stack, add a soft doubling).\n\n"
+        "- Slot 1 stays exactly on time; slot 2 trails by the set milliseconds.\n"
+        "- The SAME every hit (not random). 0 = both slots together. Faded when only one slot is used.");
     keysPanel.strumKnob.setTooltip("STRUM (needs Chord or Scale on): spreads a chord's notes in time, low to high, "
         "like strumming - every hit (keys, steps or drawn) fans the chord out instead of a block. Stepped in fixed "
         "amounts (0/20/40/60/80/100%) so it matches the piano-roll right-click override exactly (no drift between "
@@ -5933,9 +6465,11 @@ void DrumSequencerEditor::setupComponents()
         aw->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
         aw->enterModalState(true, juce::ModalCallbackFunction::create(
             [this, aw](int r) {
-                if (r == 1) stepGrid.setGridDiv(aw->getTextEditorContents("n").getIntValue());
+                if (r == 1) { stepGrid.setGridDiv(aw->getTextEditorContents("n").getIntValue());
+                              proc.sequencer.uiGridDiv = juce::jmax(1, stepGrid.gridDiv()); }   // feed LFO/arp "Lock to grid"
             }), true);
     };
+    proc.sequencer.uiGridDiv = juce::jmax(1, stepGrid.gridDiv());   // keep the DSP's grid divisor in sync from the start
     // QUANTIZE (one-time): type 1/N, snap every note's START (and clamp length to >= one cell) to
     // that grid for the channel shown in the big editor. Independent of the live snap grid; undoable.
     stepGrid.onQuantizeEdit = [this] {
@@ -6255,17 +6789,22 @@ void DrumSequencerEditor::setupComponents()
     freqDisplay.onEdit = [this] {
         if (ignoreKnobCallbacks) return;
         proc.sequencer.channel(selectedChannel).markDspDirty();
+        refreshKeytrackFader();   // the Keytrack fader follows the filter you just touched (F1 or F2)
     };
     freqDisplay.onDragEnd = [this] { if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel); };
-    // The resonant FILTER handle: on the "All" target it edits the CHANNEL filter (on the mix);
-    // on a slot target (1/2) it edits THAT SLOT's own filter (so it never touches the other slot's
-    // engine). eqEditTarget: 0 = All (channel), 1/2 = slot 0/1.
-    freqDisplay.onFilterEdit = [this](int type, float cut, float reso, float env) {
+    // The resonant FILTER is PER SLOT with TWO in series (filterIdx 0/1). eqEditTarget = 1 or 2 picks
+    // the slot; the display edits that slot's filter 1 or 2 (never the other slot's engine).
+    freqDisplay.onFilterEdit = [this](int filterIdx, int type, float cut, float reso, float env) {
         auto& ch = proc.sequencer.channel(selectedChannel);
-        if (eqEditTarget <= 0) { ch.filterType = type; ch.filterCutoff = cut; ch.filterReso = reso; ch.filterEnvAmt = env; }
-        else { auto& sl = ch.slots[juce::jlimit(0, DrumChannel::NUM_SLOTS - 1, eqEditTarget - 1)];
-               sl.filterType = type; sl.filterCutoff = cut; sl.filterReso = reso; sl.filterEnvAmt = env; }
+        auto& sl = ch.slots[juce::jlimit(0, DrumChannel::NUM_SLOTS - 1, eqEditTarget - 1)];
+        if (filterIdx == 0) { sl.filterType = type;  sl.filterCutoff = cut;  sl.filterReso = reso;  sl.filterEnvAmt = env; }
+        else                { sl.filterType2 = type; sl.filterCutoff2 = cut; sl.filterReso2 = reso; sl.filterEnvAmt2 = env; }
         ch.markDspDirty();
+        // The LFO's "filter is off" warning must update the INSTANT a filter is toggled here (a full
+        // refreshDetailPanel doesn't run on a filter edit). Recompute from the LFO's own slot.
+        auto& lsl = ch.slots[envTargetSlot()];
+        auto on = [](int t){ return t >= DrumChannel::LowPass && t <= DrumChannel::Notch; };
+        lfoDisplay.setFilterOn(on(lsl.filterType) || on(lsl.filterType2));
     };
 
     // Filter (multimode) + its type selector
@@ -6298,7 +6837,7 @@ void DrumSequencerEditor::setupComponents()
     lblDrvType.setText("Drive Type", juce::dontSendNotification);
     lblDrvType.setFont(juce::Font(9.0f)); lblDrvType.setJustificationType(juce::Justification::centred);
     lblDrvType.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
-    comboDriveType.addItem("Off",       1);
+    comboDriveType.addItem("Drive: Off", 1);   // labelled so the dropdown reads as DRIVE (the "Drive" text label was removed)
     comboDriveType.addItem("Soft Clip", 2);
     comboDriveType.addItem("Hard Clip", 3);
     comboDriveType.addItem("Tube",      4);
@@ -6449,8 +6988,38 @@ void DrumSequencerEditor::setupComponents()
         });
     };
 
-    setupKnob(knobReverb,  lblRev, "Reverb",  0.0,   1.0,   0.0,   1.0, fmtPct);
-    setupKnob(knobDelay,   lblDel, "Delay",   0.0,   1.0,   0.0,   1.0, fmtPct);
+    setupKnob(knobReverb,  lblRev, "Rev Send", 0.0,  1.0,   0.0,   1.0, fmtPct);   // SEND into the shared reverb
+    setupKnob(knobDelay,   lblDel, "Dly Send", 0.0,  1.0,   0.0,   1.0, fmtPct);   // SEND into the shared delay
+    setupKnob(knobChMix,   lblChMix,   "Chorus", 0.0, 1.0,   0.0,   1.0,
+              [](double v){ return v <= 0.001 ? juce::String("Off") : juce::String(juce::roundToInt(v * 100.0)) + "%"; });
+    knobChMix.onValueChange = [this]{ if(!ignoreKnobCallbacks) proc.sequencer.channel(selectedChannel).slots[envTargetSlot()].chorusMix = (float)knobChMix.getValue(); };
+    knobChMix.onDragEnd     = [this]{ if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel); };
+    knobChMix.setTooltip("Per-slot lush 3-voice STEREO chorus - ONE knob, saved with the sound.\n\n"
+        "- Turn up to widen/thicken this slot (pads, keys, plucks, leads).\n"
+        "- The modulation speed + depth are fixed at the musical sweet spot (part of the effect's design, "
+        "like the reverb's diffusion) - so every position of this knob sounds good.");
+    setupKnob(knobTone,  lblTone,  "Tone",  -1.0, 1.0, 0.0, 1.0,
+              [](double v){ const int t = juce::roundToInt(v * 100.0);
+                            return t == 0 ? juce::String("Flat") : (t < 0 ? "Dark " + juce::String(-t) : "Brt " + juce::String(t)); });
+    setupKnob(knobPunch, lblPunch, "Punch", -1.0, 1.0, 0.0, 1.0,
+              [](double v){ const int t = juce::roundToInt(v * 100.0);
+                            return t == 0 ? juce::String("Off") : (t < 0 ? "Soft " + juce::String(-t) : "+" + juce::String(t)); });
+    setupKnob(knobComp,  lblComp,  "Comp",   0.0, 1.0, 0.0, 1.0,
+              [](double v){ return v <= 0.001 ? juce::String("Off") : juce::String(juce::roundToInt(v * 100.0)) + "%"; });
+    knobTone.onValueChange  = [this]{ if(!ignoreKnobCallbacks) proc.sequencer.channel(selectedChannel).slots[envTargetSlot()].fxTone  = (float)knobTone.getValue(); };
+    knobPunch.onValueChange = [this]{ if(!ignoreKnobCallbacks) proc.sequencer.channel(selectedChannel).slots[envTargetSlot()].fxPunch = (float)knobPunch.getValue(); };
+    knobComp.onValueChange  = [this]{ if(!ignoreKnobCallbacks) proc.sequencer.channel(selectedChannel).slots[envTargetSlot()].fxComp  = (float)knobComp.getValue(); };
+    for (auto* k : { &knobTone, &knobPunch, &knobComp })
+        k->onDragEnd = [this]{ if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel); };
+    knobTone.setTooltip("TONE (per slot): one-knob tilt EQ around ~800 Hz.\n\n"
+        "- Left = darker/warmer (highs down, lows up), right = brighter/thinner (+/-6 dB).\n"
+        "- The quick tone fix now that the old 5-band EQ is gone; for resonant shaping use the FILTER display.");
+    knobPunch.setTooltip("PUNCH (per slot): transient shaper - reshapes each hit's ATTACK.\n\n"
+        "- Right = more snap/click (drums cut through), left = softened attack (felt-piano, pillowy pads).\n"
+        "- Works per hit on this slot only; 0 = untouched.");
+    knobComp.setTooltip("COMP (per slot): one-knob compressor on this slot's summed output.\n\n"
+        "- Turn up to squash peaks + raise the body (automatic makeup): fatter drums, more even keys.\n"
+        "- Fixed fast attack / musical release; 0 = off.");
 
     // Per-slot LFO visual (FX box bottom): the drawn sine IS the parameters. Three independent
     // LFOs per slot - the drag edits ONLY the tab-selected one.
@@ -6461,10 +7030,40 @@ void DrumSequencerEditor::setupComponents()
         auto& sl = ch.slots[envTargetSlot()];
         sl.lfoRate[dest] = rate; sl.lfoAmt[dest] = amt;
         ch.markDspDirty();
-        lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.filterType == DrumChannel::LowPass,
+        lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)), sl.oscShape >= DrumChannel::WvCustom,
                              envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8));
     };
+    // Tempo sync is edited IN the visual (Sync button + snapped wave drag) - write it straight back.
+    lfoDisplay.onSyncChange = [this](int dest, float sync) {
+        if (ignoreKnobCallbacks) return;
+        auto& ch = proc.sequencer.channel(selectedChannel);
+        ch.slots[envTargetSlot()].lfoSync[juce::jlimit(0, 3, dest)] = sync;
+        ch.markDspDirty();
+    };
     lfoDisplay.onDragEnd = [this] { if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel); };
+
+    // ---- Per-slot FX + Chorus + Keytrack + LFO-sync DRAG-FADERS (Arp Rate-fader style, slot-coloured).
+    //      All write the SELECTED slot; the accent follows the FX slot selector (yellow 1 / pink 2).
+    auto pctFader = [](float v){ return juce::String(juce::roundToInt(v * 100.0f)) + "%"; };
+    auto setupFxFader = [this](SlotDragFader& fd, const juce::String& name, float dflt,
+                               std::function<juce::String(float)> fmt,
+                               std::function<void(float)> write, const juce::String& tip) {
+        content.addAndMakeVisible(fd);
+        fd.setLabel(name); fd.setDefault(dflt); fd.format = std::move(fmt);
+        fd.setTooltip(tip);
+        fd.onChange = [this, write = std::move(write)](float v) { if (! ignoreKnobCallbacks) write(v); };
+        fd.onDragEnd = [this] { if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel); };
+    };
+    setupFxFader(fxDriveFader, "Drive", 0.0f, pctFader,
+        [this](float v){ proc.sequencer.channel(selectedChannel).slots[envTargetSlot()].fxDrive = v; },
+        "How hard THIS slot is pushed into distortion (the Drive TYPE is the dropdown beside it).\n\n"
+        "- Per slot: slot 1 and slot 2 distort independently.\n- Drag left/right; double-click = off.");
+    setupFxFader(keytrackFader, "Keytrack", 0.0f, [](float v){ return v <= 0.001f ? juce::String("Off") : juce::String(juce::roundToInt(v * 100.0f)) + "%"; },
+        [this](float v){ auto& sl = proc.sequencer.channel(selectedChannel).slots[juce::jlimit(0, DrumChannel::NUM_SLOTS - 1, eqEditTarget - 1)];
+                         if (freqDisplay.active() == 0) sl.filterKeyTrack = v; else sl.filterKeyTrack2 = v; },
+        "Makes the resonant FILTER cutoff FOLLOW the note pitch.\n\n"
+        "- 0 = fixed cutoff. 100% = the cutoff tracks 1:1 (doubles per octave), so high notes stay bright.\n"
+        "- Needs the slot filter ON (pick its type + cutoff on the FILTER display to the left).");
     setupKnob(knobReverbRoom,  lblRevRoom,  "Size",  0.0, 1.0,  0.5,   1.0, fmtPct);
     setupKnob(knobReverbDecay, lblRevDecay, "Decay", 0.0, 1.0,  0.5,   1.0, fmtPct);
     setupKnob(knobReverbWet,   lblRevWet,   "Wet",   0.0, 1.0,  0.4,   1.0, fmtPct);
@@ -6587,7 +7186,50 @@ void DrumSequencerEditor::setupComponents()
         };
         slotEd[b].onFileDropped   = dropLoad;
         waveform[b].onFileDropped = dropLoad;
+        // ADDITIVE Custom wave: the preview reads the baked table; clicking it opens the harmonic editor.
+        slotEd[b].morphView.getCustomTbl = [this, b]() -> const float* {
+            auto& ch = proc.sequencer.channel(selectedChannel);
+            const auto& sl = ch.slots[b];
+            // in MOTION (glide / WAVE LFO) the split view starts at frame A; a STATIC position
+            // shows the EXACT two-frame blend the DSP plays (message-thread scratch, read
+            // immediately by the paint that asked for it).
+            if (sl.addSeg[0] > 0.001f || sl.lfoAmt[3] > 0.001f || sl.addPos <= 0.001f)
+                return ch.addTbl[b][0];
+            static float blend[DrumChannel::ADD_TBL];
+            const float wtp = juce::jlimit(0.0f, 1.0f, sl.addPos) * (float)(DrumChannel::ADD_FRAMES - 1);
+            const int   f0 = juce::jmin((int) wtp, DrumChannel::ADD_FRAMES - 2);
+            const float fm = wtp - (float) f0;
+            for (int i = 0; i < DrumChannel::ADD_TBL; ++i)
+                blend[i] = ch.addTbl[b][f0][i] + (ch.addTbl[b][f0 + 1][i] - ch.addTbl[b][f0][i]) * fm;
+            return blend; };
+        slotEd[b].morphView.getCustomFrame = [this, b](int f) -> const float* {
+            return proc.sequencer.channel(selectedChannel)
+                       .addTbl[b][juce::jlimit(0, DrumChannel::ADD_FRAMES - 1, f)]; };
+        slotEd[b].morphView.onOpenCustom = [this, b] {
+            harmEdSlot = b;
+            harmEd.slotIdx = b;
+            harmEd.clickIgnore = &slotEd[b].morphView;   // the preview's own click re-opens, never toggle-fights
+            harmEd.accent = b == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8);
+            { auto& sl = proc.sequencer.channel(selectedChannel).slots[b];
+              harmEd.setValues(sl.addH, sl.addPh, sl.addSeg, sl.addPos); }
+            harmEd.setVisible(true); harmEd.toFront(false);
+        };
     }
+    // The DRAW HARMONICS overlay (shared by both slots; a content child, closed by X / layoutContent).
+    content.addChildComponent(harmEd);
+    harmEd.onChange = [this] {
+        auto& ch = proc.sequencer.channel(selectedChannel);
+        auto& sl = ch.slots[juce::jlimit(0, DrumChannel::NUM_SLOTS - 1, harmEdSlot)];
+        for (int k = 0; k < DrumChannel::ADD_HARM; ++k)
+            for (int f = 0; f < DrumChannel::ADD_FRAMES; ++f)
+            { sl.addH[f][k] = harmEd.vals[f][k]; sl.addPh[f][k] = harmEd.phs[f][k]; }
+        for (int k = 0; k < DrumChannel::ADD_FRAMES - 1; ++k) sl.addSeg[k] = harmEd.seg[k];
+        sl.addPos = harmEd.wtPos;
+        ch.rebuildAddTables(); ch.markDspDirty();
+        slotEd[harmEdSlot].morphView.repaint();
+    };
+    harmEd.onDragEnd = [this] { if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel); };
+    harmEd.onClose   = [this] { harmEd.setVisible(false); };
     content.addAndMakeVisible(lblPadHint);
     lblPadHint.setText("Drag the yellow dot to\nadjust sound levels.", juce::dontSendNotification);
     lblPadHint.setFont(juce::Font(12.5f)); lblPadHint.setJustificationType(juce::Justification::centred);
@@ -6628,12 +7270,13 @@ void DrumSequencerEditor::setupComponents()
     setupGroupHeader(hdrPitch, "PITCH ENVELOPE");
     setupGroupHeader(hdrVoice, "UNISON");   // sub-title above the voice visual (detune/vibrato; SCALE moved above the keyboard)
     setupGroupHeader(hdrAmpEnv, "AMP ENVELOPE");
-    setupGroupHeader(hdrEqBox,  "EQ");
-    // === PER-SLOT EQ (begin) - target picker (All / 1 / 2 / 3) ===
-    slotSelEq.labels = { "All", "1", "2" };
+    setupGroupHeader(hdrEqBox,  "FILTER");
+    // The FILTER is PER SLOT (the "All" channel target + the static EQ were removed, v1.3.5). Pick which
+    // slot's filter you edit. s = slot index (0/1); eqEditTarget = s + 1 (1 or 2, never 0/All). Labels
+    // stay "1"/"2" so the SlotSelector keeps its yellow/pink slot colours.
+    slotSelEq.labels = { "1", "2" };
     content.addAndMakeVisible(slotSelEq);
-    slotSelEq.onSelect = [this](int s) { if (ignoreKnobCallbacks) return; eqEditTarget = s; refreshEqTarget(); };
-    // === PER-SLOT EQ (end) ===
+    slotSelEq.onSelect = [this](int s) { if (ignoreKnobCallbacks) return; eqEditTarget = s + 1; refreshEqTarget(); };
 
     // Unison / Detune / Vibrato as an interactive VISUAL (like the amp/pitch env editors), editing the
     // selected slot. The 1/2/3 selector (slotSelPitch) above it chooses which slot.
@@ -6649,7 +7292,7 @@ void DrumSequencerEditor::setupComponents()
         proc.sequencer.channel(selectedChannel).markDspDirty();
     };
 
-    static const char* srcNames[5] = { "Sample", "Noise", "Analog", "FM", "Karplus-Strong" };
+    static const char* srcNames[5] = { "Sample", "Noise", "Oscillator", "FM", "Karplus-Strong" };
     for (int i = 0; i < 5; ++i)
     {
         content.addAndMakeVisible(lblSrc[i]);
@@ -6893,7 +7536,7 @@ void DrumSequencerEditor::setupComponents()
     knobFmFeedback.onValueChange  = [this] { if (!ignoreKnobCallbacks) proc.sequencer.channel(selectedChannel).fmFeedback       = (float)knobFmFeedback.getValue(); };
 
     setupGroupHeader(hdrSamplerG, "SAMPLE");
-    setupGroupHeader(hdrOscG,   "ANALOG");
+    setupGroupHeader(hdrOscG,   "OSCILLATOR");
     setupGroupHeader(hdrNoiseG, "NOISE");
     setupGroupHeader(hdrFmG,    "FM");
     setupGroupHeader(hdrPhysG,  "KARPLUS-STRONG");
@@ -6991,8 +7634,10 @@ void DrumSequencerEditor::setupComponents()
     knobReso.setTooltip("Filter resonance - emphasises the sound right at the cutoff for a sharper, more vocal tone.");
     knobEnvAmt.setTooltip("Lets the envelope sweep the filter cutoff over time for a moving, dynamic tone.");
     knobDrive.setTooltip("How hard the sound is pushed into distortion. More drive = grittier, louder, more aggressive.");
-    knobReverb.setTooltip("How much of this channel is sent to the shared reverb (set its size/decay in Pattern FX).");
-    knobDelay.setTooltip("How much of this channel is sent to the shared delay (echo).");
+    knobReverb.setTooltip("REV SEND: how much of THIS slot is sent into the shared reverb. The reverb itself "
+                          "(Size/Decay/Wet...) lives in the MASTER box - one reverb, every slot sends into it.");
+    knobDelay.setTooltip("DLY SEND: how much of THIS slot is sent into the shared delay. The delay itself "
+                         "(Time/Feedback/Wet...) lives in the MASTER box - one delay, every slot sends into it.");
     knobReverbRoom.setTooltip("Reverb size - small room to large hall.");
     knobReverbDecay.setTooltip("How long the reverb tail lasts before fading away.");
     knobReverbWet.setTooltip("Overall reverb amount (how loud the reverb is in the mix).");
@@ -7083,15 +7728,16 @@ static juce::String engineDescription(int eng)
                                             "Trim regions, reverse, crush, stretch + an optional amp envelope.";
         case DrumChannel::SrcNoise:  return "NOISE - coloured noise (White/Pink/Brown/Grey/Purple) through a band-pass. "
                                             "Hats, claps, texture; Reso makes it pitched/whistling.";
-        case DrumChannel::SrcOsc:    return "ANALOG + FM - a band-limited oscillator (17 waves + Warp wavefold), with an "
+        case DrumChannel::SrcOsc:    return "OSCILLATOR - a band-limited oscillator (analog waves + additive shapes + a "
+                                            "drawable Custom wave + Warp wavefold), with an "
                                             "FM section on top (Amount 0 = pure analog). Kicks, basses, bells, leads.";
         case DrumChannel::SrcFM:     return "FM (legacy) - an old project's 2-operator FM slot. New sounds: use "
-                                            "Analog + FM (its FM section is the same maths).";
+                                            "Oscillator (its FM section is the same maths).";
         case DrumChannel::SrcPhys:   return "KARPLUS-STRONG - a plucked/struck string synthesis: materials, stiffness, "
                                             "strike position. Drag the string visual; Ring = its natural decay.";
         case DrumChannel::SrcSynth:  return "SYNTH (legacy) - an old project's unified-synth slot (osc + noise + resonator).";
         case DrumChannel::SrcWave:   return "WAVETABLE (legacy) - an old project's wavetable slot. New sounds: the "
-                                            "Analog + FM waves + Warp cover this ground.";
+                                            "Oscillator waves + Warp cover this ground.";
         case DrumChannel::SrcModal:  return "MODAL - a struck resonant body (marimba, bell, glass, membrane, plate...): "
                                             "a bank of ringing modes. Drag the hammer visual; Ring = the mode decay.";
         default:                     return "Pick this slot's sound engine (or a sample). Two slots blend into one sound.";
@@ -7145,7 +7791,7 @@ void DrumSequencerEditor::rebuildSlotMenus()
         sampleSub.addItem(ID_REFRESH_SAMPLES, "Refresh samples folder");   // rescan so newly-added files show up
         sampleSub.addItem(ID_SHOW_SAMPLES,    "Show Folder");              // open the Samples folder to drop files in
         root->addSubMenu("Sample", sampleSub);
-        root->addItem(3, "Noise"); root->addItem(4, "Analog + FM");   // Depth 0 = analog, raise it for FM (resonator removed)
+        root->addItem(3, "Noise"); root->addItem(4, "Oscillator");   // analog waves + FM + drawable additive Custom
         root->addItem(6, "Karplus-Strong");   // (was "Physical") - the honest algorithm name; "FM"/"Synth"/"Wavetable" retired (kept parseable for old
                                         // projects); the Oscillator now covers wavetable-style shaping (more shapes + Warp).
         root->addItem(9, "Modal");      // id = engine+2 -> SrcModal (7); maps automatically (struck resonant body)
@@ -7161,7 +7807,7 @@ void DrumSequencerEditor::rebuildSlotMenus()
 void DrumSequencerEditor::syncPadFromSlots(bool recenter)
 {
     auto& ch = proc.sequencer.channel(selectedChannel);
-    static const char* eng[DrumChannel::NUM_SOURCES + 3] = { "Sample", "Noise", "Analog + FM", "FM", "Karplus-Strong", "Synth", "Wavetable", "Modal" };
+    static const char* eng[DrumChannel::NUM_SOURCES + 3] = { "Sample", "Noise", "Oscillator", "FM", "Karplus-Strong", "Synth", "Wavetable", "Modal" };
     bool a[DrumChannel::NUM_SLOTS];
     int total[DrumChannel::NUM_SOURCES + 3] = {}, seen[DrumChannel::NUM_SOURCES + 3] = {};
     for (int b = 0; b < DrumChannel::NUM_SLOTS; ++b)
@@ -7244,7 +7890,8 @@ void DrumSequencerEditor::setShapeSlot(int s)
     knobReverb.setValue(sl.fxReverbSend,  juce::dontSendNotification);
     knobDelay.setValue (sl.fxDelaySend,   juce::dontSendNotification);
     comboDriveType.setSelectedId(sl.fxDriveType + 1, juce::dontSendNotification);
-    lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.filterType == DrumChannel::LowPass,
+    updateFxFaders(sl);
+    lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)), sl.oscShape >= DrumChannel::WvCustom,
                          envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8));
     // The EQ target follows the selected slot too (user: picking a slot shouldn't leave EQ on
     // "All"). Picking "All" on the EQ selector afterward still works - it just isn't the default.
@@ -7636,7 +8283,7 @@ void DrumSequencerEditor::refreshKeysPanel()
     keysPanel.polySwitch.setToggleState(kch.keysPolyMode, juce::dontSendNotification);
     keysPanel.polyMode = kch.keysPolyMode;
     ignoreKnobCallbacks = prevIgnore;
-    // HUMANIZE enabled only with 2 audible slots; STRUM only when a slot is in Chord or Scale mode.
+    // SLOT OFFSET needs BOTH slots (it delays slot 2 behind slot 1); STRUM only when a slot is in Chord/Scale.
     auto slotAudible = [&](int s){ return kch.slots[s].engine >= 0 && kch.slots[s].weight > 0.001f; };
     const bool humOk   = slotAudible(0) && slotAudible(1);
     const bool strumOk = (kch.slots[0].scaleOn || kch.slots[0].chordMode > 0
@@ -8260,6 +8907,34 @@ void DrumSequencerEditor::updateStripParamIds()
     }
 }
 
+// Push the per-slot FX / Chorus / Keytrack / LFO-Sync drag-fader values for the edited slot, and
+// tint every fader with the slot's colour (yellow slot 1 / pink slot 2). setValue01 never fires
+// onChange, so this is safe to call from refresh without guarding ignoreKnobCallbacks.
+void DrumSequencerEditor::updateFxFaders(const DrumChannel::Slot& sl)
+{
+    const juce::Colour acc = envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8);
+    for (auto* fd : { &fxDriveFader, &keytrackFader }) fd->setAccent(acc);
+    fxDriveFader.setValue01(sl.fxDrive);
+    // Reverb/Delay/Pan + Chorus are KNOBS now (set here); ignoreKnobCallbacks is on during refresh.
+    knobChMix.setValue  (sl.chorusMix,    juce::dontSendNotification);
+    knobTone.setValue   (sl.fxTone,       juce::dontSendNotification);
+    knobPunch.setValue  (sl.fxPunch,      juce::dontSendNotification);
+    knobComp.setValue   (sl.fxComp,       juce::dontSendNotification);
+    // (LFO tempo sync lives INSIDE the LfoDisplay now - setValues carries sl.lfoSync.)
+    refreshKeytrackFader();   // Keytrack follows the ACTIVE filter (F1/F2) with its colour + label
+}
+
+// The Keytrack fader edits the filter you last touched on the display (F1 or F2), coloured to match.
+void DrumSequencerEditor::refreshKeytrackFader()
+{
+    const int si = juce::jlimit(0, DrumChannel::NUM_SLOTS - 1, eqEditTarget - 1);
+    auto& sl = proc.sequencer.channel(selectedChannel).slots[si];
+    const int fi = freqDisplay.active();
+    keytrackFader.setValue01(fi == 0 ? sl.filterKeyTrack : sl.filterKeyTrack2);
+    keytrackFader.setAccent(FrequencyDisplay::filtColour(fi));
+    keytrackFader.setLabel(fi == 0 ? "F1 Key" : "F2 Key");
+}
+
 void DrumSequencerEditor::refreshDetailPanel()
 {
     ignoreKnobCallbacks = true;
@@ -8300,7 +8975,8 @@ void DrumSequencerEditor::refreshDetailPanel()
       knobReverb.setValue(sl.fxReverbSend,  juce::dontSendNotification);
       knobDelay.setValue (sl.fxDelaySend,   juce::dontSendNotification);
       comboDriveType.setSelectedId(sl.fxDriveType + 1, juce::dontSendNotification);
-      lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.filterType == DrumChannel::LowPass,
+      updateFxFaders(sl);
+      lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)), sl.oscShape >= DrumChannel::WvCustom,
                            envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8)); }
     refreshKeysPanel();   // the KEYS panel follows the selected channel/slot too
 
@@ -8520,19 +9196,18 @@ void DrumSequencerEditor::updateVisuals()
     refreshEqTarget();
 }
 
-// Point the EQ display at the chosen target: All = the final channel EQ, 1/2/3 = that slot's EQ.
+// Point the FILTER display at the chosen SLOT (1 or 2). The "All" channel-EQ target was REMOVED
+// (v1.3.5, user): the filter is PER SLOT now - it only touches that slot's own engine, and it's the
+// only spectral tool (the static EQ is gone). eqEditTarget is 1 or 2 (slot index + 1).
 void DrumSequencerEditor::refreshEqTarget()
 {
     auto& ch = proc.sequencer.channel(selectedChannel);
-    const bool isChan = (eqEditTarget <= 0);
-    auto& fsl = ch.slots[juce::jlimit(0, DrumChannel::NUM_SLOTS - 1, (isChan ? 1 : eqEditTarget) - 1)];
-    DrumChannel::EqBand* bands = isChan ? ch.eqBand : fsl.eqBand;
-    // The filter handle now lives on EVERY target: "All" edits the channel filter (on the mix),
-    // a slot target edits that slot's own filter (only its engine). showFilt = true either way.
-    if (isChan) freqDisplay.setBands(bands, ch.filterType, ch.filterCutoff, ch.filterReso, ch.filterEnvAmt, proc.spectrumRate(), true);
-    else        freqDisplay.setBands(bands, fsl.filterType, fsl.filterCutoff, fsl.filterReso, fsl.filterEnvAmt, proc.spectrumRate(), true);
-    proc.analysisSlot.store(isChan ? -1 : eqEditTarget - 1);   // spectrum follows the selected slot
-    slotSelEq.sel = eqEditTarget; slotSelEq.repaint();
+    const int si = juce::jlimit(0, DrumChannel::NUM_SLOTS - 1, eqEditTarget - 1);
+    auto& fsl = ch.slots[si];
+    freqDisplay.setFilters(fsl.filterType,  fsl.filterCutoff,  fsl.filterReso,  fsl.filterEnvAmt,
+                           fsl.filterType2, fsl.filterCutoff2, fsl.filterReso2, fsl.filterEnvAmt2, proc.spectrumRate());
+    proc.analysisSlot.store(si);   // spectrum follows the selected slot
+    slotSelEq.sel = si; slotSelEq.repaint();
 }
 
 void DrumSequencerEditor::timerCallback()
@@ -8845,6 +9520,16 @@ void DrumSequencerEditor::timerCallback()
     pitchEditor.setLengthSec(pitchEnvLenSec(envTargetSlot()));
     // Live LFO dot: the REAL phase of the newest playing voice on the selected channel/slot.
     lfoDisplay.setPhase(proc.sequencer.channel(selectedChannel).getLfoPhase(envTargetSlot(), lfoDisplay.selDest()));
+    { // live tempo + grid info so the wave/read-out always show the TRUE synced speed (change-gated)
+        auto& lch = proc.sequencer.channel(selectedChannel);
+        lfoDisplay.setTempoInfo((float) proc.sequencer.blockBarSeconds,
+                                (float) juce::jmax(1, lch.drawMode ? stepGrid.gridDiv() : lch.numSteps));
+    }
+    { // keep the LFO's "filter is off" warning correct regardless of how the filter was toggled (change-gated = cheap)
+        auto& lsl = proc.sequencer.channel(selectedChannel).slots[envTargetSlot()];
+        auto fOn = [](int t){ return t >= DrumChannel::LowPass && t <= DrumChannel::Notch; };
+        lfoDisplay.setFilterOn(fOn(lsl.filterType) || fOn(lsl.filterType2));
+    }
 }
 
 //==============================================================================
@@ -9194,6 +9879,7 @@ void DrumSequencerEditor::layoutContent()
     // picker floating over the NEW layout (user screenshot: "it all just scrambled").
     if (soundPicker != nullptr && soundPicker->isVisible())
         static_cast<SoundPickerPanel&>(*soundPicker).close();
+    harmEd.setVisible(false);   // same rule for the DRAW HARMONICS overlay
     const int W = DESIGN_W;
     const int gridLeft = STRIP_W + 4;
     const int gridW = W - gridLeft - 12;            // step grid now spans the full width
@@ -9431,9 +10117,14 @@ void DrumSequencerEditor::layoutContent()
           hdrAmpEnv.setBounds (ax, colTop, ampEqW, hdrH);                    // box header / "AMP ENVELOPE"
           slotSelAmp.setBounds(ax + 8, colTop + 18, ampEqW - 16, 16);
           envEditor.setBounds (ax + 8, GRAPH_Y, ampEqW - 16, GRAPH_H);
-          hdrEqBox.setBounds  (ax + 4, GRAPH_Y + GRAPH_H + 10, ampEqW - 8, hdrH);   // "EQ" sub-title
+          hdrEqBox.setBounds  (ax + 4, GRAPH_Y + GRAPH_H + 10, ampEqW - 8, hdrH);   // "FILTER / EQ" sub-title
           slotSelEq.setBounds (ax + 8, GRAPH_Y + GRAPH_H + 30, ampEqW - 16, 16);
-          freqDisplay.setBounds(ax + 8, GRAPH_Y + GRAPH_H + 50, ampEqW - 16, 124); }
+          // The EQ/filter display is shrunk a little to the LEFT so the vertical KEYTRACK fader sits on
+          // its right, under the same "FILTER / EQ" title (both control the resonant filter shown here).
+          const int ktW = 30, ktGap = 6, fdY = GRAPH_Y + GRAPH_H + 50, fdH = 124;
+          freqDisplay.setBounds (ax + 8, fdY, ampEqW - 16 - ktW - ktGap, fdH);
+          keytrackFader.setVertical(true);
+          keytrackFader.setBounds(ax + 8 + ampEqW - 16 - ktW, fdY, ktW, fdH); }
 
         // -- PITCH ENVELOPE column: title on TOP, its 1/2 selector BELOW it (matches the amp-env column), graph aligned
         //    with the amp-env graph. Then "UNISON/DETUNE/VIBRATO" with ITS OWN 1/2 selector under it, the voice visual,
@@ -9546,30 +10237,35 @@ void DrumSequencerEditor::layoutContent()
         hdrMasterFX.setBounds(0, 0, 0, 0); hdrMasterFX.setVisible(false);
         comboOutput.setBounds(0, 0, 0, 0); lblOutput.setBounds(0, 0, 0, 0);
 
-        // ===== FX column (cxFx, per-sound only): 1/2 selector, then a 2x2 grid -
-        //       top row = Drive type + Drive, bottom row = Reverb + Delay (sends). =====
+        // ===== FX column (cxFx, per-sound only): 1/2 selector | Drive dropdown + Drive-amount fader |
+        //       Reverb/Delay/Pan KNOBS | Chorus/Ch-Rate/Ch-Depth KNOBS | LFO visual + Sync/Rate faders. =====
         hdrSend.setBounds(cxFx, colTop, fxColW, hdrH);                            // "FX" header
-        slotSelFx.setBounds(cxFx + 6, colTop + 18, fxColW - 12, 16);              // aligned with the pitch column's 1/2 selector (its left neighbour)
-        // Knob rows sit TIGHT under the selector so the LFO visual gets the whole bottom half
-        // (user: the knobs "looked dumb" spread out over a tiny LFO strip).
-        lfoDisplay.setBounds(cxFx + 6, colTop + 214, fxColW - 12, colH - 220);
-        const int lblH = 12;
-        const int colL = cxFx + 6, colR = cxFx + fxColW / 2 + 2;                  // two cell columns
-        const int cellW = fxColW / 2 - 8;
-        const int KS = 58, kxL = colL + (cellW - KS) / 2, kxR = colR + (cellW - KS) / 2;
-        const int row1 = colTop + 40, row2 = colTop + 126;
-        auto kc = [&](LearnableKnob& kn, juce::Label& l, int kx, int y, int cellX) {
+        slotSelFx.setBounds(cxFx + 6, colTop + 18, fxColW - 12, 16);
+        knobDrive.setBounds(0, 0, 0, 0); knobDrive.setVisible(false);            // drive AMOUNT is the fader now
+        lblDrive.setBounds(0, 0, 0, 0); lblDrvType.setBounds(0, 0, 0, 0);        // (label removed; combo says "Drive: ...")
+        const int fxX = cxFx + 6, fxW = fxColW - 12;
+        // Row 1: Drive TYPE dropdown (left) + Drive AMOUNT fader (right), same line.
+        const int dRow = colTop + 38, dComboW = fxW / 2 - 2;
+        comboDriveType.setBounds(fxX, dRow, dComboW, 22);
+        fxDriveFader.setBounds(fxX + dComboW + 4, dRow, fxW - dComboW - 4, 22);
+        // Rows 2 + 3: three KNOBS each (>= master-knob size), Reverb/Delay/Pan then Chorus/Rate/Depth.
+        const int KSB = 46, kboxH = 16, cw = fxW / 3;
+        auto kFx = [&](LearnableKnob& kn, juce::Label& l, int col, int y) {
             kn.setVisible(true); l.setVisible(true);
-            kn.setBounds(kx, y, KS, KS + 13); l.setBounds(cellX, y + KS + 13, cellW, lblH); };
-        // Top row: Drive type (combo) | Drive (knob).
-        comboDriveType.setBounds(colL + (cellW - juce::jmin(cellW, 78)) / 2, row1 + 24, juce::jmin(cellW, 78), 26);
-        lblDrvType.setBounds(colL, row1 + KS + 13, cellW, lblH);
-        kc(knobDrive, lblDrive, kxR, row1, colR);
-        // Bottom row: Reverb send | Delay send.
-        kc(knobReverb, lblRev, kxL, row2, colL);
-        kc(knobDelay,  lblDel, kxR, row2, colR);
-        // (The reverb/delay character + Sync/Ping live in the MASTER box now.)
+            kn.setBounds(fxX + col * cw + (cw - KSB) / 2, y, KSB, KSB + kboxH);
+            l.setBounds(fxX + col * cw, y + KSB + kboxH, cw, 12);
+        };
+        const int row2 = colTop + 66, row3 = colTop + 66 + KSB + kboxH + 14;
+        kFx(knobReverb, lblRev, 0, row2); kFx(knobDelay, lblDel, 1, row2); kFx(knobChMix, lblChMix, 2, row2);
+        kFx(knobTone, lblTone, 0, row3); kFx(knobPunch, lblPunch, 1, row3); kFx(knobComp, lblComp, 2, row3);
+        // LFO visual fills everything left - tempo sync lives INSIDE it (Sync button + snapped drag).
+        const int lfoTop = row3 + KSB + kboxH + 16;
+        lfoDisplay.setBounds(fxX, lfoTop, fxW, juce::jmax(60, colTop + colH - hdrH - lfoTop - 2));
     }
+
+    // DRAW HARMONICS overlay: parked over the amp/pitch columns (opened from the Custom wave preview;
+    // hidden again at the top of every layoutContent like the sound picker).
+    harmEd.setBounds(cxAmp, colTop, ampEqW + gp + pitchW + gp + fxColW, colH);   // covers amp..FX (user-outlined area)
 
     hdrDrive.setBounds(0, 0, 0, 0);
     lblSampleSel.setBounds(0, 0, 0, 0);

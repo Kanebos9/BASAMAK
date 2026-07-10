@@ -453,7 +453,12 @@ void StepGridComponent::eraseColRange(int ch, int lo, int hi)
 void StepGridComponent::drawStrokeTo(int ch, juce::Point<int> pos)
 {
     const auto rect = drawRowRect(ch);
-    const int semi = yToDrawSemi(rect, pos.y, 36);
+    // PITCH LOCK (user): the stroke stays at the pitch where the press landed - dragging only extends
+    // the note in time (the magnified editor already worked this way; the free-pitch row drawing made
+    // it too easy to wander off-key). Release + press at another height = the next pitch.
+    const int semiRaw = yToDrawSemi(rect, pos.y, 36);
+    if (! drawErase && strokeLockSemi <= -100) strokeLockSemi = semiRaw;
+    const int semi = drawErase ? semiRaw : strokeLockSemi;
     const int col = drawColAt(pos.x);
     const int lo = juce::jmin(col, drawLastCol < 0 ? col : drawLastCol);
     const int hi = juce::jmax(col, drawLastCol < 0 ? col : drawLastCol);
@@ -1209,7 +1214,7 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
             // so the ROW is pure note drawing: left-drag draws (poly), right-drag erases; lens opens
             // the big editor. Per-note velocity/pan live in the right-click menu.
             if (onLens) { drawMagCh = dch; repaint(); return; }
-            drawDragCh = dch; drawErase = e.mods.isRightButtonDown(); drawLastCol = -1; strokeNoteIdx = -1;
+            drawDragCh = dch; drawErase = e.mods.isRightButtonDown(); drawLastCol = -1; strokeNoteIdx = -1; strokeLockSemi = -128;
             drawStrokeTo(dch, p);
             return;
         }
@@ -1424,7 +1429,7 @@ void StepGridComponent::mouseUp(const juce::MouseEvent&)
         return;
     }
     if (prMode != 0) { prMode = 0; prIdx = -1; repaint(); return; }   // piano-roll gesture ended
-    if (drawDragCh >= 0) { drawDragCh = -1; drawLastCol = -1; strokeNoteIdx = -1; drawReadSemi = -128; repaint(); return; }   // line stroke ended
+    if (drawDragCh >= 0) { drawDragCh = -1; drawLastCol = -1; strokeNoteIdx = -1; strokeLockSemi = -128; drawReadSemi = -128; repaint(); return; }   // line stroke ended
     // Loop-condition: a plain CLICK (no drag) toggles the bar under the cursor.
     if (editMode == ModeProb && condDragCh >= 0)
     {
