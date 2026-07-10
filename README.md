@@ -2,9 +2,13 @@
 
 <img width="1440" height="787" alt="Screenshot 2026-06-28 at 20 11 13" src="https://github.com/user-attachments/assets/7e98473c-c176-4a22-8f1d-b6945e213aca" />
 
-**BASAMAK** is a free, open-source **drum & bass synth / step-sequencer / sampler** — VST3, AU (macOS), and Standalone — for macOS, Windows, and Linux. Its built-in sounds are **synthesized** (analog/FM, physical-modelling, modal, noise) rather than sampled, so a channel can be a kick, a hi-hat, a plucked bell, *or* a full-blown bassline — every channel is playable as a pitched instrument with per-step pitch, glide and note-length. It also has a per-slot **sampler**, and ships with a CC0 sample library you can drop into any slot.
+**BASAMAK** started as a **drum synth / step-sequencer / sampler** but then I added so much features on it and now it's like a mini DAW. It's not drum specific anymore, you can synthesize regular keyboard sounds as well.
 
-Think of it as a **sketchpad for a whole track**: program a beat on some channels, write a **bass line** (or a lead) on others with per-step notes + 303-style slide, and finish it on the master bus. But you don't have to program everything — **play any pitched sound live from a MIDI keyboard** (or the on-screen keys) and **record** your performance straight into the pattern, either quantized to steps or as a **free, unquantized piano-draw lane**. Two synth slots per channel let you stack, say, a saw + a sub-oscillator for a fat bass, and any voice can be turned into a **chord**.
+It comes as VST3, AU (macOS), and Standalone for macOS, Windows, and Linux. Its built-in sounds are **synthesized** rather than sampled. But you can load sample as well. It also comes with a CC0 sample library.
+
+There are different sound sources, they mainly come from modal, karplus strong and a very flexible oscillator (it has additive, wavetable, FM features too)
+
+I think you should think of BASAMAK as a **sketchpad for a whole track**: because everything is in front of you. You can create your drum sequences, bass lines and play along with them in the same plugin. It has midi recording and midi dragging (in case you wanna drag it on your DAW's track) feature too.
 
 <img width="1440" height="786" alt="Screenshot 2026-06-28 at 20 12 15" src="https://github.com/user-attachments/assets/e6a438b9-ca91-445c-99ef-6864f092997e" />
 
