@@ -1889,7 +1889,10 @@ void ADSRDisplay::paint(juce::Graphics& g)
     // so dec IS the audible decay time - matches the handle read-out (no 3.2x inflation, no release).
     const float total = atk + (strikeRing ? 0.0f : hld) + dcy;
     g.setColour(juce::Colour(0xffcdd8ec)); g.setFont(juce::Font(10.5f, juce::Font::bold));
-    g.drawText("length ~" + envTimeStr(total), getLocalBounds().reduced(5).withTrimmedTop(14), juce::Justification::topRight, false);
+    // Release shown SEPARATELY: it only plays at a note's END (key-up / Note Length), so it is not
+    // part of the one-shot length - but hiding it entirely read as "release does nothing" (user).
+    g.drawText("length ~" + envTimeStr(total) + (rel > 0.05f ? "  +rel " + envTimeStr(rel) : juce::String()),
+               getLocalBounds().reduced(5).withTrimmedTop(14), juce::Justification::topRight, false);
 
     if (strikeRing) {   // make it obvious this is the Physical-specific envelope (cue at top-left)
         g.setColour(juce::Colour(0xff7a8aa8)); g.setFont(juce::Font(9.5f, juce::Font::bold));
@@ -2973,14 +2976,15 @@ void LfoDisplay::paint(juce::Graphics& g)
 
     // GHOST waves first: the other destinations that are running (dim, their own hue) - makes it
     // obvious the three LFOs are independent and can stack.
-    auto wavePath = [&a, cy](float rate, float amt, int shape) {
+    const uint32_t cycBase = liveCyc_;   // Random: draw the PLAYING note's rolled pattern (changes per note)
+    auto wavePath = [&a, cy, cycBase](float rate, float amt, int shape) {
         const float cyc = lfoCyclesShown(rate);
         const float amp = amt * (a.getHeight() * 0.5f - 2.0f);
         juce::Path w;
         for (float px = 0; px <= a.getWidth(); px += 1.5f)
         {
             const double ph = (double) px / (double) a.getWidth() * (double) cyc * 2.0 * juce::MathConstants<double>::pi;
-            const float y = cy - amp * uiLfoShapeVal(shape, ph, (uint32_t)(ph / (2.0 * juce::MathConstants<double>::pi)));
+            const float y = cy - amp * uiLfoShapeVal(shape, ph, cycBase + (uint32_t)(ph / (2.0 * juce::MathConstants<double>::pi)));
             if (px == 0) w.startNewSubPath(a.getX(), y); else w.lineTo(a.getX() + px, y);
         }
         return w;
@@ -9719,6 +9723,7 @@ void DrumSequencerEditor::timerCallback()
     pitchEditor.setLengthSec(pitchEnvLenSec(envTargetSlot()));
     // Live LFO dot: the REAL phase of the newest playing voice on the selected channel/slot.
     lfoDisplay.setPhase(proc.sequencer.channel(selectedChannel).getLfoPhase(envTargetSlot(), lfoDisplay.selDest()));
+    lfoDisplay.setLiveCycle(proc.sequencer.channel(selectedChannel).getLfoCycle(envTargetSlot(), lfoDisplay.selDest()));
     {   // DRIFT visual honesty: push the last hit's REAL rolled detunes into the unison view
         auto& dc = proc.sequencer.channel(selectedChannel);
         float dcents[DrumChannel::UNI_MAX + 1];

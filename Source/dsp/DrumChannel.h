@@ -632,6 +632,14 @@ public:
         for (auto& v : voices) if (v.active() && (nv == nullptr || v.voiceSamples < nv->voiceSamples)) nv = &v;
         return nv != nullptr ? nv->sv[juce::jlimit(0, NUM_SLOTS - 1, slot)].lfoPhase[juce::jlimit(0, 3, dest)] : -1.0;
     }
+    // The newest voice's S&H cycle counter (seeded per note) - the editor draws the REAL rolled
+    // Random pattern with it, so the picture changes per note exactly like the sound does.
+    uint32_t getLfoCycle(int slot, int dest) const
+    {
+        const Voice* nv = nullptr;
+        for (auto& v : voices) if (v.active() && (nv == nullptr || v.voiceSamples < nv->voiceSamples)) nv = &v;
+        return nv != nullptr ? nv->sv[juce::jlimit(0, NUM_SLOTS - 1, slot)].lfoCyc[juce::jlimit(0, 3, dest)] : 0;
+    }
 
     // PER-SLOT sample storage: each Sample slot has its OWN buffer + region + speed + reverse, so both
     // slots can hold different samples (each with its own waveform/trim/reverse). Public so the

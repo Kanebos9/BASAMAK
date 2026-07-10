@@ -650,6 +650,7 @@ public:
     int  selDest() const { return dest_; }   // the tab being edited (the timer feeds ITS phase)
     void setFilterOn(bool on) { if (on != filtOn_) { filtOn_ = on; repaint(); } }   // live update of the FILT-off warning
     void setPhase(double ph) { if (std::abs(ph - phase_) > 1.0e-3) { phase_ = ph; repaint(); } }
+    void setLiveCycle(uint32_t c2) { if (c2 != liveCyc_) { liveCyc_ = c2; if (shape_[dest_] == 4) repaint(); } }
     void paint(juce::Graphics&) override;
     void mouseDown(const juce::MouseEvent&) override;
     void mouseDrag(const juce::MouseEvent&) override;
@@ -662,6 +663,7 @@ private:
     int   shape_[4] = {};                          // 0 Sine / 1 Tri / 2 Saw / 3 Square / 4 Random (S&H)
     bool  free_[4]  = {};                          // FREE-RUN (timeline-anchored) vs RETRIG per note
     double freeSec_ = 0.0;                         // live free-run clock (editor timer)
+    uint32_t liveCyc_ = 0;                         // the playing note's S&H cycle base (Random draws ITS pattern)
     float barSec_ = 2.0f, gridCpb_ = 16.0f;    // live tempo + grid density (setTempoInfo)
     int dest_ = 0; bool filtOn_ = false, waveOn_ = false;   // waveOn_ = the slot's Wave is Custom (WAVE dest audible)
     double phase_ = -1.0;
@@ -1066,7 +1068,7 @@ public:
     void mouseUp(const juce::MouseEvent&) override { const bool ed = drag >= 0; drag = -1; repaint(); if (ed && onDragEnd) onDragEnd(); }
     juce::String getTooltip() override;
 
-    static constexpr float maxA = 6.0f, maxH = 6.0f, maxD = 6.0f, maxR = 2.0f;   // A/H/D up to 6 s; Release up to 2 s (live via a gate: held key / Note Length)
+    static constexpr float maxA = 6.0f, maxH = 6.0f, maxD = 6.0f, maxR = 4.0f;   // A/H/D up to 6 s; Release up to 4 s (2 s forced abrupt string/bell fades - user)
     static constexpr float maxAStrike = 0.05f;   // Strike/Ring mode: attack (Strike) maxes at 50 ms (a strike is short)
     static constexpr float kMinHold = 14.0f;   // px the Hold handle sits right of Attack (so it's visible at hold=0)
     static constexpr float kSkew = 0.22f;      // <1 => lots of room / fine control at the low (ms) end (very slow start)

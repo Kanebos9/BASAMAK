@@ -1643,11 +1643,52 @@ static DC::Slot& mkAdd(DC& c, std::initializer_list<std::pair<int,float>> hs)
         for (int k = 0; k < DC::ADD_HARM; ++k) { s.addH[f][k] = s.addH[0][k]; s.addPh[f][k] = s.addPh[0][k]; }
     return s;
 }
-static void aClarinet(DC& c) {     // woody odd-harmonic pipe with a nasal 9th bump (NOT the plain Reed 1/h)
+// -- WIND helpers: a wind instrument = tone + BREATH (a quiet filtered-noise layer with the same
+//    envelope) + a touch of DRIFT and vibrato so held notes live. The old static clarinet read as
+//    "some type of piano" (user) because nothing moved and there was no air.
+static DC::Slot& windBreath(DC& c, float w, float centerHz, float atk, float dec, float sus, float rel)
+{
+    auto& n = mkSlot(c, DC::SrcNoise);
+    n.weight = w; n.noiseType = 0;                      // white air, band-passed at the bore's brightness
+    n.noiseCenter = centerHz; n.noiseRes = 0.55f;
+    n.atk = atk; n.dec = dec; n.sustain = sus; n.release = rel;
+    return n;
+}
+static void aClarinet(DC& c) {     // woody odd-harmonic pipe with a nasal 9th bump + BREATH + living pitch
     auto& s = mkAdd(c, {{1,1.0f},{3,0.75f},{5,0.5f},{7,0.2f},{9,0.35f},{11,0.12f}});
-    s.atk = 0.03f; s.dec = 0.5f; s.sustain = 0.8f; s.release = 0.15f;
+    s.weight = 0.88f;
+    s.atk = 0.07f; s.dec = 0.5f; s.sustain = 0.85f; s.release = 0.22f;   // slower start = blown, not struck
     s.filterType = DC::LowPass; s.filterCutoff = 2400.0f; s.filterReso = 0.8f; s.filterKeyTrack = 0.5f;
-    s.fxTone = -0.25f; c.volume = 0.74f;
+    s.fxTone = -0.25f; s.drift = 0.25f; s.vibrato = 0.10f;
+    windBreath(c, 0.12f, 2600.0f, 0.05f, 0.4f, 0.5f, 0.2f);
+    c.volume = 0.74f;
+}
+static void aFlute(DC& c) {        // nearly pure tone + plenty of air; gentle vibrato carries the note
+    auto& s = mkAdd(c, {{1,1.0f},{2,0.22f},{3,0.06f}});
+    s.weight = 0.8f;
+    s.atk = 0.09f; s.dec = 0.6f; s.sustain = 0.9f; s.release = 0.25f;
+    s.drift = 0.3f; s.vibrato = 0.16f; s.fxTone = 0.1f;
+    windBreath(c, 0.2f, 3400.0f, 0.06f, 0.5f, 0.6f, 0.22f);
+    c.volume = 0.72f;
+}
+static void aPanFlute(DC& c) {     // breathy pipe: a CHIFF of air at the attack, hollow body after
+    auto& s = mkAdd(c, {{1,1.0f},{2,0.5f},{4,0.1f}});
+    s.weight = 0.72f;
+    s.atk = 0.05f; s.dec = 0.8f; s.sustain = 0.75f; s.release = 0.3f;
+    s.drift = 0.35f; s.vibrato = 0.08f;
+    auto& n = windBreath(c, 0.28f, 2200.0f, 0.008f, 0.25f, 0.35f, 0.25f);   // fast chiff, then settles
+    n.noiseRes = 0.7f;
+    c.volume = 0.7f;
+}
+static void aOboe(DC& c) {         // reedy double-reed bite: strong mid partials, nasal formant push
+    auto& s = mkAdd(c, {{1,0.55f},{2,0.85f},{3,1.0f},{4,0.7f},{5,0.45f},{6,0.3f},{8,0.18f}});
+    s.weight = 0.9f;
+    s.atk = 0.05f; s.dec = 0.5f; s.sustain = 0.85f; s.release = 0.2f;
+    s.filterType = DC::BandPass; s.filterCutoff = 1100.0f; s.filterReso = 1.3f; s.filterKeyTrack = 0.35f;
+    s.filterType2 = DC::LowPass; s.filterCutoff2 = 5200.0f; s.filterReso2 = 0.7f;
+    s.drift = 0.22f; s.vibrato = 0.12f;
+    windBreath(c, 0.1f, 3000.0f, 0.04f, 0.4f, 0.5f, 0.18f);
+    c.volume = 0.7f;
 }
 static void aMusicBox(DC& c) {     // tiny sparkling box: sparse high partials, quick ping
     auto& s = mkAdd(c, {{1,1.0f},{4,0.55f},{9,0.3f},{16,0.12f}});
@@ -2023,6 +2064,9 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Hyper Saw", nHyperSaw, "Leads" },
     { "Acid HP", nAcidHP, "Leads" },
     { "Clarinet", aClarinet, "Leads" },
+    { "Flute", aFlute, "Leads" },
+    { "Pan Flute", aPanFlute, "Leads" },
+    { "Oboe", aOboe, "Leads" },
     { "Quint Lead", aQuintLead, "Leads" },
     { "Bloom Lead", sBloomLead, "Leads" },
     { "Drift Lead", wDriftLead, "Leads" },
