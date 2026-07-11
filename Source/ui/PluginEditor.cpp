@@ -7782,7 +7782,15 @@ void DrumSequencerEditor::setupComponents()
         auto& sl = ch.slots[envTargetSlot()];
         const int d = juce::jlimit(0, 3, lfoCurveEdDest);
         for (int k = 0; k < DrumChannel::Slot::LFO_CURVE_N; ++k) sl.lfoCurve[d][k] = cv[k];
-        ch.markDspDirty();   // the LFO view follows via the timer's change-gated setValues push
+        ch.markDspDirty();
+        // Push the LFO wave view IMMEDIATELY: there is NO timer push for it (the old comment
+        // claimed one) - the drawn curve only appeared whenever something ELSE refreshed the
+        // panel = "takes some time and sometimes never shows" (user report).
+        lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoCurve,
+                             ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch)
+                              || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)),
+                             sl.oscShape >= DrumChannel::WvCustom,
+                             envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8));
     };
     lfoDisplay.onFreeChange = [this](int dest, bool freeRun) {  // Retrig <-> Free (timeline-anchored)
         if (ignoreKnobCallbacks) return;
