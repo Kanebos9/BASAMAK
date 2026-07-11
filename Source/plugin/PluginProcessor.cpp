@@ -226,7 +226,9 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             // Cut this channel's previous voices first so every TEST is a clean, consistent single hit
             // (otherwise overlapping/ringing tails sum and the level seems to vary between taps).
             sequencer.channel(tc).silenceAllVoices();
-            sequencer.channel(tc).trigger();   // trigger() arms the spectrum capture aligned to this hit's attack
+            // knobBase=true: TEST plays the Base Freq knob even on a piano-roll channel (whose
+            // block config is C4-absolute). trigger() arms the spectrum capture at the attack.
+            sequencer.channel(tc).trigger(1.0f, 0.0f, 0.0f, 0, 0.0f, 0, false, 0, false, true);
             // Phase-align the stopped re-arm grid to THIS hit so every tap samples the sound at the same points
             // (attack, +0.1 s, +0.2 s, ...) -> the EQ visual is identical tap-to-tap instead of catching a random
             // point in the decay each time.

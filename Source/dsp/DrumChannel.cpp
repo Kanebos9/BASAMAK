@@ -1239,7 +1239,8 @@ int DrumChannel::scaleNoteOffset(int scaleType, int key, int playedMidi, int voi
 int DrumChannel::chordNoteOffset(int chordMode, int k) { return chordSemis(chordMode, k); }
 
 int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long gateSamples,
-                         float glideToSemis, long glideSamples, bool forceOverlap, int slotMask, bool keyGate)
+                         float glideToSemis, long glideSamples, bool forceOverlap, int slotMask, bool keyGate,
+                         bool knobBase)
 {
     // slotMask 0 (or all-bits) = every slot sounds; a piano-roll note may restrict to slot 1 or 2.
     const int mask = (slotMask == 0) ? ~0 : slotMask;
@@ -1310,6 +1311,17 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
                 ? (uint32_t) driftRng.nextInt() : 0;   // Random shapes (Retrig): fresh random pattern per note
         sv.wtPosCur = -1.0f;                       // live-position read-out: nothing rendered yet
         sv.keySemis = 0.0f;
+        // TEST on a PIANO-ROLL channel: the block config is C4-absolute (slotBaseHz), so play
+        // each pitched slot at its own Base Freq knob via keySemis (user: "TEST should use the
+        // Base Freq knob"). Step channels already use the knob - knobBase is a no-op there.
+        if (knobBase && drawMode
+            && (sl.engine == SrcOsc || sl.engine == SrcPhys || sl.engine == SrcModal))
+        {
+            const double own = (sl.engine == SrcPhys) ? (double) sl.physFreq : (double) sl.oscFreq;
+            const double base = slotBaseHz(s, sl);
+            if (own > 1.0 && base > 1.0)
+                sv.keySemis = (float) (12.0 * std::log2(own / base));
+        }
         sv.keyMute = ! ((mask >> s) & 1);          // per-note slot tag: mute the slots this note doesn't play
         sv.sinePhase = 0.0;
         sv.noiseBP.reset();

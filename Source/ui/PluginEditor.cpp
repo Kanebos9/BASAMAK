@@ -5087,6 +5087,11 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
     h = mix(h, c.keysSlot2Down);   // slot-2 pitch is part of the SOUND now (rides + refreshes with mixes)
     h = mix(h, f(c.strumAmt));     // STRUM is per-sound too (user order: guitar sounds ship strummed)
     h = mix(h, c.keysPolyMode ? 1 : 0);   // keys Poly/Mono is per-sound too
+    // ARP is per-sound now (user 2026-07-11): editing it marks the sound modified like any param.
+    h = mix(h, c.arpOn ? 1 : 0); h = mix(h, c.arpLen); h = mix(h, c.arpRate); h = mix(h, c.arpSync);
+    h = mix(h, f(c.arpGate)); h = mix(h, c.arpAlign ? 1 : 0); h = mix(h, c.arpHold ? 1 : 0);
+    h = mix(h, c.arpAltStrum ? 1 : 0);
+    for (int i = 0; i < DrumChannel::ARP_ROWS; ++i) h = mix(h, c.arpOffset[i]);
     for (int i = 0; i < DrumChannel::NUM_SOURCES; ++i) { h = mix(h, c.srcOn[i] ? 1 : 0); h = mix(h, f(c.srcWeight[i])); }
     h = mix(h, f(c.padX)); h = mix(h, f(c.padY)); h = mix(h, c.padLayoutB ? 1 : 0);
     // Slots are the runtime source of truth (incl. duplicate engines) - hash them too.
@@ -5519,18 +5524,33 @@ void DrumSequencerEditor::saveSoundMix()
             auto name = aw->getTextEditorContents("name").trim();
             if (name.isNotEmpty())
             {
-                juce::ValueTree t("SoundMix");
-                t.setProperty("name", name, nullptr);
-                auto& sel = proc.sequencer.channel(selectedChannel);
-                writeChannelMix(t, sel);
-                auto file = getSoundMixFolder().getChildFile(name + "." + kSoundExt);
-                file.deleteFile();
-                juce::FileOutputStream os(file);
-                if (os.openedOk()) t.writeToStream(os);
-                // The selected channel now matches this saved mix -> clean baseline.
-                sel.mixName = name; sel.mixModified = false; sel.mixHash = channelSoundHash(sel);
-                rescanSoundMixes();
-                for (int c = 0; c < Sequencer::NUM_CHANNELS; ++c) rebuildSoundMixMenu(c);
+                auto doSave = [this, name]
+                {
+                    juce::ValueTree t("SoundMix");
+                    t.setProperty("name", name, nullptr);
+                    auto& sel = proc.sequencer.channel(selectedChannel);
+                    writeChannelMix(t, sel);
+                    auto file = getSoundMixFolder().getChildFile(name + "." + kSoundExt);
+                    file.deleteFile();
+                    juce::FileOutputStream os(file);
+                    if (os.openedOk()) t.writeToStream(os);
+                    // The selected channel now matches this saved mix -> clean baseline.
+                    sel.mixName = name; sel.mixModified = false; sel.mixHash = channelSoundHash(sel);
+                    rescanSoundMixes();
+                    for (int c = 0; c < Sequencer::NUM_CHANNELS; ++c) rebuildSoundMixMenu(c);
+                };
+                // A sound with this name already exists: ASK before replacing it (PopupMenu,
+                // never a message box - the user picks Replace or goes back to rename).
+                if (getSoundMixFolder().getChildFile(name + "." + kSoundExt).existsAsFile())
+                {
+                    juce::PopupMenu wm;
+                    wm.addSectionHeader("'" + name + "' already exists in your Sound Bank.");
+                    wm.addItem(1, "Replace it");
+                    wm.addItem(2, "Cancel (pick another name)");
+                    wm.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&btnSaveMix),
+                                     [this, doSave](int c) { if (c == 1) doSave(); else saveSoundMix(); });
+                }
+                else doSave();
             }
         }
         delete aw;
@@ -8543,8 +8563,10 @@ void DrumSequencerEditor::syncPadFromSlots(bool recenter)
             soundPad.setDot (ch.padX, ch.padY);               // recompute weights from the saved dot
         }
     }
-    for (int b = 0; b < DrumChannel::NUM_SLOTS; ++b) ch.slots[b].weight = soundPad.weights[b];
-    ch.padX = soundPad.dotX; ch.padY = soundPad.dotY;
+    // READ-ONLY refresh: the dormant pad used to write its recomputed weights + dot BACK into
+    // the channel here - every refresh (TEST click, channel select...) clobbered the fader-set
+    // weights and drifted padX through the pad's geometry = "the blend fader doesn't sit still".
+    // The blend fader's onValueChange is the ONE writer now; the pad only displays.
     btnPadLayout.setEnabled (false);   // A/B only matters at 4+ corners; max 3 slots now
     soundPad.repaint();
     { const juce::ScopedValueSetter<bool> g(ignoreKnobCallbacks, true);   // reflect the blend + lock on the fader
@@ -8618,16 +8640,11 @@ void DrumSequencerEditor::applyKeysView()
                           keysView ? juce::Colour(0xffe8bf4d) : juce::Colour(0xff20203a));
     btnKeysView.setColour(juce::TextButton::textColourOffId,
                           keysView ? juce::Colours::black : juce::Colours::lightgrey);
-    if (keysView)
-    {
-        // Opening KEYS puts the selected channel into DRAW mode, so a recorded performance is
-        // captured as a free unquantized pitch lane (quantize to steps later if you want).
-        auto& ch = proc.sequencer.channel(selectedChannel);
-        ch.drawMode = true;
-        strips[selectedChannel].comboSteps.setSelectedId(StepGridComponent::DRAW_ITEM_ID, juce::dontSendNotification);
-        refreshDrawModeButtons();
-    }
-    else if (proc.keysRecording.load() || keysCountdownTicks > 0)
+    // Opening KEYS no longer touches the channel's step/roll mode (user: "clicking Keys alone
+    // shouldn't switch to Piano Roll" - the old force flipped a STEP channel onto its empty
+    // roll, silencing its pattern). RECORDING still forces Piano Roll (keysStartRecord + the
+    // processor's chain branch) - that's where the roll is actually needed.
+    if (! keysView && (proc.keysRecording.load() || keysCountdownTicks > 0))
         keysStopRecord(true);   // leaving the panel ends the take
     refreshKeysPanel();
     layoutContent();

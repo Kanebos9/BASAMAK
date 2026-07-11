@@ -1,7 +1,8 @@
 // FACTORY BANK SIMILARITY AUDIT (informational; always exits 0 - run on demand, not in run.sh).
-// Renders every factory sound, fingerprints it (24 log-spaced spectral bands for the ATTACK and the
-// BODY window + a decay time), and prints the most similar same-category pairs - candidates for the
-// "no near-duplicate sounds" rule. High score = the two sound almost the same.
+// Renders every factory sound PITCH-NORMALIZED (in drawMode every pitched slot plays the
+// C4-absolute keys world = what the user hears on his keyboard - base-freq differences don't
+// count, per his rule), fingerprints it, and prints the most similar same-category pairs.
+// Redirect the output into docs/audits/bank-similarity.txt so the scores are visible in-repo.
 #include "Sequencer.h"
 #include "FactoryContent.h"
 #include <cstdio>
@@ -31,6 +32,10 @@ int main() {
     {
         auto* ch = new DrumChannel();
         Factory::applyMix(*ch, i);
+        // PITCH-BLIND (user rule): drawMode = the C4-absolute keys world (slotBaseHz), so every
+        // sound is compared at the SAME pitch - a kick and a bell differ by character, never by
+        // where their Base Freq knob happens to sit.
+        ch->drawMode = true;
         ch->prepareToPlay(SR, bs);
         ch->trigger(1.0f);
         std::vector<float> out; out.reserve((size_t) SR);
@@ -69,7 +74,18 @@ int main() {
         }
     std::sort(pairs.begin(), pairs.end(), [](const Pair& x, const Pair& y){ return x.sim > y.sim; });
     juce::StringArray seen;
-    printf("== top similar pairs PER CATEGORY (metric saturates on sustained Keys - judge those by ear) ==\n");
+    printf("BASAMAK factory-bank similarity scores (%d sounds)\n", N);
+    printf("==================================================\n");
+    printf("WHAT THE SCORE MEASURES (0..1, higher = more alike):\n");
+    printf("  55%% attack spectrum   - 24 log-spaced bands over the first 5-150 ms (the hit's colour)\n");
+    printf("  35%% body spectrum     - the same bands over 150-550 ms (the ring/tail's colour)\n");
+    printf("  10%% decay-time match  - how similarly fast the two sounds die away\n");
+    printf("PITCH-BLIND: every sound is rendered in the C4-absolute keys world (drawMode), so the\n");
+    printf("Base Freq knob never affects the score (user rule: pitch means nothing on a keyboard).\n");
+    printf("BLIND SPOTS (judge by ear): stereo width/chorus (mono render), wavetable/LFO MOTION\n");
+    printf("(one static window), arp riffs (arp runs in the processor). Sustained same-pitch pads\n");
+    printf("SATURATE the metric - 0.95+ in Keys/Pads/Leads is normal, not proof of a twin.\n\n");
+    printf("== top similar pairs PER CATEGORY ==\n");
     for (int c = 0; c < cats.size(); ++c)
     {
         if (seen.contains(cats[c])) continue;
@@ -78,7 +94,7 @@ int main() {
         int shown = 0;
         for (const auto& p : pairs)
         {
-            if (cats[p.a] != cats[c] || shown >= 5) continue;
+            if (cats[p.a] != cats[c] || shown >= 10) continue;
             printf("  %.3f  %-16s ~  %-16s (dec %.2fs/%.2fs)\n", p.sim,
                    names[p.a].toRawUTF8(), names[p.b].toRawUTF8(), dec[p.a], dec[p.b]);
             ++shown;

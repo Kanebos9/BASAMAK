@@ -865,7 +865,8 @@ public:
     // end) instead of the per-step Length decay-rescale - piano-roll notes reproduce the performance.
     int  trigger(float velocityGain = 1.0f, float pitchSemis = 0.0f, float pan = 0.0f, long gateSamples = 0,
                  float glideToSemis = 0.0f, long glideSamples = 0, bool forceOverlap = false, int slotMask = 0,
-                 bool keyGate = false);
+                 bool keyGate = false, bool knobBase = false);   // knobBase: TEST on a roll channel
+                 // plays each slot at its own Base Freq knob (the roll config is C4-absolute)
     // KEYS (on-screen keyboard / MIDI in): starts one voice playing the pressed MIDI note on every
     // ELIGIBLE slot (each slot re-tuned from its own base Freq). slot2Down = extra transpose
     // (semitones, +down/-up) applied to slot 2 only. poly=false (MONO, default) fades whatever is
