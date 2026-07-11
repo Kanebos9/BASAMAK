@@ -414,9 +414,9 @@ struct PhysModel { float apC; int apStages; float briScale; float decScale; floa
 // gets the SAME loop-length compensation as the stiffness chain (or they'd play flat).
 static const PhysModel kPhysModels[] = {
     //   apC   stg  bri   dec   excite drop(semis)
-    {  0.00f, 0, 0.45f, 1.20f, 0.15f,  0.0f }, // 0 Nylon - round + dark, soft finger pluck
+    {  0.00f, 0, 0.40f, 1.10f, 0.10f,  0.0f }, // 0 Nylon - round + DARK, soft finger pluck
     {  0.00f, 0, 1.00f, 1.90f, 0.95f,  0.0f }, // 1 Steel - bright harmonic, long sustain, sharp pluck
-    {  0.00f, 0, 0.85f, 0.14f, 0.75f,  0.0f }, // 2 Wood  - clicky DRY knock, very short
+    {  0.00f, 0, 0.65f, 0.10f, 0.90f,  0.0f }, // 2 Wood  - clicky DRY knock, VERY short (dies instantly)
     { -0.85f, 5, 1.00f, 2.60f, 0.90f,  0.0f }, // 3 Glass - audibly STRETCHED partials, bell shimmer
     { -0.92f, 6, 0.80f, 0.90f, 0.85f,  0.0f }, // 4 Metal - heavy stretch, darker, clanky, shorter
     { -0.40f, 2, 0.55f, 0.50f, 0.40f,  9.0f }, // 5 Skin  - boomy tuned drumhead with a tom pitch drop
@@ -652,7 +652,6 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("fFo", s.fmEnvFollow, nullptr);   // FM Amount follows the amp envelope
         st.setProperty("pFr", s.physFreq, nullptr); st.setProperty("pTo", s.physTone, nullptr); st.setProperty("pMa", s.physMaterial, nullptr); st.setProperty("pPo", s.physPosition, nullptr);
         st.setProperty("pSt", s.physStiff, nullptr); st.setProperty("pEx", s.physExcite, nullptr);
-        st.setProperty("phPu", s.physPickup, nullptr);   // PICKUP (electric character, KS)
         st.setProperty("pEA", s.physPEnvAmt, nullptr); st.setProperty("pET", s.physPEnvTime, nullptr); st.setProperty("pOf", s.physPOffset, nullptr);
         st.setProperty("sSp", s.smpSpeed, nullptr); st.setProperty("sCr", s.smpCrush, nullptr); st.setProperty("sPi", s.smpPitch, nullptr);
         st.setProperty("sEA", s.smpPEnvAmt, nullptr); st.setProperty("sET", s.smpPEnvTime, nullptr); st.setProperty("sOf", s.smpPOffset, nullptr);
@@ -774,7 +773,6 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         if (! st.hasProperty("v2") && s.engine == SrcOsc) { s.fmDepth = 0.0f; s.fmSpread = 0.0f; s.fmFeedback = 0.0f; s.fmSub = 0.0f; }
         s.physFreq = (float)st.getProperty("pFr", d.physFreq); s.physTone = (float)st.getProperty("pTo", d.physTone); s.physMaterial = (float)st.getProperty("pMa", d.physMaterial); s.physPosition = (float)st.getProperty("pPo", d.physPosition);
         s.physStiff = (float)st.getProperty("pSt", d.physStiff); s.physExcite = (int)st.getProperty("pEx", d.physExcite);
-        s.physPickup = (float)st.getProperty("phPu", d.physPickup);
         s.physPEnvAmt = (float)st.getProperty("pEA", d.physPEnvAmt); s.physPEnvTime = (float)st.getProperty("pET", d.physPEnvTime); s.physPOffset = (float)st.getProperty("pOf", d.physPOffset);
         s.smpSpeed = (float)st.getProperty("sSp", d.smpSpeed); s.smpCrush = (float)st.getProperty("sCr", d.smpCrush); s.smpPitch = (float)st.getProperty("sPi", d.smpPitch);
         s.smpPEnvAmt = (float)st.getProperty("sEA", d.smpPEnvAmt); s.smpPEnvTime = (float)st.getProperty("sET", d.smpPEnvTime); s.smpPOffset = (float)st.getProperty("sOf", d.smpPOffset);
@@ -1467,7 +1465,10 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
             // EXCITATION shapes how the string/bar is set in motion: Pluck = full-length noise burst (rich);
             // Strike = a short sharp burst at the start (percussive mallet hit); Mallet = a soft, rounded burst.
             const int exc = (sl.engine == SrcPhys) ? juce::jlimit(0, 2, sl.physExcite) : 0;
-            const float eb = (exc == 2) ? kPhysModels[mdl].exciteBright * 0.35f   // Mallet: softer (darker burst)
+            // v1.3.9 (user: "excite modes sound the same"): each mode fills the string DIFFERENTLY
+            // now - Pluck = full rich noise burst; Strike = a SHORT LOUD slap (1/8 of the string,
+            // x1.5, brighter); Mallet = a rounded half-cosine PUSH (almost no noise) = soft thump.
+            const float eb = (exc == 1) ? juce::jmin(0.98f, kPhysModels[mdl].exciteBright * 1.3f)
                                         :  kPhysModels[mdl].exciteBright;
             const float pos = juce::jlimit(0.0f, 1.0f, sl.physPosition);
             // Physical unison/chord: excite one real string per note, each tuned to its own pitch
@@ -1478,10 +1479,24 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
             {
                 const int base = strIdx * KS_MAX;
                 const int L = juce::jlimit(2, KS_MAX - 2, (int) std::round(sr / juce::jmax(20.0f, freqK) - apComp));
-                const int burst = (exc == 1) ? juce::jmax(2, L / 5) : L;              // Strike: only the first ~1/5 excited
                 uint32_t rng = sv.noiseState ^ (0x9e3779b9u + (uint32_t) strIdx * 0x85ebca6bu);
-                float lp = 0.0f;
-                for (int i = 0; i < L; ++i) { lp += eb * (whiteNoise(rng) - lp); sv.ksBuf[base + i] = (i < burst) ? lp : 0.0f; }
+                if (exc == 2)
+                {   // MALLET: a rounded half-cosine push over half the string + a whisper of noise -
+                    // a padded hammer DISPLACING the string, not scratching it. Dark, thumpy.
+                    const int half = juce::jmax(2, L / 2);
+                    for (int i = 0; i < L; ++i)
+                    {
+                        const float bump = (i < half) ? 0.9f * std::sin((float) kPi * (float) i / (float) half) : 0.0f;
+                        sv.ksBuf[base + i] = bump + ((i < half) ? 0.06f * whiteNoise(rng) : 0.0f);
+                    }
+                }
+                else
+                {
+                    const int burst = (exc == 1) ? juce::jmax(2, L / 8) : L;   // Strike: a short hard SLAP
+                    const float amp = (exc == 1) ? 1.5f : 1.0f;
+                    float lp = 0.0f;
+                    for (int i = 0; i < L; ++i) { lp += eb * (whiteNoise(rng) - lp); sv.ksBuf[base + i] = (i < burst) ? lp * amp : 0.0f; }
+                }
                 // PLUCK POSITION: a DOUBLE full-depth feed-forward comb ((1 - z^-d)^2, d = position along
                 // the string) + a position-following tone tilt (middle plucks ROUNDER), with RMS make-up
                 // so only the CHARACTER moves. pos 0 = thin/twangy near the edge, pos 1 = hollow mid-string.
@@ -1663,7 +1678,6 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         bool   fmEnvF = false;   // FM Amount follows the amp envelope (bright attack -> mellow decay)
         const PhysModel* pm = &kPhysModels[0]; float ksFb = 0, ksLpC = 0.5f, ksApC = 0; int ksApN = 0;
         float ksApComp = 0;   // loop-length compensation for the user-stiffness chain's DC delay (keeps tuning)
-        float puAmt = 0, puG = 0;   // PICKUP (KS): comb + resonant-peak amount, peak SVF coefficient
         double physBaseF = 110; float physPEnvAmt = 0, physPEnvTime = 0.05f, physPOffset = 0, physVibFac = 1;
         float  crushStep = 0; double speed = 1; float smpPitch = 0, smpPEnvAmt = 0, smpPEnvTime = 0.04f, smpPOffset = 0; bool reverse = false;
         bool   smpEnv = false;   // opt-in amp envelope on the sample (off = legacy full-length playback)
@@ -1871,8 +1885,6 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 c.physBaseF  = juce::jlimit(20.0, sr * 0.45, slotBaseHz(s, sl));
                 c.physPEnvAmt = sl.physPEnvAmt; c.physPEnvTime = sl.physPEnvTime; c.physPOffset = sl.physPOffset;
                 c.physVibFac = 1.0f + juce::jlimit(0.0f, 1.0f, sl.vibrato) * 0.07f * vibLfo;
-                c.puAmt = juce::jlimit(0.0f, 1.0f, sl.physPickup);              // PICKUP (0 = off)
-                c.puG   = std::tan(kPi * juce::jmin(3300.0, sr * 0.45) / sr);   // peak SVF coeff
                 break;
             case SrcSample: {
                 const float crushBits = sl.smpCrush > 0.001f ? (16.0f - juce::jlimit(0.0f, 1.0f, sl.smpCrush) * 14.0f) : 0.0f;
@@ -2105,13 +2117,9 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
     float blockSlotEnv[NUM_SLOTS] = {};
     // Drive post-smoothing coefficient (~8 kHz 1-pole at the engine rate) for the HARSH shapers.
     const float drvLpK = 1.0f - std::exp(-2.0f * (float) kPi * 8000.0f / (float) juce::jmax(1.0, sr));
-    // AMP FAMILY voicing (fixed macro constants): guitar low-cut 120 Hz / bass split 180 Hz;
-    // guitar cab ~5.2 kHz / bass cab ~3.8 kHz (2-pole each).
-    const float drvAmpHpK   = 1.0f - std::exp(-2.0f * (float) kPi * 120.0f  / (float) juce::jmax(1.0, sr));
+    // BASS AMP voicing (fixed macro constants): 180 Hz clean-low split + ~3.8 kHz 2-pole cab.
     const float drvAmpBassK = 1.0f - std::exp(-2.0f * (float) kPi * 180.0f  / (float) juce::jmax(1.0, sr));
-    const float drvAmpCabK  = 1.0f - std::exp(-2.0f * (float) kPi * 5200.0f / (float) juce::jmax(1.0, sr));
     const float drvAmpCab2K = 1.0f - std::exp(-2.0f * (float) kPi * 3800.0f / (float) juce::jmax(1.0, sr));
-    const float drvAmpMidK  = 1.0f - std::exp(-2.0f * (float) kPi * 1600.0f / (float) juce::jmax(1.0, sr));   // guitar mid-hump band
     // PUNCH transient followers: ~1.5 ms fast / ~50 ms slow.
     const float punchKf = 1.0f - std::exp(-1.0f / (0.0015f * (float) juce::jmax(1.0, sr)));
     const float punchKs = 1.0f - std::exp(-1.0f / (0.050f  * (float) juce::jmax(1.0, sr)));
@@ -2565,26 +2573,9 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             for (int st = 0; st < c.ksApN; ++st) { float yy = c.ksApC * ss + sv.ksApSt[k][st]; sv.ksApSt[k][st] = ss - c.ksApC * yy; ss = yy; }
                             const int wi = (int) sv.ksWrite[k] % KS_MAX;
                             sv.ksBuf[base + wi] = juce::jlimit(-2.5f, 2.5f, ss * ksFb); sv.ksWrite[k] = wi + 1;   // KS write clamp (anti-gunshot)
-                            if (c.puAmt > 0.001f)
-                            {   // PICKUP comb: a second listening point at 13% of the string - the
-                                // positional notches a magnetic pickup carves into the tone.
-                                double pp = (double) wi - L * 0.13; while (pp < 0.0) pp += (double) KS_MAX;
-                                const int pi = (int) pp; const float pf = (float)(pp - pi);
-                                const float p0 = sv.ksBuf[base + pi], p1 = sv.ksBuf[base + ((pi + 1) % KS_MAX)];
-                                acc += ss - c.puAmt * 0.85f * (p0 + pf * (p1 - p0));
-                            }
-                            else acc += ss;
+                            acc += ss;
                         }
                         sig = (acc * 1.4f * uniGain) * env;
-                        if (c.puAmt > 0.001f)
-                        {   // PICKUP resonance (~3.3 kHz, Q ~2): the magnetic pickup's honk - THE
-                            // "electric" in electric guitar. TPT SVF bandpass added onto the sum.
-                            const float g = c.puG, kq = 0.5f;
-                            const float v1 = (g * (sig - sv.puZ2) + sv.puZ1) / (1.0f + g * (g + kq));
-                            const float v2 = sv.puZ2 + g * v1;
-                            sv.puZ1 = 2.0f * v1 - sv.puZ1; sv.puZ2 = 2.0f * v2 - sv.puZ2;
-                            sig += c.puAmt * 1.5f * kq * v1;
-                        }
                         break; }
                     case SrcSample: {
                         // Default: no envelope - play at full level with short anti-click fades at the
@@ -2813,48 +2804,35 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 // === PER-SLOT EQ (end) ===
 
                 // Per-slot DRIVE (insert): shape THIS slot's signal with its own drive type/amount.
-                if (c.fxDrive > 0.0001f && c.fxDriveType >= DriveAmp) {
-                    // THE AMP FAMILY (user round-2: "guitar and bass amps work different... this
-                    // one doesn't even give distorted tones"). Three fixed voicings, one gain:
-                    //  GUITAR: tight 120 Hz LOW-CUT into asymmetric 2-stage crunch (up to ~34 dB),
-                    //          5.2 kHz 2-pole cab - chugs instead of mudding.
-                    //  BASS:   the SPLIT RIG - lows below ~180 Hz pass CLEAN and rejoin at the
-                    //          output; only the mids/highs are driven = fat, never farty.
-                    //  (Lead Amp REMOVED - at high gain tanh chains converge, it was Guitar's twin.
-                    //   Guitar's fader now spans the whole crunch -> high-gain range instead.)
-                    const bool bass = c.fxDriveType == DriveBassAmp;
+                if (c.fxDrive > 0.0001f && c.fxDriveType == DriveBassAmp) {
+                    // BASS AMP (the survivor of the amp family - Guitar/Lead were killed by the
+                    // user): the SPLIT RIG. Lows below ~180 Hz pass CLEAN and rejoin at the
+                    // output; only the mids/highs are driven (2 soft stages + a 3.8 kHz 2-pole
+                    // cab + DC block) = fat, never farty. Fixed voicing; the fader = the gain.
                     const float aA = c.fxDrive, a2 = aA * aA;
-                    const float g1 = 1.0f + a2 * (bass ? 22.0f : 90.0f);
-                    const float mk = 1.0f / (1.0f + (g1 - 1.0f) / (bass ? 7.0f : 9.0f));
-                    const float preK = bass ? drvAmpBassK : drvAmpHpK;
-                    const float cabK = bass ? drvAmpCab2K : drvAmpCabK;
+                    const float g1 = 1.0f + a2 * 22.0f;
+                    const float mk = 1.0f / (1.0f + (g1 - 1.0f) / 7.0f);
                     auto amp = [&](float y, int lr) -> float {
-                        sv.ampPre[lr] += preK * (y - sv.ampPre[lr]);
+                        sv.ampPre[lr] += drvAmpBassK * (y - sv.ampPre[lr]);
                         const float lo = sv.ampPre[lr];                           // the low split
-                        float v = y - lo;                                         // guitar: lows CUT / bass: split
-                        if (! bass)
-                        {   // GUITAR voicing: MID-HUMP into the stages (amps bite on mids, not
-                            // fizz) - the character difference gain alone can never make.
-                            sv.ampMid[lr] += drvAmpMidK * (v - sv.ampMid[lr]);
-                            v = sv.ampMid[lr] * 1.6f + (v - sv.ampMid[lr]) * 0.7f;
-                        }
-                        v *= 1.0f + (bass ? 0.6f : 1.4f) * aA;
+                        float v = (y - lo) * (1.0f + 0.6f * aA);
                         v = std::tanh(v * g1 + 0.12f) - std::tanh(0.12f);         // stage 1 (asym = amp evens)
                         v = std::tanh(v * 1.5f) * 1.15f;                          // stage 2 (glue)
-                        sv.ampLp1[lr] += cabK * (v - sv.ampLp1[lr]);              // 2-pole cabinet...
-                        sv.ampLp2[lr] += cabK * (sv.ampLp1[lr] - sv.ampLp2[lr]);
-                        v = bass ? sv.ampLp2[lr] * mk + lo                        // bass: clean lows rejoin
-                                 : (sv.ampLp2[lr] + (0.5f + 0.7f * aA) * (sv.ampLp1[lr] - sv.ampLp2[lr])) * mk;
+                        sv.ampLp1[lr] += drvAmpCab2K * (v - sv.ampLp1[lr]);       // 2-pole cabinet
+                        sv.ampLp2[lr] += drvAmpCab2K * (sv.ampLp1[lr] - sv.ampLp2[lr]);
+                        v = sv.ampLp2[lr] * mk + lo;                              // clean lows rejoin
                         const float dc = v - sv.drvDcX[lr] + 0.995f * sv.drvDcY[lr];   // rumble/DC block
-                        sv.drvDcX[lr] = v; sv.drvDcY[lr] = dc;                    // guitar: ...+ PRESENCE lift
+                        sv.drvDcX[lr] = v; sv.drvDcY[lr] = dc;
                         return dc;
                     };
                     if (stereo) { sL = amp(sL, 0); sR = amp(sR, 1); }
                     else          sig = amp(sig, 0);
                 }
                 else if (c.fxDrive > 0.0001f && c.fxDriveType != DriveOff) {
-                    if (stereo) { sL = driveSample(sL, c.fxDriveType, c.fxDrive); sR = driveSample(sR, c.fxDriveType, c.fxDrive); }
-                    else          sig = driveSample(sig, c.fxDriveType, c.fxDrive);
+                    // retired slot 7 (the killed Guitar/Lead amps): stray saves play as Tube
+                    const int dTy = c.fxDriveType == DriveAmpRetired ? (int) Tube : c.fxDriveType;
+                    if (stereo) { sL = driveSample(sL, dTy, c.fxDrive); sR = driveSample(sR, dTy, c.fxDrive); }
+                    else          sig = driveSample(sig, dTy, c.fxDrive);
                     // Musicality pass (v6): HARSH shapers get a gentle ~8 kHz 1-pole after the clip
                     // (naked waveshaping = fizzy top - every synth drive has a post-filter), and FUZZ
                     // gets a DC blocker (its rectified blend adds a constant offset = headroom loss).

@@ -1416,17 +1416,6 @@ static void gSteelGuitar(DC& c) {  // steel-string acoustic: bright, singing, a 
     c.strumAmt = 0.6f;                                   // strummed by default (strum is stepped 0/20/40/60/80/100%)
     c.volume = 0.8f;
 }
-static void gElecGuitar(DC& c) {   // v3 (the Soldano session): a real DI chain - singing sustain,
-    auto& s = mkGtr(c, 130.81f, 0.55f, 0.13f, 2.2f);     // PICKUP character, POWER chords, Guitar Amp
-    s.sustain = 0.7f; s.release = 0.4f;                  // held notes SING (KS sustain-hold; amps feed on this)
-    s.drift = 0.3f;                                      // the living shimmer a frozen string lacks
-    s.physPickup = 0.6f;                                 // the magnetic pickup = the "electric" in the tone
-    s.scaleOn = true; s.scaleType = 12; s.scaleUnison = 3;   // POWER chords by default (rock through gain);
-    s.scaleKey = 0;                                          // flip to Gtr Major for clean full chords
-    s.fxDriveType = DC::DriveAmp; s.fxDrive = 0.55f;
-    c.strumAmt = 0.4f;    // stepped strum grid (0/20/40/60/80/100%)
-    c.volume = 0.8f;
-}
 static void gAmpBass(DC& c) {      // finger bass through the BASS AMP split rig: fat lows, driven mids
     auto& s = mkGtr(c, 65.41f, 0.45f, 0.3f, 0.85f);
     s.fxDriveType = DC::DriveBassAmp; s.fxDrive = 0.55f;
@@ -1862,6 +1851,21 @@ static void uHungryBass(DC& c)  // USER IMPORT "my growl": KS Steel bass, resona
     c.strumAmt = 1.0f;
     c.volume = 0.82f;
 }
+static void nProwlBass(DC& c) {  // filter-forward bass (Hungry Bass's cousin, ORIGINAL recipe):
+                                 // detuned saws + FM sub into a resonant LP that BREATHES on a slow
+                                 // FREE-RUN filter LFO (timeline-anchored - notes join it mid-sweep,
+                                 // it never restarts per key: the user's bass-LFO complaint answered)
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 55.0f;   // A1
+    s.oscUnison = 2; s.oscDetune = 0.06f; s.fmSub = 0.45f;     // body + clean sub under it
+    s.atk = 0.004f; s.dec = 0.9f; s.sustain = 0.65f; s.release = 0.25f;
+    s.drift = 0.15f;
+    s.filterType = DC::LowPass; s.filterCutoff = 480.0f; s.filterReso = 2.6f;
+    s.filterEnvAmt = 0.45f; s.filterKeyTrack = 0.35f;
+    s.lfoAmt[0] = 0.3f; s.lfoSync[0] = 0.5f; s.lfoFree[0] = true;   // half a cycle per bar, free-run
+    s.fxDriveType = DC::DriveBassAmp; s.fxDrive = 0.4f;
+    c.volume = 0.85f;
+}
 static void uEvilLaugh(DC& c)   // "evil laugh": pulsing resonant pink noise + a falling filter sweep
 {
     auto& s = mkSlot(c, DC::SrcNoise);
@@ -1980,6 +1984,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Fuzz Bass", gFuzzBass, "Bass" },
     { "Amp Bass", gAmpBass, "Bass" },            // KS bass through the BASS AMP split rig
     { "Hungry Bass", uHungryBass, "Bass" },      // USER IMPORT (my growl)
+    { "Prowl Bass", nProwlBass, "Bass" },        // free-run filter LFO showcase
     { "Keys Bass", kKeysBass, "Bass" },
     { "Deep Sub", kSubBass, "Bass" },
     { "Notch Bass", nNotchBass, "Bass" },
@@ -2044,7 +2049,6 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Synth Pluck", kSynthPluck, "Plucks & Strings" },
     { "Stab", mStab, "Plucks & Strings" },
     { "Steel Guitar", gSteelGuitar, "Plucks & Strings" },
-    { "Electric Guitar", gElecGuitar, "Plucks & Strings" },
     { "Muted Guitar", gMutedGuitar, "Plucks & Strings" },
     { "Nylon Guitar", mNylonGuitar, "Plucks & Strings" },
     { "Koto", mKoto, "Plucks & Strings" },

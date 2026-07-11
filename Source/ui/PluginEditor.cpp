@@ -152,14 +152,7 @@ juce::Array<SlotParam> slotParamsFor(int engine)
                      "(the fundamental stays in tune). Most obvious with a bright Tone and a longer Ring."));
             p.add(Ic("Excite", 0, 2, &S::physExcite, { "Pluck","Strike","Mallet" },
                      "How the string is excited: Pluck (bright, narrow), Strike (harder, fuller), Mallet (soft, darker)."));
-            p.add(F ("Pickup", 0, 1, &S::physPickup, "", true,
-                     "ELECTRIC-GUITAR character: a magnetic pickup listening to the string.\n\n"
-                     "- Adds the pickup's position notches (a comb at 13% of the string) and its "
-                     "resonant ~3.3 kHz peak - the 'electric' honk.\n"
-                     "- 0 = off (the acoustic string, unchanged). Works on every Karplus-Strong "
-                     "sound - guitars, basses, plucks.\n"
-                     "- Pairs with the Guitar/Bass Amp drive types."));
-            break;   // pitch-env/Vibrato moved to the shared shape groups
+            break;   // pitch-env/Vibrato moved to the shared shape groups (4 params = knob grid)
         case DrumChannel::SrcSample:
             // NO Pitch knob here (user call: removed completely - per-step pitch + the pitch envelope
             // cover melodies; the legacy channel pitch / smpPitch fields stay dormant for old projects).
@@ -5135,7 +5128,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         h = mix(h, sl.fxDriveType); h = mix(h, f(sl.fxDrive)); h = mix(h, f(sl.fxReverbSend)); h = mix(h, f(sl.fxDelaySend));
         h = mix(h, sl.noiseType); h = mix(h, f(sl.noiseCenter)); h = mix(h, f(sl.noiseWidth)); h = mix(h, f(sl.noiseRes)); h = mix(h, f(sl.noiseDrive)); h = mix(h, f(sl.noiseCrackle));
         h = mix(h, f(sl.fmPitch)); h = mix(h, f(sl.fmSpread)); h = mix(h, f(sl.fmDepth)); h = mix(h, f(sl.fmPEnvAmt)); h = mix(h, f(sl.fmPEnvTime)); h = mix(h, f(sl.fmPOffset)); h = mix(h, f(sl.fmFeedback)); h = mix(h, f(sl.fmSub));
-        h = mix(h, f(sl.physFreq)); h = mix(h, f(sl.physTone)); h = mix(h, f(sl.physMaterial)); h = mix(h, f(sl.physPosition)); h = mix(h, f(sl.physPEnvAmt)); h = mix(h, f(sl.physPEnvTime)); h = mix(h, f(sl.physPOffset)); h = mix(h, f(sl.physStiff)); h = mix(h, sl.physExcite); h = mix(h, f(sl.physPickup));
+        h = mix(h, f(sl.physFreq)); h = mix(h, f(sl.physTone)); h = mix(h, f(sl.physMaterial)); h = mix(h, f(sl.physPosition)); h = mix(h, f(sl.physPEnvAmt)); h = mix(h, f(sl.physPEnvTime)); h = mix(h, f(sl.physPOffset)); h = mix(h, f(sl.physStiff)); h = mix(h, sl.physExcite);
         h = mix(h, f(sl.smpSpeed)); h = mix(h, f(sl.smpCrush)); h = mix(h, f(sl.smpPitch)); h = mix(h, f(sl.smpPEnvAmt)); h = mix(h, f(sl.smpPEnvTime)); h = mix(h, f(sl.smpPOffset)); h = mix(h, sl.smpReverse ? 1 : 0); h = mix(h, sl.smpUseRegion ? 1 : 0);
         h = mix(h, f(sl.smpStart)); h = mix(h, f(sl.smpEnd)); h = mix(h, sl.smpSlices); h = mix(h, f(sl.smpStretch)); h = mix(h, f(sl.smpGain));
         h = mix(h, sl.smpEnvOn ? 1 : 0); h = mix(h, sl.smpPreservePitch ? 1 : 0); h = mix(h, sl.fmEnvFollow ? 1 : 0); h = mix(h, f(sl.modalMorph));
@@ -7514,16 +7507,13 @@ void DrumSequencerEditor::setupComponents()
     comboDriveType.addItem("Foldback",  5);
     comboDriveType.addItem("Fuzz",      6);
     comboDriveType.addItem("Bitcrush",  7);
-    comboDriveType.addItem("Guitar Amp", 8);    // mid-hump crunch -> high gain + cab/presence
     comboDriveType.addItem("Bass Amp",   9);    // SPLIT rig: clean lows + driven mids/highs
     comboDriveType.setTooltip("Drive TYPE for this slot (the fader beside it = the amount).\n\n"
                               "- Soft Clip / Tube: warm, rounded saturation (Tube adds even harmonics).\n"
                               "- Hard Clip / Fuzz / Foldback: aggressive, buzzy, metallic.\n"
                               "- Bitcrush: digital lo-fi grit.\n"
-                              "- GUITAR AMP: low-cut + mid-hump into a 2-stage crunch, cabinet + presence - "
-                              "the fader spans clean edge to full high-gain.\n"
-                              "- BASS AMP: the split rig - lows stay CLEAN, only mids/highs distort = fat.\n"
-                              "All amp voicings are fixed (like the chorus); the amount is the amp GAIN.");
+                              "- BASS AMP: the split rig - lows stay CLEAN, only the mids/highs distort "
+                              "= fat, never farty (fixed voicing; the amount is the amp GAIN).");
     comboDriveType.onChange = [this] {   // per-slot drive type
         if (ignoreKnobCallbacks) return;
         proc.sequencer.channel(selectedChannel).slots[envTargetSlot()].fxDriveType = comboDriveType.getSelectedId() - 1;
