@@ -1884,6 +1884,10 @@ private:
     void applyUndoState(const UndoEntry& e);
     void doUndo();
     void doRedo();
+    // MIDI sound browsing (ui_sound_* CCs -> the SELECTED channel's Sound Bank pick):
+    void stepSoundBank(int dir);              // previous/next sound in the picker's order (wraps)
+    int  soundTickAcc = 0;                    // encoder ticks toward the next step (3 = one step)
+    juce::uint32 lastSoundTickMs = 0, lastSoundStepMs = 0;   // stale-turn forget + step rate limit
     void updateUndoRedoEnabled();
 
     //-- Presets
@@ -2025,9 +2029,12 @@ private:
         std::function<void()> onOpen;          // open the picker panel
         std::function<bool()> panelOpen;       // panel currently open for THIS combo?
         std::function<void()> onToggleClose;   // close it (click on the combo = toggle)
+        MidiLearnManager* mlm = nullptr;       // RIGHT-CLICK = MIDI-learn sound browsing (ui_sound_*)
+        void showCcMenu();                     // the 3 learnable targets (knob / next / prev)
         void showPopup() override { if (onOpen) onOpen(); else juce::ComboBox::showPopup(); }
         void mouseDown(const juce::MouseEvent& e) override
         {
+            if ((e.mods.isRightButtonDown() || e.mods.isPopupMenu()) && mlm != nullptr) { showCcMenu(); return; }
             if (panelOpen && panelOpen()) { if (onToggleClose) onToggleClose(); return; }
             juce::ComboBox::mouseDown(e);
         }

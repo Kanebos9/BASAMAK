@@ -1708,6 +1708,43 @@ void showMidiLearnMenu(juce::Component* target, MidiLearnManager& mlm,
 // (StepGridComponent method definitions live in StepGridComponent.cpp)
 
 //==============================================================================
+// Sound Bank combo right-click: MIDI-learn SOUND BROWSING for the SELECTED channel.
+// Three global targets (they always act on whatever channel/pattern is selected):
+// a relative-encoder knob (one CC, both directions) or NEXT/PREV buttons.
+//==============================================================================
+void DrumSequencerEditor::PickerCombo::showCcMenu()
+{
+    auto tag = [this](const char* pid) {
+        const int cc = mlm->getCCForParam(pid);
+        return cc < 0 ? juce::String()
+                      : "   [ch" + juce::String(mlm->getChannelForParam(pid)) + " cc" + juce::String(cc) + "]";
+    };
+    juce::PopupMenu m;
+    m.addSectionHeader("MIDI: browse sounds on the SELECTED channel");
+    if (mlm->isLearning())
+    {
+        m.addSectionHeader("Listening... move a control on your MIDI device");
+        m.addItem(5, "Cancel MIDI learn");
+    }
+    m.addItem(1, "Learn KNOB (relative encoder)..." + tag("ui_sound_knob"));
+    m.addItem(2, "Learn NEXT sound (button)..."     + tag("ui_sound_next"));
+    m.addItem(3, "Learn PREV sound (button)..."     + tag("ui_sound_prev"));
+    if (mlm->getCCForParam("ui_sound_knob") >= 0 || mlm->getCCForParam("ui_sound_next") >= 0
+        || mlm->getCCForParam("ui_sound_prev") >= 0)
+    { m.addSeparator(); m.addItem(4, "Clear these assignments"); }
+    auto mp = juce::Desktop::getInstance().getMainMouseSource().getScreenPosition().roundToInt();
+    auto* L = mlm;
+    m.showMenuAsync(juce::PopupMenu::Options{}.withTargetScreenArea({ mp.x, mp.y, 1, 1 }).withMinimumWidth(280),
+        [L](int r) {
+            if      (r == 1) L->startLearning("ui_sound_knob");
+            else if (r == 2) L->startLearning("ui_sound_next");
+            else if (r == 3) L->startLearning("ui_sound_prev");
+            else if (r == 4) { L->clearParam("ui_sound_knob"); L->clearParam("ui_sound_next"); L->clearParam("ui_sound_prev"); }
+            else if (r == 5) L->stopLearning();
+        });
+}
+
+//==============================================================================
 // DragMidiSource
 //==============================================================================
 
@@ -5783,6 +5820,25 @@ bool DrumSequencerEditor::keyPressed(const juce::KeyPress& k)
     return false;
 }
 
+// Step the SELECTED channel's sound through the bank in the PICKER's order (factory categories in
+// kSoundCatOrder, then Your Sound Bank; wraps at the ends). Driven by the ui_sound_* MIDI CCs.
+void DrumSequencerEditor::stepSoundBank(int dir)
+{
+    juce::Array<int> order;                                    // the full bank in PICKER order
+    auto facNames = Factory::mixNames();
+    auto facCats  = Factory::mixCategories();
+    for (auto* cat : kSoundCatOrder)
+        for (int i : factoryIndicesFor(cat, facNames, facCats, {}))
+            order.add(FACTORY_MIX_BASE + i);
+    for (int i = 0; i < soundMixFiles.size(); ++i) order.add(i + 1);   // Your Sound Bank (file ids = idx+1)
+    if (order.isEmpty()) return;
+    const int cur = strips[selectedChannel].comboSound.getSelectedId();
+    int pos = order.indexOf(cur);
+    pos = pos < 0 ? (dir > 0 ? 0 : order.size() - 1)           // nothing/Init selected: start at an end
+                  : (pos + dir + order.size()) % order.size(); // wrap
+    applySoundPickId(selectedChannel, order[pos]);
+}
+
 void DrumSequencerEditor::doUndo()
 {
     // The passive timer commits a snapshot ~0.1 s AFTER each edit, so for a split-second the top
@@ -6885,6 +6941,7 @@ void DrumSequencerEditor::setupComponents()
 
         content.addAndMakeVisible(strip.comboSound);  // now the "Sound Bank" selector
         strip.comboSound.setLookAndFeel(&wideMenuLNF); // 3-column popup (no tall scroll)
+        strip.comboSound.mlm      = &proc.midiLearn;   // right-click = MIDI-learn sound browsing
         strip.comboSound.onChange = [this, ci] { handleSoundMixChange(ci); selectChannel(ci); };
         strip.comboSound.onOpen   = [this, ci] { selectChannel(ci); openSoundPicker(ci); };   // the searchable dropdown
         strip.comboSound.panelOpen = [this, ci]
@@ -6992,7 +7049,12 @@ void DrumSequencerEditor::setupComponents()
                                 "- SHIFT+CLICK = Merge & Split with the previous channel (split keyboard).\n"
                                 "- The COLOUR = routing: dark = Main mix, TEAL = own aux Output, PURPLE = MIDI Out "
                                 "(no sound, sequences another plugin).");
-        strip.comboSound.setTooltip("Load a saved 'sound mix' onto this channel, or start a fresh one.");
+        strip.comboSound.setTooltip("Sound Bank: pick this channel's sound (opens the searchable picker).\n\n"
+                                    "- RIGHT-CLICK = MIDI-learn sound BROWSING: a relative-encoder knob (one CC, "
+                                    "both directions) or NEXT/PREV buttons step the SELECTED channel through the "
+                                    "bank - whatever channel and pattern are selected at the time.\n"
+                                    "- Turn slowly: ~3 encoder clicks = one sound; fast spins are speed-limited.\n"
+                                    "- Works while this window is open (browsing is an editor action).");
         strip.btnTest.setTooltip("Play this channel once with its current settings, to hear it without running the sequencer.");
         strip.btnMute->setTooltip("Mute: silence this channel.");
         strip.btnSolo->setTooltip("Solo: play only this channel (and other soloed ones), muting the rest.");
@@ -9842,6 +9904,22 @@ void DrumSequencerEditor::timerCallback()
         bool ns = ! stepGrid.influenceArmed[ic];
         stepGrid.influenceArmed[ic] = ns;
         if (ic == selectedChannel) btnInfluenceTop.setToggleState(ns, juce::dontSendNotification);
+    }
+    // MIDI sound browsing: drain the accumulated encoder ticks. Sensitivity by design (user):
+    // kSoundStepTicks ticks = one step; at most ONE step per ~220 ms; excess is DROPPED, never
+    // queued - the moment the hand stops, the browsing stops (no overshoot).
+    if (int t = proc.uiMidiSoundStep.exchange(0); t != 0)
+    {
+        const juce::uint32 now = juce::Time::getMillisecondCounter();
+        if (now - lastSoundTickMs > 500) soundTickAcc = 0;   // a stale half-turn is forgotten
+        lastSoundTickMs = now;
+        soundTickAcc += t;
+        if (std::abs(soundTickAcc) >= DrumSequencerProcessor::kSoundStepTicks)
+        {
+            const int dir = soundTickAcc > 0 ? 1 : -1;
+            soundTickAcc = 0;                                // drop the excess ticks
+            if (now - lastSoundStepMs >= 220) { lastSoundStepMs = now; stepSoundBank(dir); }
+        }
     }
 
     stepGrid.update(proc.sequencer, proc.anySolo);      // 60 Hz: smooth playhead

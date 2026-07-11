@@ -1195,6 +1195,12 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
     if (pid == "ui_mode_len")   { if (on) uiMidiEditMode.store(6); return; }
     if (pid == "ui_mode_nudge") { if (on) uiMidiEditMode.store(7); return; }
     if (pid.startsWith("ui_influence_ch")) { if (on) uiMidiInfluence.store(pid.substring(15).getIntValue()); return; }
+    // Sound browsing on the SELECTED channel. Knob = a RELATIVE encoder (two's complement:
+    // 1..63 = clockwise, 65..127 = counter-clockwise); each message counts +-1 tick regardless
+    // of its magnitude, so encoder acceleration can never jump. 0 and 64 = idle.
+    if (pid == "ui_sound_knob") { if (val != 0 && val != 64) uiMidiSoundStep.fetch_add(val < 64 ? 1 : -1); return; }
+    if (pid == "ui_sound_next") { if (on) uiMidiSoundStep.fetch_add(kSoundStepTicks);  return; }
+    if (pid == "ui_sound_prev") { if (on) uiMidiSoundStep.fetch_add(-kSoundStepTicks); return; }
 
     // Pattern-scoped controls:  "p{P}_..."
     if (!pid.startsWithChar('p')) return;
