@@ -6467,7 +6467,10 @@ void DrumSequencerEditor::setupComponents()
             // MERGE: the group adopts the HEAD's sounds, step counts, roll/step MODE and Tune. Warn
             // first (user) - naming the channels whose mode will FLIP (roll<->step) in the later bars,
             // plus the reminder that every channel inherits the head's sound.
-            const int mHead = sq.groupHead(p), mEnd = sq.groupEnd(p);
+            // The head = the PREVIOUS pattern's group head (like the fit-check above): the clicked
+            // pattern isn't merged YET, so groupHead(p) was just p = the dialog said "2-2" and the
+            // merge normalized to the CLICKED bar's sounds instead of pattern 1's (user report).
+            const int mHead = sq.groupHead(juce::jmax(0, p - 1)), mEnd = sq.groupEnd(p);
             juce::StringArray flips;
             for (int c = 0; c < Sequencer::NUM_CHANNELS; ++c) {
                 const bool headRoll = sq.patterns[mHead].channels[c].drawMode;
