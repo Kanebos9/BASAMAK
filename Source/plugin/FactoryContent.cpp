@@ -246,20 +246,6 @@ static void m808Kick(DC& c) {   // long boomy 808: lower sine, longer tail, warm
     c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 1.35f;
     c.driveType = DC::SoftClip; c.driveAmount = 0.447f; c.volume = 0.97f;
 }
-static void m808Snare(DC& c) {   // 808: snappy noise + tuned body knock
-    clearSound(c);
-    c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 0.58f;
-    c.srcOn[DC::SrcOsc]   = true; c.srcWeight[DC::SrcOsc]   = 0.42f;
-    c.padX = 0.14f + 0.42f * 0.72f; c.padY = 0.5f;
-    c.noiseType = 0; c.layerNoiseCenter = 2000.0f; c.layerNoiseWidth = 0.15f;
-    c.srcAtk[DC::SrcNoise] = 0.001f; c.srcDec[DC::SrcNoise] = 0.14f;
-    c.layerOscShape = DC::OscTriangle; c.layerSineFreq = 180.0f;
-    c.layerSinePEnvAmt = 4.0f; c.layerSinePEnvTime = 0.035f;
-    c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 0.11f;
-    c.eqBand[DC::EQ_HP] = { true, 150.0f, 0.0f, 0.707f };
-    c.driveType = DC::SoftClip; c.driveAmount = 0.316f;
-    c.reverbSend = 0.10f; c.volume = 0.86f;
-}
 static void m808Clap(DC& c) {
     clearSound(c); c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 1.0f;
     c.noiseType = 0; c.layerNoiseCenter = 1200.0f; c.layerNoiseWidth = 0.30f;
@@ -318,13 +304,6 @@ static void m909Kick(DC& c) {   // 909: punchy sine + a real attack click, tube-
     c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 0.42f;
     c.noiseType = 0; c.layerNoiseCenter = 4000.0f; c.srcAtk[DC::SrcNoise] = 0.001f; c.srcDec[DC::SrcNoise] = 0.018f;
     c.driveType = DC::Tube; c.driveAmount = 0.529f; c.volume = 0.97f;
-}
-static void m909Clap(DC& c) {   // big roomy 909 clap: longer + wetter than the tight Clap / darker 808
-    clearSound(c); c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 1.0f;
-    c.noiseType = 0; c.layerNoiseCenter = 1500.0f; c.layerNoiseWidth = 0.24f;
-    c.srcAtk[DC::SrcNoise] = 0.001f; c.srcDec[DC::SrcNoise] = 0.19f;
-    c.eqBand[DC::EQ_HP] = { true, 500.0f, 0.0f, 0.707f };
-    c.reverbSend = 0.30f; c.volume = 0.84f;
 }
 static void m909ClosedHat(DC& c) {
     clearSound(c); c.srcOn[DC::SrcFM] = true; c.srcWeight[DC::SrcFM] = 1.0f;
@@ -478,13 +457,6 @@ static void mRumbleKick(DC& c) {   // hard-techno: clipped knock + a LONG dark n
     c.srcAtk[DC::SrcNoise] = 0.002f; c.srcDec[DC::SrcNoise] = 0.70f;
     c.eqBand[DC::EQ_HP] = { true, 40.0f, 0.0f, 0.707f };
     c.driveType = DC::HardClip; c.driveAmount = 0.616f; c.volume = 0.90f;
-}
-static void mCrunchKick(DC& c) {   // foldback grit (the only kick on Foldback): harmonics bite mid-band
-    clearSound(c); c.srcOn[DC::SrcOsc] = true; c.srcWeight[DC::SrcOsc] = 1.0f;
-    c.layerOscShape = DC::OscSine; c.layerSineFreq = 60.0f;
-    c.layerSinePEnvAmt = 18.0f; c.layerSinePEnvTime = 0.030f;
-    c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 0.30f;
-    c.driveType = DC::Foldback; c.driveAmount = 0.632f; c.volume = 0.90f;
 }
 // -- Snares & Claps --
 static void mTrapSnare(DC& c) {   // sharp trap crack
@@ -1080,13 +1052,6 @@ static void mBigClap(DC& c) {      // stadium clap: long, very wet, darker centr
     c.srcAtk[DC::SrcNoise] = 0.002f; c.srcDec[DC::SrcNoise] = 0.38f;
     c.eqBand[DC::EQ_HP] = { true, 400.0f, 0.0f, 0.707f };
     c.reverbSend = 0.5f; c.volume = 0.82f;
-}
-static void mLofiClap(DC& c) {     // crushed clap: Bitcrush grit (the only crushed clap)
-    clearSound(c); c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 1.0f;
-    c.noiseType = 0; c.layerNoiseCenter = 2400.0f; c.layerNoiseWidth = 0.12f;
-    c.srcAtk[DC::SrcNoise] = 0.001f; c.srcDec[DC::SrcNoise] = 0.09f;
-    c.eqBand[DC::EQ_HP] = { true, 700.0f, 0.0f, 0.707f };
-    c.driveType = DC::Bitcrush; c.driveAmount = 0.7f; c.volume = 0.85f;
 }
 // ---- Hi-Hats (+1) ----
 static void mFootHat(DC& c) {      // pedal "chick": the shortest, dullest hat (foot close)
@@ -1898,11 +1863,9 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Steel Kick", uSteelKick, "Kicks" },        // USER IMPORT (kick1)
     { "Break Kick", mBreakKick, "Kicks" },
     { "Rumble Kick", mRumbleKick, "Kicks" },
-    { "Crunch Kick", mCrunchKick, "Kicks" },
     { "Snap Kick", xSnapKick, "Kicks" },
     // ---- Snares ----
     { "Noise Snare", mNoiseSnare, "Snares" },
-    { "808 Snare", m808Snare, "Snares" },
     { "606 Snare", m606Snare, "Snares" },
     { "Trap Snare", mTrapSnare, "Snares" },
     { "Mod Snare", mModSnare, "Snares" },
@@ -1914,10 +1877,8 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     // ---- Claps ----
     { "Clap", mClap, "Claps" },
     { "808 Clap", m808Clap, "Claps" },
-    { "909 Clap", m909Clap, "Claps" },
     { "Snap Clap", mSnapClap, "Claps" },
     { "Big Clap", mBigClap, "Claps" },
-    { "Lofi Clap", mLofiClap, "Claps" },
     { "Squash Clap", xSquashClap, "Claps" },
     // ---- Hi-Hats ----
     { "Closed Hat", mClosedHat, "Hi-Hats" },
@@ -2313,7 +2274,7 @@ static void pRiserDrop(Sequencer& s)
     s.patterns[0].repeatTarget = 1;
     // -- Pattern 2 (index 1): the drop / main groove (loops). --
     buildChP(s, 1, 0, mPunchKick,  16, { 0,4,8,12 });
-    buildChP(s, 1, 1, m909Clap,   16, { 4, 12 });   // (Clap Snare removed - 0.995 twin)
+    buildChP(s, 1, 1, mClap,      16, { 4, 12 });   // (909 Clap removed - the tight Clap stands in)
     buildChP(s, 1, 2, mClosedHat,  16, { 0,2,4,6,8,10,12,14 });
     buildChP(s, 1, 3, mReeseBass,  16, { 0,3,6,8,11,14 });
     buildChP(s, 1, 4, mOpenHat,    16, { 2,6,10,14 });

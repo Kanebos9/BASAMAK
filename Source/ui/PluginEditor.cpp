@@ -4415,13 +4415,21 @@ static const char* kSoundCatOrder[] = { "Kicks", "Snares", "Claps", "Hi-Hats", "
                                         "Risers & Falls", "Impacts & Booms", "Noise & Texture" };
 // Factory indices in CATEGORY cat, alphabetical; a non-empty query keeps only matches
 // (against the sound NAME or the category title - the search feature).
+// SPACE-INSENSITIVE match: hosts (Reaper) often reserve the SPACE key for their transport, so
+// the search field may never receive it - matching ignores spaces on BOTH sides ("subkick"
+// finds "Sub Kick") and the search works whether or not the host lets the space through.
+static bool pickerMatch(const juce::String& name, const juce::String& query)
+{
+    return name.removeCharacters(" ").containsIgnoreCase(query.removeCharacters(" "));
+}
+
 static juce::Array<int> factoryIndicesFor(const char* cat, const juce::StringArray& names,
                                           const juce::StringArray& cats, const juce::String& query)
 {
     juce::Array<int> idx;
     for (int i = 0; i < names.size(); ++i)
-        if (cats[i] == cat && (query.isEmpty() || names[i].containsIgnoreCase(query)
-                               || juce::String(cat).containsIgnoreCase(query)))
+        if (cats[i] == cat && (query.isEmpty() || pickerMatch(names[i], query)
+                               || pickerMatch(cat, query)))
             idx.add(i);
     std::sort(idx.begin(), idx.end(),
               [&](int a, int b) { return names[a].compareIgnoreCase(names[b]) < 0; });
@@ -4467,10 +4475,13 @@ public:
     }
     ~SoundPickerPanel() override { juce::Desktop::getInstance().removeGlobalMouseListener(&closer); }
 
-    void openWith(const juce::Array<juce::File>& userFiles, const juce::File& userRoot, int currentId)
+    std::function<void(const juce::String&)> onQueryChanged;   // editor remembers it per channel
+    void openWith(const juce::Array<juce::File>& userFiles, const juce::File& userRoot, int currentId,
+                  const juce::String& rememberedQuery)
     {
         files = userFiles; root = userRoot; curId = currentId;
-        ed.setText({}, juce::dontSendNotification);
+        // The channel's last search survives open/close until the user clears it (user request).
+        ed.setText(rememberedQuery, juce::dontSendNotification);
         rebuild();
         setVisible(true);
         toFront(false);
@@ -4575,7 +4586,7 @@ private:
             const bool inRoot = files[i].getParentDirectory() == root;
             const juce::String label = inRoot ? files[i].getFileNameWithoutExtension()
                 : files[i].getParentDirectory().getFileName() + " / " + files[i].getFileNameWithoutExtension();
-            if (q.isEmpty() || label.containsIgnoreCase(q)) user.add({ label, i + 1 });
+            if (q.isEmpty() || pickerMatch(label, q)) user.add({ label, i + 1 });
         }
         if (! user.isEmpty()) { addHeader("Your Sound Bank"); addSection(user); }
         if (q.isEmpty())
@@ -4597,7 +4608,8 @@ private:
         if (onPick) onPick(en.id);
     }
     // TextEditor::Listener
-    void textEditorTextChanged(juce::TextEditor&) override { rebuild(); }
+    void textEditorTextChanged(juce::TextEditor&) override
+    { rebuild(); if (onQueryChanged) onQueryChanged(ed.getText()); }
     void textEditorReturnKeyPressed(juce::TextEditor&) override
     { for (const auto& r : rows) if (! r.isHeader && r.n > 0) { pick(r.e[0]); return; } }
     void textEditorEscapeKeyPressed(juce::TextEditor&) override { close(); }
@@ -5027,13 +5039,14 @@ void DrumSequencerEditor::openSoundPicker(int ch)
     panel.clickIgnore = &combo;
     panel.onClosed = [&combo] { combo.hidePopup(); };   // free the menuActive latch for the next click
     panel.onPick = [this, ch](int id) { applySoundPickId(ch, id); selectChannel(ch); };
+    panel.onQueryChanged = [this, ch](const juce::String& q) { pickerQuery[ch] = q; };
     const auto r = content.getLocalArea(&combo, combo.getLocalBounds());
     int y = r.getBottom() + 2;
     int h = content.getHeight() - y - 6;
     if (h < 300) { h = juce::jmin(620, content.getHeight() - 12); y = content.getHeight() - h - 6; }
     h = juce::jmin(h, 620);
     panel.setBounds(juce::jlimit(2, juce::jmax(2, content.getWidth() - 902), r.getX()), y, 900, h);   // 3 columns
-    panel.openWith(soundMixFiles, getSoundMixFolder(), currentSoundPickId(ch));   // highlight + scroll to the current sound
+    panel.openWith(soundMixFiles, getSoundMixFolder(), currentSoundPickId(ch), pickerQuery[ch]);   // highlight + remembered search
 }
 
 void DrumSequencerEditor::applySoundPickId(int ch, int id)
@@ -10725,11 +10738,11 @@ void DrumSequencerEditor::layoutContent()
             patternBar.setCurrentRange((double) firstPatternCol, (double) shown, juce::dontSendNotification);
         }
     }
-    patModeBtn.setBounds(664, PAT_Y + 8, 160, 26);   // nudged left; wide enough to show "Chain P2(4)>P3(2)"
+    patModeBtn.setBounds(664, PAT_Y + 8, 210, 26);   // widened into the old dead gap (longer chain text fits)
     // Channel-count (8/16) + pattern-count (16/32) toggles, right next to the loop dropdown (Follow moved to the top bar).
 
-    sliderSwing.setBounds(940, PAT_Y + 3, 88, 20);    // moved left to open room for the Influence button
-    lblSwing.setBounds   (940, PAT_Y + 24, 88, 12);   // ...live caption under it, e.g. Swing 66%
+    sliderSwing.setBounds(944, PAT_Y + 3, 92, 20);    // + a touch wider/right: the row breathes evenly now
+    lblSwing.setBounds   (944, PAT_Y + 24, 92, 12);   // ...live caption under it, e.g. Swing 66%
     // Step edit-mode radio buttons, then the purple Influence button, then Clear (flush right).
     lblEditMode.setBounds (1044, PAT_Y + 8, 30, 24);   // "Edit:" (minimumHorizontalScale squeezes it)
     btnModeVel.setBounds  (1078, PAT_Y + 8, 36, 24);   // (Slide has no button - it lives in Pitch mode's bottom band)
