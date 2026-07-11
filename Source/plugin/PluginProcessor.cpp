@@ -1227,9 +1227,30 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
         uiMidiSoundStep.fetch_add(d);
         return;
     }
+    if (pid == "ui_sound_knob14")
+    {   // the FINE (LSB) CC of a 14-BIT knob: it ticks on EVERY click and WRAPS 127->0 as the
+        // big value climbs - a wrap (|diff| > 64) is CONTINUED motion, not a jump back. The
+        // 14-bit wall sits ~16,000 clicks away = unreachable in practice, so no pawl needed.
+        const int last = uiSoundKnob14Last; uiSoundKnob14Last = val;
+        if (last < 0) return;                                // first touch: just sync
+        const int diff = val - last;
+        const int d = diff == 0 ? 0 : diff > 64 ? -1 : diff < -64 ? 1 : diff > 0 ? 1 : -1;
+        if (d != 0) uiMidiSoundStep.fetch_add(d);
+        return;
+    }
     if (pid == "ui_sound_knob") { if (val != 0 && val != 64) uiMidiSoundStep.fetch_add(val < 64 ? 1 : -1); return; }
-    if (pid == "ui_sound_next") { if (on) uiMidiSoundStep.fetch_add(kSoundStepTicks);  return; }
-    if (pid == "ui_sound_prev") { if (on) uiMidiSoundStep.fetch_add(-kSoundStepTicks); return; }
+    // NEXT/PREV buttons: one step per press + HOLD-TO-REPEAT (the editor repeats while held;
+    // release = the pad's value-0 message). Set pads to MOMENTARY in the controller's editor.
+    if (pid == "ui_sound_next")
+    { if (on) { uiMidiSoundStep.fetch_add(kSoundStepTicks);  uiSoundHold.store(1);
+                uiSoundHoldMs.store(juce::Time::getMillisecondCounter()); }
+      else if (uiSoundHold.load() > 0) uiSoundHold.store(0);
+      return; }
+    if (pid == "ui_sound_prev")
+    { if (on) { uiMidiSoundStep.fetch_add(-kSoundStepTicks); uiSoundHold.store(-1);
+                uiSoundHoldMs.store(juce::Time::getMillisecondCounter()); }
+      else if (uiSoundHold.load() < 0) uiSoundHold.store(0);
+      return; }
 
     // Pattern-scoped controls:  "p{P}_..."
     if (!pid.startsWithChar('p')) return;

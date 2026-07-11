@@ -1726,11 +1726,20 @@ void DrumSequencerEditor::PickerCombo::showCcMenu()
         m.addSectionHeader("Listening... move a control on your MIDI device");
         m.addItem(6, "Cancel MIDI learn");
     }
-    m.addItem(1, "Learn KNOB (normal / absolute)..."     + tag("ui_sound_knobA"));
-    m.addItem(2, "Learn KNOB (relative encoder CC)..."   + tag("ui_sound_knob"));
-    m.addItem(3, "Learn NEXT sound (button)..."          + tag("ui_sound_next"));
-    m.addItem(4, "Learn PREV sound (button)..."          + tag("ui_sound_prev"));
+    m.addItem(1, "Learn KNOB (normal / absolute)..."       + tag("ui_sound_knobA"));
+    m.addItem(2, "Learn KNOB (relative encoder CC)..."     + tag("ui_sound_knob"));
+    m.addItem(3, "Learn NEXT sound (button, hold=scroll)..." + tag("ui_sound_next"));
+    m.addItem(4, "Learn PREV sound (button, hold=scroll)..." + tag("ui_sound_prev"));
+    // 14-BIT knobs (e.g. Launchkey MK4 set to Resolution 14 bit): the endless-in-practice mode.
+    // Learn the knob normally first (captures the coarse CC), then this moves the assignment to
+    // the FINE partner CC (+32), which ticks on every click across a ~16,000-step range.
+    if (const int ccA = mlm->getCCForParam("ui_sound_knobA"); ccA >= 0 && ccA + 32 <= 127)
+        m.addItem(7, "14-bit knob: switch to its fine CC (cc" + juce::String(ccA)
+                     + " -> cc" + juce::String(ccA + 32) + ")");
+    if (mlm->getCCForParam("ui_sound_knob14") >= 0)
+        m.addItem(8, "14-bit fine knob ACTIVE" + tag("ui_sound_knob14"), false);
     if (mlm->getCCForParam("ui_sound_knobA") >= 0 || mlm->getCCForParam("ui_sound_knob") >= 0
+        || mlm->getCCForParam("ui_sound_knob14") >= 0
         || mlm->getCCForParam("ui_sound_next") >= 0 || mlm->getCCForParam("ui_sound_prev") >= 0)
     { m.addSeparator(); m.addItem(5, "Clear these assignments"); }
     auto mp = juce::Desktop::getInstance().getMainMouseSource().getScreenPosition().roundToInt();
@@ -1742,8 +1751,13 @@ void DrumSequencerEditor::PickerCombo::showCcMenu()
             else if (r == 3) L->startLearning("ui_sound_next");
             else if (r == 4) L->startLearning("ui_sound_prev");
             else if (r == 5) { L->clearParam("ui_sound_knobA"); L->clearParam("ui_sound_knob");
+                               L->clearParam("ui_sound_knob14");
                                L->clearParam("ui_sound_next");  L->clearParam("ui_sound_prev"); }
             else if (r == 6) L->stopLearning();
+            else if (r == 7) { const int cc = L->getCCForParam("ui_sound_knobA");
+                               const int ch = L->getChannelForParam("ui_sound_knobA");
+                               if (cc >= 0) { L->assign("ui_sound_knob14", cc + 32, ch);
+                                              L->clearParam("ui_sound_knobA"); } }
         });
 }
 
@@ -7100,9 +7114,11 @@ void DrumSequencerEditor::setupComponents()
                                     "relative-encoder CC) or NEXT/PREV buttons step the SELECTED channel through "
                                     "the bank - whatever channel and pattern are selected at the time.\n"
                                     "- Turn slowly: ~3 knob clicks = one sound; fast spins are speed-limited.\n"
-                                    "- Normal knob at its end? Flick back - the WHOLE rewind is free (no steps) - "
-                                    "then crank on: endless. To genuinely reverse right after hitting an end, "
-                                    "pause a second first, then turn back. NEXT/PREV pads also step endlessly.\n"
+                                    "- BEST with an encoder: set it to 14-bit resolution in your controller's "
+                                    "editor, learn it, then pick '14-bit knob: switch to its fine CC' - endless "
+                                    "travel, no tricks. A plain 7-bit knob gets ratchet ends instead (flick back "
+                                    "free, crank on).\n"
+                                    "- NEXT/PREV: tap = one sound, HOLD = keeps scrolling until released.\n"
                                     "- Works while this window is open (browsing is an editor action).");
         strip.btnTest.setTooltip("Play this channel once with its current settings, to hear it without running the sequencer.");
         strip.btnMute->setTooltip("Mute: silence this channel.");
@@ -9969,6 +9985,17 @@ void DrumSequencerEditor::timerCallback()
             soundTickAcc = 0;                                // drop the excess ticks
             if (now - lastSoundStepMs >= 220) { lastSoundStepMs = now; stepSoundBank(dir); }
         }
+    }
+    // NEXT/PREV hold-to-repeat: a held pad keeps stepping at the browse rate. Starts after
+    // ~0.45 s so a tap stays ONE step; a 15 s cap stops a stuck toggle-mode pad from scrolling
+    // forever (set pads to MOMENTARY in the controller's editor).
+    if (int hd = proc.uiSoundHold.load(); hd != 0)
+    {
+        const juce::uint32 now = juce::Time::getMillisecondCounter();
+        const juce::uint32 t0  = proc.uiSoundHoldMs.load();
+        if      (now - t0 > 15000) proc.uiSoundHold.store(0);
+        else if (now - t0 > 450 && now - lastSoundStepMs >= 220)
+        { lastSoundStepMs = now; stepSoundBank(hd); }
     }
 
     stepGrid.update(proc.sequencer, proc.anySolo);      // 60 Hz: smooth playhead

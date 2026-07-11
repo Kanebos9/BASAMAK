@@ -155,6 +155,10 @@ public:
     int uiSoundKnobLast = -1;   // ABSOLUTE knob (ui_sound_knobA): last value seen (audio thread only)
     int uiSoundPegDir   = 0;    // ratchet pawl: +1/-1 = an end was touched (its rewind is free)
     juce::uint32 uiSoundKnobMs = 0;   // last message time (the pawl expires after a pause)
+    int uiSoundKnob14Last = -1; // 14-BIT knob's FINE CC (ui_sound_knob14): last LSB seen
+    // NEXT/PREV hold-to-repeat: +-1 while a pad is held (editor repeats a step per rate window).
+    std::atomic<int> uiSoundHold { 0 };
+    std::atomic<juce::uint32> uiSoundHoldMs { 0 };   // press time (repeat starts after ~0.45 s)
 
     // MIDI-in monitor (drives the on-screen "MIDI" indicator). midiInCount bumps
     // for EVERY incoming message so the UI can tell whether MIDI reaches us at all.
