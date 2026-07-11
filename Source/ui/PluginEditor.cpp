@@ -482,6 +482,14 @@ void HarmonicEditor::paint(juce::Graphics& g)
             g.setColour(accent.withAlpha(0.30f));
             g.fillRoundedRectangle(pr.withRight(hx), 3.0f);
             g.setColour(juce::Colours::white); g.fillEllipse(hx - 4.0f, pr.getCentreY() - 4.0f, 8.0f, 8.0f); }
+        if (livePos >= 0.0f)
+        {   // LIVE marker (amber, the playhead colour): the position the engine is PLAYING right
+            // now - handle + glide + WAVE LFO combined - straight from the newest voice's render.
+            const float lx = pr.getX() + 6.0f + (pr.getWidth() - 12.0f) * juce::jlimit(0.0f, 1.0f, livePos);
+            g.setColour(juce::Colour(0xffffc169));
+            g.drawLine(lx, pr.getY() + 1.0f, lx, pr.getBottom() - 1.0f, 2.0f);
+            g.fillEllipse(lx - 2.6f, pr.getCentreY() - 2.6f, 5.2f, 5.2f);
+        }
     }
     for (int k = 0; k < NF - 1; ++k)
     {   // THREE per-leg GLIDE boxes (A>B / B>C / C>D): drag = travel time, hard left = HOLD.
@@ -793,9 +801,12 @@ juce::String HarmonicEditor::getTooltip()
 {
     const auto p = getMouseXYRelative().toFloat();
     if (posRect().contains(p))
-        return "POSITION: where in the A > D strip the sound sits. The two neighbouring frames "
-               "crossfade; the handle SNAPS onto the letters (a letter = purely that frame - hold "
-               "SHIFT for free placement). Greyed while glide is on (the note travels instead).";
+        return "POSITION: where in the A > D strip the sound sits.\n\n"
+               "- The two neighbouring frames crossfade; the handle SNAPS onto the letters "
+               "(a letter = purely that frame - hold SHIFT for free placement).\n"
+               "- Greyed while glide is on (the note travels instead).\n"
+               "- The AMBER line = the position actually PLAYING right now (handle + glide + "
+               "WAVE LFO combined) - watch it move while a note sounds.";
     if (loopRect().contains(p))
         return "LOOP: the glide travels its legs OUT and then BACK, forever (ping-pong, so there is "
                "no snap) - a breathing, evolving tone instead of settling on the last frame.";
@@ -1146,10 +1157,10 @@ void ModalDisplay::mouseUp(const juce::MouseEvent&)
 
 juce::String ModalDisplay::getTooltip()
 {
-    return "The struck body's REAL vibration shape (the sum of its ringing modes - Material/Tone/Morph "
-           "reshape it live). DRAG the mallet: LEFT/RIGHT = where you strike (edges = full ring, middle = "
-           "hits the modes' nodes = combed/hollow - watch modes vanish from the curve). DOWN = Damp "
-           "(the curve flattens as the body is muted).";
+    return "The struck body's REAL vibration shape (its ringing modes - Material/Tone/Morph reshape it live).\n\n"
+           "- Drag the mallet LEFT/RIGHT = where you strike: edges = full ring, middle = combed/hollow "
+           "(watch modes vanish from the curve).\n"
+           "- Drag DOWN = Damp (the curve flattens as the body is muted).";
 }
 
 void SlotEditor::init(int idx, MidiLearnManager& mlm, juce::LookAndFeel* knobLNF,
@@ -1219,10 +1230,11 @@ void SlotEditor::init(int idx, MidiLearnManager& mlm, juce::LookAndFeel* knobLNF
     modalView.onEdit    = [this] { if (onEdit) onEdit(); };
     modalView.onDragEnd = [this] { if (onAudition) onAudition(); };
     addChildComponent(fmEnvSw);                   // SrcOsc: FM Amount follows the amp envelope
-    fmEnvSw.setTooltip("ENV: ties the FM brightness to the volume of the sound. ON = each hit STARTS buzzy/metallic "
-                       "(full FM) and smooths back to the plain wave as it fades out - press a key and listen to the "
-                       "tail get cleaner. That's the classic FM drum/bass trick (bright attack, warm tail). "
-                       "OFF = the FM buzz stays constant from start to finish. Only matters when FM Amount is up.");
+    fmEnvSw.setTooltip("ENV: ties the FM brightness to the sound's volume envelope.\n\n"
+                       "- ON = each hit starts buzzy/metallic and smooths to the plain wave as it fades "
+                       "(the classic FM drum/bass trick: bright attack, warm tail).\n"
+                       "- OFF = the FM buzz stays constant start to finish.\n"
+                       "- Only matters when FM Amount is up.");
     fmEnvSw.onClick = [this] {
         if (auto* s = getSlot ? getSlot() : nullptr) {
             s->fmEnvFollow = fmEnvSw.getToggleState();
@@ -1256,12 +1268,12 @@ void SlotEditor::init(int idx, MidiLearnManager& mlm, juce::LookAndFeel* knobLNF
     freqFader->textFromValueFunction = [](double v) {   // Hz by default; the NOTE in note mode (click the read-out)
         return gFreqNotesMode ? noteNameFor(v) : juce::String(juce::roundToInt(v)) + " Hz";
     };
-    freqFader->setTooltip("Frequency: the oscillator's base pitch (Hz). CLICK the value read-out to switch to NOTE "
-                          "mode (shows A1, C2...; dragging snaps to semitones, SHIFT = free). Click again for Hz.\n\n"
-                          "KEYS: the keyboard plays REAL notes no matter where this knob sits, and never changes it. "
-                          "Keyboard recordings are stored RELATIVE to this knob (step pitch 0 = this frequency), so "
-                          "they play back exactly as performed - and moving the knob afterwards transposes the whole "
-                          "pattern.");
+    freqFader->setTooltip("Base Freq: the oscillator's base pitch.\n\n"
+                          "- CLICK the value read-out = NOTE mode (shows A1, C2...; drags snap to semitones, "
+                          "SHIFT = free). Click again = Hz. Double-click = C4.\n"
+                          "- The keyboard plays REAL notes wherever this sits, and never changes it.\n"
+                          "- Step recordings are stored RELATIVE to it (step pitch 0 = this frequency) - "
+                          "moving it afterwards transposes the whole pattern.");
     freqFader->onValueChange = [this] {
         if (auto* s = getSlot ? getSlot() : nullptr) {
             double v = freqFader->getValue();
@@ -3275,28 +3287,49 @@ juce::String LfoDisplay::getTooltip()
                "- Grid = follows the channel's grid automatically (piano-roll Grid 1/N, else the step count) - "
                "one cycle per grid cell, even odd grids like 1/23.\n"
                "The wave always draws the TRUE speed; the read-out beside this button shows it.";
-    juce::String s ("LFOs (per slot): FOUR independent sine wobbles - one per target (FILT / PITCH / VOL / WAVE) - that "
-                    "RESTART on every hit, so they always lock to the groove. The tabs pick which one you're "
-                    "editing (the others show as dim ghost waves; any mix can run at once). Drag LEFT/RIGHT = "
-                    "speed (free Hz, or SNAPPED to musical rates when Sync is on - see the Sync button below), "
-                    "UP/DOWN = amount (wave height; 0 = off). Double-click = off/restore.\n\n"
-                    "The vertical line + white dot = the LIVE PLAYHEAD: where the playing LFO is right now. "
-                    "Dot high = pushing its target up, dot low = pushing it down (on WAVE: high = toward frame D, "
-                    "low = toward A). With Retrig it appears while a note sounds; with Free it travels non-stop.\n\n"
-                    "RECIPES:  Wobble bass = FILT, 1-3 Hz, high amount, slot filter ON with some resonance, long "
-                    "per-step Length (at 120 BPM ~2 Hz feels like 1/8th notes, ~4 Hz like 1/16ths).  Siren/alarm = "
-                    "PITCH, ~1 Hz, full amount on a long bright sound.  Vibrato = PITCH, 4-6 Hz, TINY amount "
-                    "(5-10%).  Helicopter = VOL, 10-14 Hz, full amount on noise.  Slow pump = VOL, 1-2 Hz, half "
-                    "amount.  Shimmering hats/cymbals = FILT, 6-10 Hz, low amount.  Talking wavetable = WAVE, 1-4 Hz "
-                    "(Sync!) on a Custom wave - it scans the 4 drawn frames around the Position.  Stack them: "
-                    "wobble (FILT) + slow pump (VOL) = dubstep growl.");
-    if (! filtOn_ && dest_ == 0)
-        s << "\n\nNOTE: this slot's FILTER is OFF, so the FILT target does nothing right now - enable it with the "
-             "orange F diamond on this slot's EQ (double-click it).";
-    if (! waveOn_ && dest_ == 3)
-        s << "\n\nNOTE: this slot's Wave is not CUSTOM, so the WAVE target has nothing to scan - set the Wave "
-             "fader to Custom (the drawable additive wavetable).";
-    return s;
+    // Per-TAB tooltips (user: "not all chips have individual tooltips but they should").
+    switch (destAt(getMouseXYRelative().toFloat()))
+    {
+        case 0:
+        {
+            juce::String s ("FILT tab: this LFO wobbles the slot FILTER's cutoff.\n\n"
+                            "- Needs a filter ON on this slot (a diamond in the FILTER / EQ box).\n"
+                            "- Click the tab to edit this LFO; drag its wave below for speed and amount.\n"
+                            "- All four LFOs run at once - the tabs only pick which one you edit.");
+            if (! filtOn_)
+                s << "\n\nNOTE: this slot's filter is OFF right now, so this LFO does nothing - "
+                     "double-click a diamond in FILTER / EQ to enable one.";
+            return s;
+        }
+        case 1:
+            return "PITCH tab: this LFO wobbles the note's pitch (up to +/-1 octave at full amount).\n\n"
+                   "- Tiny amounts read as vibrato, big slow ones as sirens.\n"
+                   "- Click the tab to edit this LFO; drag its wave below for speed and amount.";
+        case 2:
+            return "VOL tab: this LFO wobbles the slot's volume (tremolo).\n\n"
+                   "- Full amount dips to silence every cycle; half = a gentle pump.\n"
+                   "- Click the tab to edit this LFO; drag its wave below for speed and amount.";
+        case 3:
+        {
+            juce::String s ("WAVE tab: this LFO moves the Custom wavetable's A-D POSITION - it changes "
+                            "the TONE itself, not volume or pitch.\n\n"
+                            "- Wave high = pushed toward frame D; wave low = toward frame A; centre "
+                            "line = the Position handle.\n"
+                            "- Only audible when this slot's Wave is Custom (the drawable wavetable).\n"
+                            "- The amber line in the draw window's Position strip shows this movement live.");
+            if (! waveOn_)
+                s << "\n\nNOTE: this slot's Wave is not Custom right now, so this LFO does nothing - "
+                     "set the Wave fader to Custom (or click the wave preview).";
+            return s;
+        }
+        default: break;
+    }
+    return "The selected LFO's wave - the drawing is exactly what plays.\n\n"
+           "- Drag LEFT/RIGHT = speed - UP/DOWN = amount (wave height; 0 = off).\n"
+           "- Double-click = off / restore.\n"
+           "- Dim waves = the OTHER tabs' LFOs that are running (all four play at once).\n"
+           "- The vertical line + white dot = the LIVE playhead while sound plays.\n\n"
+           "Every tab and button here has its own tooltip - hover them.";
 }
 
 //==============================================================================
@@ -3478,10 +3511,10 @@ juce::String ScaleBox::getTooltip()
     if (scaleRect().contains(p))
         return "SCALE (drag): Off, or the scale the slot plays in. With a scale ON, every key you press plays "
                "a full chord built from that key inside the scale; off-scale keys snap to the nearest scale note.";
-    return "SCALE harmonizer for the selected channel's sound slots (moved here from the sound editor). One key "
-           "= a full in-scale chord.\n\nThe three read-outs above the keys name what is sounding LIVE: yellow = "
-           "slot 1, pink = slot 2, white ALL = every key from both slots combined. Combinations that match no "
-           "chord show the note list instead.";
+    return "SCALE harmonizer for the selected channel's sound slots: one key = a full in-scale chord.\n\n"
+           "- Pick the slot (1/2), a Key, a scale and the chord size (Notes).\n"
+           "- The read-outs above the keys name what sounds LIVE: yellow = slot 1, pink = slot 2, "
+           "white ALL = both combined (no matching chord = the note list).";
 }
 
 //==============================================================================
@@ -5854,11 +5887,10 @@ void DrumSequencerEditor::setupComponents()
 
     // MIDI menu (dropdown): Save / load the current pattern's note grid + clear MIDI-learn.
     content.addAndMakeVisible(comboMidi);
-    comboMidi.setTooltip("MIDI: save or load a MIDI-learn map (the MIDI channel + CC number assigned to each "
-                         "parameter and step - NOT their values) as *.basamakpattern in your MIDI Patterns folder, "
-                         "refresh/open that folder, or clear all MIDI-learn assignments.\n\n"
-                         "The 'Ch1 8x8 + M/S/OV + Play' factory map is compatible with the TouchOSC file that comes "
-                         "with your download.");
+    comboMidi.setTooltip("MIDI: save/load a MIDI-LEARN MAP - which CC controls which parameter (never their values).\n\n"
+                         "- Saved as *.basamakpattern in your MIDI Patterns folder (refresh/open it here too).\n"
+                         "- 'Clear MIDI' wipes all assignments.\n"
+                         "- The 'Ch1 8x8 + M/S/OV + Play' factory map matches the TouchOSC file in your download.");
     rebuildMidiMenu();
     comboMidi.onChange = [this] { handleMidiMenuChange(); };
 
@@ -5932,9 +5964,9 @@ void DrumSequencerEditor::setupComponents()
     btnModeRoll.midiLearn  = &proc.midiLearn; btnModeRoll.paramId  = "ui_mode_roll";
     btnModePan.midiLearn   = &proc.midiLearn; btnModePan.paramId   = "ui_mode_pan";
     btnModeNudge.midiLearn = &proc.midiLearn; btnModeNudge.paramId = "ui_mode_nudge";
-    btnModeVel.setTooltip("Velocity mode: drag a step UP/DOWN for how HARD that hit plays (0-100%). It's more than "
-                          "volume: on sounds with a filter envelope a harder hit sweeps the filter further (303-style "
-                          "accent), and MIDI Out channels send it as real MIDI velocity. Click again to leave.");
+    btnModeVel.setTooltip("Velocity mode: drag a step up/down for how HARD that hit plays (0-100%).\n\n"
+                          "- More than volume: a harder hit also sweeps a filter envelope further (303 accent).\n"
+                          "- MIDI Out channels send it as real MIDI velocity.");
     btnModeLen.setTooltip("Gate mode (note length): drag a step LEFT/RIGHT to set how long the note is held - "
                           "the same idea as a piano-roll note's length.\n\n"
                           "- The note keeps its attack/punch, then its DECAY is stretched (or tightened) so the fall "
@@ -5950,15 +5982,17 @@ void DrumSequencerEditor::setupComponents()
                           "- PIANO ROLL round trips use Gate too: a Gate step becomes a gated note of that length, "
                           "and a gated note's duration comes back into Gate (Gate-OFF notes = plain steps).\n\n"
                           "Double-click a step resets it to Off.");
-    btnModePitch.setTooltip("Pitch edit mode: each step becomes a bipolar bar - centre is +0, drag up for higher / "
-                            "down for lower pitch (semitones). Affects the whole sound of that hit. The 'slide' band "
-                            "at the BOTTOM of each cell: click it and that step's pitch GLIDES across the step to land "
-                            "on the NEXT step's pitch (303 portamento). It only makes a difference when the two steps "
-                            "have DIFFERENT pitch values - set a pitch line first, then slide the notes that should "
-                            "flow together. TIP: the glide is most obvious with FEWER steps and a LONG per-step Length "
-                            "(a slow bass line) - on a busy 16/32-step pattern each step is too short to hear the bend, "
-                            "so slow it down or stretch the notes to really hear it.");
-    btnModeProb.setTooltip("Loop-condition mode: DRAG a step left/right to set a cycle of N bars, then CLICK the bars to pick which loops it fires on (e.g. N=6, bars 3 & 6 -> fires only on the 3rd and 6th loop). No bars picked = every loop. The step must also be ON in normal mode. Double-click resets.");
+    btnModePitch.setTooltip("Pitch mode: drag a step up/down to transpose that hit (semitones; centre = +0).\n\n"
+                            "- The SLIDE band at each cell's bottom: click it and the step's pitch GLIDES across "
+                            "the step into the NEXT step's pitch (303 portamento).\n"
+                            "- Slide is only audible when the two steps have DIFFERENT pitches - draw the pitch "
+                            "line first, then slide the notes that should flow together.\n\n"
+                            "TIP: the glide is clearest with FEW steps + a long Gate (a slow bass line).");
+    btnModeProb.setTooltip("Loop-condition mode: make a step fire only on certain passes of the loop.\n\n"
+                           "- DRAG a step left/right = the cycle length (N bars).\n"
+                           "- CLICK the bars = pick which passes it fires on (N=6, bars 3+6 = only the 3rd "
+                           "and 6th time around). None picked = every pass.\n"
+                           "- The step must also be ON in normal mode. Double-click resets.");
     btnModeRoll.setTooltip("Roll / ratchet mode: each step is a 2D cell.\n\n"
                            "- Drag UP/DOWN = how many times the step re-fires (1-6).\n"
                            "- Drag LEFT/RIGHT = the velocity RAMP across those hits: centre = flat, left = fade OUT, "
@@ -5970,13 +6004,13 @@ void DrumSequencerEditor::setupComponents()
     btnModePan.setTooltip("Pan edit mode: each step becomes a bipolar bar - drag LEFT/RIGHT to place that hit in the "
                           "stereo field (centre = middle). Per-step pan rides on top of the channel Pan. For built-in "
                           "sounds only (a MIDI-Out channel sends notes, not audio). Click again to leave.");
-    btnModeNudge.setTooltip("Nudge edit mode (micro-timing): drag a step LEFT and its hit fires EARLY - i.e. BEFORE the "
-                            "sequencer reaches that grid line (negative ms) - or RIGHT for LATE (positive ms), up to half a "
-                            "step each way. The read-out is real milliseconds at the current tempo. Unlike Swing (one groove "
-                            "knob shifting every off-beat), Nudge moves ONE chosen hit: drag a snare a touch late for "
-                            "laid-back feel, rush a hat, humanize a fill by hand. Snaps back to exactly on-the-grid near "
-                            "the centre; double-click resets. Rolls and MIDI-out notes shift with it; Drag-MIDI exports "
-                            "the same timing. Click again to leave.");
+    btnModeNudge.setTooltip("Nudge mode (micro-timing): shift ONE hit off the grid line.\n\n"
+                            "- Drag LEFT = fires EARLY (before the grid line), RIGHT = LATE - up to half a step; "
+                            "the read-out is real milliseconds at the current tempo.\n"
+                            "- Unlike Swing (one knob shifting every off-beat), Nudge moves one chosen hit: a "
+                            "lazy snare, a rushed hat, a hand-humanized fill.\n"
+                            "- Snaps to on-the-grid near centre; double-click resets.\n"
+                            "- Rolls, MIDI-out notes and Drag-MIDI all follow the shifted timing.");
 
     // Time signature + bar-length calculator. X/Y editable.
     auto styleStatic = [this](juce::Label& l, const juce::String& t, float fs) {
@@ -6132,12 +6166,12 @@ void DrumSequencerEditor::setupComponents()
             wm.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&patternBtns[p]),
                              [doMerge](int r) { if (r == 1) doMerge(); });
         };
-        pb.setTooltip("Pattern " + juce::String(p + 1) + ". Click to view + edit it. DRAG it onto another pattern "
-                      "to COPY this pattern's steps, swing, play-mode + FX into that slot (the sounds are shared, so "
-                      "only the sequencing copies). SHIFT+CLICK to MERGE it with the pattern before it: merged "
-                      "patterns play back to back as one longer piece (SOUNDS + step counts mirror the FIRST one; "
-                      "the play mode / chain comes from the LAST one - the bar playback leaves from; steps stay per "
-                      "pattern). Shift+click again to un-merge. Right-click to MIDI-learn.");
+        pb.setTooltip("Pattern " + juce::String(p + 1) + " - click to view + edit it.\n\n"
+                      "- DRAG onto another pattern = copy its steps, swing, play-mode + FX there.\n"
+                      "- SHIFT+CLICK = MERGE with the pattern before it: merged patterns play back to back "
+                      "as one longer piece (sounds + step counts mirror the FIRST bar; play mode/chain "
+                      "come from the LAST). Shift+click again = un-merge.\n"
+                      "- Right-click = MIDI-learn.");
         content.addAndMakeVisible(pb);
     }
     content.addAndMakeVisible(btnFollow);
@@ -6185,10 +6219,10 @@ void DrumSequencerEditor::setupComponents()
     content.addAndMakeVisible(btnClearPat);
     btnClearPat.setLookAndFeel(&tinyBtnLNF);
     btnClearPat.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff3a2030));
-    btnClearPat.setTooltip("Clear the SELECTED channel (in this pattern): disable its steps and reset all its "
-                           "per-step values (velocity, pan, pitch, loop, roll) back to default. In Draw mode it "
-                           "also wipes the whole drawn lane (pitch + length) and resets the channel's draw vol/pan. "
-                           "Other channels are untouched. Undoable.");
+    btnClearPat.setTooltip("Clear the SELECTED channel in this pattern.\n\n"
+                           "- Steps: disables them + resets every per-step value (vel, pan, pitch, loop, roll).\n"
+                           "- Piano Roll: deletes all notes.\n"
+                           "- Other channels untouched. Undoable.");
     btnClearPat.onClick = [this] {
         // Clear the SELECTED channel only - across EVERY bar of a merged group (the whole visible row).
         commitUndoNow();   // so this Clear is undoable even right after recording (user request)
@@ -6272,10 +6306,10 @@ void DrumSequencerEditor::setupComponents()
     content.addAndMakeVisible(btnKeysView);
     btnKeysView.setLookAndFeel(&tinyBtnLNF);
     btnKeysView.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
-    btnKeysView.setTooltip("Switch between the SOUND EDITOR and the on-screen KEYS piano. Keys play the selected "
-                           "channel's Analog+FM / Physical / Modal slots at the pressed pitch (their Freq knobs are "
-                           "ignored; Sample/Noise slots stay silent), MONO, with slot 2 optionally transposed down. "
-                           "You can also RECORD what you play into the pattern's steps as per-step pitch.");
+    btnKeysView.setTooltip("Switch between the SOUND EDITOR and the on-screen KEYS piano.\n\n"
+                           "- Keys play the SELECTED channel at the pressed pitch (Freq knobs are never changed).\n"
+                           "- Every engine plays; 'Keep pitch' samples just don't transpose.\n"
+                           "- REC records what you play into the channel as piano-roll notes.");
     btnKeysView.onClick = [this] { keysView = ! keysView; applyKeysView(); };
 
     content.addChildComponent(keysPanel);   // hidden until KEYS is opened
@@ -6952,22 +6986,22 @@ void DrumSequencerEditor::setupComponents()
                              [go](int r) { if (r == 1) go(); });
         };
 
-        strip.numBtn.setTooltip("Channel number - click to select + edit its sound below. DRAG it onto another channel's "
-                                "number to copy this channel's whole sound + steps there (that channel keeps its own routing). "
-                                "The COLOUR shows its routing (set via the top-bar Routing button or the CHANNEL box's Output "
-                                "dropdown): dark = normal (plays into the Main mix); TEAL = sent to its own aux Output for a "
-                                "separate DAW track; PURPLE = MIDI Out (makes no sound, sends MIDI notes to sequence another plugin).");
+        strip.numBtn.setTooltip("Channel number - click to select + edit its sound below.\n\n"
+                                "- DRAG onto another channel's number = copy this channel's sound + steps there "
+                                "(the target keeps its own routing).\n"
+                                "- SHIFT+CLICK = Merge & Split with the previous channel (split keyboard).\n"
+                                "- The COLOUR = routing: dark = Main mix, TEAL = own aux Output, PURPLE = MIDI Out "
+                                "(no sound, sequences another plugin).");
         strip.comboSound.setTooltip("Load a saved 'sound mix' onto this channel, or start a fresh one.");
         strip.btnTest.setTooltip("Play this channel once with its current settings, to hear it without running the sequencer.");
         strip.btnMute->setTooltip("Mute: silence this channel.");
         strip.btnSolo->setTooltip("Solo: play only this channel (and other soloed ones), muting the rest.");
-        strip.comboSteps.setTooltip("Number of steps in this channel's pattern (the bar is split into this many even slices), "
-                                    "or PIANO ROLL for a free note lane (draw or record melodies AND chords; the lens opens "
-                                    "the full editor).\n\n"
-                                    "Steps and Piano Roll are SEPARATE - switching between them CLEARS this channel's "
-                                    "content and starts the other side fresh (it warns first if there's anything to lose, "
-                                    "and Undo restores it). To QUANTISE notes without leaving the roll, use the Quantize "
-                                    "button in the piano-roll editor's header.");
+        strip.comboSteps.setTooltip("Number of steps in this channel's pattern, or PIANO ROLL for a free note lane "
+                                    "(draw/record melodies and chords; the lens opens the full editor).\n\n"
+                                    "- Steps and Piano Roll are SEPARATE: switching CLEARS this channel's content and "
+                                    "starts the other side fresh (it warns first; Undo restores).\n"
+                                    "- To quantise notes WITHOUT leaving the roll, use the Quantize button in the "
+                                    "roll editor's header.");
     }
 
     // Detail panel
@@ -7165,13 +7199,12 @@ void DrumSequencerEditor::setupComponents()
     content.addAndMakeVisible(btnRoute);
     btnRoute.setLookAndFeel(&dropBtnLNF);   // draws a down-triangle (it's a dropdown)
     btnRoute.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
-    btnRoute.setTooltip("Routing overview - wire every channel at once: Main (normal mix), its own aux Output "
-                        "(a separate DAW track - the DAW routes 'Out N' to a track), or MIDI Out -> a note (sequences "
-                        "another plugin; the DAW routes this plugin's MIDI output to your synth/sampler). No internal "
-                        "sound when on MIDI. Each channel shows two MIDI lines: 'MIDI Out (note)' switches it on with its "
-                        "current note, and 'Change MIDI Out note' picks a new one. The MIDI note's LENGTH = this channel's "
-                        "amp-envelope length (shape it on the AMP ENVELOPE graph). Channels are colour-coded in the strip: "
-                        "purple = MIDI, teal = aux out. Channel-wide (applies to all patterns).");
+    btnRoute.setTooltip("Routing overview: wire every channel at once (channel-wide, all patterns).\n\n"
+                        "- Main = the normal mix.\n"
+                        "- Out N = its own aux output - route it to a separate DAW track.\n"
+                        "- MIDI Out = no internal sound; the channel sequences another plugin on a note "
+                        "('Change MIDI Out note' picks it; note length = this channel's amp-envelope length).\n"
+                        "- Strip colours: purple = MIDI, teal = aux out.");
     btnRoute.onClick = [this] {
         juce::PopupMenu menu;
         for (int ch = 0; ch < Sequencer::NUM_CHANNELS; ++ch) {
@@ -7719,11 +7752,10 @@ void DrumSequencerEditor::setupComponents()
         soundPad.repaint();
     };
     btnPadLayout.setTooltip(
-        "Blend layout A / B (works with 4 or 5 sources on). On the blend shape, sources on OPPOSITE "
-        "corners can never both be loud at once, so some mixes are impossible in layout A. Layout B "
-        "re-arranges which sources are neighbours - the square swaps its two top corners; the pentagon "
-        "uses a star order - so a pair that was opposite in A becomes adjacent and you can push both up "
-        "together. It does not change the sound on its own, only which blends are reachable.");
+        "Blend layout A / B (with 4-5 sources on): re-arranges which sources are NEIGHBOURS on the pad.\n\n"
+        "- Sources on OPPOSITE corners can never both be loud at once.\n"
+        "- If the pair you want to push up together is opposite in A, switch to B (it becomes adjacent).\n"
+        "- Changes nothing by itself - only which blends are reachable.");
 
     // Sample chooser (moved here from the channel strip) — "Sample" as a group header
     setupGroupHeader(lblSampleSel, "SAMPLE");
@@ -7784,11 +7816,11 @@ void DrumSequencerEditor::setupComponents()
         swSmpPreserve[b].onClick = [this, b] { if (!ignoreKnobCallbacks) {
             proc.sequencer.channel(selectedChannel).slots[b].smpPreservePitch = swSmpPreserve[b].getToggleState();
             proc.sequencer.channel(selectedChannel).markDspDirty(); } };
-        swSmpPreserve[b].setTooltip("Keep pitch (ON by default): the NOTE you play - the keyboard AND per-step / "
-            "draw pitch - won't transpose this sample, so recording a melody can't detune it. It's applied AFTER "
-            "the pitch ENVELOPE, so the pitch envelope, vibrato and pitch LFO still shape the sound normally. "
-            "Turn OFF to play it as a pitched sampler; when off, a note below C4 (middle C) simply plays slower and now "
-            "always finishes the whole sample.");
+        swSmpPreserve[b].setTooltip("Keep pitch (ON by default): played NOTES never transpose this sample.\n\n"
+            "- The keyboard and per-step/roll pitch leave it alone - recording a melody can't detune it.\n"
+            "- The pitch envelope, vibrato and pitch LFO STILL work (applied separately).\n"
+            "- Turn OFF to play it as a pitched sampler: notes below C4 play slower (and always "
+            "finish the whole sample).");
     }
     // PITCH (semitones) = transpose the WHOLE channel - works for every engine (synth freq + sample
     // varispeed), applied via vPitchMul in the render. Same unit as the pitch envelope. Per-channel.
@@ -7966,26 +7998,23 @@ void DrumSequencerEditor::setupComponents()
     btnPlay.setTooltip("Start playback (used when DAW Sync is off, so the plugin runs on its own).");
     btnStop.setTooltip("Stop playback (used when DAW Sync is off).");
     comboPreset.setTooltip("Save or load a whole-kit preset: all channels, patterns and settings at once.");
-    dragMidi.setTooltip("Dragging pitch values works for selected channel, not for the whole pattern. It is useful "
-                        "when steps have different pitch values. Pitched slots (Oscillator/Modal/Physical) export "
-                        "from their own Freq knob; a slot in CHORD or SCALE mode exports its FULL voicing (every "
-                        "chord note), and both slots export together. A channel with only Sample/Noise exports its "
-                        "step/draw pitch on the channel's own note (no fixed anchor). If your MIDI lands transposed, "
-                        "check the Freq knobs on the sound slots: they set the 0-point of the pitch (the keyboard "
-                        "plays real notes but never changes the knobs).");
+    dragMidi.setTooltip("Drag onto a DAW track to export the SELECTED channel's pitches as a MIDI clip.\n\n"
+                        "- Pitched slots (Oscillator/Modal/Karplus-Strong) export from their own Freq knob; "
+                        "CHORD/SCALE slots export their FULL voicing; both slots export together.\n"
+                        "- A pure Sample/Noise channel exports its step/draw pitch on the channel's own note.\n\n"
+                        "MIDI lands transposed? Check the slots' Freq knobs - they set the pitch 0-point.");
     patModeBtn.setTooltip("What happens after this pattern finishes: loop forever, stop after N loops, or jump to another pattern.");
 
-    freqDisplay.setTooltip("Live spectrum (the frequencies of what's playing) + the EQ/filter curve. The spectrum "
-                           "refreshes once per step, so channels with more steps show the frequencies at a higher resolution.\n\n"
-                           "Boosting EQ bands makes the channel louder, which adds up across all channels. If the "
-                           "final mix gets too hot, some DAWs (Reaper included) clip or auto-mute the track. Cut "
-                           "other bands, lower the channel/master Volume, or raise the master Limit knob to keep it safe.");
+    freqDisplay.setTooltip("Live spectrum (the frequencies of what's playing) + this slot's filter curve.\n\n"
+                           "- The spectrum refreshes once per step (more steps = higher refresh).\n"
+                           "- Boosting makes the channel louder, and channels add up - if the mix gets too hot "
+                           "some DAWs clip or auto-mute. Lower Volume or use the master Limit knob.");
     soundPad.setTooltip("Drag the yellow dot to blend the enabled sound sources. Closer to a corner = more of that source.");
     comboSampleSel.setTooltip("Pick a sample for this channel from your samples folder (or load a new one).");
-    knobSpeed.setTooltip("TUNE: transpose the WHOLE channel in semitones (its different job vs the per-step grid "
-                         "Pitch: Tune sets the root/key once, per-step Pitch plays the melody RELATIVE to it - and "
-                         "Keys mode plays from this root too). On samples Tune is a high-quality PITCH-SHIFT that "
-                         "keeps the length (per-step pitch is varispeed and changes it). Length without pitch = Stretch.");
+    knobSpeed.setTooltip("TUNE: transpose the WHOLE channel in semitones.\n\n"
+                         "- Tune sets the root/key once; per-step Pitch plays the melody RELATIVE to it.\n"
+                         "- On samples Tune is a length-keeping pitch-shift (per-step pitch is varispeed).\n"
+                         "- Length without pitch change = Stretch.");
     knobLayNoiseType.setTooltip("Noise colour: White (bright/hissy), Pink (softer), Brown (deep/rumbly), Grey (balanced), Purple (very bright/airy).");
     swDelaySync.setTooltip("Lock the delay time to the tempo (note values like 1/8, 1/4) instead of free milliseconds.");
     swMasterMono.setTooltip("Switch the final output between Stereo (off) and Mono (on, both speakers identical).");
@@ -8015,26 +8044,25 @@ void DrumSequencerEditor::setupComponents()
     knobDelayFB.setTooltip("Delay feedback - how many times the echo repeats. Higher = more repeats.");
     knobDelayWet.setTooltip("Overall delay amount (how loud the echoes are in the mix) - like the reverb Wet.");
     knobMasterVol.setTooltip("MASTER output volume (the final fader, per pattern).");
-    knobMasterLimit.setTooltip("MASTER output limiter. The read-out is the output CEILING in dB - peaks are held just "
-                               "below this level so loud EQ/volume boosts can't make your DAW mute or clip. 'Off' = no "
-                               "limiting. A light ceiling (-0.1 to -1 dB) just catches stray peaks transparently; lower "
-                               "it (toward -12 dB) to squash peaks harder + push the overall level up.");
-    knobMasterGlue.setTooltip("GLUE - a master COMPRESSOR (dynamics). It reduces the level DIFFERENCE between loud and "
-                              "quiet hits, squeezing the kit into one cohesive, punchy groove with a subtle 'pump'. It "
-                              "does NOT add harmonics/dirt - that's SAT. Rule of thumb: GLUE for tightness + punch + "
-                              "pump; SAT for warmth + grit + colour. At 0% it's OFF. Sits before the Limiter, reacts to "
-                              "both channels equally so the stereo image stays put.");
-    knobMasterTilt.setTooltip("TILT - one knob for the overall tone of the WHOLE mix (drums AND bass together), tilting "
-                              "the balance around ~700 Hz. Centre = 'Flat' (off, no change). Turn LEFT (Dk) = darker / "
-                              "warmer / more low-end weight - tames harsh hats + fattens the bass. Turn RIGHT (Br) = "
-                              "brighter / crisper - more attack + air. A fast way to warm up or open up the full pattern "
-                              "without touching each channel's EQ. Range about +/-6 dB.");
-    knobMasterSat.setTooltip("SAT - master SATURATION (harmonic drive), a tube-style warmer. It ADDS harmonics = "
-                             "warmth, thickness and edge, and keeps the bass audible on small speakers - it does NOT "
-                             "squeeze dynamics (that's GLUE). Low amounts = subtle analog warmth/colour; high amounts = "
-                             "obvious grit/dirt. Rule of thumb: SAT for warmth + grit + colour; GLUE for tightness + "
-                             "punch + pump - they stack. At 0% it's OFF (clean). Driven harder as the master gets "
-                             "louder, sits before Glue + the Limiter, great on bass lines as well as the kit.");
+    knobMasterLimit.setTooltip("MASTER output limiter - the read-out is the output CEILING in dB.\n\n"
+                               "- Peaks are held just below the ceiling, so boosts can't clip your DAW.\n"
+                               "- Light (-0.1 to -1 dB) = transparently catches strays; low (toward -12 dB) = "
+                               "squashes hard + pushes the level up.\n"
+                               "- 'Off' = no limiting.");
+    knobMasterGlue.setTooltip("GLUE: a master compressor - squeezes loud and quiet hits closer together so the kit "
+                              "plays as one punchy groove.\n\n"
+                              "- Adds a subtle 'pump'; no harmonics/dirt (that's SAT).\n"
+                              "- GLUE = tightness + punch; SAT = warmth + colour - they stack.\n"
+                              "- 0% = OFF. Sits before the Limiter; keeps the stereo image put.");
+    knobMasterTilt.setTooltip("TILT: one knob for the tone of the WHOLE mix, tilting the balance around ~700 Hz.\n\n"
+                              "- LEFT (Dk) = darker/warmer - tames harsh hats, fattens bass.\n"
+                              "- RIGHT (Br) = brighter/crisper - more attack + air.\n"
+                              "- Centre = Flat = off. Range about +/-6 dB.");
+    knobMasterSat.setTooltip("SAT: master saturation - a tube-style warmer that ADDS harmonics.\n\n"
+                             "- Low = subtle analog warmth; high = obvious grit/dirt.\n"
+                             "- Keeps bass audible on small speakers.\n"
+                             "- SAT = warmth + colour; GLUE = tightness + pump (no harmonics) - they stack.\n"
+                             "- 0% = OFF (clean). Sits before Glue + the Limiter.");
     knobLayOscShape.setTooltip("Oscillator waveform: Sine (pure), Triangle (soft), Square (hollow), Saw (bright/buzzy).");
     knobLaySineFreq.setTooltip("Oscillator pitch in Hz. Low values give sub-bass for kicks; higher for tones.");
     knobLaySinePEA.setTooltip("Oscillator pitch bend amount at the start of the note.");
@@ -9613,11 +9641,11 @@ void DrumSequencerEditor::timerCallback()
         {
             hostFrozen = frozen;
             btnPlay.setTooltip(frozen
-                ? juce::String("NOT PLAYING? BASAMAK is not receiving audio from the host right now, so "
-                               "everything is paused - no sound, the sequencer will not move, and TEST does "
-                               "nothing. This is almost always the AUDIO DEVICE: it is off, unplugged or "
-                               "misconfigured (in a DAW check its audio device settings and that this FX is "
-                               "not offline/bypassed; in the standalone check Options > Audio Settings). "
+                ? juce::String("NOT PLAYING? BASAMAK is not receiving audio from the host - everything is "
+                               "paused (no sound, no sequencer movement, TEST does nothing).\n\n"
+                               "- Almost always the AUDIO DEVICE: off, unplugged or misconfigured.\n"
+                               "- In a DAW: check its audio device settings + that this FX is not offline/bypassed.\n"
+                               "- Standalone: check Options > Audio Settings.\n\n"
                                "BASAMAK unfreezes by itself as soon as audio is back.")
                 : juce::String("Start playback (used when DAW Sync is off, so the plugin runs on its own)."));
         }
@@ -9914,6 +9942,9 @@ void DrumSequencerEditor::timerCallback()
         // FREE-RUN LFOs: the continuous clock the white dot rides between notes
         lfoDisplay.setFreeClockSec(dc.lfoBarPos >= 0.0 ? dc.lfoBarPos * (double) dc.lfoBarSeconds
                                                        : dc.lfoFreeSec);
+        // LIVE wavetable position (amber marker on the draw window's Position strip)
+        if (harmEd.isVisible())
+            harmEd.setLivePos(dc.getWtPos(harmEd.slotIdx));
     }
     { // live tempo + grid info so the wave/read-out always show the TRUE synced speed (change-gated)
         auto& lch = proc.sequencer.channel(selectedChannel);

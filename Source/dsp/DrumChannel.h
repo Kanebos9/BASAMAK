@@ -638,6 +638,14 @@ public:
         for (auto& v : voices) if (v.active() && (nv == nullptr || v.voiceSamples < nv->voiceSamples)) nv = &v;
         return nv != nullptr ? nv->sv[juce::jlimit(0, NUM_SLOTS - 1, slot)].lfoPhase[juce::jlimit(0, 3, dest)] : -1.0;
     }
+    // UI: the newest active voice's LIVE wavetable position for this slot (0..1 across A..D =
+    // handle + glide + WAVE LFO, straight from the render; -1 = nothing playing / not Custom).
+    float getWtPos(int slot) const
+    {
+        const Voice* nv = nullptr;
+        for (auto& v : voices) if (v.active() && (nv == nullptr || v.voiceSamples < nv->voiceSamples)) nv = &v;
+        return nv != nullptr ? nv->sv[juce::jlimit(0, NUM_SLOTS - 1, slot)].wtPosCur : -1.0f;
+    }
     // The newest voice's S&H cycle counter (seeded per note) - the editor draws the REAL rolled
     // Random pattern with it, so the picture changes per note exactly like the sound does.
     uint32_t getLfoCycle(int slot, int dest) const
@@ -960,6 +968,9 @@ private:
         float    gateDec = 0.0f;
         double   lfoPhase[4] = {}; // per-slot LFO phases (radians), one per dest (3 = WAVE)
         uint32_t lfoCyc[4]   = {}; // completed cycles (Random/S&H holds one value per cycle)
+        float    wtPosCur = -1.0f; // UI: LIVE wavetable position 0..1 the render last played
+                                   // (handle + glide + WAVE LFO combined; -1 = not rendering a
+                                   // Custom table). Torn-read tolerant like the other UI reads.
         // DRIFT per-note randomness (all 1/neutral when drift = 0 = bit-identical):
         float    driftMul[UNI_MAX + 1] = {}; // per-unison-voice fixed detune multiplier (rolled per note)
         float    driftFiltMul = 1.0f;        // per-note FILTER cutoff variation (needs a filter on)

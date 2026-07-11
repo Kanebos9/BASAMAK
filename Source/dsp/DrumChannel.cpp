@@ -1308,6 +1308,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         for (int d2 = 0; d2 < 4; ++d2)
             sv.lfoCyc[d2] = ((sl.lfoShape[d2] == 4 || sl.lfoShape[d2] == 6) && sl.lfoAmt[d2] > 0.001f && ! sl.lfoFree[d2])
                 ? (uint32_t) driftRng.nextInt() : 0;   // Random shapes (Retrig): fresh random pattern per note
+        sv.wtPosCur = -1.0f;                       // live-position read-out: nothing rendered yet
         sv.keySemis = 0.0f;
         sv.keyMute = ! ((mask >> s) & 1);          // per-note slot tag: mute the slots this note doesn't play
         sv.sinePhase = 0.0;
@@ -2370,7 +2371,9 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                                     const uint32_t cy3 = c.lfoFreeOn[3] ? (uint32_t) juce::jmax(0.0, ph3 / (2.0 * kPi)) : sv.lfoCyc[3];
                                     wtp += lfoShapeVal(c.lfoShape[3], ph3, cy3, c.lfoCurve[3]) * c.lfoAmt[3] * 0.5f;
                                 }
-                                wtp = juce::jlimit(0.0f, 1.0f, wtp) * (float)(ADD_FRAMES - 1);
+                                wtp = juce::jlimit(0.0f, 1.0f, wtp);
+                                sv.wtPosCur = wtp;   // live position read-out (UI Position strip)
+                                wtp *= (float)(ADD_FRAMES - 1);
                                 const int   f0 = juce::jmin((int) wtp, ADD_FRAMES - 2);
                                 const float fmix = wtp - (float) f0;
                                 const float* tA = c.wtFrm[f0];

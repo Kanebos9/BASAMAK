@@ -398,6 +398,11 @@ public:
     float seg[NF - 1] = {};                       // per-leg glide seconds (0 = HOLD); [0] == 0 = glide off
     bool  loopOn = false;                         // ping-pong the glide forever
     float wtPos = 0.0f;                           // static wavetable position 0..1
+    // LIVE position marker (amber line on the Position strip): the REAL played position from the
+    // engine (handle + glide + WAVE LFO), fed by the editor timer; -1 = nothing playing.
+    void setLivePos(float p)
+    { if (std::abs(p - livePos) > 0.004f || (p < 0.0f) != (livePos < 0.0f))
+      { livePos = p; repaint(posRect().getSmallestIntegerContainer().expanded(3)); } }
     void setValues(const float (*h)[DrumChannel::ADD_HARM], const float (*p)[DrumChannel::ADD_HARM],
                    const float* segs, float pos, bool loopIn)
     { for (int f = 0; f < NF; ++f) for (int i = 0; i < DrumChannel::ADD_HARM; ++i)
@@ -416,6 +421,7 @@ public:
 private:
     static constexpr int WPTS = 256;              // freehand wave stroke resolution (one cycle)
     float wavePts[NF][WPTS] = {};
+    float livePos = -1.0f;                        // live played position (-1 = none; see setLivePos)
     bool  drawing = false, waveDrawing = false, posDragging = false;
     int   segDragging = -1;                       // which leg's time box is being dragged (-1 = none)
     int   dragFrame = 0, waveLastI = -1;

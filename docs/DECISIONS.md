@@ -116,6 +116,7 @@
 | 60 | Filter drive = one soft-tanh flavour on v3 inside the SVF loop; no type menu | user: one type like discussed; in-loop = resonance compression (the analog character), types deferred | user-approved |
 | 61 | Reverb mode default = Hall = the exact original FDN numbers; modes are re-voicings of the SAME safe network | factory/old projects sound identical; anti-gunshot clamps stay on every path incl. shimmer | my call |
 | 62 | Reverb stays ONE shared engine (mode is preset-wide); per-slot reverb rejected | 2 slots x 16 channels = 32 reverb instances = CPU cliff; send/return is the industry model | explained, user accepted |
+| 63 | Live Position marker (amber, both strip modes) shows ONLY while a voice renders a Custom table; silent = no marker | honest display: no voice = no position being played (same rule as the LFO playhead); amber = the plugin's playhead colour | my call |
 
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
