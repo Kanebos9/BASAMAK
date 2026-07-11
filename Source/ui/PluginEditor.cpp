@@ -2276,23 +2276,26 @@ void LevelMeter::paint(juce::Graphics& g)
 
     if (horizontal)
     {
-        // green->amber->red gradient laid over the FULL width, clipped to the filled portion.
-        juce::ColourGradient grad (green, r.getX(), 0.0f, red, r.getRight(), 0.0f, false);
+        // The VOLUME HANDLE is the level bar's CEILING on the strips (user design): the fill can
+        // never pass the handle - pull the handle down and the whole bar squeezes with it.
+        const float capW = onVolume ? r.getWidth() * (vol / VOL_MAX) : r.getWidth();
+        // green->amber->red gradient laid over the capped span, clipped to the filled portion.
+        juce::ColourGradient grad (green, r.getX(), 0.0f, red, r.getX() + juce::jmax (8.0f, capW), 0.0f, false);
         grad.addColour (0.78, amber);
         g.setGradientFill (grad);
-        g.fillRect (r.withWidth (r.getWidth() * lv));
+        g.fillRect (r.withWidth (capW * lv));
         if (pk > 0.01f)
         {
             g.setColour (juce::Colours::white.withAlpha (0.85f));
-            const float px = r.getX() + r.getWidth() * pk;
+            const float px = r.getX() + capW * pk;
             g.fillRect (juce::Rectangle<float> (px - 0.75f, r.getY(), 1.5f, r.getHeight()));
         }
         if (onVolume)   // strips only (the logo master meter has no volume handle)
         {
-            // CHANNEL VOLUME handle: faint unity notch at 100%, bright cyan handle at the value.
+            // UNITY (100%) marker: a clearly visible white tick (user: the old one was too faint).
             const float ux = r.getX() + r.getWidth() * (1.0f / VOL_MAX);
-            g.setColour (juce::Colours::white.withAlpha (0.25f));
-            g.fillRect (juce::Rectangle<float> (ux - 0.5f, r.getY(), 1.0f, r.getHeight()));
+            g.setColour (juce::Colours::white.withAlpha (0.55f));
+            g.fillRect (juce::Rectangle<float> (ux - 1.0f, r.getY() - 1.0f, 2.0f, r.getHeight() + 2.0f));
             const float vx = r.getX() + r.getWidth() * (vol / VOL_MAX);
             g.setColour (juce::Colour (0xff35c0ff));
             g.fillRoundedRectangle (vx - 1.6f, r.getY() - 1.0f, 3.2f, r.getHeight() + 2.0f, 1.2f);
@@ -7176,8 +7179,10 @@ void DrumSequencerEditor::setupComponents()
                               "p" + juce::String(currentPattern()) + "_ch" + juce::String(i) + "_volume", -1,
                               "ui_sel_chVol", "SELECTED-channel Volume");
         };
-        stripMeter[i].setTooltip("Channel meter + VOLUME: the cyan handle is this channel's volume.\n\n"
-                                 "- Drag left/right to set it; the faint notch = 100%; double-click = reset.\n"
+        stripMeter[i].setTooltip("Channel meter + VOLUME: the cyan handle is this channel's volume, and it is "
+                                 "also the level bar's CEILING - the bar fills up to the handle, never past it.\n\n"
+                                 "- Drag left/right to set it; the white tick = 100% (right of it = boost, up to 125%).\n"
+                                 "- Double-click = back to 100%.\n"
                                  "- Right-click = MIDI-learn (this exact channel, or the SELECTED channel).");
         content.addAndMakeVisible(stripMeter[i]);
 
@@ -7495,6 +7500,14 @@ void DrumSequencerEditor::setupComponents()
     comboDriveType.addItem("Foldback",  5);
     comboDriveType.addItem("Fuzz",      6);
     comboDriveType.addItem("Bitcrush",  7);
+    comboDriveType.addItem("Amp",       8);   // guitar/bass amp voicing (pre-tilt + 2 stages + cabinet)
+    comboDriveType.setTooltip("Drive TYPE for this slot (the fader beside it = the amount).\n\n"
+                              "- Soft Clip / Tube: warm, rounded saturation (Tube adds even harmonics).\n"
+                              "- Hard Clip / Fuzz / Foldback: aggressive, buzzy, metallic.\n"
+                              "- Bitcrush: digital lo-fi grit.\n"
+                              "- AMP: a real amp+cab voicing - a mid-tilt into TWO soft stages, then a "
+                              "cabinet-style rolloff (fixed constants, like the chorus). Made for the "
+                              "Karplus-Strong guitars and basses; the amount is the amp gain.");
     comboDriveType.onChange = [this] {   // per-slot drive type
         if (ignoreKnobCallbacks) return;
         proc.sequencer.channel(selectedChannel).slots[envTargetSlot()].fxDriveType = comboDriveType.getSelectedId() - 1;

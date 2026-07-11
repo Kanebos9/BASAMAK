@@ -2080,6 +2080,9 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
     float blockSlotEnv[NUM_SLOTS] = {};
     // Drive post-smoothing coefficient (~8 kHz 1-pole at the engine rate) for the HARSH shapers.
     const float drvLpK = 1.0f - std::exp(-2.0f * (float) kPi * 8000.0f / (float) juce::jmax(1.0, sr));
+    // AMP drive voicing (fixed macro constants): 90 Hz pre-split + ~4.2 kHz cabinet poles.
+    const float drvAmpHpK  = 1.0f - std::exp(-2.0f * (float) kPi * 90.0f   / (float) juce::jmax(1.0, sr));
+    const float drvAmpCabK = 1.0f - std::exp(-2.0f * (float) kPi * 4200.0f / (float) juce::jmax(1.0, sr));
     // PUNCH transient followers: ~1.5 ms fast / ~50 ms slow.
     const float punchKf = 1.0f - std::exp(-1.0f / (0.0015f * (float) juce::jmax(1.0, sr)));
     const float punchKs = 1.0f - std::exp(-1.0f / (0.050f  * (float) juce::jmax(1.0, sr)));
@@ -2764,7 +2767,32 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 // === PER-SLOT EQ (end) ===
 
                 // Per-slot DRIVE (insert): shape THIS slot's signal with its own drive type/amount.
-                if (c.fxDrive > 0.0001f && c.fxDriveType != DriveOff) {
+                if (c.fxDrive > 0.0001f && c.fxDriveType == DriveAmp) {
+                    // AMP: a waveshaper wearing clothes (user: "amp sim... the current drives
+                    // aren't musical"). Pre-TILT brightens what hits the clip (the mids/highs
+                    // bite, the sub stays clean-ish), TWO cascaded soft stages saturate like an
+                    // amp instead of one hard knee, and a 2-pole ~4.2 kHz CABINET rolloff +
+                    // 90 Hz DC/rumble blocker voice the result. All constants fixed (macro
+                    // philosophy, like the chorus) - the one Drive amount is the gain.
+                    const float a2 = c.fxDrive * c.fxDrive;
+                    const float g1 = 1.0f + a2 * 16.0f, mk = 1.0f / (1.0f + (g1 - 1.0f) / 6.0f);
+                    auto amp = [&](float y, int lr) -> float {
+                        sv.ampPre[lr] += drvAmpHpK * (y - sv.ampPre[lr]);
+                        const float lo = sv.ampPre[lr];
+                        float v = lo + (y - lo) * (1.0f + 1.6f * c.fxDrive);   // pre-tilt into the clip
+                        v = std::tanh(v * g1);                                  // stage 1 (the gain)
+                        v = std::tanh(v * 1.5f) * 1.15f;                        // stage 2 (the glue)
+                        sv.ampLp1[lr] += drvAmpCabK * (v - sv.ampLp1[lr]);      // 2-pole cabinet
+                        sv.ampLp2[lr] += drvAmpCabK * (sv.ampLp1[lr] - sv.ampLp2[lr]);
+                        v = sv.ampLp2[lr];
+                        const float dc = v - sv.drvDcX[lr] + 0.995f * sv.drvDcY[lr];   // rumble/DC block
+                        sv.drvDcX[lr] = v; sv.drvDcY[lr] = dc;
+                        return dc * mk;
+                    };
+                    if (stereo) { sL = amp(sL, 0); sR = amp(sR, 1); }
+                    else          sig = amp(sig, 0);
+                }
+                else if (c.fxDrive > 0.0001f && c.fxDriveType != DriveOff) {
                     if (stereo) { sL = driveSample(sL, c.fxDriveType, c.fxDrive); sR = driveSample(sR, c.fxDriveType, c.fxDrive); }
                     else          sig = driveSample(sig, c.fxDriveType, c.fxDrive);
                     // Musicality pass (v6): HARSH shapers get a gentle ~8 kHz 1-pole after the clip
@@ -2859,7 +2887,11 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 const float a   = sc[s].comp;
                 const float att = 1.0f - std::exp(-1.0f / (0.004f * (float) sr));
                 const float rel = 1.0f - std::exp(-1.0f / (0.120f * (float) sr));
-                const float mk  = 1.0f + a * 0.8f;               // makeup so squashing doesn't just get quieter
+                // v2 (user: "barely doing anything"): the knob now ALSO lowers the threshold
+                // (0.30 -> 0.10) while the ratio steepens - high settings genuinely squash.
+                // Factory Tone/Punch/Comp showcases get audibly tighter (disclosed).
+                const float thr = 0.30f - 0.20f * a;
+                const float mk  = 1.0f + a * 1.4f;               // makeup so squashing doesn't just get quieter
                 float* iL = chorInL[s]; float* iR = chorInR[s];
                 float env = compEnv[s];
                 for (int i = 0; i < numSamples; ++i)
@@ -2867,7 +2899,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     const float lvl = juce::jmax(std::abs(iL[i]), std::abs(iR[i]));
                     env += (lvl > env ? att : rel) * (lvl - env);
                     float gr = 1.0f;
-                    if (env > 0.30f) gr = std::pow(env / 0.30f, -0.7f * a);   // soft ratio rises with the knob
+                    if (env > thr) gr = std::pow(env / thr, -0.9f * a);   // ratio rises with the knob
                     const float g2 = gr * mk;
                     iL[i] *= g2; iR[i] *= g2;
                 }

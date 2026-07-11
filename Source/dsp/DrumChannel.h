@@ -715,7 +715,8 @@ public:
     float filterEnvAmt = 0.0f;     // Formant: envelope sweep
 
     //-- Drive / distortion (sits after the filter, before the EQ)
-    enum DriveType { DriveOff = 0, SoftClip, HardClip, Tube, Foldback, Fuzz, Bitcrush };
+    enum DriveType { DriveOff = 0, SoftClip, HardClip, Tube, Foldback, Fuzz, Bitcrush,
+                     DriveAmp };   // Amp = guitar/bass amp voicing (pre-tilt + 2 stages + cab)
     int   driveType   = DriveOff;
     float driveAmount = 0.0f;      // 0..1
 
@@ -956,6 +957,7 @@ private:
         // === PER-SLOT EQ (end) ===
         // === PER-SLOT FILTER (begin) - resonant LP state (stereo); coeffs live in SC ===
         float    drvLp[2] = {}, drvDcX[2] = {}, drvDcY[2] = {};   // drive post-smoothing (~8 kHz, harsh types) + Fuzz DC blocker
+        float    ampPre[2] = {}, ampLp1[2] = {}, ampLp2[2] = {};  // AMP drive: pre-tilt + 2-pole cabinet state
         float    toneZ[2] = {};                       // per-slot TONE tilt (1-pole split state)
         float    pFast[2] = {}, pSlow[2] = {};        // per-slot PUNCH transient followers (fast/slow)
         double   filtIc1[2][2] = {}, filtIc2[2][2] = {};   // TPT/ZDF SVF integrators [filter 0/1][stereo side]
