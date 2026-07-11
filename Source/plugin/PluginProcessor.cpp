@@ -1174,17 +1174,33 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
     if (pid == "global_play")       { if (on && !sequencer.dawSync) sequencer.startStandalone(); return; }
     if (pid == "global_stop")       { if (on && !sequencer.dawSync) { sequencer.stopStandalone(); silenceRequest.store(true); } return; }
     if (pid == "global_dawsync")    { if (on) sequencer.dawSync = !sequencer.dawSync;             return; }
-    if (pid == "global_reverbRoom") { masterFX().reverbRoom  = norm;                  return; }
-    if (pid == "global_reverbDecay"){ masterFX().reverbDamp  = 1.0f - norm;           return; }
-    if (pid == "global_reverbWet")  { masterFX().reverbWet   = norm;                  return; }
-    if (pid == "global_reverbPre")  { masterFX().reverbPreDelay = norm;               return; }
-    if (pid == "global_reverbWidth"){ masterFX().reverbWidth    = norm;               return; }
-    if (pid == "global_delayTime")  { masterFX().delayTime   = 0.05f + norm * 1.95f;  return; }
-    if (pid == "global_delayFB")    { masterFX().delayFeedback = norm * 0.95f;        return; }
-    if (pid == "global_delayWet")   { for (auto& pat : sequencer.patterns) pat.master.delayWet = norm; return; }
-    if (pid == "global_masterGlue") { for (auto& pat : sequencer.patterns) pat.master.glue = norm; return; }
-    if (pid == "global_masterTilt") { for (auto& pat : sequencer.patterns) pat.master.tilt = norm; return; }
-    if (pid == "global_masterSat")  { for (auto& pat : sequencer.patterns) pat.master.sat  = norm; return; }
+    // MASTER CCs: write ALL patterns (the UI knobs' preset-wide rule - a single-pattern write
+    // gets silently overwritten the next time the knob moves) and flag the editor so the master
+    // knobs REFRESH. Without the flag the DSP changed but the knobs sat frozen = the "master
+    // only works while I also move FX knobs" report (the FX CCs forced the refresh).
+    if (pid.startsWith("global_reverb") || pid.startsWith("global_delay") || pid.startsWith("global_master"))
+    {
+        for (auto& pat : sequencer.patterns)
+        {
+            auto& m = pat.master;
+            if      (pid == "global_reverbRoom")  m.reverbRoom     = norm;
+            else if (pid == "global_reverbDecay") m.reverbDamp     = 1.0f - norm;
+            else if (pid == "global_reverbWet")   m.reverbWet      = norm;
+            else if (pid == "global_reverbPre")   m.reverbPreDelay = norm;
+            else if (pid == "global_reverbWidth") m.reverbWidth    = norm;
+            else if (pid == "global_delayTime")   m.delayTime      = 0.05f + norm * 1.95f;
+            else if (pid == "global_delayFB")     m.delayFeedback  = norm * 0.95f;
+            else if (pid == "global_delayWet")    m.delayWet       = norm;
+            else if (pid == "global_masterGlue")  m.glue           = norm;
+            else if (pid == "global_masterTilt")  m.tilt           = norm;
+            else if (pid == "global_masterSat")   m.sat            = norm;
+            else if (pid == "global_masterVol")   m.volume         = norm;
+            else if (pid == "global_masterLimit") m.limit          = norm;
+            else return;                          // unknown global_* name: nothing written
+        }
+        uiMasterCcDirty.store(true);
+        return;
+    }
 
     // UI-only controls (edit-mode buttons + influence) -> relayed to the editor.
     if (pid == "ui_mode_vel")   { if (on) uiMidiEditMode.store(1); return; }
@@ -1226,13 +1242,19 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
             { "ui_sel_rec", SelRec }, { "ui_sel_mute", SelMute }, { "ui_sel_solo", SelSolo },
             { "ui_sel_overlap", SelOverlap }, { "ui_sel_slotSel", SelSlotSel },
             { "ui_sel_chNext", SelChNext }, { "ui_sel_chPrev", SelChPrev },
-            { "ui_sel_patNext", SelPatNext }, { "ui_sel_patPrev", SelPatPrev } };
+            { "ui_sel_patNext", SelPatNext }, { "ui_sel_patPrev", SelPatPrev },
+            { "ui_sel_follow", SelFollow }, { "ui_sel_test", SelTest } };
         for (auto& k : kSelBtns) if (pid == k.first) { if (on) pushSelCC(k.second, 1.0f); return; }
         return;
     }
-    // MASTER gaps (knobs that had learnable pids but no routing): per-pattern by design, like the UI.
-    if (pid == "global_masterVol")   { masterFX().volume = norm; return; }
-    if (pid == "global_masterLimit") { masterFX().limit  = norm; return; }
+    // SELECTED-channel steps: "ui_selstep_{N}" sets step N on the SELECTED channel (value >= 64
+    // = on, below = off - same convention as the addressed p{P}_step ids / TouchOSC pads).
+    if (pid.startsWith("ui_selstep_"))
+    {
+        const int st = pid.substring(11).getIntValue();
+        if (st >= 0 && st < DrumChannel::MAX_STEPS) pushSelCC(2000 + st, on ? 1.0f : 0.0f);
+        return;
+    }
 
     // Pattern-scoped controls:  "p{P}_..."
     if (!pid.startsWithChar('p')) return;

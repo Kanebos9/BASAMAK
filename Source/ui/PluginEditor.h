@@ -1926,7 +1926,8 @@ private:
     juce::Label    lblPatternsBars { {}, "(Bars)" };   // under "Patterns" - a merged run = one multi-bar piece
     PatternButton  patternBtns[Sequencer::NUM_PATTERNS];
     juce::TextButton patModeBtn;   // opens the Loop/Stop/Go-to menu; shows a summary
-    juce::TextButton btnFollow { "Follow" };   // global toggle: view follows the playing pattern (proc.followPlayback)
+    LearnableButton btnFollow { "Follow" };    // global toggle: view follows the playing pattern
+                                               // (proc.followPlayback); MIDI = "ui_sel_follow"
     juce::TextButton btnClearPat { "Clear" };  // wipe the current pattern's steps/values back to default
     LearnableButton  btnInfluenceTop { "Infl" };  // arm step-influence for the SELECTED channel (moved off the strips)
     // All 16 channels + 32 patterns are ALWAYS active now (the old 8/16 + 16/32 count toggles are gone).

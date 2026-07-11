@@ -163,10 +163,13 @@ public:
                        SelUniCount, SelUniDet, SelUniVib, SelUniWidth, SelUniDrift,
                        SelStrum, SelMinVel, SelMaxVel, SelGlide, SelSlotOfs,
                        SelRec, SelMute, SelSolo, SelOverlap, SelSlotSel,
-                       SelChNext, SelChPrev, SelPatNext, SelPatPrev };
+                       SelChNext, SelChPrev, SelPatNext, SelPatPrev,
+                       SelFollow, SelTest,
+                       SelStepBase = 2000 };   // 2000 + N = step N on the selected channel
     struct SelCCEvt { int t; float v; };
     SelCCEvt selQ[64];
     std::atomic<int> selQHead { 0 }, selQTail { 0 };
+    std::atomic<bool> uiMasterCcDirty { false };   // a master CC landed: editor refreshes the knobs
     void pushSelCC(int t, float v)
     {
         const int h = selQHead.load(std::memory_order_relaxed), n = (h + 1) & 63;

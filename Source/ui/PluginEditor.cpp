@@ -5707,19 +5707,21 @@ void DrumSequencerEditor::handleMidiMenuChange()
                           : "   [ch" + juce::String(L->getChannelForParam(pid)) + " cc" + juce::String(cc) + "]";
         };
         juce::PopupMenu m;
-        m.addSectionHeader("Buttons that move the SELECTION (learn + press a pad)");
+        m.addSectionHeader("Buttons that act on the SELECTION (learn + press a pad)");
         m.addItem(1, "Next channel..."  + tag("ui_sel_chNext"));
         m.addItem(2, "Prev channel..."  + tag("ui_sel_chPrev"));
         m.addItem(3, "Next pattern..."  + tag("ui_sel_patNext"));
         m.addItem(4, "Prev pattern..."  + tag("ui_sel_patPrev"));
         m.addItem(5, "Slot 1 <-> 2..."  + tag("ui_sel_slotSel"));
-        m.addSeparator(); m.addItem(6, "Clear these assignments");
+        m.addItem(6, "TEST the selected channel..." + tag("ui_sel_test"));
+        m.addSeparator(); m.addItem(7, "Clear these assignments");
         m.showMenuAsync(juce::PopupMenu::Options{}.withTargetComponent(&comboMidi).withMinimumWidth(260),
             [L](int r) {
-                static const char* pids[5] = { "ui_sel_chNext", "ui_sel_chPrev",
-                                               "ui_sel_patNext", "ui_sel_patPrev", "ui_sel_slotSel" };
-                if (r >= 1 && r <= 5) L->startLearning(pids[r - 1]);
-                else if (r == 6) for (auto* p : pids) L->clearParam(p);
+                static const char* pids[6] = { "ui_sel_chNext", "ui_sel_chPrev",
+                                               "ui_sel_patNext", "ui_sel_patPrev",
+                                               "ui_sel_slotSel", "ui_sel_test" };
+                if (r >= 1 && r <= 6) L->startLearning(pids[r - 1]);
+                else if (r == 7) for (auto* p : pids) L->clearParam(p);
             });
     }
     else if (id == 9102)     // Refresh MIDI pattern folder
@@ -5964,6 +5966,11 @@ void DrumSequencerEditor::applySelCC(int t, float v, bool& slotDirty, bool& keys
     using P = DrumSequencerProcessor;
     auto& ch = proc.sequencer.channel(selectedChannel);
     auto& sl = ch.slots[envTargetSlot()];
+    if (t >= P::SelStepBase && t < P::SelStepBase + DrumChannel::MAX_STEPS)
+    {   // step N of the SELECTED channel: SET from the pad's value (127 = on, 0 = off)
+        ch.steps[t - P::SelStepBase] = v >= 0.5f;
+        return;
+    }
     switch (t)
     {
         case P::SelFxDrive: sl.fxDrive = v; break;
@@ -6013,6 +6020,8 @@ void DrumSequencerEditor::applySelCC(int t, float v, bool& slotDirty, bool& keys
         case P::SelChPrev:  selectChannel((selectedChannel + Sequencer::NUM_CHANNELS - 1) % Sequencer::NUM_CHANNELS); return;
         case P::SelPatNext: selectPattern((currentPattern() + 1) % Sequencer::NUM_PATTERNS); return;
         case P::SelPatPrev: selectPattern((currentPattern() + Sequencer::NUM_PATTERNS - 1) % Sequencer::NUM_PATTERNS); return;
+        case P::SelFollow:  btnFollow.triggerClick(); return;
+        case P::SelTest:    proc.requestTestTrigger(selectedChannel); return;
         default: return;
     }
     ch.markDspDirty();
@@ -6430,6 +6439,7 @@ void DrumSequencerEditor::setupComponents()
     }
     content.addAndMakeVisible(btnFollow);
     btnFollow.setClickingTogglesState(false);
+    btnFollow.paramId = "ui_sel_follow"; btnFollow.midiLearn = &proc.midiLearn;   // right-click = learn
     btnFollow.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
     btnFollow.setTooltip("Follow: when ON, the editor view jumps to whatever pattern is playing. "
                          "Turn it OFF (or just click a pattern) to look at one pattern while another keeps playing. "
@@ -9997,7 +10007,11 @@ void DrumSequencerEditor::timerCallback()
     // Signals: the app deactivated (clicked another app), or a popup is open but no window of
     // ours has OS focus (clicked the host window in the same process). Debounced 2 ticks
     // (~80 ms) so focus flicker while a menu is opening can never dismiss it.
-    if (juce::ModalComponentManager::getInstance()->getNumModalComponents() > 0)
+    // The sound picker is a CONTENT CHILD (never modal), so it gets the same treatment - the
+    // old gate on getNumModalComponents() > 0 meant the focus check NEVER RAN with only the
+    // picker open = "doesn't close when I click outside the plugin" (round-2 report).
+    const bool pickerOpen = soundPicker != nullptr && soundPicker->isVisible();
+    if (juce::ModalComponentManager::getInstance()->getNumModalComponents() > 0 || pickerOpen)
     {
         bool anyFocused = juce::Process::isForegroundProcess();
         if (anyFocused)
@@ -10022,10 +10036,7 @@ void DrumSequencerEditor::timerCallback()
         {   // ~100ms at 60Hz (was 2 = 33ms, dismissed dropdowns as they opened)
             outsideFocusTicks = 0;
             juce::PopupMenu::dismissAllActiveMenus();
-            // The sound picker is a content child (not a PopupMenu) - close it too when the
-            // user clicks away into the host / another app (its own Closer can't see those).
-            if (soundPicker != nullptr && soundPicker->isVisible())
-                static_cast<SoundPickerPanel&>(*soundPicker).close();
+            if (pickerOpen) static_cast<SoundPickerPanel&>(*soundPicker).close();
         }
         else if (anyFocused) outsideFocusTicks = 0;
     }
@@ -10148,6 +10159,7 @@ void DrumSequencerEditor::timerCallback()
             applySelCC(ev.t, ev.v, slotDirty, keysDirty);
         }
         proc.selQTail.store(tail, std::memory_order_release);
+        if (proc.uiMasterCcDirty.exchange(false)) slotDirty = true;   // master CC landed: refresh knobs
         if (slotDirty) refreshDetailPanel();
         if (keysDirty) refreshKeysPanel();
     }
