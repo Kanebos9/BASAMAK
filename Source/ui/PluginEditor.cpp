@@ -1667,7 +1667,8 @@ void SlotEditor::paint(juce::Graphics& g)
 // Shared MIDI-learn popup (shows current assignment, lets you assign/clear)
 //==============================================================================
 void showMidiLearnMenu(juce::Component* target, MidiLearnManager& mlm,
-                       const juce::String& paramId, int forcedChannel)
+                       const juce::String& paramId, int forcedChannel,
+                       const juce::String& altPid, const juce::String& altLabel)
 {
     juce::PopupMenu menu;
     int cc = mlm.getCCForParam(paramId);
@@ -1687,6 +1688,15 @@ void showMidiLearnMenu(juce::Component* target, MidiLearnManager& mlm,
         menu.addItem(2, cc >= 0 ? "Reassign MIDI CC..." : "Assign MIDI CC...");
         if (cc >= 0)
             menu.addItem(1, "Reset (clear) MIDI assignment");
+        if (altPid.isNotEmpty())   // the SELECTED-channel variant (follows selection)
+        {
+            const int acc = mlm.getCCForParam(altPid);
+            menu.addSeparator();
+            menu.addItem(4, "Assign: " + altLabel + "..."
+                            + (acc >= 0 ? "  [ch" + juce::String(mlm.getChannelForParam(altPid))
+                                           + " cc" + juce::String(acc) + "]" : juce::String()));
+            if (acc >= 0) menu.addItem(5, "Clear the " + altLabel + " assignment");
+        }
         if (learningOther)
             menu.addItem(3, "Cancel the pending MIDI learn");
     }
@@ -1698,10 +1708,12 @@ void showMidiLearnMenu(juce::Component* target, MidiLearnManager& mlm,
     menu.showMenuAsync(juce::PopupMenu::Options{}
                            .withTargetScreenArea({ mp.x, mp.y, 1, 1 })
                            .withMinimumWidth(240),
-        [mlmPtr, paramId, forcedChannel](int result) {
+        [mlmPtr, paramId, forcedChannel, altPid](int result) {
             if      (result == 1) mlmPtr->clearParam(paramId);
             else if (result == 2) mlmPtr->startLearning(paramId, forcedChannel);
             else if (result == 3) mlmPtr->stopLearning();
+            else if (result == 4) mlmPtr->startLearning(altPid);
+            else if (result == 5) mlmPtr->clearParam(altPid);
         });
 }
 
@@ -1833,7 +1845,7 @@ void LearnableButton::mouseDown(const juce::MouseEvent& e)
     if ((e.mods.isRightButtonDown() || e.mods.isPopupMenu()) && midiLearn != nullptr)
     {
         int forced = learnChannelProvider ? learnChannelProvider() : -1;
-        showMidiLearnMenu(this, *midiLearn, paramId, forced);
+        showMidiLearnMenu(this, *midiLearn, paramId, forced, altPid, altLabel);
         return;
     }
     juce::TextButton::mouseDown(e);
@@ -2150,6 +2162,31 @@ juce::String ADSRDisplay::getTooltip()
 
 void ADSRDisplay::mouseDown(const juce::MouseEvent& e)
 {
+    if ((e.mods.isRightButtonDown() || e.mods.isPopupMenu()) && mlm != nullptr)
+    {   // MIDI-learn: the 5 envelope parameters, applied to the SELECTED slot (ui_sel_env*)
+        auto tag = [this](const char* pid) {
+            const int cc = mlm->getCCForParam(pid);
+            return cc < 0 ? juce::String()
+                          : "   [ch" + juce::String(mlm->getChannelForParam(pid)) + " cc" + juce::String(cc) + "]";
+        };
+        juce::PopupMenu m;
+        m.addSectionHeader("MIDI-learn (acts on the SELECTED slot)");
+        m.addItem(1, "Attack..."  + tag("ui_sel_envA"));
+        m.addItem(2, "Hold..."    + tag("ui_sel_envH"));
+        m.addItem(3, "Decay..."   + tag("ui_sel_envD"));
+        m.addItem(4, "Sustain..." + tag("ui_sel_envS"));
+        m.addItem(5, "Release..." + tag("ui_sel_envR"));
+        m.addSeparator(); m.addItem(6, "Clear these assignments");
+        auto mp = juce::Desktop::getInstance().getMainMouseSource().getScreenPosition().roundToInt();
+        auto* L = mlm;
+        m.showMenuAsync(juce::PopupMenu::Options{}.withTargetScreenArea({ mp.x, mp.y, 1, 1 }).withMinimumWidth(240),
+            [L](int r) {
+                static const char* pids[5] = { "ui_sel_envA", "ui_sel_envH", "ui_sel_envD", "ui_sel_envS", "ui_sel_envR" };
+                if (r >= 1 && r <= 5) L->startLearning(pids[r - 1]);
+                else if (r == 6) for (auto* p : pids) L->clearParam(p);
+            });
+        return;
+    }
     if (! enabledLook) return;   // sample slots: no amp envelope to edit
     drag = nearestHandle(e.position);
     mouseDrag(e);
@@ -2748,6 +2785,31 @@ void VoiceModDisplay::mouseMove(const juce::MouseEvent& e) {
 }
 void VoiceModDisplay::mouseDown(const juce::MouseEvent& e)
 {
+    if ((e.mods.isRightButtonDown() || e.mods.isPopupMenu()) && mlm != nullptr)
+    {   // MIDI-learn: the 5 unison-visual parameters, applied to the SELECTED slot (ui_sel_uni*)
+        auto tag = [this](const char* pid) {
+            const int cc = mlm->getCCForParam(pid);
+            return cc < 0 ? juce::String()
+                          : "   [ch" + juce::String(mlm->getChannelForParam(pid)) + " cc" + juce::String(cc) + "]";
+        };
+        juce::PopupMenu m;
+        m.addSectionHeader("MIDI-learn (acts on the SELECTED slot)");
+        m.addItem(1, "Unison count..." + tag("ui_sel_uniCount"));
+        m.addItem(2, "Detune..."       + tag("ui_sel_uniDet"));
+        m.addItem(3, "Vibrato..."      + tag("ui_sel_uniVib"));
+        m.addItem(4, "Width..."        + tag("ui_sel_uniWidth"));
+        m.addItem(5, "Drift..."        + tag("ui_sel_uniDrift"));
+        m.addSeparator(); m.addItem(6, "Clear these assignments");
+        auto mp = juce::Desktop::getInstance().getMainMouseSource().getScreenPosition().roundToInt();
+        auto* L = mlm;
+        m.showMenuAsync(juce::PopupMenu::Options{}.withTargetScreenArea({ mp.x, mp.y, 1, 1 }).withMinimumWidth(240),
+            [L](int r) {
+                static const char* pids[5] = { "ui_sel_uniCount", "ui_sel_uniDet", "ui_sel_uniVib", "ui_sel_uniWidth", "ui_sel_uniDrift" };
+                if (r >= 1 && r <= 5) L->startLearning(pids[r - 1]);
+                else if (r == 6) for (auto* p : pids) L->clearParam(p);
+            });
+        return;
+    }
     if (uniOn) {
         if (chip[0].contains(e.position)) { const bool ch = scaleOn || chord != 0; scaleOn = false; chord = 0; if (ch) { emit(); repaint(); if (onDragEnd) onDragEnd(); } return; }
         if (chip[1].contains(e.position)) { const bool ch = scaleOn || chord == 0; scaleOn = false; if (chord == 0) chord = 3; if (ch) { emit(); repaint(); if (onDragEnd) onDragEnd(); } return; }  // CHORD (Maj); type via the detune dot
@@ -3629,8 +3691,12 @@ juce::String KeySplitBox::getTooltip()
     return "Merge & Split: pair two adjacent channels and split the keyboard between them.";
 }
 
-KeysPanel::KeysPanel()
+KeysPanel::KeysPanel(MidiLearnManager& mlm)
+    : humanKnob("ui_sel_slotOfs", mlm), strumKnob("ui_sel_strum", mlm),
+      minVelKnob("ui_sel_minVel", mlm), maxVelKnob("ui_sel_maxVel", mlm),
+      glideKnob("ui_sel_glide", mlm)
 {
+    btnRec.paramId = "ui_sel_rec"; btnRec.midiLearn = &mlm;   // REC is MIDI-learnable too
     kbState.addListener(this);
     addAndMakeVisible(kb);
     kb.setAvailableRange(12, 108);                      // C0..C8 (scientific) = +-48 st around middle C - contains a full 88-key piano
@@ -5587,6 +5653,7 @@ void DrumSequencerEditor::rebuildMidiMenu()
     comboMidi.addItem("Refresh MIDI pattern folder", 9102);
     comboMidi.addItem("Show Folder",                 9103);
     comboMidi.addSeparator();
+    comboMidi.addItem("MIDI-learn: selection controls...", 9106);   // next/prev channel + pattern, slot 1<->2
     comboMidi.addItem("Clear MIDI (learn)",          9104);    // clears MIDI-learn CC assignments (the old button)
     comboMidi.setItemEnabled(-1, false);
     comboMidi.setTextWhenNothingSelected("MIDI");
@@ -5630,6 +5697,30 @@ void DrumSequencerEditor::handleMidiMenuChange()
         proc.midiLearn.assign("global_play", 89, 1);   // transport (global, pattern-independent)
         proc.midiLearn.assign("global_stop", 90, 1);
         stepGrid.repaint(); content.repaint();   // the grid draws each step's assigned CC
+    }
+    else if (id == 9106)     // MIDI-learn: SELECTION controls (they act on whatever is selected)
+    {
+        auto* L = &proc.midiLearn;
+        auto tag = [L](const char* pid) {
+            const int cc = L->getCCForParam(pid);
+            return cc < 0 ? juce::String()
+                          : "   [ch" + juce::String(L->getChannelForParam(pid)) + " cc" + juce::String(cc) + "]";
+        };
+        juce::PopupMenu m;
+        m.addSectionHeader("Buttons that move the SELECTION (learn + press a pad)");
+        m.addItem(1, "Next channel..."  + tag("ui_sel_chNext"));
+        m.addItem(2, "Prev channel..."  + tag("ui_sel_chPrev"));
+        m.addItem(3, "Next pattern..."  + tag("ui_sel_patNext"));
+        m.addItem(4, "Prev pattern..."  + tag("ui_sel_patPrev"));
+        m.addItem(5, "Slot 1 <-> 2..."  + tag("ui_sel_slotSel"));
+        m.addSeparator(); m.addItem(6, "Clear these assignments");
+        m.showMenuAsync(juce::PopupMenu::Options{}.withTargetComponent(&comboMidi).withMinimumWidth(260),
+            [L](int r) {
+                static const char* pids[5] = { "ui_sel_chNext", "ui_sel_chPrev",
+                                               "ui_sel_patNext", "ui_sel_patPrev", "ui_sel_slotSel" };
+                if (r >= 1 && r <= 5) L->startLearning(pids[r - 1]);
+                else if (r == 6) for (auto* p : pids) L->clearParam(p);
+            });
     }
     else if (id == 9102)     // Refresh MIDI pattern folder
         rebuildMidiMenu();
@@ -5863,6 +5954,69 @@ int DrumSequencerEditor::currentSoundPickId(int ch) const
     for (int i = 0; i < soundMixFiles.size(); ++i)
         if (name == soundMixFiles[i].getFileNameWithoutExtension()) return i + 1;
     return 0;
+}
+
+// Apply ONE selected-scope MIDI CC (ui_sel_*) to the current selection. Knob targets write the
+// SELECTED slot/channel fields through the same paths the on-screen controls use; button targets
+// trigger the actual buttons (all their side-effects included). Runs on the message thread.
+void DrumSequencerEditor::applySelCC(int t, float v, bool& slotDirty, bool& keysDirty)
+{
+    using P = DrumSequencerProcessor;
+    auto& ch = proc.sequencer.channel(selectedChannel);
+    auto& sl = ch.slots[envTargetSlot()];
+    switch (t)
+    {
+        case P::SelFxDrive: sl.fxDrive = v; break;
+        case P::SelFxRev:   sl.fxReverbSend = v; break;
+        case P::SelFxDel:   sl.fxDelaySend = v; break;
+        case P::SelFxCho:   sl.chorusMix = v; break;
+        case P::SelFxTone:  sl.fxTone  = v * 2.0f - 1.0f; break;
+        case P::SelFxPunch: sl.fxPunch = v * 2.0f - 1.0f; break;
+        case P::SelFxComp:  sl.fxComp = v; break;
+        case P::SelEnvA: case P::SelEnvH: case P::SelEnvD: case P::SelEnvS: case P::SelEnvR:
+        {   // read the current 5 (Modal mirrors the Ring read-back), replace ONE, write via the
+            // ONE apply path so the per-engine mapping stays identical to dragging the editor
+            float a = sl.atk, h = sl.hold,
+                  d = sl.engine == DrumChannel::SrcModal ? 0.05f + sl.modalDecay * 3.95f : sl.dec,
+                  s = sl.sustain, r = sl.release;
+            const float t2 = v * v;   // musical curve (bottom-weighted, like the editor's skew)
+            if      (t == P::SelEnvA) a = t2 * 6.0f;
+            else if (t == P::SelEnvH) h = t2 * 6.0f;
+            else if (t == P::SelEnvD) d = juce::jmax(0.01f, t2 * 6.0f);
+            else if (t == P::SelEnvS) s = v;
+            else                      r = t2 * 4.0f;
+            applyEnvToTargets(a, h, d, s, r);
+            break;
+        }
+        case P::SelUniCount:
+        {   // per-engine cap, mirroring setMaxUni (Modal 3 / KS 6 / Osc 16)
+            const int cap = sl.engine == DrumChannel::SrcModal ? 3
+                          : sl.engine == DrumChannel::SrcPhys  ? 6 : 16;
+            sl.oscUnison = 1 + juce::roundToInt(v * (float) (cap - 1));
+            break;
+        }
+        case P::SelUniDet:   sl.oscDetune = v; break;
+        case P::SelUniVib:   sl.vibrato = v; break;
+        case P::SelUniWidth: sl.uniSpread = v; break;
+        case P::SelUniDrift: sl.drift = v; break;
+        case P::SelStrum:   ch.strumAmt = std::round(v * 5.0f) / 5.0f; keysDirty = true; break;   // 0.2 steps = the knob's grid
+        case P::SelMinVel:  ch.keysMinVel = v; if (ch.keysMaxVel < v) ch.keysMaxVel = v; keysDirty = true; break;
+        case P::SelMaxVel:  ch.keysMaxVel = v; if (ch.keysMinVel > v) ch.keysMinVel = v; keysDirty = true; break;
+        case P::SelGlide:   ch.keysGlide = v; keysDirty = true; break;
+        case P::SelSlotOfs: ch.humanizeAmt = v; keysDirty = true; break;
+        case P::SelRec:     keysPanel.btnRec.triggerClick(); return;
+        case P::SelMute:    strips[selectedChannel].btnMute->triggerClick(); return;
+        case P::SelSolo:    strips[selectedChannel].btnSolo->triggerClick(); return;
+        case P::SelOverlap: strips[selectedChannel].btnPoly.triggerClick(); return;
+        case P::SelSlotSel: setShapeSlot(envTargetSlot() == 0 ? 1 : 0); return;
+        case P::SelChNext:  selectChannel((selectedChannel + 1) % Sequencer::NUM_CHANNELS); return;
+        case P::SelChPrev:  selectChannel((selectedChannel + Sequencer::NUM_CHANNELS - 1) % Sequencer::NUM_CHANNELS); return;
+        case P::SelPatNext: selectPattern((currentPattern() + 1) % Sequencer::NUM_PATTERNS); return;
+        case P::SelPatPrev: selectPattern((currentPattern() + Sequencer::NUM_PATTERNS - 1) % Sequencer::NUM_PATTERNS); return;
+        default: return;
+    }
+    ch.markDspDirty();
+    if (t <= P::SelUniDrift) slotDirty = true;   // slot-level edits refresh the detail panel
 }
 
 // Step the SELECTED channel's sound through the bank in the PICKER's order (factory categories in
@@ -6965,6 +7119,10 @@ void DrumSequencerEditor::setupComponents()
 
         strip.btnMute  = std::make_unique<LearnableButton>("M", "p0_ch" + juce::String(i) + "_mute",  proc.midiLearn);
         strip.btnSolo  = std::make_unique<LearnableButton>("S", "p0_ch" + juce::String(i) + "_solo",  proc.midiLearn);
+        // Each M/S/OV right-click ALSO offers the SELECTED-channel variant (follows selection).
+        strip.btnMute->altPid = "ui_sel_mute";    strip.btnMute->altLabel = "SELECTED-channel Mute";
+        strip.btnSolo->altPid = "ui_sel_solo";    strip.btnSolo->altLabel = "SELECTED-channel Solo";
+        strip.btnPoly.altPid  = "ui_sel_overlap"; strip.btnPoly.altLabel  = "SELECTED-channel Overlap";
 
         content.addAndMakeVisible(*strip.btnMute);
         content.addAndMakeVisible(*strip.btnSolo);
@@ -7509,7 +7667,9 @@ void DrumSequencerEditor::setupComponents()
     setupFxFader(fxDriveFader, "Drive", 0.0f, pctFader,
         [this](float v){ proc.sequencer.channel(selectedChannel).slots[envTargetSlot()].fxDrive = v; },
         "How hard THIS slot is pushed into distortion (the Drive TYPE is the dropdown beside it).\n\n"
-        "- Per slot: slot 1 and slot 2 distort independently.\n- Drag left/right; double-click = off.");
+        "- Per slot: slot 1 and slot 2 distort independently.\n- Drag left/right; double-click = off.\n"
+        "- Right-click = MIDI-learn (acts on the selected slot).");
+    fxDriveFader.mlm = &proc.midiLearn; fxDriveFader.learnPid = "ui_sel_fxDrive";
     const auto ktFmt = [](float v){ return v <= 0.001f ? juce::String("Off") : juce::String(juce::roundToInt(v * 100.0f)) + "%"; };
     setupFxFader(keytrackFader, "F1 Keytrack", 0.0f, ktFmt,
         [this](float v){ proc.sequencer.channel(selectedChannel)
@@ -7739,6 +7899,7 @@ void DrumSequencerEditor::setupComponents()
     content.addAndMakeVisible(envEditor);
     // Auto-audition also for the VISUAL editors (amp/pitch/voice) - fire a TEST hit on drag-release, like knobs do.
     auto auditionEnd = [this] { if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel); };
+    envEditor.mlm = &proc.midiLearn;   // right-click = MIDI-learn the 5 env params (selected slot)
     envEditor.onChange = [this](float a, float h, float d, float s, float r) {
         if (ignoreKnobCallbacks) return; applyEnvToTargets(a, h, d, s, r); };
     envEditor.onDragEnd = auditionEnd;
@@ -7786,6 +7947,7 @@ void DrumSequencerEditor::setupComponents()
     // Unison / Detune / Vibrato as an interactive VISUAL (like the amp/pitch env editors), editing the
     // selected slot. The 1/2/3 selector (slotSelPitch) above it chooses which slot.
     content.addAndMakeVisible(voiceMod);
+    voiceMod.mlm = &proc.midiLearn;   // right-click = MIDI-learn the 5 unison params (selected slot)
     voiceMod.onChange = [this](int u, float d, float v, bool centre, int detuneMode, int chordMode, bool scaleOn, int scaleType, int scaleKey, float uniSpread, float driftV) {
         if (ignoreKnobCallbacks) return;
         auto& sl = proc.sequencer.channel(selectedChannel).slots[envTargetSlot()];
@@ -9393,8 +9555,8 @@ void DrumSequencerEditor::updateKnobParamIds()
     knobReso.paramId     = prefix + "filterReso";
     knobEnvAmt.paramId   = prefix + "filterEnvAmt";
     knobDrive.paramId    = prefix + "drive";
-    knobReverb.paramId   = prefix + "reverb";
-    knobDelay.paramId    = prefix + "delay";
+    // knobReverb/knobDelay (+ the rest of the FX row) keep FIXED ui_sel_* ids - they are
+    // selected-scope targets now, never re-addressed per channel.
 }
 
 void DrumSequencerEditor::updateStripParamIds()
@@ -9856,7 +10018,15 @@ void DrumSequencerEditor::timerCallback()
         auto* mtop = mm->getModalComponent(0);   // identity only - a swapped menu can keep count 1
         if (mc != lastModalCount || mtop != lastModalComp)
         { lastModalCount = mc; lastModalComp = mtop; outsideFocusTicks = -30; }   // ~0.5 s grace
-        if (! anyFocused && ++outsideFocusTicks >= 6) { outsideFocusTicks = 0; juce::PopupMenu::dismissAllActiveMenus(); }   // ~100ms at 60Hz (was 2 = 33ms, dismissed dropdowns as they opened)
+        if (! anyFocused && ++outsideFocusTicks >= 6)
+        {   // ~100ms at 60Hz (was 2 = 33ms, dismissed dropdowns as they opened)
+            outsideFocusTicks = 0;
+            juce::PopupMenu::dismissAllActiveMenus();
+            // The sound picker is a content child (not a PopupMenu) - close it too when the
+            // user clicks away into the host / another app (its own Closer can't see those).
+            if (soundPicker != nullptr && soundPicker->isVisible())
+                static_cast<SoundPickerPanel&>(*soundPicker).close();
+        }
         else if (anyFocused) outsideFocusTicks = 0;
     }
     else { outsideFocusTicks = 0; lastModalCount = 0; lastModalComp = nullptr; }
@@ -9966,6 +10136,20 @@ void DrumSequencerEditor::timerCallback()
         if      (now - t0 > 15000) proc.uiSoundHold.store(0);
         else if (now - t0 > 450 && now - lastSoundStepMs >= 220)
         { lastSoundStepMs = now; stepSoundBank(hd); }
+    }
+    {   // SELECTED-SCOPE MIDI controls (ui_sel_*): apply queued CCs to the current selection
+        // through the same paths the on-screen controls use (undo + the modified-* follow).
+        bool slotDirty = false, keysDirty = false;
+        int tail = proc.selQTail.load(std::memory_order_relaxed);
+        const int head = proc.selQHead.load(std::memory_order_acquire);
+        while (tail != head)
+        {
+            const auto ev = proc.selQ[tail]; tail = (tail + 1) & 63;
+            applySelCC(ev.t, ev.v, slotDirty, keysDirty);
+        }
+        proc.selQTail.store(tail, std::memory_order_release);
+        if (slotDirty) refreshDetailPanel();
+        if (keysDirty) refreshKeysPanel();
     }
 
     stepGrid.update(proc.sequencer, proc.anySolo);      // 60 Hz: smooth playhead

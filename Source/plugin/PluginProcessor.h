@@ -154,6 +154,25 @@ public:
     // NEXT/PREV hold-to-repeat: +-1 while a pad is held (editor repeats a step per rate window).
     std::atomic<int> uiSoundHold { 0 };
     std::atomic<juce::uint32> uiSoundHoldMs { 0 };   // press time (repeat starts after ~0.45 s)
+    // SELECTED-SCOPE MIDI CONTROLS (ui_sel_*): routeCC pushes (target, value) events here; the
+    // editor's timer drains and applies them to the CURRENT selection (pattern/channel/slot)
+    // through the same code paths the on-screen controls use. SPSC ring (keyQ pattern): the
+    // audio thread writes, the editor reads. Full ring = events dropped (the UI catches up).
+    enum SelCC : int { SelFxDrive = 0, SelFxRev, SelFxDel, SelFxCho, SelFxTone, SelFxPunch, SelFxComp,
+                       SelEnvA, SelEnvH, SelEnvD, SelEnvS, SelEnvR,
+                       SelUniCount, SelUniDet, SelUniVib, SelUniWidth, SelUniDrift,
+                       SelStrum, SelMinVel, SelMaxVel, SelGlide, SelSlotOfs,
+                       SelRec, SelMute, SelSolo, SelOverlap, SelSlotSel,
+                       SelChNext, SelChPrev, SelPatNext, SelPatPrev };
+    struct SelCCEvt { int t; float v; };
+    SelCCEvt selQ[64];
+    std::atomic<int> selQHead { 0 }, selQTail { 0 };
+    void pushSelCC(int t, float v)
+    {
+        const int h = selQHead.load(std::memory_order_relaxed), n = (h + 1) & 63;
+        if (n == selQTail.load(std::memory_order_acquire)) return;
+        selQ[h] = { t, v }; selQHead.store(n, std::memory_order_release);
+    }
 
     // MIDI-in monitor (drives the on-screen "MIDI" indicator). midiInCount bumps
     // for EVERY incoming message so the UI can tell whether MIDI reaches us at all.

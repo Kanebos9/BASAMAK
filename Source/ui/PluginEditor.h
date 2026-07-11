@@ -276,9 +276,11 @@ private:
 
 //==============================================================================
 // Shared helper: build a popup menu for a MIDI-learnable control and run it.
-// Shows the current assignment ("Assigned: ch6 cc44" / "Not assigned").
+// Shows the current assignment ("Assigned: ch6 cc44" / "Not assigned"). altPid/altLabel add an
+// optional SECOND target to the same menu (the "SELECTED channel" variants on M/S/OV).
 void showMidiLearnMenu(juce::Component* target, MidiLearnManager& mlm,
-                       const juce::String& paramId, int forcedChannel);
+                       const juce::String& paramId, int forcedChannel,
+                       const juce::String& altPid = {}, const juce::String& altLabel = {});
 
 //==============================================================================
 // Knob with right-click MIDI-learn popup.
@@ -324,6 +326,9 @@ public:
     juce::String paramId;
     MidiLearnManager* midiLearn = nullptr; // set later when default-constructed
     std::function<int()> learnChannelProvider;
+    // Optional SECOND learn target (the "SELECTED channel - follows selection" variant on the
+    // strip M/S/OV buttons); the right-click menu offers both when set.
+    juce::String altPid, altLabel;
 };
 
 //==============================================================================
@@ -652,7 +657,12 @@ public:
         }
         else g.drawText(t, getLocalBounds().reduced(7, 0), juce::Justification::centredLeft, false);
     }
-    void mouseDown(const juce::MouseEvent& e) override { drag_ = true; apply(e); }
+    MidiLearnManager* mlm = nullptr;                 // right-click MIDI-learn (only faders GIVEN a pid)
+    juce::String learnPid;
+    void mouseDown(const juce::MouseEvent& e) override
+    { if ((e.mods.isPopupMenu() || e.mods.isRightButtonDown()) && mlm != nullptr && learnPid.isNotEmpty())
+      { showMidiLearnMenu(this, *mlm, learnPid, -1); return; }
+      drag_ = true; apply(e); }
     void mouseDrag(const juce::MouseEvent& e) override { apply(e); }
     void mouseUp  (const juce::MouseEvent&)   override { if (drag_ && onDragEnd) onDragEnd(); drag_ = false; }
     void mouseDoubleClick(const juce::MouseEvent&) override
@@ -933,16 +943,18 @@ private:
 class KeysPanel : public juce::Component, private juce::MidiKeyboardState::Listener
 {
 public:
-    KeysPanel();
+    explicit KeysPanel(MidiLearnManager& mlm);            // knobs + REC are MIDI-learnable (ui_sel_*)
     ~KeysPanel() override { kbState.removeListener(this); }
     std::function<void(int note, float vel)> onKeyDown;   // -> processor (mono handled here)
     std::function<void(int)> onKeyUp;   // which note was released (slide-safe mono pairing)
 
-    juce::TextButton btnRec   { "REC" };
+    LearnableButton  btnRec   { "REC" };                  // paramId "ui_sel_rec" (set in ctor)
     juce::ComboBox   comboRecMode;
     juce::TextButton btnSlot2 { "0 st" };                 // slot-2 transpose (3-column popup, -24..+24)
     juce::TextButton btnTakes { "Takes (0)" };
-    juce::Slider     humanKnob, strumKnob, minVelKnob, maxVelKnob, glideKnob;   // HUMANIZE / STRUM / min+max vel / GLIDE
+    // The feel knobs are SELECTED-SCOPE MIDI targets (right-click = learn; they act on the
+    // selected pattern's selected channel via the SelCC ring).
+    LearnableKnob humanKnob, strumKnob, minVelKnob, maxVelKnob, glideKnob;   // SLOT OFFSET / STRUM / min+max vel / GLIDE
     ToggleSwitch     polySwitch;                          // keys POLY (chords stack like a piano)
     juce::TextButton btnArp { "Arp" };                    // opens the ARP editor popup (space-saving)
     juce::TextButton btnGuide { "Guide" };                // KEY GUIDE popup: dim out-of-scale keys (display only)
@@ -1113,6 +1125,7 @@ public:
 class ADSRDisplay : public juce::Component, public juce::SettableTooltipClient
 {
 public:
+    MidiLearnManager* mlm = nullptr;   // RIGHT-CLICK = MIDI-learn menu (5 ui_sel_env* targets)
     void setValues(float a, float h, float d, float s, float r);  // load (no callback)
     void setPlayheads(const float* sec, int n);                   // live voice positions (seconds) -> moving dots
     void setEnabledLook(bool en) { if (en == enabledLook) return; enabledLook = en; repaint(); }  // grey out (samples have no AHDSR)
@@ -1246,6 +1259,7 @@ private:
 class VoiceModDisplay : public juce::Component, public juce::SettableTooltipClient
 {
 public:
+    MidiLearnManager* mlm = nullptr;     // RIGHT-CLICK = MIDI-learn menu (5 ui_sel_uni* targets)
     static constexpr int kMaxUni = 16;   // Osc cap (KS 6 / Modal 3 set via setMaxUni)
     void setValues(int unison, int chordUnison, int scaleUnison, float detune, float vibrato, bool centre, int detuneMode, int chordMode, bool scaleOn, int scaleType, int scaleKey, float uniSpread = 0.0f, float driftIn = 0.0f);
     // DRIFT visual honesty: the DSP's real rolled per-voice detunes (cents) from the newest playing
@@ -1888,6 +1902,8 @@ private:
     void stepSoundBank(int dir);              // previous/next sound in the picker's order (wraps)
     int  currentSoundPickId(int ch) const;    // the channel's current sound as a picker id (by mixName; 0 = none)
     juce::uint32 lastSoundStepMs = 0;         // step rate limit (one browse step per ~220 ms)
+    // Selected-scope MIDI controls (ui_sel_*): apply one queued CC to the current selection.
+    void applySelCC(int target, float v, bool& slotDirty, bool& keysDirty);
     void updateUndoRedoEnabled();
 
     //-- Presets
@@ -1933,7 +1949,7 @@ private:
     void  refreshAuditionButton();
     // ==== KEYS view (on-screen piano). Radio with the sound editor: the KEYS button shows the
     // OTHER view's name. The panel covers everything right of the slot boxes. =================
-    KeysPanel        keysPanel;
+    KeysPanel        keysPanel { proc.midiLearn };
     juce::TextButton btnKeysView { "KEYS" };
     bool keysView = false;                     // session-only; the sound editor is the default view
     // Takes live on the PROCESSOR (proc.keysTakes - persisted with the state/preset). The editor
@@ -2096,12 +2112,15 @@ private:
     static constexpr int kMidiOutId = DrumSequencerProcessor::NUM_AUX_OUTS + 2;  // combo id for "MIDI Out"
     juce::TextButton btnRoute { "Routing" };   // top-bar: open the per-channel routing overview
     void refreshRouting();           // recolour the channel strips + Route button by routing
-    LearnableKnob knobReverb  { "p0_ch0_reverb",  proc.midiLearn };
-    LearnableKnob knobDelay   { "p0_ch0_delay",   proc.midiLearn };
-    LearnableKnob knobChMix   { "p0_ch0_chMix",   proc.midiLearn };   // CHORUS - one macro knob (rate/depth = effect constants)
-    LearnableKnob knobTone    { "p0_ch0_tone",    proc.midiLearn };   // per-slot TONE tilt (dark..bright)
-    LearnableKnob knobPunch   { "p0_ch0_punch",   proc.midiLearn };   // per-slot PUNCH transient shaper
-    LearnableKnob knobComp    { "p0_ch0_comp",    proc.midiLearn };   // per-slot one-knob COMPRESSOR
+    // FX row = SELECTED-SCOPE MIDI targets: the CC acts on whatever pattern/channel/slot is
+    // selected (SelCC ring -> editor timer). The old p{P}_ch{C}_* ids routed to LEGACY
+    // channel-level fields with no UI = "assigned but nothing moves".
+    LearnableKnob knobReverb  { "ui_sel_fxRev",   proc.midiLearn };
+    LearnableKnob knobDelay   { "ui_sel_fxDel",   proc.midiLearn };
+    LearnableKnob knobChMix   { "ui_sel_fxCho",   proc.midiLearn };   // CHORUS - one macro knob (rate/depth = effect constants)
+    LearnableKnob knobTone    { "ui_sel_fxTone",  proc.midiLearn };   // per-slot TONE tilt (dark..bright)
+    LearnableKnob knobPunch   { "ui_sel_fxPunch", proc.midiLearn };   // per-slot PUNCH transient shaper
+    LearnableKnob knobComp    { "ui_sel_fxComp",  proc.midiLearn };   // per-slot one-knob COMPRESSOR
     juce::Label   lblChMix, lblTone, lblPunch, lblComp;
     // REVERB MODE: clicking the "REVERB" header cycles Room -> Hall -> Plate -> Shimmer (whole
     // preset, like the other master flavour controls). A tiny MouseListener makes the Label clickable.

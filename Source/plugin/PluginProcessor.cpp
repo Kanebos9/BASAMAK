@@ -1208,6 +1208,31 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
                 uiSoundHoldMs.store(juce::Time::getMillisecondCounter()); }
       else if (uiSoundHold.load() < 0) uiSoundHold.store(0);
       return; }
+    // SELECTED-SCOPE controls (ui_sel_*): knobs carry the CC value; buttons fire on press.
+    if (pid.startsWith("ui_sel_"))
+    {
+        static const std::pair<const char*, int> kSelKnobs[] = {
+            { "ui_sel_fxDrive", SelFxDrive }, { "ui_sel_fxRev", SelFxRev }, { "ui_sel_fxDel", SelFxDel },
+            { "ui_sel_fxCho", SelFxCho }, { "ui_sel_fxTone", SelFxTone }, { "ui_sel_fxPunch", SelFxPunch },
+            { "ui_sel_fxComp", SelFxComp },
+            { "ui_sel_envA", SelEnvA }, { "ui_sel_envH", SelEnvH }, { "ui_sel_envD", SelEnvD },
+            { "ui_sel_envS", SelEnvS }, { "ui_sel_envR", SelEnvR },
+            { "ui_sel_uniCount", SelUniCount }, { "ui_sel_uniDet", SelUniDet }, { "ui_sel_uniVib", SelUniVib },
+            { "ui_sel_uniWidth", SelUniWidth }, { "ui_sel_uniDrift", SelUniDrift },
+            { "ui_sel_strum", SelStrum }, { "ui_sel_minVel", SelMinVel }, { "ui_sel_maxVel", SelMaxVel },
+            { "ui_sel_glide", SelGlide }, { "ui_sel_slotOfs", SelSlotOfs } };
+        for (auto& k : kSelKnobs) if (pid == k.first) { pushSelCC(k.second, norm); return; }
+        static const std::pair<const char*, int> kSelBtns[] = {
+            { "ui_sel_rec", SelRec }, { "ui_sel_mute", SelMute }, { "ui_sel_solo", SelSolo },
+            { "ui_sel_overlap", SelOverlap }, { "ui_sel_slotSel", SelSlotSel },
+            { "ui_sel_chNext", SelChNext }, { "ui_sel_chPrev", SelChPrev },
+            { "ui_sel_patNext", SelPatNext }, { "ui_sel_patPrev", SelPatPrev } };
+        for (auto& k : kSelBtns) if (pid == k.first) { if (on) pushSelCC(k.second, 1.0f); return; }
+        return;
+    }
+    // MASTER gaps (knobs that had learnable pids but no routing): per-pattern by design, like the UI.
+    if (pid == "global_masterVol")   { masterFX().volume = norm; return; }
+    if (pid == "global_masterLimit") { masterFX().limit  = norm; return; }
 
     // Pattern-scoped controls:  "p{P}_..."
     if (!pid.startsWithChar('p')) return;
