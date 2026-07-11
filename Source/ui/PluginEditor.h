@@ -369,6 +369,19 @@ public:
     bool hoverEd = false;                          // hover = show the "click to edit" affordance (Custom only)
     bool fmMode = false;                           // FM: apply phase modulation to the drawing
     bool compact = false;                          // short form (no A/B label strip) when the box is tight
+    // GRANULAR: live grain read positions (0..1 across the source) + the source caption. The
+    // dots are REAL grain positions from the engine (honest-visual rule); -1 = not a grain slot.
+    float grainPos[DrumChannel::GRAINS_MAX] = {}; int grainN = -1;
+    juce::String srcName;                          // "Sample: x.wav" while granulating a file
+    void setGrainLive(const float* p, int n, const juce::String& nm)
+    {
+        bool ch = (n != grainN) || (nm != srcName);
+        for (int i = 0; i < n && ! ch; ++i) ch = std::abs(p[i] - grainPos[i]) > 0.01f;
+        if (! ch) return;
+        grainN = n; srcName = nm;
+        for (int i = 0; i < n; ++i) grainPos[i] = p[i];
+        repaint();
+    }
     void paint(juce::Graphics& g) override;
     void mouseDown(const juce::MouseEvent& e) override;
     juce::String getTooltip() override;
@@ -989,8 +1002,31 @@ private:
 };
 
 class SlotEditor : public juce::Component,
-                   public juce::FileDragAndDropTarget   // drop an audio file anywhere on the box -> load it as a Sample
+                   public juce::FileDragAndDropTarget,  // drop an audio file anywhere on the box -> load it as a Sample
+                   public juce::DragAndDropTarget       // drag the OTHER slot's box here = copy its settings
 {
+public:
+    std::function<void(int srcSlot)> onCopyFromSlot;   // the other slot's box was dropped on this one
+    void mouseDrag(const juce::MouseEvent& e) override   // drag the BOX BACKGROUND = pick the slot up
+    {
+        if (slotDragging || e.getDistanceFromDragStart() < 8) return;
+        if (auto* dnd = juce::DragAndDropContainer::findParentDragContainerFor(this))
+        { slotDragging = true; dnd->startDragging("slotcopy:" + juce::String(index), this); }
+    }
+    void mouseUp(const juce::MouseEvent&) override { slotDragging = false; }
+    bool isInterestedInDragSource(const SourceDetails& d) override
+    { return d.description.toString().startsWith("slotcopy:")
+             && d.description.toString().substring(9).getIntValue() != index; }
+    void itemDragEnter(const SourceDetails&) override { slotDropOver = true;  repaint(); }
+    void itemDragExit (const SourceDetails&) override { slotDropOver = false; repaint(); }
+    void itemDropped  (const SourceDetails& d) override
+    {
+        slotDropOver = false; repaint();
+        if (onCopyFromSlot) onCopyFromSlot(d.description.toString().substring(9).getIntValue());
+    }
+    bool slotDropOver = false;   // paint a green outline while the other slot hovers here
+private:
+    bool slotDragging = false;
 public:
     static constexpr int MAXK = 24;            // Synth engine needs the most knobs
     static constexpr int KNOB = 42, GAP = 6;   // bigger, easier-to-grab knobs (slots are wide now)

@@ -2776,17 +2776,24 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                                                       * std::pow(2.0, (double) (r2 * c.grPitch));   // +-12 st max
                                     gr.len = juce::jmax(64, c.grLenSamp);
                                     gr.age = 0; gr.amp = 1.0f;
+                                    float lfoP = 0.0f;   // WAVE LFO scans grain Position (same meaning
+                                    if (c.lfoAmt[3] > 0.001f)                      // as the osc wavetable)
+                                    {
+                                        const double ph3 = c.lfoFreeOn[3] ? c.lfoFreePh[3] + (double) i * c.lfoFreeInc[3] : sv.lfoPhase[3];
+                                        const uint32_t cy3 = c.lfoFreeOn[3] ? (uint32_t) juce::jmax(0.0, ph3 / (2.0 * kPi)) : sv.lfoCyc[3];
+                                        lfoP = lfoShapeVal(c.lfoShape[3], ph3, cy3, c.lfoCurve[3]) * c.lfoAmt[3] * 0.5f;
+                                    }
                                     if (smp)
                                     {
                                         const double span = (double) (c.grHi - c.grLo);
-                                        double p01 = (double) c.grPos + (double) (r1 * c.grSpray);
+                                        double p01 = (double) c.grPos + (double) (r1 * c.grSpray) + (double) lfoP;
                                         p01 -= std::floor(p01);
                                         gr.pos = (double) c.grLo + p01 * juce::jmax(1.0, span - 4.0);
                                         gr.inc = pmul / (double) engineOS;         // varispeed at the file's rate
                                     }
                                     else
                                     {
-                                        double p01 = (double) c.grPos + (double) (r1 * c.grSpray);
+                                        double p01 = (double) c.grPos + (double) (r1 * c.grSpray) + (double) lfoP;
                                         p01 -= std::floor(p01);
                                         gr.pos = p01 * (double) GRAIN_TBL;
                                         gr.inc = c.grIncBase * pmul;               // the table cycle at base pitch

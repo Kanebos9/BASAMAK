@@ -326,6 +326,23 @@ void WaveMorphDisplay::paint(juce::Graphics& g)
         g.setColour(juce::Colour(0xffe8bf4d).withAlpha(0.8f));
         g.drawRoundedRectangle(b.reduced(1.0f), 4.0f, 1.6f);
     }
+    if (grainN >= 0)
+    {   // GRANULAR: the dots are the REAL positions the engine's grains are reading right now
+        // (fed from getGrainSnapshot - honest visual, never an animation).
+        g.setColour(juce::Colour(0xff35c0ff));
+        for (int i = 0; i < grainN; ++i)
+        {
+            const float x = b.getX() + 4.0f + grainPos[i] * (b.getWidth() - 8.0f);
+            g.fillEllipse(x - 2.0f, b.getBottom() - 7.0f, 4.0f, 4.0f);
+        }
+        if (srcName.isNotEmpty())
+        {   // the source caption: which sample the grains chew on (wave mode shows the shape label)
+            g.setFont(juce::Font(9.0f, juce::Font::bold));
+            g.setColour(juce::Colour(0xff9fd1ff));
+            g.drawText(srcName, (int) b.getX() + 5, (int) b.getY() + 2, (int) b.getWidth() - 10, 11,
+                       juce::Justification::topLeft, false);
+        }
+    }
 }
 
 void WaveMorphDisplay::mouseDown(const juce::MouseEvent& e)
@@ -1369,18 +1386,19 @@ void SlotEditor::setEngine(int eng)
 {
     engine = eng;
     params = slotParamsFor(eng);
-    const bool morph = (eng == DrumChannel::SrcOsc || eng == DrumChannel::SrcFM);
-    morphView.setVisible(morph);
+    const bool grain = (eng == DrumChannel::SrcGrain);
+    const bool morph = (eng == DrumChannel::SrcOsc || eng == DrumChannel::SrcFM || grain);
+    morphView.setVisible(morph);   // GRAIN reuses the wave preview: it shows the grain SOURCE
     waveView.setVisible(eng == DrumChannel::SrcWave);   // wavetable visual
     physView.setVisible(eng == DrumChannel::SrcPhys);   // interactive string (Position/Tone)
     modalView.setVisible(eng == DrumChannel::SrcModal); // interactive struck body (Hit Pos/Damp)
     fmEnvSw.setVisible(eng == DrumChannel::SrcOsc);     // FM Amount env-follow (placed by placeOsc)
-    morphView.fmMode = morph;   // Analog now does FM too -> show the live FM result for both (Depth 0 = plain carrier)
+    morphView.fmMode = morph && ! grain;   // grain preview = the raw source (no FM applied to grains)
     oscLayout = (eng == DrumChannel::SrcOsc);   // sectioned Analog/FM/Resonator layout with Freq/Depth/Reson faders
     freqFader->setVisible(oscLayout);
     depthFader->setVisible(false);          // FM amount is now the "Amount" KNOB (params[0]), not a fader
     warpFader->setVisible(oscLayout);
-    fromFader->setVisible(oscLayout);       // the single "Wave" fader
+    fromFader->setVisible(oscLayout || grain);   // the "Wave" fader = the grain SOURCE picker too
     if (toFader) toFader->setVisible(false);   // retired
     for (int i = 0; i < MAXK; ++i)
     {
@@ -1529,13 +1547,19 @@ void SlotEditor::placeGeneric(int boxW)
     const int n = activeParamCount();                     // only the currently-revealed knobs
     const int mL = 6, innerW = boxW - 2 * mL;
     int yTop = 4;
-    if (morphView.isVisible()) {                          // legacy Analog/FM: morph view across the top
+    if (morphView.isVisible()) {                          // Analog/FM legacy + GRANULAR: source preview
         const int mw = juce::jmin(boxW - 8, rowWidth(MAX_ROW) + 12);
         const int mh = 40;
         morphView.compact = true;
         morphView.setBounds((boxW - mw) / 2, yTop, mw, mh);
         morphView.repaint();
         yTop += mh + 4;
+    }
+    if (fromFader != nullptr && fromFader->isVisible() && ! oscLayout) {
+        // GRANULAR: the Wave fader right under the preview = the grain SOURCE, fully visible
+        // (it was silently read from oscShape with no control = a hidden param - user caught it).
+        fromFader->setBounds(mL, yTop, innerW, 18);
+        yTop += 22;
     }
     if (waveView.isVisible()) {                           // Wavetable: the current waveform across the top
         const int mw = juce::jmin(boxW - 8, rowWidth(MAX_ROW) + 12);
@@ -7761,7 +7785,7 @@ void DrumSequencerEditor::setupComponents()
         auto& sl = ch.slots[envTargetSlot()];
         sl.lfoRate[dest] = rate; sl.lfoAmt[dest] = amt;
         ch.markDspDirty();
-        lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)), sl.oscShape >= DrumChannel::WvCustom,
+        lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)), (sl.oscShape >= DrumChannel::WvCustom || sl.engine == DrumChannel::SrcGrain),
                              envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8));
     };
     // Tempo sync is edited IN the visual (Sync button + snapped wave drag) - write it straight back.
@@ -7808,7 +7832,7 @@ void DrumSequencerEditor::setupComponents()
         lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve,
                              ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch)
                               || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)),
-                             sl.oscShape >= DrumChannel::WvCustom,
+                             (sl.oscShape >= DrumChannel::WvCustom || sl.engine == DrumChannel::SrcGrain),
                              envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8));
     };
     lfoDisplay.onTrigChange = [this](int dest, bool freeRun, bool legato) {  // Retrig/Free/Legato
@@ -7965,9 +7989,30 @@ void DrumSequencerEditor::setupComponents()
         content.addAndMakeVisible(slotEd[b]);
         slotEd[b].init(b, proc.midiLearn, &knobLNF,
                        [this, b]() -> DrumChannel::Slot* { return &proc.sequencer.channel(selectedChannel).slots[b]; },
-                       [this]() { proc.sequencer.channel(selectedChannel).markDspDirty(); });
+                       [this, b]() {
+                           auto& ch = proc.sequencer.channel(selectedChannel);
+                           if (ch.slots[b].engine == DrumChannel::SrcGrain)
+                               ch.rebuildGrainTables();   // the grain SOURCE follows wave edits live
+                           ch.markDspDirty();
+                       });
         // "Auto" toggle ON: releasing a slot knob fires a TEST hit so you hear the edit (default OFF).
         slotEd[b].onAudition = [this] { if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel); };
+        // DRAG one slot's box onto the other = copy its whole setup (engine, params, env, EQ,
+        // filters, FX, sample) - the slot version of the channel-number drag-copy (user order).
+        slotEd[b].onCopyFromSlot = [this, b](int srcIdx) {
+            if (srcIdx == b || srcIdx < 0 || srcIdx >= DrumChannel::NUM_SLOTS) return;
+            auto& ch = proc.sequencer.channel(selectedChannel);
+            commitUndoNow();
+            ch.silenceAllVoices();                 // nothing reads the old buffers mid-copy
+            ch.slots[b] = ch.slots[srcIdx];
+            ch.slotSample[b] = ch.slotSample[srcIdx];
+            ch.ensureKsBuffers();
+            ch.rebuildAddTables();                 // chains the grain-source rebuild too
+            ch.markDspDirty();
+            cacheWaveform(selectedChannel);
+            syncPadFromSlots(false);
+            layoutContent(); refreshDetailPanel();
+        };
         // Sample Stretch was changed -> re-bake that slot's buffer (SoundTouch) + refresh the waveform.
         slotEd[b].onSampleEdit = [this](int box) {
             auto& ch = proc.sequencer.channel(selectedChannel);
@@ -8731,7 +8776,7 @@ void DrumSequencerEditor::setShapeSlot(int s)
     knobDelay.setValue (sl.fxDelaySend,   juce::dontSendNotification);
     comboDriveType.setSelectedId(sl.fxDriveType + 1, juce::dontSendNotification);
     updateFxFaders(sl);
-    lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)), sl.oscShape >= DrumChannel::WvCustom,
+    lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)), (sl.oscShape >= DrumChannel::WvCustom || sl.engine == DrumChannel::SrcGrain),
                          envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8));
     // The EQ target follows the selected slot too (user: picking a slot shouldn't leave EQ on
     // "All"). Picking "All" on the EQ selector afterward still works - it just isn't the default.
@@ -9813,7 +9858,7 @@ void DrumSequencerEditor::refreshDetailPanel()
       knobDelay.setValue (sl.fxDelaySend,   juce::dontSendNotification);
       comboDriveType.setSelectedId(sl.fxDriveType + 1, juce::dontSendNotification);
       updateFxFaders(sl);
-      lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)), sl.oscShape >= DrumChannel::WvCustom,
+      lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)), (sl.oscShape >= DrumChannel::WvCustom || sl.engine == DrumChannel::SrcGrain),
                            envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8)); }
     refreshKeysPanel();   // the KEYS panel follows the selected channel/slot too
 
@@ -10420,6 +10465,21 @@ void DrumSequencerEditor::timerCallback()
         // LIVE wavetable position (amber marker on the draw window's Position strip)
         if (harmEd.isVisible())
             harmEd.setLivePos(dc.getWtPos(harmEd.slotIdx));
+        // LIVE grain markers on the source preview (real grain positions, honest-visual rule)
+        for (int b2 = 0; b2 < DrumChannel::NUM_SLOTS; ++b2)
+        {
+            auto& mv = slotEd[b2].morphView;
+            if (! mv.isVisible()) continue;
+            if (dc.slots[b2].engine == DrumChannel::SrcGrain)
+            {
+                float gp[DrumChannel::GRAINS_MAX];
+                const int n2 = dc.getGrainSnapshot(b2, gp, DrumChannel::GRAINS_MAX);
+                mv.setGrainLive(gp, n2, dc.slotSample[b2].buf.getNumSamples() > 64
+                                          ? "Sample: " + dc.slotSample[b2].file.getFileName()
+                                          : juce::String());
+            }
+            else if (mv.grainN >= 0) mv.setGrainLive(nullptr, -1, {});
+        }
     }
     { // live tempo + grid info so the wave/read-out always show the TRUE synced speed (change-gated)
         auto& lch = proc.sequencer.channel(selectedChannel);

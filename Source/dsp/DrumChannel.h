@@ -664,6 +664,29 @@ public:
         for (auto& v : voices) if (v.active() && (nv == nullptr || v.voiceSamples < nv->voiceSamples)) nv = &v;
         return nv != nullptr ? nv->sv[juce::jlimit(0, NUM_SLOTS - 1, slot)].wtPosCur : -1.0f;
     }
+    // UI: the newest voice's LIVE grain read positions (0..1 across the source) - the preview's
+    // dots are real grains, never an animation. Returns the count (0 = nothing sounding).
+    int getGrainSnapshot(int s, float* out, int maxN) const
+    {
+        const Voice* nv = nullptr;
+        for (auto& v : voices) if (v.active() && (nv == nullptr || v.voiceSamples < nv->voiceSamples)) nv = &v;
+        if (nv == nullptr) return 0;
+        s = juce::jlimit(0, NUM_SLOTS - 1, s);
+        const auto& sv = nv->sv[s];
+        double lo = 0.0, span = (double) GRAIN_TBL;
+        if (slotSample[s].buf.getNumSamples() > 64)
+        {
+            const int n2 = slotSample[s].buf.getNumSamples();
+            const int l2 = juce::jlimit(0, n2 - 2, (int) (slots[s].smpStart * (float) n2));
+            const int h2 = juce::jlimit(l2 + 2, n2, (int) (slots[s].smpEnd * (float) n2));
+            lo = (double) l2; span = juce::jmax(1.0, (double) (h2 - l2));
+        }
+        int n = 0;
+        for (const auto& gr : sv.grains)
+            if (gr.age < gr.len && n < maxN)
+                out[n++] = (float) juce::jlimit(0.0, 1.0, (gr.pos - lo) / span);
+        return n;
+    }
     // The newest voice's S&H cycle counter (seeded per note) - the editor draws the REAL rolled
     // Random pattern with it, so the picture changes per note exactly like the sound does.
     uint32_t getLfoCycle(int slot, int dest) const
