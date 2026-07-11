@@ -1724,23 +1724,26 @@ void DrumSequencerEditor::PickerCombo::showCcMenu()
     if (mlm->isLearning())
     {
         m.addSectionHeader("Listening... move a control on your MIDI device");
-        m.addItem(5, "Cancel MIDI learn");
+        m.addItem(6, "Cancel MIDI learn");
     }
-    m.addItem(1, "Learn KNOB (relative encoder)..." + tag("ui_sound_knob"));
-    m.addItem(2, "Learn NEXT sound (button)..."     + tag("ui_sound_next"));
-    m.addItem(3, "Learn PREV sound (button)..."     + tag("ui_sound_prev"));
-    if (mlm->getCCForParam("ui_sound_knob") >= 0 || mlm->getCCForParam("ui_sound_next") >= 0
-        || mlm->getCCForParam("ui_sound_prev") >= 0)
-    { m.addSeparator(); m.addItem(4, "Clear these assignments"); }
+    m.addItem(1, "Learn KNOB (normal / absolute)..."     + tag("ui_sound_knobA"));
+    m.addItem(2, "Learn KNOB (relative encoder CC)..."   + tag("ui_sound_knob"));
+    m.addItem(3, "Learn NEXT sound (button)..."          + tag("ui_sound_next"));
+    m.addItem(4, "Learn PREV sound (button)..."          + tag("ui_sound_prev"));
+    if (mlm->getCCForParam("ui_sound_knobA") >= 0 || mlm->getCCForParam("ui_sound_knob") >= 0
+        || mlm->getCCForParam("ui_sound_next") >= 0 || mlm->getCCForParam("ui_sound_prev") >= 0)
+    { m.addSeparator(); m.addItem(5, "Clear these assignments"); }
     auto mp = juce::Desktop::getInstance().getMainMouseSource().getScreenPosition().roundToInt();
     auto* L = mlm;
     m.showMenuAsync(juce::PopupMenu::Options{}.withTargetScreenArea({ mp.x, mp.y, 1, 1 }).withMinimumWidth(280),
         [L](int r) {
-            if      (r == 1) L->startLearning("ui_sound_knob");
-            else if (r == 2) L->startLearning("ui_sound_next");
-            else if (r == 3) L->startLearning("ui_sound_prev");
-            else if (r == 4) { L->clearParam("ui_sound_knob"); L->clearParam("ui_sound_next"); L->clearParam("ui_sound_prev"); }
-            else if (r == 5) L->stopLearning();
+            if      (r == 1) L->startLearning("ui_sound_knobA");
+            else if (r == 2) L->startLearning("ui_sound_knob");
+            else if (r == 3) L->startLearning("ui_sound_next");
+            else if (r == 4) L->startLearning("ui_sound_prev");
+            else if (r == 5) { L->clearParam("ui_sound_knobA"); L->clearParam("ui_sound_knob");
+                               L->clearParam("ui_sound_next");  L->clearParam("ui_sound_prev"); }
+            else if (r == 6) L->stopLearning();
         });
 }
 
@@ -4389,16 +4392,19 @@ public:
     }
     ~SoundPickerPanel() override { juce::Desktop::getInstance().removeGlobalMouseListener(&closer); }
 
-    void openWith(const juce::Array<juce::File>& userFiles, const juce::File& userRoot)
+    void openWith(const juce::Array<juce::File>& userFiles, const juce::File& userRoot, int currentId)
     {
-        files = userFiles; root = userRoot;
+        files = userFiles; root = userRoot; curId = currentId;
         ed.setText({}, juce::dontSendNotification);
         rebuild();
         setVisible(true);
         toFront(false);
         ed.grabKeyboardFocus();
+        scrollToCur();                             // open ON the channel's current sound
     }
     void close() { setVisible(false); giveAwayKeyboardFocus(); if (onClosed) onClosed(); }
+    // Live re-highlight (MIDI knob browsing with the panel open follows along).
+    void setCurrent(int id) { if (id != curId) { curId = id; scrollToCur(); list.repaint(); } }
 
     void resized() override
     {
@@ -4433,6 +4439,15 @@ private:
     juce::File root;
     juce::TextEditor ed;
     juce::ListBox list;
+    int curId = 0;                            // the channel's CURRENT sound (amber highlight; 0 = none)
+    void scrollToCur()
+    {
+        if (curId == 0) return;
+        for (int i = 0; i < rows.size(); ++i)
+            if (! rows[i].isHeader)
+                for (int k = 0; k < rows[i].n; ++k)
+                    if (rows[i].e[k].id == curId) { list.scrollToEnsureRowIsOnscreen(i); return; }
+    }
 
     struct Closer : juce::MouseListener   // click anywhere OUTSIDE = close, like a real dropdown
     {
@@ -4541,8 +4556,19 @@ private:
             }
             else
             {
+                const bool sel = curId != 0 && en.id == curId;   // the channel's CURRENT sound
                 if (hov) { g.setColour(juce::Colour(0xff2a2a4a)); g.fillRect(x0, 0, colW, h); }
-                g.setColour(juce::Colours::white);
+                if (sel)
+                {
+                    g.setColour(juce::Colour(0xff3a3320));       // amber wash + outline (brand gold)
+                    g.fillRoundedRectangle((float) x0 + 2.0f, 1.0f, (float) colW - 6.0f, (float) h - 2.0f, 4.0f);
+                    g.setColour(juce::Colour(0xffcf9a2a));
+                    g.drawRoundedRectangle((float) x0 + 2.5f, 1.5f, (float) colW - 7.0f, (float) h - 3.0f, 4.0f, 1.4f);
+                }
+                g.setColour(sel ? juce::Colour(0xffffd98a) : juce::Colours::white);
+                if (sel) { g.setFont(juce::Font(17.0f, juce::Font::bold));
+                           g.drawFittedText(en.text, x0 + 12, 0, colW - 16, h, juce::Justification::centredLeft, 1, 0.75f);
+                           continue; }
             }
             g.setFont(juce::Font(17.0f, en.action ? juce::Font::bold : juce::Font::plain));   // x1.25 (user)
             g.drawFittedText(en.text, x0 + 12, 0, colW - 16, h, juce::Justification::centredLeft, 1, 0.75f);
@@ -4932,7 +4958,7 @@ void DrumSequencerEditor::openSoundPicker(int ch)
     if (h < 300) { h = juce::jmin(620, content.getHeight() - 12); y = content.getHeight() - h - 6; }
     h = juce::jmin(h, 620);
     panel.setBounds(juce::jlimit(2, juce::jmax(2, content.getWidth() - 902), r.getX()), y, 900, h);   // 3 columns
-    panel.openWith(soundMixFiles, getSoundMixFolder());
+    panel.openWith(soundMixFiles, getSoundMixFolder(), currentSoundPickId(ch));   // highlight + scroll to the current sound
 }
 
 void DrumSequencerEditor::applySoundPickId(int ch, int id)
@@ -4967,6 +4993,12 @@ void DrumSequencerEditor::applySoundPickId(int ch, int id)
         c.mixName = soundMixFiles[id - 1].getFileNameWithoutExtension();
         c.mixModified = false; c.mixHash = channelSoundHash(c);
         updateStripMixLabel(ch);
+    }
+    // A visible picker for this channel follows the pick (MIDI knob browsing highlights live).
+    if (soundPicker != nullptr && soundPicker->isVisible())
+    {
+        auto& pp = static_cast<SoundPickerPanel&>(*soundPicker);
+        if (pp.clickIgnore == &strips[ch].comboSound) pp.setCurrent(currentSoundPickId(ch));
     }
 }
 
@@ -5820,29 +5852,33 @@ bool DrumSequencerEditor::keyPressed(const juce::KeyPress& k)
     return false;
 }
 
+// The channel's CURRENT sound as a picker id, located by its mixName - the one thing every pick
+// path records (the combo's selectedId is NOT set by the picker panel, so it can't be trusted).
+int DrumSequencerEditor::currentSoundPickId(int ch) const
+{
+    const auto& name = proc.sequencer.channel(ch).mixName;
+    if (name.isEmpty()) return 0;
+    auto facNames = Factory::mixNames();
+    for (int i = 0; i < facNames.size(); ++i)
+        if (name == facNames[i]) return FACTORY_MIX_BASE + i;
+    for (int i = 0; i < soundMixFiles.size(); ++i)
+        if (name == soundMixFiles[i].getFileNameWithoutExtension()) return i + 1;
+    return 0;
+}
+
 // Step the SELECTED channel's sound through the bank in the PICKER's order (factory categories in
 // kSoundCatOrder, then Your Sound Bank; wraps at the ends). Driven by the ui_sound_* MIDI CCs.
-// The CURRENT sound is found by the channel's mixName - the one thing every pick path records
-// (the combo's selectedId is NOT set by the picker panel, so it can't be trusted here).
 void DrumSequencerEditor::stepSoundBank(int dir)
 {
-    const auto& c = proc.sequencer.channel(selectedChannel);
     juce::Array<int> order;                                    // the full bank in PICKER order
-    int pos = -1;                                              // where the channel's sound sits in it
     auto facNames = Factory::mixNames();
     auto facCats  = Factory::mixCategories();
     for (auto* cat : kSoundCatOrder)
         for (int i : factoryIndicesFor(cat, facNames, facCats, {}))
-        {
-            if (pos < 0 && c.mixName == facNames[i]) pos = order.size();
             order.add(FACTORY_MIX_BASE + i);
-        }
-    for (int i = 0; i < soundMixFiles.size(); ++i)             // Your Sound Bank (file ids = idx+1)
-    {
-        if (pos < 0 && c.mixName == soundMixFiles[i].getFileNameWithoutExtension()) pos = order.size();
-        order.add(i + 1);
-    }
+    for (int i = 0; i < soundMixFiles.size(); ++i) order.add(i + 1);   // Your Sound Bank (file ids = idx+1)
     if (order.isEmpty()) return;
+    int pos = order.indexOf(currentSoundPickId(selectedChannel));
     pos = pos < 0 ? (dir > 0 ? 0 : order.size() - 1)           // Init / unknown: start at an end
                   : (pos + dir + order.size()) % order.size(); // wrap
     applySoundPickId(selectedChannel, order[pos]);
@@ -7058,11 +7094,14 @@ void DrumSequencerEditor::setupComponents()
                                 "- SHIFT+CLICK = Merge & Split with the previous channel (split keyboard).\n"
                                 "- The COLOUR = routing: dark = Main mix, TEAL = own aux Output, PURPLE = MIDI Out "
                                 "(no sound, sequences another plugin).");
-        strip.comboSound.setTooltip("Sound Bank: pick this channel's sound (opens the searchable picker).\n\n"
-                                    "- RIGHT-CLICK = MIDI-learn sound BROWSING: a relative-encoder knob (one CC, "
-                                    "both directions) or NEXT/PREV buttons step the SELECTED channel through the "
-                                    "bank - whatever channel and pattern are selected at the time.\n"
-                                    "- Turn slowly: ~3 encoder clicks = one sound; fast spins are speed-limited.\n"
+        strip.comboSound.setTooltip("Sound Bank: pick this channel's sound (opens the searchable picker; the "
+                                    "current sound is highlighted amber).\n\n"
+                                    "- RIGHT-CLICK = MIDI-learn sound BROWSING: a knob (normal absolute, or a "
+                                    "relative-encoder CC) or NEXT/PREV buttons step the SELECTED channel through "
+                                    "the bank - whatever channel and pattern are selected at the time.\n"
+                                    "- Turn slowly: ~3 knob clicks = one sound; fast spins are speed-limited.\n"
+                                    "- A normal knob can run out of travel at its 0/127 ends - turn back a little, "
+                                    "or use NEXT/PREV pads for endless stepping.\n"
                                     "- Works while this window is open (browsing is an editor action).");
         strip.btnTest.setTooltip("Play this channel once with its current settings, to hear it without running the sequencer.");
         strip.btnMute->setTooltip("Mute: silence this channel.");

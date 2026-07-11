@@ -146,12 +146,13 @@ public:
     // so it parks the request here and the editor's timer applies it.
     std::atomic<int> uiMidiEditMode  { -1 };  // 1=Vel 2=Pitch 3=Prob 4=Roll (editor toggles)
     std::atomic<int> uiMidiInfluence { -1 };  // channel index to toggle step-influence on
-    // MIDI sound browsing (ui_sound_knob/next/prev = the SELECTED channel's Sound Bank pick):
-    // accumulated encoder TICKS. A relative-encoder message adds +-1 (acceleration ignored);
-    // kSoundStepTicks ticks = ONE sound step (the sensitivity detent); next/prev buttons add a
-    // whole step per press. The editor drains + rate-limits (drops excess - never queues).
+    // MIDI sound browsing (ui_sound_knobA/knob/next/prev = the SELECTED channel's Sound Bank pick):
+    // accumulated encoder TICKS. A knob message adds +-1 (acceleration ignored); kSoundStepTicks
+    // ticks = ONE sound step (the sensitivity detent); next/prev buttons add a whole step per
+    // press. The editor drains + rate-limits (drops excess - never queues).
     static constexpr int kSoundStepTicks = 3;
     std::atomic<int> uiMidiSoundStep { 0 };
+    int uiSoundKnobLast = -1;   // ABSOLUTE knob (ui_sound_knobA): last value seen (audio thread only)
 
     // MIDI-in monitor (drives the on-screen "MIDI" indicator). midiInCount bumps
     // for EVERY incoming message so the UI can tell whether MIDI reaches us at all.

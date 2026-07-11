@@ -1195,9 +1195,27 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
     if (pid == "ui_mode_len")   { if (on) uiMidiEditMode.store(6); return; }
     if (pid == "ui_mode_nudge") { if (on) uiMidiEditMode.store(7); return; }
     if (pid.startsWith("ui_influence_ch")) { if (on) uiMidiInfluence.store(pid.substring(15).getIntValue()); return; }
-    // Sound browsing on the SELECTED channel. Knob = a RELATIVE encoder (two's complement:
-    // 1..63 = clockwise, 65..127 = counter-clockwise); each message counts +-1 tick regardless
-    // of its magnitude, so encoder acceleration can never jump. 0 and 64 = idle.
+    // Sound browsing on the SELECTED channel. Two knob flavours (each +-1 tick per message so
+    // acceleration can never jump):
+    //  - knobA = a NORMAL/ABSOLUTE knob (the Launchkey MK4's custom modes have no relative
+    //    option): direction = how the VALUE moved since the last message; a REPEATED 0/127 at
+    //    the ends keeps stepping (hardware that re-sends at the clamp), otherwise the knob
+    //    simply runs out of travel there.
+    //  - knob = a true RELATIVE encoder CC (two's complement: 1..63 = next, 65..127 = prev).
+    if (pid == "ui_sound_knobA")
+    {
+        const int last = uiSoundKnobLast; uiSoundKnobLast = val;
+        int d = 0;
+        if (last >= 0)                                       // first touch after learn: just sync
+        {
+            if      (val > last)   d = 1;
+            else if (val < last)   d = -1;
+            else if (val >= 127)   d = 1;                    // pegged high, still turning
+            else if (val <= 0)     d = -1;                   // pegged low, still turning
+        }
+        if (d != 0) uiMidiSoundStep.fetch_add(d);
+        return;
+    }
     if (pid == "ui_sound_knob") { if (val != 0 && val != 64) uiMidiSoundStep.fetch_add(val < 64 ? 1 : -1); return; }
     if (pid == "ui_sound_next") { if (on) uiMidiSoundStep.fetch_add(kSoundStepTicks);  return; }
     if (pid == "ui_sound_prev") { if (on) uiMidiSoundStep.fetch_add(-kSoundStepTicks); return; }

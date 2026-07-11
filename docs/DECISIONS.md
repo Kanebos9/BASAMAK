@@ -118,6 +118,7 @@
 | 62 | Reverb stays ONE shared engine (mode is preset-wide); per-slot reverb rejected | 2 slots x 16 channels = 32 reverb instances = CPU cliff; send/return is the industry model | explained, user accepted |
 | 63 | Live Position marker (amber, both strip modes) shows ONLY while a voice renders a Custom table; silent = no marker | honest display: no voice = no position being played (same rule as the LFO playhead); amber = the plugin's playhead colour | my call |
 | 64 | MIDI sound-browse knob = two's-complement relative CC (1..63 up / 65..127 down), +-1 tick per message, 3 ticks/step, 220 ms rate limit with excess DROPPED (never queued) | user's sensitivity spec (no jumps, no overshoot); 2's comp = Novation's relative convention - if a controller uses binary-offset the direction inverts (flip the encoder mode in its editor) | user-approved sensitivity; convention = my call |
+| 65 | ABSOLUTE sound-browse knob (ui_sound_knobA) = delta-sign per message; first message after learn only syncs; repeated 0/127 = keep stepping | Launchkey MK4 custom modes have NO relative option (absolute-only) - delta-sign gives correct direction; the peg trick rescues endless hardware that re-sends at the clamp; the remaining end-stop is physics, disclosed in the tooltip | my call, sourced + disclosed |
 
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /

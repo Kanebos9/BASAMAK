@@ -1886,6 +1886,7 @@ private:
     void doRedo();
     // MIDI sound browsing (ui_sound_* CCs -> the SELECTED channel's Sound Bank pick):
     void stepSoundBank(int dir);              // previous/next sound in the picker's order (wraps)
+    int  currentSoundPickId(int ch) const;    // the channel's current sound as a picker id (by mixName; 0 = none)
     int  soundTickAcc = 0;                    // encoder ticks toward the next step (3 = one step)
     juce::uint32 lastSoundTickMs = 0, lastSoundStepMs = 0;   // stale-turn forget + step rate limit
     void updateUndoRedoEnabled();
