@@ -7100,8 +7100,9 @@ void DrumSequencerEditor::setupComponents()
                                     "relative-encoder CC) or NEXT/PREV buttons step the SELECTED channel through "
                                     "the bank - whatever channel and pattern are selected at the time.\n"
                                     "- Turn slowly: ~3 knob clicks = one sound; fast spins are speed-limited.\n"
-                                    "- A normal knob can run out of travel at its 0/127 ends - turn back a little, "
-                                    "or use NEXT/PREV pads for endless stepping.\n"
+                                    "- Normal knob at its end? Flick BACK a little - the flick is FREE (no steps) - "
+                                    "then keep turning: crank forever, like winding a watch. NEXT/PREV pads also "
+                                    "step endlessly.\n"
                                     "- Works while this window is open (browsing is an editor action).");
         strip.btnTest.setTooltip("Play this channel once with its current settings, to hear it without running the sequencer.");
         strip.btnMute->setTooltip("Mute: silence this channel.");

@@ -1205,15 +1205,16 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
     if (pid == "ui_sound_knobA")
     {
         const int last = uiSoundKnobLast; uiSoundKnobLast = val;
-        int d = 0;
-        if (last >= 0)                                       // first touch after learn: just sync
-        {
-            if      (val > last)   d = 1;
-            else if (val < last)   d = -1;
-            else if (val >= 127)   d = 1;                    // pegged high, still turning
-            else if (val <= 0)     d = -1;                   // pegged low, still turning
-        }
-        if (d != 0) uiMidiSoundStep.fetch_add(d);
+        if (last < 0) return;                                // first touch after learn: just sync
+        int d = val > last ? 1 : val < last ? -1
+              : (val >= 127 ? 1 : val <= 0 ? -1 : 0);        // repeated clamp value = still turning
+        if (d == 0) return;
+        // RATCHET ("wind the watch"): the 16 values nearest each end are a FREE-REWIND zone -
+        // motion AWAY from that end makes no steps. The Launchkey sends NOTHING once pegged, so
+        // endless travel = crank to the end, flick back (free), crank again. Costs a few
+        // swallowed clicks only when deliberately reversing from very near an end.
+        if ((d < 0 && last >= 127 - 16) || (d > 0 && last <= 16)) return;
+        uiMidiSoundStep.fetch_add(d);
         return;
     }
     if (pid == "ui_sound_knob") { if (val != 0 && val != 64) uiMidiSoundStep.fetch_add(val < 64 ? 1 : -1); return; }
