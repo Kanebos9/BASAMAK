@@ -143,13 +143,22 @@ juce::Array<SlotParam> slotParamsFor(int engine)
                      "KEYS: touching the piano snaps this to C4 (middle C) so recordings play back as performed - transpose "
                      "with it afterwards."));
             p.add(Fc("Material", 0, 5, &S::physMaterial, { "Nylon","Steel","Wood","Glass","Metal","Skin" },
-                     "The string/body material - changes the damping + overtone character (Nylon = soft, Steel/Metal = "
-                     "bright + long, Wood/Skin = short + dull)."));
+                     "The string/body material.\n\n"
+                     "- Nylon: round + dark, soft finger pluck.\n- Steel: bright, long, sharp pick.\n"
+                     "- Wood: clicky DRY knock, very short.\n- Glass: stretched shimmering partials (bell-like).\n"
+                     "- Metal: heavy stretch, darker clank.\n- Skin: boomy drumhead with a pitch drop."));
             p.add(F ("Stiffness", 0, 1, &S::physStiff, "", true,
                      "Inharmonicity: bends the overtones progressively SHARP - pure string -> stiff bar -> bell "
                      "(the fundamental stays in tune). Most obvious with a bright Tone and a longer Ring."));
             p.add(Ic("Excite", 0, 2, &S::physExcite, { "Pluck","Strike","Mallet" },
                      "How the string is excited: Pluck (bright, narrow), Strike (harder, fuller), Mallet (soft, darker)."));
+            p.add(F ("Pickup", 0, 1, &S::physPickup, "", true,
+                     "ELECTRIC-GUITAR character: a magnetic pickup listening to the string.\n\n"
+                     "- Adds the pickup's position notches (a comb at 13% of the string) and its "
+                     "resonant ~3.3 kHz peak - the 'electric' honk.\n"
+                     "- 0 = off (the acoustic string, unchanged). Works on every Karplus-Strong "
+                     "sound - guitars, basses, plucks.\n"
+                     "- Pairs with the Guitar/Bass Amp drive types."));
             break;   // pitch-env/Vibrato moved to the shared shape groups
         case DrumChannel::SrcSample:
             // NO Pitch knob here (user call: removed completely - per-step pitch + the pitch envelope
@@ -2487,14 +2496,19 @@ static const int8_t kUiScaleTab[10][7] = {
     { 0,2,4,5,7,9,11 },{ 0,2,3,5,7,8,10 },{ 0,2,3,5,7,8,11 },{ 0,2,3,5,7,9,10 },{ 0,1,3,5,7,8,10 },
     { 0,2,4,6,7,9,11 },{ 0,2,4,5,7,9,10 },{ 0,2,4,7,9,0,0 },{ 0,3,5,7,10,0,0 },{ 0,3,5,6,7,10,0 } };
 static const int   kUiScaleLen[10]   = { 7,7,7,7,7,7,7,5,5,6 };
-static const char* kUiScaleName[12]  = { "Major","Minor","Har Min","Dorian","Phrygian","Lydian","Mixolyd","Maj Pent","Min Pent","Blues","Gtr Major","Gtr Minor" };
+static const char* kUiScaleName[13]  = { "Major","Minor","Har Min","Dorian","Phrygian","Lydian","Mixolyd","Maj Pent","Min Pent","Blues","Gtr Major","Gtr Minor","Power" };
 // (guitar voicings are DIATONIC now - the display cluster shows the TONIC chord: see uiScaleSemis)
 static const char* kUiNoteName[12]   = { "C","C#","D","D#","E","F","F#","G","G#","A","A#","B" };
-static constexpr int kNumScales = 12;   // 10 scales + 2 GUITAR VOICINGS (fixed E-shape barre)
+static constexpr int kNumScales = 13;   // 10 scales + 2 GUITAR VOICINGS + POWER (root+5th+oct, chromatic)
 // The TONIC diatonic chord's k-th tone (semitones from the tonic) - a REPRESENTATIVE voicing for the
 // display cluster + read-out (the real per-note voicing is note-dependent - see DrumChannel scaleSemis).
 static inline int uiScaleSemis(int scaleType, int k) {
     scaleType = juce::jlimit(0, kNumScales - 1, scaleType);
+    if (scaleType == 12)
+    {   // POWER: root + 5th + octave stack (chromatic - mirror of the DSP kPower table)
+        static const int kPower[7] = { 0, 7, 12, 19, 24, 31, 36 };
+        return kPower[juce::jlimit(0, 6, k)];
+    }
     if (scaleType >= 10)
     {   // guitar voicing display = the TONIC barre (diatonic 3rd/5th of the parent scale)
         const int8_t* S = kUiScaleTab[scaleType - 10];
@@ -5121,7 +5135,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         h = mix(h, sl.fxDriveType); h = mix(h, f(sl.fxDrive)); h = mix(h, f(sl.fxReverbSend)); h = mix(h, f(sl.fxDelaySend));
         h = mix(h, sl.noiseType); h = mix(h, f(sl.noiseCenter)); h = mix(h, f(sl.noiseWidth)); h = mix(h, f(sl.noiseRes)); h = mix(h, f(sl.noiseDrive)); h = mix(h, f(sl.noiseCrackle));
         h = mix(h, f(sl.fmPitch)); h = mix(h, f(sl.fmSpread)); h = mix(h, f(sl.fmDepth)); h = mix(h, f(sl.fmPEnvAmt)); h = mix(h, f(sl.fmPEnvTime)); h = mix(h, f(sl.fmPOffset)); h = mix(h, f(sl.fmFeedback)); h = mix(h, f(sl.fmSub));
-        h = mix(h, f(sl.physFreq)); h = mix(h, f(sl.physTone)); h = mix(h, f(sl.physMaterial)); h = mix(h, f(sl.physPosition)); h = mix(h, f(sl.physPEnvAmt)); h = mix(h, f(sl.physPEnvTime)); h = mix(h, f(sl.physPOffset)); h = mix(h, f(sl.physStiff)); h = mix(h, sl.physExcite);
+        h = mix(h, f(sl.physFreq)); h = mix(h, f(sl.physTone)); h = mix(h, f(sl.physMaterial)); h = mix(h, f(sl.physPosition)); h = mix(h, f(sl.physPEnvAmt)); h = mix(h, f(sl.physPEnvTime)); h = mix(h, f(sl.physPOffset)); h = mix(h, f(sl.physStiff)); h = mix(h, sl.physExcite); h = mix(h, f(sl.physPickup));
         h = mix(h, f(sl.smpSpeed)); h = mix(h, f(sl.smpCrush)); h = mix(h, f(sl.smpPitch)); h = mix(h, f(sl.smpPEnvAmt)); h = mix(h, f(sl.smpPEnvTime)); h = mix(h, f(sl.smpPOffset)); h = mix(h, sl.smpReverse ? 1 : 0); h = mix(h, sl.smpUseRegion ? 1 : 0);
         h = mix(h, f(sl.smpStart)); h = mix(h, f(sl.smpEnd)); h = mix(h, sl.smpSlices); h = mix(h, f(sl.smpStretch)); h = mix(h, f(sl.smpGain));
         h = mix(h, sl.smpEnvOn ? 1 : 0); h = mix(h, sl.smpPreservePitch ? 1 : 0); h = mix(h, sl.fmEnvFollow ? 1 : 0); h = mix(h, f(sl.modalMorph));
@@ -7500,16 +7514,15 @@ void DrumSequencerEditor::setupComponents()
     comboDriveType.addItem("Foldback",  5);
     comboDriveType.addItem("Fuzz",      6);
     comboDriveType.addItem("Bitcrush",  7);
-    comboDriveType.addItem("Guitar Amp", 8);    // tight low-cut + asym crunch + 5.2k cab
+    comboDriveType.addItem("Guitar Amp", 8);    // mid-hump crunch -> high gain + cab/presence
     comboDriveType.addItem("Bass Amp",   9);    // SPLIT rig: clean lows + driven mids/highs
-    comboDriveType.addItem("Lead Amp",  10);    // the guitar chain at ~3x gain + a 3rd stage
     comboDriveType.setTooltip("Drive TYPE for this slot (the fader beside it = the amount).\n\n"
                               "- Soft Clip / Tube: warm, rounded saturation (Tube adds even harmonics).\n"
                               "- Hard Clip / Fuzz / Foldback: aggressive, buzzy, metallic.\n"
                               "- Bitcrush: digital lo-fi grit.\n"
-                              "- GUITAR AMP: tight low-cut into a 2-stage crunch + cabinet - chugs, never muds.\n"
+                              "- GUITAR AMP: low-cut + mid-hump into a 2-stage crunch, cabinet + presence - "
+                              "the fader spans clean edge to full high-gain.\n"
                               "- BASS AMP: the split rig - lows stay CLEAN, only mids/highs distort = fat.\n"
-                              "- LEAD AMP: the guitar chain at ~3x the gain - real high-gain distortion.\n"
                               "All amp voicings are fixed (like the chorus); the amount is the amp GAIN.");
     comboDriveType.onChange = [this] {   // per-slot drive type
         if (ignoreKnobCallbacks) return;
@@ -9252,6 +9265,7 @@ void DrumSequencerEditor::updateKeyboardGuide()
     // Build a 12-bit pitch-class mask of the keys that stay LIT (-1 = guide off / nothing to dim).
     auto scaleMask = [](int key, int type) {
         type = juce::jlimit(0, kNumScales - 1, type);
+        if (type == 12) return 0xFFF;   // POWER is chromatic: every key is a valid root - nothing dims
         if (type >= 10) type -= 10;   // guitar voicings snap in Major / Natural Minor - same lit keys
         int m = 0;
         for (int k = 0; k < kUiScaleLen[type]; ++k) m |= 1 << ((key + kUiScaleTab[type][k]) % 12);

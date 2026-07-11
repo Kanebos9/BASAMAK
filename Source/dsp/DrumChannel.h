@@ -492,6 +492,10 @@ public:
         // -- Physical --
         float physFreq = 110.0f, physTone = 0.5f, physMaterial = 0.0f, physPosition = 0.0f, physPEnvAmt = 0.0f, physPEnvTime = 0.05f, physPOffset = 0.0f;
         float physStiff = 0.0f;          // Stiffness/inharmonicity: extra dispersion allpass (0 = pure string -> bar/bell)
+        // PICKUP (KS only): 0 = off (bit-identical). Turning up = electric-guitar character:
+        // a position comb tapped at 13% of each string + a resonant ~3.3 kHz peak (the
+        // magnetic pickup's honk). Fixed constants (macro philosophy); the knob = amount.
+        float physPickup = 0.0f;
         int   physExcite = 0;            // excitation: 0 = Pluck (noise burst), 1 = Strike (impulse), 2 = Mallet (soft)
         // -- Sample -- (the buffer lives per-slot in slotSample[]; these are this slot's playback params)
         float smpSpeed = 1.0f, smpCrush = 0.0f, smpPitch = 0.0f, smpPEnvAmt = 0.0f, smpPEnvTime = 0.04f, smpPOffset = 0.0f;
@@ -716,8 +720,9 @@ public:
 
     //-- Drive / distortion (sits after the filter, before the EQ)
     enum DriveType { DriveOff = 0, SoftClip, HardClip, Tube, Foldback, Fuzz, Bitcrush,
-                     DriveAmp, DriveBassAmp, DriveLeadAmp };   // the AMP FAMILY: guitar crunch /
-                     // bass split-rig (clean lows) / high-gain lead - fixed voicings, one gain
+                     DriveAmp, DriveBassAmp };   // the AMP FAMILY: guitar (crunch -> high gain
+                     // across the fader) / bass split-rig (clean lows). Lead Amp was removed
+                     // (user: indistinguishable from Guitar at high gain - tanh converges).
     int   driveType   = DriveOff;
     float driveAmount = 0.0f;      // 0..1
 
@@ -958,7 +963,9 @@ private:
         // === PER-SLOT EQ (end) ===
         // === PER-SLOT FILTER (begin) - resonant LP state (stereo); coeffs live in SC ===
         float    drvLp[2] = {}, drvDcX[2] = {}, drvDcY[2] = {};   // drive post-smoothing (~8 kHz, harsh types) + Fuzz DC blocker
-        float    ampPre[2] = {}, ampLp1[2] = {}, ampLp2[2] = {};  // AMP drive: pre-tilt + 2-pole cabinet state
+        float    ampPre[2] = {}, ampLp1[2] = {}, ampLp2[2] = {};  // AMP drive: low split + 2-pole cabinet state
+        float    ampMid[2] = {};                                  // GUITAR AMP: mid-hump band state
+        float    puZ1 = 0.0f, puZ2 = 0.0f;                        // PICKUP resonant peak (SVF, mono)
         float    toneZ[2] = {};                       // per-slot TONE tilt (1-pole split state)
         float    pFast[2] = {}, pSlow[2] = {};        // per-slot PUNCH transient followers (fast/slow)
         double   filtIc1[2][2] = {}, filtIc2[2][2] = {};   // TPT/ZDF SVF integrators [filter 0/1][stereo side]
