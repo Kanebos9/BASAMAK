@@ -417,7 +417,10 @@ static const PhysModel kPhysModels[] = {
     {  0.00f, 0, 0.40f, 1.10f, 0.10f,  0.0f }, // 0 Nylon - round + DARK, soft finger pluck
     {  0.00f, 0, 1.00f, 1.90f, 0.95f,  0.0f }, // 1 Steel - bright harmonic, long sustain, sharp pluck
     {  0.00f, 0, 0.65f, 0.10f, 0.90f,  0.0f }, // 2 Wood  - clicky DRY knock, VERY short (dies instantly)
-    { -0.85f, 5, 1.00f, 2.60f, 0.90f,  0.0f }, // 3 Glass - audibly STRETCHED partials, bell shimmer
+    { -0.88f, 6, 0.95f, 3.20f, 0.50f,  0.0f }, // 3 Bell (was Glass) - SOFT ping attack + very long ring
+                                               //   + stretched shimmer up high. Dispersion alone is
+                                               //   pitch-dependent (inaudible on bass strings - physics),
+                                               //   so Bell differs by ATTACK + LENGTH at every pitch.
     { -0.92f, 6, 0.80f, 0.90f, 0.85f,  0.0f }, // 4 Metal - heavy stretch, darker, clanky, shorter
     { -0.40f, 2, 0.55f, 0.50f, 0.40f,  9.0f }, // 5 Skin  - boomy tuned drumhead with a tom pitch drop
 };
@@ -1462,6 +1465,17 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
             if (sl.engine == SrcPhys && sl.physStiff > 0.01f)
             { float ac; int an; designStiffChain(sl.physStiff, slotBaseHz(s, sl), sr, ac, an, apComp); }
             const int mdl = juce::jlimit(0, kNumPhysModels - 1, (int) std::lround(sl.physMaterial));
+            if (sl.engine == SrcPhys && kPhysModels[mdl].apC != 0.0f && kPhysModels[mdl].apStages > 0)
+            {   // the MATERIAL chain's delay too (it STACKS with stiffness now) - keeps the
+                // excitation fill length in tune with what the render will read back
+                const float mc = kPhysModels[mdl].apC;
+                const float tdc = (1.0f - mc) / (1.0f + mc);
+                const float per = (float) (sr / juce::jmax(20.0, slotBaseHz(s, sl)));
+                int n2 = kPhysModels[mdl].apStages;
+                const float budget = juce::jmax(0.0f, 0.45f * per - apComp);
+                while (n2 > 0 && tdc * (float) n2 > budget) --n2;
+                apComp += tdc * (float) n2;
+            }
             // EXCITATION shapes how the string/bar is set in motion: Pluck = full-length noise burst (rich);
             // Strike = a short sharp burst at the start (percussive mallet hit); Mallet = a soft, rounded burst.
             const int exc = (sl.engine == SrcPhys) ? juce::jlimit(0, 2, sl.physExcite) : 0;
@@ -1677,7 +1691,9 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         float  fmRatio = 1.0f;   // Analog+FM merge: modulator freq = carrier freq * fmRatio (per-sample, tracks vibrato/pitch)
         bool   fmEnvF = false;   // FM Amount follows the amp envelope (bright attack -> mellow decay)
         const PhysModel* pm = &kPhysModels[0]; float ksFb = 0, ksLpC = 0.5f, ksApC = 0; int ksApN = 0;
-        float ksApComp = 0;   // loop-length compensation for the user-stiffness chain's DC delay (keeps tuning)
+        float ksApComp = 0;   // loop-length compensation for BOTH allpass chains' DC delay (keeps tuning)
+        float ksApC2 = 0; int ksApN2 = 0;   // the MATERIAL's dispersion chain - STACKS with the user
+                                            // stiffness chain (it used to be REPLACED by it)
         double physBaseF = 110; float physPEnvAmt = 0, physPEnvTime = 0.05f, physPOffset = 0, physVibFac = 1;
         float  crushStep = 0; double speed = 1; float smpPitch = 0, smpPEnvAmt = 0, smpPEnvTime = 0.04f, smpPOffset = 0; bool reverse = false;
         bool   smpEnv = false;   // opt-in amp envelope on the sample (off = legacy full-length playback)
@@ -1871,17 +1887,24 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 // design (designStiffChain) - the positive-coefficient approach was inaudible at the
                 // 2x engine rate (twice reported by the user; see the function comment for the math).
                 { const float st = juce::jlimit(0.0f, 1.0f, sl.physStiff);
-                  if (st > 0.01f) designStiffChain(st, slotBaseHz(s, sl), sr, c.ksApC, c.ksApN, c.ksApComp);
-                  else { c.ksApC = c.pm->apC; c.ksApN = c.pm->apStages; c.ksApComp = 0.0f;
-                         if (c.ksApC != 0.0f && c.ksApN > 0)
-                         {   // material chains need the SAME DC-delay compensation as the user
-                             // stiffness chain, or dispersive materials (Glass/Metal) play FLAT;
-                             // high notes shed stages so the comp never eats the loop (cap 45%).
-                             const float tdc = (1.0f - c.ksApC) / (1.0f + c.ksApC);
-                             const float per = (float) (sr / juce::jmax(20.0, slotBaseHz(s, sl)));
-                             while (c.ksApN > 0 && tdc * (float) c.ksApN > 0.45f * per) --c.ksApN;
-                             c.ksApComp = tdc * (float) c.ksApN;
-                         } } }
+                  // CHAIN 1 = user stiffness; CHAIN 2 = the MATERIAL's own dispersion. They STACK
+                  // now (stiffness used to REPLACE the material chain, erasing Bell/Metal character
+                  // the moment Stiffness moved). Both compensated; the material sheds stages against
+                  // whatever loop budget stiffness left (total comp capped at ~45% of the period).
+                  float comp1 = 0.0f;
+                  if (st > 0.01f) designStiffChain(st, slotBaseHz(s, sl), sr, c.ksApC, c.ksApN, comp1);
+                  else { c.ksApC = 0.0f; c.ksApN = 0; }
+                  c.ksApC2 = c.pm->apC; c.ksApN2 = c.pm->apStages;
+                  float comp2 = 0.0f;
+                  if (c.ksApC2 != 0.0f && c.ksApN2 > 0)
+                  {
+                      const float tdc = (1.0f - c.ksApC2) / (1.0f + c.ksApC2);
+                      const float per = (float) (sr / juce::jmax(20.0, slotBaseHz(s, sl)));
+                      const float budget = juce::jmax(0.0f, 0.45f * per - comp1);
+                      while (c.ksApN2 > 0 && tdc * (float) c.ksApN2 > budget) --c.ksApN2;
+                      comp2 = tdc * (float) c.ksApN2;
+                  }
+                  c.ksApComp = comp1 + comp2; }
                 c.physBaseF  = juce::jlimit(20.0, sr * 0.45, slotBaseHz(s, sl));
                 c.physPEnvAmt = sl.physPEnvAmt; c.physPEnvTime = sl.physPEnvTime; c.physPOffset = sl.physPOffset;
                 c.physVibFac = 1.0f + juce::jlimit(0.0f, 1.0f, sl.vibrato) * 0.07f * vibLfo;
@@ -2538,7 +2561,10 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         // feedback alone still lost ~18 dB in 2 s). Gate closed / sustain 0 = bit-identical.
                         const bool ksHold = c.sustain > 0.01f
                                          && ((v.isKey && v.keyOff < 0) || (v.gateLen > 0 && t < v.gateLen));
-                        const float lpC = ksHold ? 1.0f - (1.0f - c.ksLpC) * 0.02f : c.ksLpC;
+                        // HOLD keeps the LEVEL (ksFb below), but only PARTLY opens the loop LP now
+                        // (35% of the damping stays) - a held dark material settles into a darker
+                        // singing tone instead of every material converging on the same bright ebow.
+                        const float lpC = ksHold ? 1.0f - (1.0f - c.ksLpC) * 0.35f : c.ksLpC;
                         // String feedback. Normally the Decay-derived ksFb (the string decays on its own).
                         // ksHold sustains it (bowed/ebow); the STRIKE window swells a slow attack to full.
                         float ksFb = ksFbGate[s] > 0.0f ? ksFbGate[s] : c.ksFb;   // Length rescales the string's own decay too
@@ -2571,6 +2597,9 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             sv.ksLp[k] += lpC * (y - sv.ksLp[k]);
                             float ss = sv.ksLp[k];
                             for (int st = 0; st < c.ksApN; ++st) { float yy = c.ksApC * ss + sv.ksApSt[k][st]; sv.ksApSt[k][st] = ss - c.ksApC * yy; ss = yy; }
+                            for (int st = 0; st < c.ksApN2 && c.ksApN + st < 12; ++st)
+                            { const int q = c.ksApN + st;   // MATERIAL chain (stacked after stiffness)
+                              float yy = c.ksApC2 * ss + sv.ksApSt[k][q]; sv.ksApSt[k][q] = ss - c.ksApC2 * yy; ss = yy; }
                             const int wi = (int) sv.ksWrite[k] % KS_MAX;
                             sv.ksBuf[base + wi] = juce::jlimit(-2.5f, 2.5f, ss * ksFb); sv.ksWrite[k] = wi + 1;   // KS write clamp (anti-gunshot)
                             acc += ss;

@@ -142,11 +142,14 @@ juce::Array<SlotParam> slotParamsFor(int engine)
                      "(shows A1/C2...; dragging snaps to semitones, SHIFT = free). Also follows per-step pitch. "
                      "KEYS: touching the piano snaps this to C4 (middle C) so recordings play back as performed - transpose "
                      "with it afterwards."));
-            p.add(Fc("Material", 0, 5, &S::physMaterial, { "Nylon","Steel","Wood","Glass","Metal","Skin" },
+            p.add(Fc("Material", 0, 5, &S::physMaterial, { "Nylon","Steel","Wood","Bell","Metal","Skin" },
                      "The string/body material.\n\n"
                      "- Nylon: round + dark, soft finger pluck.\n- Steel: bright, long, sharp pick.\n"
-                     "- Wood: clicky DRY knock, very short.\n- Glass: stretched shimmering partials (bell-like).\n"
-                     "- Metal: heavy stretch, darker clank.\n- Skin: boomy drumhead with a pitch drop."));
+                     "- Wood: clicky DRY knock, very short.\n- Bell: SOFT ping attack, very long ring, "
+                     "shimmering stretched partials on higher notes.\n"
+                     "- Metal: heavy stretch, darker clank, shorter.\n- Skin: boomy drumhead with a pitch drop.\n\n"
+                     "Ring length differences need a longer Ring to show; materials now KEEP their "
+                     "character while a key is held (and they stack with Stiffness)."));
             p.add(F ("Stiffness", 0, 1, &S::physStiff, "", true,
                      "Inharmonicity: bends the overtones progressively SHARP - pure string -> stiff bar -> bell "
                      "(the fundamental stays in tune). Most obvious with a bright Tone and a longer Ring."));
