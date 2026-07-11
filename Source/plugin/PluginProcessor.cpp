@@ -1195,59 +1195,16 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
     if (pid == "ui_mode_len")   { if (on) uiMidiEditMode.store(6); return; }
     if (pid == "ui_mode_nudge") { if (on) uiMidiEditMode.store(7); return; }
     if (pid.startsWith("ui_influence_ch")) { if (on) uiMidiInfluence.store(pid.substring(15).getIntValue()); return; }
-    // Sound browsing on the SELECTED channel. Two knob flavours (each +-1 tick per message so
-    // acceleration can never jump):
-    //  - knobA = a NORMAL/ABSOLUTE knob (the Launchkey MK4's custom modes have no relative
-    //    option): direction = how the VALUE moved since the last message; a REPEATED 0/127 at
-    //    the ends keeps stepping (hardware that re-sends at the clamp), otherwise the knob
-    //    simply runs out of travel there.
-    //  - knob = a true RELATIVE encoder CC (two's complement: 1..63 = next, 65..127 = prev).
-    if (pid == "ui_sound_knobA")
-    {
-        const int last = uiSoundKnobLast; uiSoundKnobLast = val;
-        const juce::uint32 nowMs = juce::Time::getMillisecondCounter();
-        const bool stale = nowMs - uiSoundKnobMs > 4000;     // a pause releases the pawl
-        uiSoundKnobMs = nowMs;
-        if (last < 0) return;                                // first touch after learn: just sync
-        int d = val > last ? 1 : val < last ? -1
-              : (val >= 127 ? 1 : val <= 0 ? -1 : 0);        // repeated clamp value = still turning
-        if (d == 0) return;
-        if (stale) uiSoundPegDir = 0;
-        // RATCHET PAWL: touching an end arms it; while armed, the WHOLE rewind away from that
-        // end is free - any distance, any speed, zero steps (a stateless 16-value zone was far
-        // too small for real flicks: most of the rewind stepped backward = round-4 complaint).
-        // The pawl releases when the crank resumes toward the end, or after a ~4 s pause - so a
-        // deliberate reverse right after pegging = pause a beat (or one notch forward) first.
-        if (val >= 127) uiSoundPegDir = 1; else if (val <= 0) uiSoundPegDir = -1;
-        if (uiSoundPegDir != 0)
-        {
-            if (d == -uiSoundPegDir) return;                 // the free rewind
-            if (val < 127 && val > 0) uiSoundPegDir = 0;     // cranking again: re-arms at the end
-        }
-        uiMidiSoundStep.fetch_add(d);
-        return;
-    }
-    if (pid == "ui_sound_knob14")
-    {   // the FINE (LSB) CC of a 14-BIT knob: it ticks on EVERY click and WRAPS 127->0 as the
-        // big value climbs - a wrap (|diff| > 64) is CONTINUED motion, not a jump back. The
-        // 14-bit wall sits ~16,000 clicks away = unreachable in practice, so no pawl needed.
-        const int last = uiSoundKnob14Last; uiSoundKnob14Last = val;
-        if (last < 0) return;                                // first touch: just sync
-        const int diff = val - last;
-        const int d = diff == 0 ? 0 : diff > 64 ? -1 : diff < -64 ? 1 : diff > 0 ? 1 : -1;
-        if (d != 0) uiMidiSoundStep.fetch_add(d);
-        return;
-    }
-    if (pid == "ui_sound_knob") { if (val != 0 && val != 64) uiMidiSoundStep.fetch_add(val < 64 ? 1 : -1); return; }
-    // NEXT/PREV buttons: one step per press + HOLD-TO-REPEAT (the editor repeats while held;
-    // release = the pad's value-0 message). Set pads to MOMENTARY in the controller's editor.
+    // Sound browsing on the SELECTED channel: NEXT/PREV buttons only. One step per press +
+    // HOLD-TO-REPEAT (the editor repeats while held; release = the pad's value-0 message).
+    // Set pads to MOMENTARY in the controller's editor.
     if (pid == "ui_sound_next")
-    { if (on) { uiMidiSoundStep.fetch_add(kSoundStepTicks);  uiSoundHold.store(1);
+    { if (on) { uiMidiSoundStep.fetch_add(1);  uiSoundHold.store(1);
                 uiSoundHoldMs.store(juce::Time::getMillisecondCounter()); }
       else if (uiSoundHold.load() > 0) uiSoundHold.store(0);
       return; }
     if (pid == "ui_sound_prev")
-    { if (on) { uiMidiSoundStep.fetch_add(-kSoundStepTicks); uiSoundHold.store(-1);
+    { if (on) { uiMidiSoundStep.fetch_add(-1); uiSoundHold.store(-1);
                 uiSoundHoldMs.store(juce::Time::getMillisecondCounter()); }
       else if (uiSoundHold.load() < 0) uiSoundHold.store(0);
       return; }

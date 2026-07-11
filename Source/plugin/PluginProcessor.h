@@ -146,16 +146,11 @@ public:
     // so it parks the request here and the editor's timer applies it.
     std::atomic<int> uiMidiEditMode  { -1 };  // 1=Vel 2=Pitch 3=Prob 4=Roll (editor toggles)
     std::atomic<int> uiMidiInfluence { -1 };  // channel index to toggle step-influence on
-    // MIDI sound browsing (ui_sound_knobA/knob/next/prev = the SELECTED channel's Sound Bank pick):
-    // accumulated encoder TICKS. A knob message adds +-1 (acceleration ignored); kSoundStepTicks
-    // ticks = ONE sound step (the sensitivity detent); next/prev buttons add a whole step per
-    // press. The editor drains + rate-limits (drops excess - never queues).
-    static constexpr int kSoundStepTicks = 3;
+    // MIDI sound browsing (ui_sound_next/prev = the SELECTED channel's Sound Bank pick): +-1
+    // steps, drained + rate-limited by the editor (excess DROPPED, never queued). Knob decodes
+    // (absolute / relative / 14-bit fine) were built and REMOVED at the user's order - see
+    // docs/HISTORY.md; buttons ARE motion, so they browse without walls.
     std::atomic<int> uiMidiSoundStep { 0 };
-    int uiSoundKnobLast = -1;   // ABSOLUTE knob (ui_sound_knobA): last value seen (audio thread only)
-    int uiSoundPegDir   = 0;    // ratchet pawl: +1/-1 = an end was touched (its rewind is free)
-    juce::uint32 uiSoundKnobMs = 0;   // last message time (the pawl expires after a pause)
-    int uiSoundKnob14Last = -1; // 14-BIT knob's FINE CC (ui_sound_knob14): last LSB seen
     // NEXT/PREV hold-to-repeat: +-1 while a pad is held (editor repeats a step per rate window).
     std::atomic<int> uiSoundHold { 0 };
     std::atomic<juce::uint32> uiSoundHoldMs { 0 };   // press time (repeat starts after ~0.45 s)

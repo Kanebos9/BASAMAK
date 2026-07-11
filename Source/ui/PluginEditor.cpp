@@ -1709,8 +1709,10 @@ void showMidiLearnMenu(juce::Component* target, MidiLearnManager& mlm,
 
 //==============================================================================
 // Sound Bank combo right-click: MIDI-learn SOUND BROWSING for the SELECTED channel.
-// Three global targets (they always act on whatever channel/pattern is selected):
-// a relative-encoder knob (one CC, both directions) or NEXT/PREV buttons.
+// NEXT/PREV buttons only (tap = one sound, hold = scroll). The knob decodes (absolute /
+// relative / 14-bit fine) were built and REMOVED at the user's order: his controller's
+// custom modes are absolute-only with fixed physical travel, so every knob mode ended in
+// a wall or a recovery gesture. Buttons ARE motion - no walls. (docs/HISTORY.md has the saga.)
 //==============================================================================
 void DrumSequencerEditor::PickerCombo::showCcMenu()
 {
@@ -1723,41 +1725,24 @@ void DrumSequencerEditor::PickerCombo::showCcMenu()
     m.addSectionHeader("MIDI: browse sounds on the SELECTED channel");
     if (mlm->isLearning())
     {
-        m.addSectionHeader("Listening... move a control on your MIDI device");
-        m.addItem(6, "Cancel MIDI learn");
+        m.addSectionHeader("Listening... press a pad/button on your MIDI device");
+        m.addItem(4, "Cancel MIDI learn");
     }
-    m.addItem(1, "Learn KNOB (normal / absolute)..."       + tag("ui_sound_knobA"));
-    m.addItem(2, "Learn KNOB (relative encoder CC)..."     + tag("ui_sound_knob"));
-    m.addItem(3, "Learn NEXT sound (button, hold=scroll)..." + tag("ui_sound_next"));
-    m.addItem(4, "Learn PREV sound (button, hold=scroll)..." + tag("ui_sound_prev"));
-    // 14-BIT knobs (e.g. Launchkey MK4 set to Resolution 14 bit): the endless-in-practice mode.
-    // Learn the knob normally first (captures the coarse CC), then this moves the assignment to
-    // the FINE partner CC (+32), which ticks on every click across a ~16,000-step range.
-    if (const int ccA = mlm->getCCForParam("ui_sound_knobA"); ccA >= 0 && ccA + 32 <= 127)
-        m.addItem(7, "14-bit knob: switch to its fine CC (cc" + juce::String(ccA)
-                     + " -> cc" + juce::String(ccA + 32) + ")");
-    if (mlm->getCCForParam("ui_sound_knob14") >= 0)
-        m.addItem(8, "14-bit fine knob ACTIVE" + tag("ui_sound_knob14"), false);
-    if (mlm->getCCForParam("ui_sound_knobA") >= 0 || mlm->getCCForParam("ui_sound_knob") >= 0
-        || mlm->getCCForParam("ui_sound_knob14") >= 0
-        || mlm->getCCForParam("ui_sound_next") >= 0 || mlm->getCCForParam("ui_sound_prev") >= 0)
-    { m.addSeparator(); m.addItem(5, "Clear these assignments"); }
+    m.addItem(1, "Learn NEXT sound (tap = one, hold = scroll)..." + tag("ui_sound_next"));
+    m.addItem(2, "Learn PREV sound (tap = one, hold = scroll)..." + tag("ui_sound_prev"));
+    if (mlm->getCCForParam("ui_sound_next") >= 0 || mlm->getCCForParam("ui_sound_prev") >= 0)
+    { m.addSeparator(); m.addItem(3, "Clear these assignments"); }
     auto mp = juce::Desktop::getInstance().getMainMouseSource().getScreenPosition().roundToInt();
     auto* L = mlm;
     m.showMenuAsync(juce::PopupMenu::Options{}.withTargetScreenArea({ mp.x, mp.y, 1, 1 }).withMinimumWidth(280),
         [L](int r) {
-            if      (r == 1) L->startLearning("ui_sound_knobA");
-            else if (r == 2) L->startLearning("ui_sound_knob");
-            else if (r == 3) L->startLearning("ui_sound_next");
-            else if (r == 4) L->startLearning("ui_sound_prev");
-            else if (r == 5) { L->clearParam("ui_sound_knobA"); L->clearParam("ui_sound_knob");
-                               L->clearParam("ui_sound_knob14");
-                               L->clearParam("ui_sound_next");  L->clearParam("ui_sound_prev"); }
-            else if (r == 6) L->stopLearning();
-            else if (r == 7) { const int cc = L->getCCForParam("ui_sound_knobA");
-                               const int ch = L->getChannelForParam("ui_sound_knobA");
-                               if (cc >= 0) { L->assign("ui_sound_knob14", cc + 32, ch);
-                                              L->clearParam("ui_sound_knobA"); } }
+            if      (r == 1) L->startLearning("ui_sound_next");
+            else if (r == 2) L->startLearning("ui_sound_prev");
+            else if (r == 3) { L->clearParam("ui_sound_next"); L->clearParam("ui_sound_prev");
+                               // retired knob targets: scrub stale assignments from old sessions
+                               L->clearParam("ui_sound_knobA"); L->clearParam("ui_sound_knob");
+                               L->clearParam("ui_sound_knob14"); }
+            else if (r == 4) L->stopLearning();
         });
 }
 
@@ -7110,15 +7095,9 @@ void DrumSequencerEditor::setupComponents()
                                 "(no sound, sequences another plugin).");
         strip.comboSound.setTooltip("Sound Bank: pick this channel's sound (opens the searchable picker; the "
                                     "current sound is highlighted amber).\n\n"
-                                    "- RIGHT-CLICK = MIDI-learn sound BROWSING: a knob (normal absolute, or a "
-                                    "relative-encoder CC) or NEXT/PREV buttons step the SELECTED channel through "
-                                    "the bank - whatever channel and pattern are selected at the time.\n"
-                                    "- Turn slowly: ~3 knob clicks = one sound; fast spins are speed-limited.\n"
-                                    "- BEST with an encoder: set it to 14-bit resolution in your controller's "
-                                    "editor, learn it, then pick '14-bit knob: switch to its fine CC' - endless "
-                                    "travel, no tricks. A plain 7-bit knob gets ratchet ends instead (flick back "
-                                    "free, crank on).\n"
-                                    "- NEXT/PREV: tap = one sound, HOLD = keeps scrolling until released.\n"
+                                    "- RIGHT-CLICK = MIDI-learn sound browsing on the SELECTED channel: "
+                                    "NEXT/PREV buttons - tap = one sound, HOLD = keeps scrolling until released.\n"
+                                    "- Set the pads to MOMENTARY (not Toggle) in your controller's editor.\n"
                                     "- Works while this window is open (browsing is an editor action).");
         strip.btnTest.setTooltip("Play this channel once with its current settings, to hear it without running the sequencer.");
         strip.btnMute->setTooltip("Mute: silence this channel.");
@@ -9970,21 +9949,12 @@ void DrumSequencerEditor::timerCallback()
         stepGrid.influenceArmed[ic] = ns;
         if (ic == selectedChannel) btnInfluenceTop.setToggleState(ns, juce::dontSendNotification);
     }
-    // MIDI sound browsing: drain the accumulated encoder ticks. Sensitivity by design (user):
-    // kSoundStepTicks ticks = one step; at most ONE step per ~220 ms; excess is DROPPED, never
-    // queued - the moment the hand stops, the browsing stops (no overshoot).
+    // MIDI sound browsing (NEXT/PREV): at most ONE step per ~220 ms; excess presses are
+    // DROPPED, never queued - the moment the hand stops, the browsing stops (no overshoot).
     if (int t = proc.uiMidiSoundStep.exchange(0); t != 0)
     {
         const juce::uint32 now = juce::Time::getMillisecondCounter();
-        if (now - lastSoundTickMs > 500) soundTickAcc = 0;   // a stale half-turn is forgotten
-        lastSoundTickMs = now;
-        soundTickAcc += t;
-        if (std::abs(soundTickAcc) >= DrumSequencerProcessor::kSoundStepTicks)
-        {
-            const int dir = soundTickAcc > 0 ? 1 : -1;
-            soundTickAcc = 0;                                // drop the excess ticks
-            if (now - lastSoundStepMs >= 220) { lastSoundStepMs = now; stepSoundBank(dir); }
-        }
+        if (now - lastSoundStepMs >= 220) { lastSoundStepMs = now; stepSoundBank(t > 0 ? 1 : -1); }
     }
     // NEXT/PREV hold-to-repeat: a held pad keeps stepping at the browse rate. Starts after
     // ~0.45 s so a tap stays ONE step; a 15 s cap stops a stuck toggle-mode pad from scrolling

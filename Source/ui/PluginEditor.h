@@ -1884,11 +1884,10 @@ private:
     void applyUndoState(const UndoEntry& e);
     void doUndo();
     void doRedo();
-    // MIDI sound browsing (ui_sound_* CCs -> the SELECTED channel's Sound Bank pick):
+    // MIDI sound browsing (ui_sound_next/prev CCs -> the SELECTED channel's Sound Bank pick):
     void stepSoundBank(int dir);              // previous/next sound in the picker's order (wraps)
     int  currentSoundPickId(int ch) const;    // the channel's current sound as a picker id (by mixName; 0 = none)
-    int  soundTickAcc = 0;                    // encoder ticks toward the next step (3 = one step)
-    juce::uint32 lastSoundTickMs = 0, lastSoundStepMs = 0;   // stale-turn forget + step rate limit
+    juce::uint32 lastSoundStepMs = 0;         // step rate limit (one browse step per ~220 ms)
     void updateUndoRedoEnabled();
 
     //-- Presets
