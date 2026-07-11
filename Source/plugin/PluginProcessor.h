@@ -153,6 +153,8 @@ public:
     static constexpr int kSoundStepTicks = 3;
     std::atomic<int> uiMidiSoundStep { 0 };
     int uiSoundKnobLast = -1;   // ABSOLUTE knob (ui_sound_knobA): last value seen (audio thread only)
+    int uiSoundPegDir   = 0;    // ratchet pawl: +1/-1 = an end was touched (its rewind is free)
+    juce::uint32 uiSoundKnobMs = 0;   // last message time (the pawl expires after a pause)
 
     // MIDI-in monitor (drives the on-screen "MIDI" indicator). midiInCount bumps
     // for EVERY incoming message so the UI can tell whether MIDI reaches us at all.

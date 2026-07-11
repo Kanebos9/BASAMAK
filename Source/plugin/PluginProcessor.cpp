@@ -1205,15 +1205,25 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
     if (pid == "ui_sound_knobA")
     {
         const int last = uiSoundKnobLast; uiSoundKnobLast = val;
+        const juce::uint32 nowMs = juce::Time::getMillisecondCounter();
+        const bool stale = nowMs - uiSoundKnobMs > 4000;     // a pause releases the pawl
+        uiSoundKnobMs = nowMs;
         if (last < 0) return;                                // first touch after learn: just sync
         int d = val > last ? 1 : val < last ? -1
               : (val >= 127 ? 1 : val <= 0 ? -1 : 0);        // repeated clamp value = still turning
         if (d == 0) return;
-        // RATCHET ("wind the watch"): the 16 values nearest each end are a FREE-REWIND zone -
-        // motion AWAY from that end makes no steps. The Launchkey sends NOTHING once pegged, so
-        // endless travel = crank to the end, flick back (free), crank again. Costs a few
-        // swallowed clicks only when deliberately reversing from very near an end.
-        if ((d < 0 && last >= 127 - 16) || (d > 0 && last <= 16)) return;
+        if (stale) uiSoundPegDir = 0;
+        // RATCHET PAWL: touching an end arms it; while armed, the WHOLE rewind away from that
+        // end is free - any distance, any speed, zero steps (a stateless 16-value zone was far
+        // too small for real flicks: most of the rewind stepped backward = round-4 complaint).
+        // The pawl releases when the crank resumes toward the end, or after a ~4 s pause - so a
+        // deliberate reverse right after pegging = pause a beat (or one notch forward) first.
+        if (val >= 127) uiSoundPegDir = 1; else if (val <= 0) uiSoundPegDir = -1;
+        if (uiSoundPegDir != 0)
+        {
+            if (d == -uiSoundPegDir) return;                 // the free rewind
+            if (val < 127 && val > 0) uiSoundPegDir = 0;     // cranking again: re-arms at the end
+        }
         uiMidiSoundStep.fetch_add(d);
         return;
     }
