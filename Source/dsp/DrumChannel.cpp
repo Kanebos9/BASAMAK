@@ -331,6 +331,46 @@ void DrumChannel::rebuildAddTables()
     for (int sl = 0; sl < NUM_SLOTS; ++sl)
         for (int f = 0; f < ADD_FRAMES; ++f)
             bake(slots[sl].addH[f], slots[sl].addPh[f], addTbl[sl][f]);
+    rebuildGrainTables();   // granular sources ride the same message-thread rebuild sites
+}
+
+// GRANULAR source: a 64-cycle "journey" of the slot's wave. Custom waves sweep the 4 drawn
+// frames A->D across the table (Position = the timbre scan); plain waves render uniformly
+// (Position matters less there - disclosed in the tooltip). MESSAGE THREAD ONLY; audio reads
+// only when the vector is fully sized (torn tolerance like the additive tables).
+void DrumChannel::rebuildGrainTables()
+{
+    for (int s = 0; s < NUM_SLOTS; ++s)
+    {
+        auto& tbl = grainTbl[s];
+        if (slots[s].engine != SrcGrain) { tbl.clear(); continue; }
+        if ((int) tbl.size() != GRAIN_TBL) { tbl.clear(); tbl.resize(GRAIN_TBL, 0.0f); }
+        const auto& sl = slots[s];
+        const bool custom = sl.oscShape >= WvCustom;
+        const int nCyc = GRAIN_TBL / GRAIN_CYC;   // 64
+        for (int cyc = 0; cyc < nCyc; ++cyc)
+        {
+            const float jf = (float) cyc / (float) (nCyc - 1) * (float) (ADD_FRAMES - 1);
+            const int   f0 = juce::jmin((int) jf, ADD_FRAMES - 2);
+            const float fm = jf - (float) f0;
+            for (int i = 0; i < GRAIN_CYC; ++i)
+            {
+                const float ph = (float) i / (float) GRAIN_CYC;
+                float v;
+                if (custom)
+                {   // sweep the drawn frames across the table = the grain journey
+                    const float spx = ph * (float) ADD_TBL;
+                    const int j0 = ((int) spx) & (ADD_TBL - 1), j1 = (j0 + 1) & (ADD_TBL - 1);
+                    const float fr = spx - (float) (int) spx;
+                    const float a0 = addTbl[s][f0][j0] + (addTbl[s][f0][j1] - addTbl[s][f0][j0]) * fr;
+                    const float a1 = addTbl[s][f0 + 1][j0] + (addTbl[s][f0 + 1][j1] - addTbl[s][f0 + 1][j0]) * fr;
+                    v = a0 + (a1 - a0) * fm;
+                }
+                else v = oscShapeSample(sl.oscShape, ph, nullptr);
+                tbl[(size_t) (cyc * GRAIN_CYC + i)] = v;
+            }
+        }
+    }
 }
 // LFO wave value for a shape at phase ph (radians). Shape 0 = sine (the old, exact path);
 // 1 Triangle / 2 Saw down / 3 Square / 4 Random steps / 5 Saw up / 6 Random glide (interpolated
@@ -655,6 +695,9 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("fFo", s.fmEnvFollow, nullptr);   // FM Amount follows the amp envelope
         st.setProperty("pFr", s.physFreq, nullptr); st.setProperty("pTo", s.physTone, nullptr); st.setProperty("pMa", s.physMaterial, nullptr); st.setProperty("pPo", s.physPosition, nullptr);
         st.setProperty("pSt", s.physStiff, nullptr); st.setProperty("pEx", s.physExcite, nullptr);
+        st.setProperty("grPo", s.grainPos, nullptr); st.setProperty("grSz", s.grainSize, nullptr);
+        st.setProperty("grDn", s.grainDens, nullptr); st.setProperty("grSp", s.grainSpray, nullptr);
+        st.setProperty("grPi", s.grainPitch, nullptr);   // GRANULAR
         st.setProperty("pEA", s.physPEnvAmt, nullptr); st.setProperty("pET", s.physPEnvTime, nullptr); st.setProperty("pOf", s.physPOffset, nullptr);
         st.setProperty("sSp", s.smpSpeed, nullptr); st.setProperty("sCr", s.smpCrush, nullptr); st.setProperty("sPi", s.smpPitch, nullptr);
         st.setProperty("sEA", s.smpPEnvAmt, nullptr); st.setProperty("sET", s.smpPEnvTime, nullptr); st.setProperty("sOf", s.smpPOffset, nullptr);
@@ -718,6 +761,7 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
             st.setProperty("lfSR" + juce::String(d2), s.lfoSyncRate[d2], nullptr);   // sync rate multiplier index
             st.setProperty("lfSh" + juce::String(d2), s.lfoShape[d2], nullptr);  // wave shape (0 sine .. 7 custom)
             st.setProperty("lfFr" + juce::String(d2), s.lfoFree[d2], nullptr);   // free-run (timeline-anchored)
+            st.setProperty("lfLg" + juce::String(d2), s.lfoLegato[d2], nullptr); // legato retrig
             if (s.lfoShape[d2] == 7)                                              // LFO SHAPER drawn curve
             { juce::String cv;
               for (int k = 0; k < Slot::LFO_CURVE_N; ++k)
@@ -776,6 +820,9 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         if (! st.hasProperty("v2") && s.engine == SrcOsc) { s.fmDepth = 0.0f; s.fmSpread = 0.0f; s.fmFeedback = 0.0f; s.fmSub = 0.0f; }
         s.physFreq = (float)st.getProperty("pFr", d.physFreq); s.physTone = (float)st.getProperty("pTo", d.physTone); s.physMaterial = (float)st.getProperty("pMa", d.physMaterial); s.physPosition = (float)st.getProperty("pPo", d.physPosition);
         s.physStiff = (float)st.getProperty("pSt", d.physStiff); s.physExcite = (int)st.getProperty("pEx", d.physExcite);
+        s.grainPos = (float)st.getProperty("grPo", d.grainPos); s.grainSize = (float)st.getProperty("grSz", d.grainSize);
+        s.grainDens = (float)st.getProperty("grDn", d.grainDens); s.grainSpray = (float)st.getProperty("grSp", d.grainSpray);
+        s.grainPitch = (float)st.getProperty("grPi", d.grainPitch);
         s.physPEnvAmt = (float)st.getProperty("pEA", d.physPEnvAmt); s.physPEnvTime = (float)st.getProperty("pET", d.physPEnvTime); s.physPOffset = (float)st.getProperty("pOf", d.physPOffset);
         s.smpSpeed = (float)st.getProperty("sSp", d.smpSpeed); s.smpCrush = (float)st.getProperty("sCr", d.smpCrush); s.smpPitch = (float)st.getProperty("sPi", d.smpPitch);
         s.smpPEnvAmt = (float)st.getProperty("sEA", d.smpPEnvAmt); s.smpPEnvTime = (float)st.getProperty("sET", d.smpPEnvTime); s.smpPOffset = (float)st.getProperty("sOf", d.smpPOffset);
@@ -868,6 +915,7 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
             s.lfoSyncRate[d2] = (int)st.getProperty("lfSR" + juce::String(d2), d.lfoSyncRate[d2]);
             s.lfoShape[d2] = juce::jlimit(0, 7, (int) st.getProperty("lfSh" + juce::String(d2), d.lfoShape[d2]));
             s.lfoFree[d2]  = (bool) st.getProperty("lfFr" + juce::String(d2), d.lfoFree[d2]);
+            s.lfoLegato[d2] = (bool) st.getProperty("lfLg" + juce::String(d2), d.lfoLegato[d2]);
             if (st.hasProperty("lfCv" + juce::String(d2)))
             { juce::StringArray a; a.addTokens(st.getProperty("lfCv" + juce::String(d2)).toString(), ",", "");
               for (int k = 0; k < Slot::LFO_CURVE_N; ++k)
@@ -1323,7 +1371,20 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         for (int d2 = 0; d2 < 4; ++d2)
             sv.lfoCyc[d2] = ((sl.lfoShape[d2] == 4 || sl.lfoShape[d2] == 6) && sl.lfoAmt[d2] > 0.001f && ! sl.lfoFree[d2])
                 ? (uint32_t) driftRng.nextInt() : 0;   // Random shapes (Retrig): fresh random pattern per note
+        // LEGATO retrig: inherit the phase (and Random pattern) from the newest OTHER sounding
+        // voice - overlapping/legato notes ride the same wave; detached notes restart normally.
+        for (int d2 = 0; d2 < 4; ++d2)
+            if (sl.lfoLegato[d2] && ! sl.lfoFree[d2] && sl.lfoAmt[d2] > 0.001f)
+            {
+                const Voice* nv = nullptr;
+                for (auto& v2 : voices)
+                    if (&v2 != &v && v2.active() && (nv == nullptr || v2.voiceSamples < nv->voiceSamples)) nv = &v2;
+                if (nv != nullptr)
+                { sv.lfoPhase[d2] = nv->sv[s].lfoPhase[d2]; sv.lfoCyc[d2] = nv->sv[s].lfoCyc[d2]; }
+            }
         sv.wtPosCur = -1.0f;                       // live-position read-out: nothing rendered yet
+        sv.grAcc = 1.0f;                           // GRANULAR: first grain fires immediately;
+        for (auto& gr : sv.grains) { gr.age = 0; gr.len = 0; }   // stale grains from the last note die
         sv.keySemis = 0.0f;
         // TEST on a PIANO-ROLL channel: the block config is C4-absolute (slotBaseHz), so play
         // each pitched slot at its own Base Freq knob via keySemis (user: "TEST should use the
@@ -1606,6 +1667,7 @@ int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly,
         switch (sl.engine)
         {
             case SrcOsc:   base = (float) slotBaseHz(s, sl);  break;   // Analog+FM
+            case SrcGrain: base = (float) slotBaseHz(s, sl);  break;   // grains transpose via keySemis
             case SrcModal: base = (float) slotBaseHz(s, sl);  break;   // Modal's Freq lives on oscFreq too
             case SrcPhys:  base = (float) slotBaseHz(s, sl); break;
             case SrcSample:   // Sample plays on keys: Preserve pitch = its own pitch (keySemis 0);
@@ -1700,6 +1762,11 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         bool   fmEnvF = false;   // FM Amount follows the amp envelope (bright attack -> mellow decay)
         const PhysModel* pm = &kPhysModels[0]; float ksFb = 0, ksLpC = 0.5f, ksApC = 0; int ksApN = 0;
         float ksApComp = 0;   // loop-length compensation for BOTH allpass chains' DC delay (keeps tuning)
+        // GRANULAR config: the source (table or the slot's sample), mapped params, spawn rate.
+        const float* grTbl = nullptr; int grTblLen = 0;
+        const juce::AudioBuffer<float>* grBuf = nullptr; int grLo = 0, grHi = 0;
+        float grPos = 0, grSpray = 0, grPitch = 0; int grLenSamp = 2400;
+        float grSpawnPerSamp = 0; double grIncBase = 1.0; float grNorm = 1.0f;
         float ksApC2 = 0; int ksApN2 = 0;   // the MATERIAL's dispersion chain - STACKS with the user
                                             // stiffness chain (it used to be REPLACED by it)
         double physBaseF = 110; float physPEnvAmt = 0, physPEnvTime = 0.05f, physPOffset = 0, physVibFac = 1;
@@ -1939,6 +2006,30 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             // SrcSynth / SrcWave: legacy slot engines REMOVED (v1.2.x). No factory sound uses them; the
             // enum values stay reserved so saved projects don't renumber, but they no longer bake/render
             // (a very old project's Synth/Wave slot is silent - accepted compat break).
+            case SrcGrain: {
+                // GRANULAR: source = the slot's SAMPLE when loaded, else the pre-rendered wave
+                // journey table. Params mapped here once per block; grains are spawned per voice.
+                const auto& gt = grainTbl[s];
+                c.grTbl = ((int) gt.size() == GRAIN_TBL) ? gt.data() : nullptr;
+                c.grTblLen = GRAIN_TBL;
+                if (slotSample[s].buf.getNumSamples() > 64)
+                {   // sample source (reuses the Sample engine's per-slot buffer + trim region)
+                    c.grBuf = &slotSample[s].buf;
+                    const int n = slotSample[s].buf.getNumSamples();
+                    c.grLo = juce::jlimit(0, n - 2, (int) (sl.smpStart * (float) n));
+                    c.grHi = juce::jlimit(c.grLo + 2, n, (int) (sl.smpEnd * (float) n));
+                }
+                c.grPos   = juce::jlimit(0.0f, 1.0f, sl.grainPos);
+                c.grSpray = juce::jlimit(0.0f, 1.0f, sl.grainSpray);
+                c.grPitch = juce::jlimit(0.0f, 1.0f, sl.grainPitch);
+                c.grLenSamp = (int) ((0.015 * std::pow(350.0 / 15.0, (double) juce::jlimit(0.0f, 1.0f, sl.grainSize)) ) * sr);
+                const float dens = 3.0f * std::pow(50.0f / 3.0f, juce::jlimit(0.0f, 1.0f, sl.grainDens));
+                c.grSpawnPerSamp = dens / (float) sr;
+                c.grNorm = 0.85f / std::sqrt(juce::jmax(1.0f, c.grSpawnPerSamp * (float) c.grLenSamp));
+                // table mode: one table CYCLE plays at the slot's base pitch (keys/step transpose ride pe3Mul/keySemis)
+                c.grIncBase = (double) GRAIN_CYC * juce::jlimit(20.0, sr * 0.45, slotBaseHz(s, sl)) / sr;
+                c.atk = sl.atk; c.hold = sl.hold; c.dec = sl.dec;   // full AHDSR like SrcOsc
+                break; }
             case SrcModal: {
                 // Build the resonator bank from the Material + base pitch + Decay/Tone/Structure.
                 // MORPH crossfades this material's mode table toward the NEXT material in the list
@@ -2663,6 +2754,74 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         stereo = true;
                         break; }
                     // SrcSynth / SrcWave render REMOVED (v1.2.x) - engines retired, no factory usage.
+                    case SrcGrain: {
+                        // GRANULAR: a pool of short windowed reads of the source (the slot's
+                        // sample, else the pre-rendered wave-journey table). DETERMINISTIC per
+                        // hit: the grain dice roll from sv.noiseState (identical-hits rule).
+                        env = (v.isKey || (v.gateLen > 0 && c.sustain > 0.01f))
+                            ? keyAdsr(t, v.isKey ? v.keyOff : v.gateLen, c.atk, c.hold, c.dec, c.sustain, c.release)
+                            : ahdsEnv(t, c.atk, c.hold, sv.gateDec > 0.0f ? sv.gateDec : c.dec, c.sustain, c.release);
+                        const bool smp = c.grBuf != nullptr;
+                        if (! smp && c.grTbl == nullptr) break;    // table still building (message thread)
+                        sv.grAcc += c.grSpawnPerSamp;              // spawn clock
+                        if (sv.grAcc >= 1.0f)
+                        {
+                            sv.grAcc -= 1.0f;
+                            for (auto& gr : sv.grains)
+                                if (gr.age >= gr.len)              // a free grain slot
+                                {
+                                    const float r1 = whiteNoise(sv.noiseState);   // position spray
+                                    const float r2 = whiteNoise(sv.noiseState);   // pitch spray
+                                    const double pmul = (double) noteMul * (double) pe3Mul
+                                                      * std::pow(2.0, (double) (r2 * c.grPitch));   // +-12 st max
+                                    gr.len = juce::jmax(64, c.grLenSamp);
+                                    gr.age = 0; gr.amp = 1.0f;
+                                    if (smp)
+                                    {
+                                        const double span = (double) (c.grHi - c.grLo);
+                                        double p01 = (double) c.grPos + (double) (r1 * c.grSpray);
+                                        p01 -= std::floor(p01);
+                                        gr.pos = (double) c.grLo + p01 * juce::jmax(1.0, span - 4.0);
+                                        gr.inc = pmul / (double) engineOS;         // varispeed at the file's rate
+                                    }
+                                    else
+                                    {
+                                        double p01 = (double) c.grPos + (double) (r1 * c.grSpray);
+                                        p01 -= std::floor(p01);
+                                        gr.pos = p01 * (double) GRAIN_TBL;
+                                        gr.inc = c.grIncBase * pmul;               // the table cycle at base pitch
+                                    }
+                                    break;
+                                }
+                        }
+                        float g = 0.0f;
+                        for (auto& gr : sv.grains)
+                        {
+                            if (gr.age >= gr.len) continue;
+                            const float w0 = std::sin((float) kPi * (float) gr.age / (float) gr.len);
+                            float smpv;
+                            if (smp)
+                            {
+                                if (gr.pos >= (double) c.grHi - 1.0) { gr.age = gr.len; continue; }
+                                const int   i0 = (int) gr.pos;
+                                const float fr = (float) (gr.pos - i0);
+                                const auto* sa = c.grBuf->getReadPointer(0);
+                                const auto* sb = c.grBuf->getReadPointer(juce::jmin(1, c.grBuf->getNumChannels() - 1));
+                                const float m0 = 0.5f * (sa[i0] + sb[i0]), m1 = 0.5f * (sa[i0 + 1] + sb[i0 + 1]);
+                                smpv = m0 + fr * (m1 - m0);
+                            }
+                            else
+                            {
+                                double pp = gr.pos; while (pp >= (double) GRAIN_TBL) pp -= (double) GRAIN_TBL;
+                                const int   i0 = (int) pp, i1 = (i0 + 1) % GRAIN_TBL;
+                                const float fr = (float) (pp - i0);
+                                smpv = c.grTbl[i0] + fr * (c.grTbl[i1] - c.grTbl[i0]);
+                            }
+                            g += smpv * (w0 * w0) * gr.amp;
+                            gr.pos += gr.inc; ++gr.age;
+                        }
+                        sig = g * c.grNorm * env;
+                        break; }
                     case SrcModal: {
                         // Strike: feed ONE impulse into the resonator bank (a bank of 2-pole resonators =
                         // decaying sines). Each mode rings + decays on its own from there.

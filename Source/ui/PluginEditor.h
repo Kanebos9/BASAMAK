@@ -698,14 +698,14 @@ public:
     std::function<void(int dest, float sync)> onSyncChange;   // Sync mode/value edited (0 off / cpb / -1 grid)
     static constexpr int CVN = 64;   // = DrumChannel::Slot::LFO_CURVE_N (drawn LFO cycle points)
     void setValues(const float* rates, const float* amts, const float* syncs, const int* shapes,
-                   const bool* frees, const float (*curves)[CVN], bool filterOn, bool waveOn,
+                   const bool* frees, const bool* legs, const float (*curves)[CVN], bool filterOn, bool waveOn,
                    juce::Colour accent)
     {
         bool ch = (filterOn != filtOn_) || (waveOn != waveOn_) || (accent != accent_);
         for (int d = 0; d < 4; ++d) { ch = ch || rates[d] != rate_[d] || amts[d] != amt_[d] || syncs[d] != sync_[d]
-                                              || shapes[d] != shape_[d] || frees[d] != free_[d];
+                                              || shapes[d] != shape_[d] || frees[d] != free_[d] || legs[d] != leg_[d];
                                       rate_[d] = rates[d]; amt_[d] = amts[d]; sync_[d] = syncs[d];
-                                      shape_[d] = shapes[d]; free_[d] = frees[d];
+                                      shape_[d] = shapes[d]; free_[d] = frees[d]; leg_[d] = legs[d];
                                       for (int k = 0; k < CVN; ++k)
                                       { ch = ch || std::abs(curves[d][k] - curve_[d][k]) > 1.0e-4f;
                                         curve_[d][k] = curves[d][k]; } }
@@ -713,7 +713,7 @@ public:
     }
     std::function<void(int dest)> onOpenCurveEditor;   // Custom: a plain CLICK on the wave opens the draw window
     std::function<void(int dest, int shape)> onShapeChange;   // Shape button cycled
-    std::function<void(int dest, bool freeRun)> onFreeChange; // Retrig/Free toggled
+    std::function<void(int dest, bool freeRun, bool legato)> onTrigChange; // Retrig/Free/Legato cycled
     void setFreeClockSec(double s) { if (std::abs(s - freeSec_) > 1.0e-4) { freeSec_ = s;
         if (free_[dest_] && amt_[dest_] > 0.001f) repaint(); } }   // dot keeps moving between notes
     // Live tempo/grid info so the drawn wave + read-out show the TRUE synced speed (never the ignored
@@ -741,6 +741,7 @@ private:
     float sync_[4] = { 0.0f, 0.0f, 0.0f, 0.0f };   // per-dest tempo sync: 0 = off (free Hz), > 0 = cycles/bar, -1 = grid
     int   shape_[4] = {};                          // 0 Sine .. 7 Custom (the drawn curve)
     bool  free_[4]  = {};                          // FREE-RUN (timeline-anchored) vs RETRIG per note
+    bool  leg_[4]   = {};                          // LEGATO: overlapping notes inherit the phase
     float curve_[4][CVN] = {};                     // shape 7: the drawn cycle (-1..1)
     bool  dnMoved_ = false;                        // click vs drag (a plain click in Custom opens the editor)
     double freeSec_ = 0.0;                         // live free-run clock (editor timer)

@@ -331,6 +331,12 @@ public:
     // SrcModal: a SLOT-ONLY MODAL synthesis engine (a struck resonant body = a bank of decaying
     // sine "modes"). Excited by an impulse; each Material picks the mode ratios/gains/decays.
     static constexpr int SrcModal = NUM_SOURCES + 2;   // = 7
+    // SrcGrain: a SLOT-ONLY GRANULAR engine (v1.3.9, user order). Grains = short windowed reads
+    // of a SOURCE: the slot's SAMPLE when one is loaded, else a pre-rendered WAVETABLE JOURNEY
+    // of the slot's wave (64 cycles sweeping the Custom frames A->D - so Position scans the
+    // timbre; plain waves render a uniform table where Position matters less, disclosed).
+    static constexpr int SrcGrain = NUM_SOURCES + 3;   // = 8
+    static constexpr int GRAIN_TBL = 65536, GRAIN_CYC = 1024, GRAINS_MAX = 12;
     static constexpr int MODAL_MODES = 16;             // max resonant modes per voice
     static constexpr int MODAL_NOTES = 3;              // Modal unison/chord: up to this many FULL banks (one per note)
     static int         modalMaterialCount();
@@ -345,6 +351,7 @@ public:
     static constexpr int ADD_FRAMES = 4;     // WAVETABLE frames per slot (A/B/C/D), position scans them
     static constexpr int ADD_TBL    = 1024;  // baked custom-wave table length (power of two)
     void rebuildAddTables();                 // addH frames -> addTbl (MESSAGE THREAD; audio reads floats only)
+    void rebuildGrainTables();   // granular source tables (grainTbl below, past NUM_SLOTS)
     // DRIFT visual honesty: the newest voice's REAL rolled detunes (cents) for the editor's unison
     // view - the drawn lines move with what actually played. Returns voice count (0 = none active).
     int  getDriftSnapshot(int slot, float* centsOut, int maxN) const;
@@ -421,6 +428,9 @@ public:
     //   slot.engine: -1 = none, else a Source value (SrcSample..SrcPhys).
     //======================================================================
     static constexpr int NUM_SLOTS = 2;
+    // GRANULAR source tables (message thread only, like rebuildAddTables): built only for
+    // SrcGrain slots (cleared otherwise); the audio thread reads only when fully sized.
+    std::vector<float> grainTbl[NUM_SLOTS];
     static constexpr int UNI_MAX   = 16;     // max unison/chord/scale voices (Osc; KS 6 / Modal 3 caps stay - public: key-highlight uses it)
     static constexpr int POLY      = 16;     // simultaneous note events (chords live INSIDE a voice); public: the processor's held stack sizes off it
 
@@ -492,6 +502,10 @@ public:
         // -- Physical --
         float physFreq = 110.0f, physTone = 0.5f, physMaterial = 0.0f, physPosition = 0.0f, physPEnvAmt = 0.0f, physPEnvTime = 0.05f, physPOffset = 0.0f;
         float physStiff = 0.0f;          // Stiffness/inharmonicity: extra dispersion allpass (0 = pure string -> bar/bell)
+        // GRANULAR (SrcGrain) - all 0..1, mapped in the render: Position (where in the source),
+        // Size (15..350 ms log), Density (3..50 grains/s log), Spray (random position spread),
+        // Pitch Spray (random per-grain detune up to +-12 st).
+        float grainPos = 0.25f, grainSize = 0.35f, grainDens = 0.5f, grainSpray = 0.15f, grainPitch = 0.0f;
         int   physExcite = 0;            // excitation: 0 = Pluck (noise burst), 1 = Strike (impulse), 2 = Mallet (soft)
         // -- Sample -- (the buffer lives per-slot in slotSample[]; these are this slot's playback params)
         float smpSpeed = 1.0f, smpCrush = 0.0f, smpPitch = 0.0f, smpPEnvAmt = 0.0f, smpPEnvTime = 0.04f, smpPOffset = 0.0f;
@@ -546,6 +560,10 @@ public:
         // on every playback pass; notes join it mid-flight).
         int  lfoShape[4] = { 0, 0, 0, 0 };
         bool lfoFree[4]  = { false, false, false, false };
+        // LEGATO retrig (per dest, only meaningful when lfoFree is off): a note that starts
+        // while ANOTHER voice of this channel still sounds INHERITS its LFO phase instead of
+        // restarting - MiniFreak's "Legato KBD" (user order). Detached notes restart as usual.
+        bool lfoLegato[4] = { false, false, false, false };
         // LFO SHAPER (shape 7): one drawn cycle per dest, -1..1, drawn directly ON the LFO wave
         // view. The curve IS what plays (all-zero = no modulation). Persisted "lfCv0..3".
         static constexpr int LFO_CURVE_N = 64;
@@ -973,6 +991,10 @@ private:
         float    gateDec = 0.0f;
         double   lfoPhase[4] = {}; // per-slot LFO phases (radians), one per dest (3 = WAVE)
         uint32_t lfoCyc[4]   = {}; // completed cycles (Random/S&H holds one value per cycle)
+        // GRANULAR per-voice state: a small pool of concurrent grains + the spawn accumulator.
+        struct Grain { double pos = 0, inc = 0; int age = 0, len = 0; float amp = 0; };
+        Grain    grains[GRAINS_MAX];
+        float    grAcc = 0.0f;
         float    wtPosCur = -1.0f; // UI: LIVE wavetable position 0..1 the render last played
                                    // (handle + glide + WAVE LFO combined; -1 = not rendering a
                                    // Custom table). Torn-read tolerant like the other UI reads.

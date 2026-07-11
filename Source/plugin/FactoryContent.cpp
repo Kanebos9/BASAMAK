@@ -1866,6 +1866,78 @@ static void nProwlBass(DC& c) {  // filter-forward bass (Hungry Bass's cousin, O
     s.fxDriveType = DC::DriveBassAmp; s.fxDrive = 0.4f;
     c.volume = 0.85f;
 }
+// ---- GRANULAR bank (v1.3.9, user order: "at least 10"). All wave-sourced = self-contained;
+// load a sample onto the slot (drag-drop keeps the Granular engine) to granulate audio instead.
+static DC::Slot& grSlot(DC& c, int shape) { auto& s = mkSlot(c, DC::SrcGrain); s.oscShape = s.oscShapeB = shape; return s; }
+static void grGrainPad(DC& c) {      // custom dark->bright journey; Position = the timbre scan
+    auto& s = grSlot(c, 14);         // Custom wave
+    wtFrame(s, 0, {{1,1.0f}});  wtFrame(s, 1, {{1,1.0f},{2,0.4f},{3,0.25f}});
+    wtFrame(s, 2, {{1,0.9f},{3,0.6f},{5,0.4f},{7,0.25f}});
+    wtFrame(s, 3, {{1,0.8f},{2,0.6f},{3,0.55f},{4,0.4f},{5,0.35f},{6,0.3f},{7,0.25f},{8,0.2f}});
+    s.grainPos = 0.3f; s.grainSize = 0.7f; s.grainDens = 0.8f; s.grainSpray = 0.25f;
+    s.atk = 0.4f; s.dec = 1.5f; s.sustain = 0.8f; s.release = 0.7f;
+    s.fxReverbSend = 0.3f; c.volume = 0.8f;
+}
+static void grCloudChoir(DC& c) {    // vowel grains, dense + wide = a breathing choir cloud
+    auto& s = grSlot(c, 6);          // Vowel A
+    s.grainPos = 0.5f; s.grainSize = 0.35f; s.grainDens = 0.85f; s.grainSpray = 0.4f; s.grainPitch = 0.06f;
+    s.atk = 0.3f; s.dec = 1.2f; s.sustain = 0.85f; s.release = 0.6f;
+    s.chorusMix = 0.35f; s.fxReverbSend = 0.35f; c.volume = 0.78f;
+}
+static void grShimmerDrone(DC& c) {  // octave glitter over a slow bright journey
+    auto& s = grSlot(c, 14);
+    wtFrame(s, 0, {{1,1.0f},{2,0.3f}}); wtFrame(s, 1, {{1,0.8f},{2,0.5f},{4,0.4f}});
+    wtFrame(s, 2, {{1,0.7f},{3,0.5f},{6,0.4f},{8,0.3f}}); wtFrame(s, 3, {{1,0.6f},{4,0.5f},{8,0.45f},{12,0.35f}});
+    s.grainPos = 0.45f; s.grainSize = 0.8f; s.grainDens = 0.75f; s.grainSpray = 0.3f; s.grainPitch = 0.3f;
+    s.atk = 0.9f; s.dec = 2.0f; s.sustain = 0.9f; s.release = 1.0f;
+    s.fxReverbSend = 0.4f; c.volume = 0.7f;
+}
+static void grGrainKeys(DC& c) {     // bell-grain keys: struck, glassy, a little dusty
+    auto& s = grSlot(c, 10);         // Bell shape
+    s.grainPos = 0.4f; s.grainSize = 0.4f; s.grainDens = 0.7f; s.grainSpray = 0.15f; s.grainPitch = 0.04f;
+    s.atk = 0.003f; s.dec = 1.2f; s.sustain = 0.4f; s.release = 0.35f;
+    s.fxDelaySend = 0.18f; c.volume = 0.8f;
+}
+static void grScatterLead(DC& c) {   // gritty scattered saw lead
+    auto& s = grSlot(c, 4);          // Saw
+    s.grainPos = 0.5f; s.grainSize = 0.25f; s.grainDens = 0.7f; s.grainSpray = 0.1f; s.grainPitch = 0.08f;
+    s.atk = 0.004f; s.dec = 0.8f; s.sustain = 0.7f; s.release = 0.2f;
+    s.filterType = DC::LowPass; s.filterCutoff = 2600.0f; s.filterReso = 1.2f; s.filterKeyTrack = 0.5f;
+    c.volume = 0.8f;
+}
+static void grParticlePerc(DC& c) {  // sparse micro-grains = pitched particle percussion
+    auto& s = grSlot(c, 5);          // Pulse
+    s.grainPos = 0.5f; s.grainSize = 0.05f; s.grainDens = 0.45f; s.grainSpray = 0.6f; s.grainPitch = 0.5f;
+    s.atk = 0.001f; s.dec = 0.25f; s.sustain = 0.0f; s.release = 0.05f;
+    s.fxDelaySend = 0.15f; c.volume = 0.85f;
+}
+static void grGraniteBass(DC& c) {   // thick granulated saw bass - dense grains read as texture
+    auto& s = grSlot(c, 4);
+    s.oscFreq = 55.0f;
+    s.grainPos = 0.5f; s.grainSize = 0.5f; s.grainDens = 0.9f; s.grainSpray = 0.05f; s.grainPitch = 0.03f;
+    s.atk = 0.004f; s.dec = 0.9f; s.sustain = 0.6f; s.release = 0.2f;
+    s.filterType = DC::LowPass; s.filterCutoff = 520.0f; s.filterReso = 1.6f;
+    s.fxDriveType = DC::DriveBassAmp; s.fxDrive = 0.3f;
+    c.volume = 0.85f;
+}
+static void grGrainRiser(DC& c) {    // pitch-sprayed cloud swelling in = an organic riser
+    auto& s = grSlot(c, 9);          // Organ
+    s.grainPos = 0.4f; s.grainSize = 0.55f; s.grainDens = 0.8f; s.grainSpray = 0.5f; s.grainPitch = 0.4f;
+    s.atk = 2.2f; s.hold = 0.4f; s.dec = 0.8f; s.sustain = 0.9f; s.release = 0.5f;
+    s.fxReverbSend = 0.35f; c.volume = 0.75f;
+}
+static void grFrozenOrgan(DC& c) {   // big smooth grains of an organ mixture - sustained, hazy
+    auto& s = grSlot(c, 9);
+    s.grainPos = 0.5f; s.grainSize = 0.9f; s.grainDens = 0.85f; s.grainSpray = 0.2f;
+    s.atk = 0.08f; s.dec = 1.4f; s.sustain = 0.9f; s.release = 0.5f;
+    s.chorusMix = 0.25f; c.volume = 0.78f;
+}
+static void grDustMotes(DC& c) {     // barely-there micro-particles drifting in a delay
+    auto& s = grSlot(c, 0);          // Sine
+    s.grainPos = 0.5f; s.grainSize = 0.03f; s.grainDens = 0.3f; s.grainSpray = 0.8f; s.grainPitch = 0.7f;
+    s.atk = 0.02f; s.dec = 1.0f; s.sustain = 0.6f; s.release = 0.4f;
+    s.fxDelaySend = 0.3f; s.fxReverbSend = 0.2f; c.volume = 0.62f;
+}
 static void uEvilLaugh(DC& c)   // "evil laugh": pulsing resonant pink noise + a falling filter sweep
 {
     auto& s = mkSlot(c, DC::SrcNoise);
@@ -1954,6 +2026,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Mod Cowbell", moCowbell, "Percussion" },
     // ---- Electro Perc ----
     { "Zap", mZap, "Electro Perc" },
+    { "Particle Perc", grParticlePerc, "Electro Perc" },   // GRANULAR
     { "Filter Zap", eFilterZap, "Electro Perc" },
     { "Blip", mBlip, "Electro Perc" },
     { "Laser Zap", mLaserZap, "Electro Perc" },
@@ -1984,6 +2057,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Fuzz Bass", gFuzzBass, "Bass" },
     { "Amp Bass", gAmpBass, "Bass" },            // KS bass through the BASS AMP split rig
     { "Hungry Bass", uHungryBass, "Bass" },      // USER IMPORT (my growl)
+    { "Granite Bass", grGraniteBass, "Bass" },   // GRANULAR
     { "Prowl Bass", nProwlBass, "Bass" },        // free-run filter LFO showcase
     { "Keys Bass", kKeysBass, "Bass" },
     { "Deep Sub", kSubBass, "Bass" },
@@ -1994,6 +2068,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Glue Bass", xGlueBass, "Bass" },
     // ---- Keys ----
     { "E-Piano", kEPiano, "Keys" },
+    { "Grain Keys", grGrainKeys, "Keys" },   // GRANULAR
     { "String Keys", kStringKeys, "Keys" },
     { "Toy Piano", kToyPiano, "Keys" },
     { "Harpsichord", kHarpsichord, "Keys" },
@@ -2023,10 +2098,14 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Comb Pad", aCombPad, "Pads & Choirs" },
     { "Morph Pad", sMorphPad, "Pads & Choirs" },
     { "Odyssey Pad", wOdysseyPad, "Pads & Choirs" },
+    { "Grain Pad", grGrainPad, "Pads & Choirs" },        // GRANULAR bank (v1.3.9)
+    { "Cloud Choir", grCloudChoir, "Pads & Choirs" },
+    { "Frozen Organ", grFrozenOrgan, "Pads & Choirs" },
     { "Talking Pad", wTalkingPad, "Pads & Choirs" },
     { "Bell Pad", aBellPad, "Pads & Choirs" },
     // ---- Leads ----
     { "Vox", mVox, "Leads" },
+    { "Scatter Lead", grScatterLead, "Leads" },   // GRANULAR
     { "Talkbox", mTalkbox, "Leads" },
     { "Whistle", mWhistle, "Leads" },
     { "Pulse Lead", kPulseLead, "Leads" },
@@ -2089,6 +2168,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Strum Electric", gStrumElectric, "Chords & Arps" },
     // ---- Risers & Falls ----
     { "Noise Sweep", mNoiseSweep, "Risers & Falls" },
+    { "Grain Riser", grGrainRiser, "Risers & Falls" },   // GRANULAR
     { "Uplifter", mUplifter, "Risers & Falls" },
     { "Tape Stop", mTapeStop, "Risers & Falls" },
     { "Dive", mDive, "Risers & Falls" },
@@ -2103,6 +2183,8 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Braam", mBraam, "Impacts & Booms" },
     // ---- Noise & Texture ----
     { "Wind", mWind, "Noise & Texture" },
+    { "Dust Motes", grDustMotes, "Noise & Texture" },   // GRANULAR
+    { "Shimmer Drone", grShimmerDrone, "Noise & Texture" },   // GRANULAR
     { "Siren", eSiren, "Noise & Texture" },
     { "Chopper", eChopper, "Noise & Texture" },
     { "Rain", mRain, "Noise & Texture" },
@@ -2136,7 +2218,7 @@ juce::String mixSourceTag(int index)
     // Oscillator sounds are tagged by what they USE (engine renamed "Oscillator", 2026-07-10):
     // a slot playing the drawn Custom wave = "Additive"; any FM engaged = "Oscillator+FM"; pure =
     // "Oscillator". Two OSC slots (e.g. lead + sub) are still one engine family, NOT "Hybrid".
-    static const char* eng[] = { "Sample", "Noise", "Oscillator", "FM", "Karplus-Strong", "Synth", "Wave", "Modal" };
+    static const char* eng[] = { "Sample", "Noise", "Oscillator", "FM", "Karplus-Strong", "Synth", "Wave", "Modal", "Granular" };
     int firstEng = -1; bool sameEng = true, anyEng = false, allOsc = true, anyFM = false, anyAdd = false;
     for (auto& sl : tmp.slots)
         if (sl.engine >= 0 && sl.weight > 0.001f)

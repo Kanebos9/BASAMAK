@@ -160,6 +160,23 @@ juce::Array<SlotParam> slotParamsFor(int engine)
                      "- Mallet: a soft padded push - dark and thumpy. A smooth push has few overtones, "
                      "so materials naturally sound closer together with it (real mallets do this too)."));
             break;   // pitch-env/Vibrato moved to the shared shape groups (4 params = knob grid)
+        case DrumChannel::SrcGrain:
+            p.add(F ("Position", 0, 1, &S::grainPos, "", true,
+                     "WHERE in the source the grains read.\n\n"
+                     "- Sample source: the spot in the file.\n"
+                     "- Wave source: the spot in the wave JOURNEY (Custom's frames A->D sweep across it - "
+                     "plain waves are uniform, so Position matters less there)."));
+            p.add(F ("Size", 0, 1, &S::grainSize, "", true,
+                     "Grain length (15..350 ms). Small = grainy/AM texture; big = smooth, overlapping washes."));
+            p.add(F ("Density", 0, 1, &S::grainDens, "", true,
+                     "How many grains per second (3..50). Sparse = particles and stutters; dense = a solid cloud."));
+            p.add(F ("Spray", 0, 1, &S::grainSpray, "", true,
+                     "Random position scatter per grain. 0 = all grains read the same spot (frozen); "
+                     "up = the cloud spreads across the source."));
+            p.add(F ("Pitch Spray", 0, 1, &S::grainPitch, "", true,
+                     "Random per-grain detune, up to +-12 semitones. A little = shimmer/chorus; "
+                     "a lot = glittering pitch clouds."));
+            break;
         case DrumChannel::SrcSample:
             // NO Pitch knob here (user call: removed completely - per-step pitch + the pitch envelope
             // cover melodies; the legacy channel pitch / smpPitch fields stay dormant for old projects).
@@ -3310,11 +3327,11 @@ void LfoDisplay::paint(juce::Graphics& g)
         { juce::Path tri; const float tx = shb.getRight() - 8.0f, ty = shb.getCentreY();   // drawn triangle = dropdown
           tri.addTriangle(tx - 3.5f, ty - 2.0f, tx + 3.5f, ty - 2.0f, tx, ty + 3.0f);
           g.fillPath(tri); }
-        auto fb = freeBtnRect();     // RETRIG (default) <-> FREE (timeline-anchored continuous run)
-        const bool fOn2 = free_[dest_];
+        auto fb = freeBtnRect();     // RETRIG -> FREE -> LEGATO (click cycles)
+        const bool fOn2 = free_[dest_] || leg_[dest_];
         g.setColour(fOn2 ? kLfoDestCol[dest_] : juce::Colour(0xff2a2a4a)); g.fillRoundedRectangle(fb, 3.0f);
         g.setColour(fOn2 ? juce::Colours::black : juce::Colour(0xff9aa6c0)); g.setFont(juce::Font(9.5f, juce::Font::bold));
-        g.drawText(fOn2 ? "Free" : "Retrig", fb, juce::Justification::centred, false);
+        g.drawText(free_[dest_] ? "Free" : leg_[dest_] ? "Legato" : "Retrig", fb, juce::Justification::centred, false);
         auto sb = syncBtnRect();
         const float s = sync_[dest_];
         const bool on = s != 0.0f;
@@ -3349,9 +3366,11 @@ void LfoDisplay::mouseDown(const juce::MouseEvent& e)
         return;
     }
     if (freeBtnRect().contains(e.position))
-    {   // Retrig (per note) <-> Free (continuous, timeline-anchored)
-        free_[dest_] = ! free_[dest_];
-        if (onFreeChange) onFreeChange(dest_, free_[dest_]);
+    {   // cycle Retrig -> Free -> Legato -> Retrig
+        if      (! free_[dest_] && ! leg_[dest_]) { free_[dest_] = true; }
+        else if (free_[dest_])                     { free_[dest_] = false; leg_[dest_] = true; }
+        else                                       { leg_[dest_] = false; }
+        if (onTrigChange) onTrigChange(dest_, free_[dest_], leg_[dest_]);
         if (onDragEnd) onDragEnd();
         repaint(); return;
     }
@@ -3416,12 +3435,12 @@ juce::String LfoDisplay::getTooltip()
                "the usual speed/amount). It starts as the shape you were on.\n\n"
                "The drawn wave is exactly what plays.";
     if (freeBtnRect().contains(getMouseXYRelative().toFloat()))
-        return "RETRIG / FREE (click to switch): where the wave starts on each note.\n\n"
+        return "RETRIG / FREE / LEGATO (click to cycle): where the wave starts on each note.\n\n"
                "- Retrig: the wave restarts at every note - predictable and punchy (drums, rhythmic wobbles).\n"
-               "- Free: the LFO runs continuously and each note joins it MID-FLIGHT - every note lands on a "
-               "different part of the sweep (living pads).\n\n"
-               "Free is anchored to the timeline: the same bar position always gives the same phase, so your "
-               "recording plays back identically every pass. The white dot keeps travelling between notes.";
+               "- Free: the LFO runs continuously and each note joins it MID-FLIGHT (living pads). "
+               "Timeline-anchored: playback is identical every pass.\n"
+               "- Legato: a note that starts while another is still SOUNDING inherits its wave mid-flight; "
+               "detached notes restart. The mono-lead feel: the wobble survives a legato line.";
     if (syncBtnRect().contains(getMouseXYRelative().toFloat()))
         return "SYNC (click to cycle): Off -> Sync -> Grid, for the selected LFO tab.\n\n"
                "- Off = free speed in Hz (drag the wave left/right).\n"
@@ -5150,7 +5169,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         h = mix(h, sl.fxDriveType); h = mix(h, f(sl.fxDrive)); h = mix(h, f(sl.fxReverbSend)); h = mix(h, f(sl.fxDelaySend));
         h = mix(h, sl.noiseType); h = mix(h, f(sl.noiseCenter)); h = mix(h, f(sl.noiseWidth)); h = mix(h, f(sl.noiseRes)); h = mix(h, f(sl.noiseDrive)); h = mix(h, f(sl.noiseCrackle));
         h = mix(h, f(sl.fmPitch)); h = mix(h, f(sl.fmSpread)); h = mix(h, f(sl.fmDepth)); h = mix(h, f(sl.fmPEnvAmt)); h = mix(h, f(sl.fmPEnvTime)); h = mix(h, f(sl.fmPOffset)); h = mix(h, f(sl.fmFeedback)); h = mix(h, f(sl.fmSub));
-        h = mix(h, f(sl.physFreq)); h = mix(h, f(sl.physTone)); h = mix(h, f(sl.physMaterial)); h = mix(h, f(sl.physPosition)); h = mix(h, f(sl.physPEnvAmt)); h = mix(h, f(sl.physPEnvTime)); h = mix(h, f(sl.physPOffset)); h = mix(h, f(sl.physStiff)); h = mix(h, sl.physExcite);
+        h = mix(h, f(sl.physFreq)); h = mix(h, f(sl.physTone)); h = mix(h, f(sl.physMaterial)); h = mix(h, f(sl.physPosition)); h = mix(h, f(sl.physPEnvAmt)); h = mix(h, f(sl.physPEnvTime)); h = mix(h, f(sl.physPOffset)); h = mix(h, f(sl.physStiff)); h = mix(h, sl.physExcite); h = mix(h, f(sl.grainPos)); h = mix(h, f(sl.grainSize)); h = mix(h, f(sl.grainDens)); h = mix(h, f(sl.grainSpray)); h = mix(h, f(sl.grainPitch));
         h = mix(h, f(sl.smpSpeed)); h = mix(h, f(sl.smpCrush)); h = mix(h, f(sl.smpPitch)); h = mix(h, f(sl.smpPEnvAmt)); h = mix(h, f(sl.smpPEnvTime)); h = mix(h, f(sl.smpPOffset)); h = mix(h, sl.smpReverse ? 1 : 0); h = mix(h, sl.smpUseRegion ? 1 : 0);
         h = mix(h, f(sl.smpStart)); h = mix(h, f(sl.smpEnd)); h = mix(h, sl.smpSlices); h = mix(h, f(sl.smpStretch)); h = mix(h, f(sl.smpGain));
         h = mix(h, sl.smpEnvOn ? 1 : 0); h = mix(h, sl.smpPreservePitch ? 1 : 0); h = mix(h, sl.fmEnvFollow ? 1 : 0); h = mix(h, f(sl.modalMorph));
@@ -5171,7 +5190,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         for (int sg = 0; sg < DrumChannel::ADD_FRAMES - 1; ++sg) h = mix(h, f(sl.addSeg[sg]));
         h = mix(h, sl.addLoop ? 1 : 0); h = mix(h, f(sl.addPos));
         for (int d2 = 0; d2 < 4; ++d2) { h = mix(h, f(sl.lfoRate[d2])); h = mix(h, f(sl.lfoAmt[d2])); h = mix(h, f(sl.lfoSync[d2])); h = mix(h, sl.lfoSyncRate[d2]);
-                                         h = mix(h, sl.lfoShape[d2]); h = mix(h, sl.lfoFree[d2] ? 1 : 0);
+                                         h = mix(h, sl.lfoShape[d2]); h = mix(h, sl.lfoFree[d2] ? 1 : 0); h = mix(h, sl.lfoLegato[d2] ? 1 : 0);
                                          if (sl.lfoShape[d2] == 7)   // the drawn LFO cycle IS the sound
                                              for (int k = 0; k < DrumChannel::Slot::LFO_CURVE_N; ++k)
                                                  h = mix(h, f(sl.lfoCurve[d2][k])); }   // per-slot LFOs
@@ -7742,7 +7761,7 @@ void DrumSequencerEditor::setupComponents()
         auto& sl = ch.slots[envTargetSlot()];
         sl.lfoRate[dest] = rate; sl.lfoAmt[dest] = amt;
         ch.markDspDirty();
-        lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoCurve, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)), sl.oscShape >= DrumChannel::WvCustom,
+        lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)), sl.oscShape >= DrumChannel::WvCustom,
                              envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8));
     };
     // Tempo sync is edited IN the visual (Sync button + snapped wave drag) - write it straight back.
@@ -7786,16 +7805,17 @@ void DrumSequencerEditor::setupComponents()
         // Push the LFO wave view IMMEDIATELY: there is NO timer push for it (the old comment
         // claimed one) - the drawn curve only appeared whenever something ELSE refreshed the
         // panel = "takes some time and sometimes never shows" (user report).
-        lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoCurve,
+        lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve,
                              ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch)
                               || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)),
                              sl.oscShape >= DrumChannel::WvCustom,
                              envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8));
     };
-    lfoDisplay.onFreeChange = [this](int dest, bool freeRun) {  // Retrig <-> Free (timeline-anchored)
+    lfoDisplay.onTrigChange = [this](int dest, bool freeRun, bool legato) {  // Retrig/Free/Legato
         if (ignoreKnobCallbacks) return;
         auto& ch = proc.sequencer.channel(selectedChannel);
-        ch.slots[envTargetSlot()].lfoFree[juce::jlimit(0, 3, dest)] = freeRun;
+        ch.slots[envTargetSlot()].lfoFree[juce::jlimit(0, 3, dest)]   = freeRun;
+        ch.slots[envTargetSlot()].lfoLegato[juce::jlimit(0, 3, dest)] = legato;
         ch.markDspDirty();
     };
     lfoDisplay.onDragEnd = [this] { if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel); };
@@ -7961,7 +7981,10 @@ void DrumSequencerEditor::setupComponents()
         // Sample playing that file (same path as picking it from the menu).
         auto dropLoad = [this, b](const juce::File& f) {
             auto& ch = proc.sequencer.channel(selectedChannel);
-            boxEngine[b] = DrumChannel::SrcSample; ch.slots[b].engine = DrumChannel::SrcSample;
+            // A GRANULAR slot keeps its engine: the dropped file becomes the GRAIN SOURCE
+            // (that is how you feed the granulator a sample). Any other engine -> Sample.
+            if (ch.slots[b].engine != DrumChannel::SrcGrain)
+            { boxEngine[b] = DrumChannel::SrcSample; ch.slots[b].engine = DrumChannel::SrcSample; }
             ch.loadUserSample(b, f); cacheWaveform(selectedChannel);
             syncPadFromSlots(true); ch.markDspDirty();
             layoutContent(); refreshDetailPanel();
@@ -8551,6 +8574,9 @@ static juce::String engineDescription(int eng)
                                             "Oscillator waves + Warp cover this ground.";
         case DrumChannel::SrcModal:  return "MODAL - a struck resonant body (marimba, bell, glass, membrane, plate...): "
                                             "a bank of ringing modes. Drag the hammer visual; Ring = the mode decay.";
+        case DrumChannel::SrcGrain:  return "GRANULAR - clouds of tiny windowed grains. Source = this slot's SAMPLE when "
+                                            "one is loaded, else a rendered journey of the slot's wave (Custom's 4 frames "
+                                            "= the Position scan). Pads, textures, stutters, frozen moments.";
         default:                     return "Pick this slot's sound engine (or a sample). Two slots blend into one sound.";
     }
 }
@@ -8606,6 +8632,7 @@ void DrumSequencerEditor::rebuildSlotMenus()
         root->addItem(6, "Karplus-Strong");   // (was "Physical") - the honest algorithm name; "FM"/"Synth"/"Wavetable" retired (kept parseable for old
                                         // projects); the Oscillator now covers wavetable-style shaping (more shapes + Warp).
         root->addItem(9, "Modal");      // id = engine+2 -> SrcModal (7); maps automatically (struck resonant body)
+        root->addItem(10, "Granular");  // id = engine+2 -> SrcGrain (8): grains of a wave journey or the slot's sample
     }
     syncBoxesFromSrcOn();   // restore the current channel's displayed text
 }
@@ -8618,9 +8645,9 @@ void DrumSequencerEditor::rebuildSlotMenus()
 void DrumSequencerEditor::syncPadFromSlots(bool recenter)
 {
     auto& ch = proc.sequencer.channel(selectedChannel);
-    static const char* eng[DrumChannel::NUM_SOURCES + 3] = { "Sample", "Noise", "Oscillator", "FM", "Karplus-Strong", "Synth", "Wavetable", "Modal" };
+    static const char* eng[DrumChannel::NUM_SOURCES + 4] = { "Sample", "Noise", "Oscillator", "FM", "Karplus-Strong", "Synth", "Wavetable", "Modal", "Granular" };
     bool a[DrumChannel::NUM_SLOTS];
-    int total[DrumChannel::NUM_SOURCES + 3] = {}, seen[DrumChannel::NUM_SOURCES + 3] = {};
+    int total[DrumChannel::NUM_SOURCES + 4] = {}, seen[DrumChannel::NUM_SOURCES + 4] = {};
     for (int b = 0; b < DrumChannel::NUM_SLOTS; ++b)
     { a[b] = (ch.slots[b].engine >= 0); if (a[b]) total[ch.slots[b].engine]++; }
 
@@ -8704,7 +8731,7 @@ void DrumSequencerEditor::setShapeSlot(int s)
     knobDelay.setValue (sl.fxDelaySend,   juce::dontSendNotification);
     comboDriveType.setSelectedId(sl.fxDriveType + 1, juce::dontSendNotification);
     updateFxFaders(sl);
-    lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoCurve, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)), sl.oscShape >= DrumChannel::WvCustom,
+    lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)), sl.oscShape >= DrumChannel::WvCustom,
                          envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8));
     // The EQ target follows the selected slot too (user: picking a slot shouldn't leave EQ on
     // "All"). Picking "All" on the EQ selector afterward still works - it just isn't the default.
@@ -9455,10 +9482,11 @@ void DrumSequencerEditor::onSlotEngineChange(int box)
     }
     else
     {
-        boxEngine[box] = (id <= 1) ? -1 : id - 2;   // None / Noise / Analog+FM / FM / Physical / Synth / Wave / Modal
+        boxEngine[box] = (id <= 1) ? -1 : id - 2;   // None / Noise / Analog+FM / FM / Physical / Synth / Wave / Modal / Granular
         ch.slots[box].engine = boxEngine[box];
         ch.silenceAllVoices();   // don't let a voice ringing on the OLD engine get re-read as the new one (= noise)
         ch.ensureKsBuffers();    // KS lines are lazily allocated; a KS engine just got assigned (message thread)
+        ch.rebuildGrainTables(); // a slot may have just become (or left) Granular (message thread)
     }
     syncPadFromSlots (true);   // adding/removing a slot rebalances the blend
     ch.markDspDirty();
@@ -9785,7 +9813,7 @@ void DrumSequencerEditor::refreshDetailPanel()
       knobDelay.setValue (sl.fxDelaySend,   juce::dontSendNotification);
       comboDriveType.setSelectedId(sl.fxDriveType + 1, juce::dontSendNotification);
       updateFxFaders(sl);
-      lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoCurve, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)), sl.oscShape >= DrumChannel::WvCustom,
+      lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)), sl.oscShape >= DrumChannel::WvCustom,
                            envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8)); }
     refreshKeysPanel();   // the KEYS panel follows the selected channel/slot too
 
