@@ -164,7 +164,7 @@ public:
                        SelStrum, SelMinVel, SelMaxVel, SelGlide, SelSlotOfs,
                        SelRec, SelMute, SelSolo, SelOverlap, SelSlotSel,
                        SelChNext, SelChPrev, SelPatNext, SelPatPrev,
-                       SelFollow, SelTest,
+                       SelFollow, SelTest, SelChVol, SelSwing, SelBpm, SelUndo, SelRedo,
                        SelStepBase = 2000 };   // 2000 + N = step N on the selected channel
     struct SelCCEvt { int t; float v; };
     SelCCEvt selQ[64];

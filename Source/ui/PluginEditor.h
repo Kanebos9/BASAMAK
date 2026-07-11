@@ -1200,7 +1200,27 @@ public:
     float peak  = 0.0f;     // 0..1 peak-hold marker
     bool  horizontal = true;
     void setLevel(float l, float pk) { level = l; peak = pk; repaint(); }
+    // CHANNEL VOLUME lives ON the strip meter (user design): a white drag HANDLE (0..125%,
+    // unity notch at 100%), so the channel level finally has a visible control.
+    // Drag = set - double-click = 100% - right-click = MIDI learn (addressed + selected).
+    static constexpr float VOL_MAX = 1.25f;
+    std::function<void(float)> onVolume;    // user dragged the handle (value 0..VOL_MAX)
+    std::function<void()>      onVolLearn;  // right-click (the editor shows the learn menu)
+    void setVol(float v)
+    { v = juce::jlimit(0.0f, VOL_MAX, v); if (std::abs(v - vol) > 1.0e-4f) { vol = v; repaint(); } }
+    void mouseDown(const juce::MouseEvent& e) override
+    { if (e.mods.isRightButtonDown() || e.mods.isPopupMenu()) { if (onVolLearn) onVolLearn(); return; }
+      apply(e); }
+    void mouseDrag(const juce::MouseEvent& e) override
+    { if (! (e.mods.isRightButtonDown() || e.mods.isPopupMenu())) apply(e); }
+    void mouseDoubleClick(const juce::MouseEvent&) override
+    { setVol(1.0f); if (onVolume) onVolume(1.0f); }
     void paint(juce::Graphics& g) override;
+private:
+    float vol = 1.0f;       // pushed from the channel each tick (setVol)
+    void apply(const juce::MouseEvent& e)
+    { setVol(e.position.x / juce::jmax(1.0f, (float) getWidth()) * VOL_MAX);
+      if (onVolume) onVolume(vol); }
 };
 
 //==============================================================================
@@ -2094,17 +2114,19 @@ private:
                                    { "p0_ch0_dec2", proc.midiLearn }, { "p0_ch0_dec3", proc.midiLearn },
                                    { "p0_ch0_dec4", proc.midiLearn } };
     juce::Label   lblSrcAtk[5], lblSrcHold[5], lblSrcDec[5];
-    LearnableKnob knobPitch   { "p0_ch0_pitch",    proc.midiLearn };
-    LearnableKnob knobVolume  { "p0_ch0_volume",   proc.midiLearn };
-    LearnableKnob knobPan     { "p0_ch0_pan",      proc.midiLearn };
-    LearnableKnob knobSlices  { "p0_ch0_slices",   proc.midiLearn };   // sample slicing (1 = off)
+    // Empty pids = NOT MIDI-learnable (the old p0_ch0_* routes went to UI-less legacy fields
+    // and were removed - no-hidden-params rule; an empty pid suppresses the learn menu).
+    LearnableKnob knobPitch   { "", proc.midiLearn };   // visible as sample "Crush"
+    LearnableKnob knobVolume  { "", proc.midiLearn };   // channel volume's learn surface = the strip METER
+    LearnableKnob knobPan     { "", proc.midiLearn };
+    LearnableKnob knobSlices  { "", proc.midiLearn };   // sample slicing (1 = off)
     juce::Label   lblSlices;
-    LearnableKnob knobStretch { "p0_ch0_stretch",  proc.midiLearn };   // time-stretch (needs SoundTouch)
+    LearnableKnob knobStretch { "", proc.midiLearn };   // time-stretch (needs SoundTouch)
     juce::Label   lblStretch;
-    LearnableKnob knobCutoff  { "p0_ch0_filterCutoff", proc.midiLearn };
-    LearnableKnob knobReso    { "p0_ch0_filterReso",   proc.midiLearn };
-    LearnableKnob knobEnvAmt  { "p0_ch0_filterEnvAmt", proc.midiLearn };
-    LearnableKnob knobDrive   { "p0_ch0_drive",        proc.midiLearn };
+    LearnableKnob knobCutoff  { "", proc.midiLearn };
+    LearnableKnob knobReso    { "", proc.midiLearn };
+    LearnableKnob knobEnvAmt  { "", proc.midiLearn };
+    LearnableKnob knobDrive   { "", proc.midiLearn };
     juce::ComboBox comboFilterType, comboDriveType;
 
 

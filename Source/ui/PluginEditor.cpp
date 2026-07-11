@@ -1804,7 +1804,7 @@ LearnableKnob::LearnableKnob(const juce::String& pid, MidiLearnManager& mlm)
 
 void LearnableKnob::mouseDown(const juce::MouseEvent& e)
 {
-    if (e.mods.isRightButtonDown() || e.mods.isPopupMenu())
+    if ((e.mods.isRightButtonDown() || e.mods.isPopupMenu()) && paramId.isNotEmpty())
     {
         int forced = learnChannelProvider ? learnChannelProvider() : -1;
         showMidiLearnMenu(this, midiLearn, paramId, forced);
@@ -2286,6 +2286,16 @@ void LevelMeter::paint(juce::Graphics& g)
             g.setColour (juce::Colours::white.withAlpha (0.85f));
             const float px = r.getX() + r.getWidth() * pk;
             g.fillRect (juce::Rectangle<float> (px - 0.75f, r.getY(), 1.5f, r.getHeight()));
+        }
+        if (onVolume)   // strips only (the logo master meter has no volume handle)
+        {
+            // CHANNEL VOLUME handle: faint unity notch at 100%, bright cyan handle at the value.
+            const float ux = r.getX() + r.getWidth() * (1.0f / VOL_MAX);
+            g.setColour (juce::Colours::white.withAlpha (0.25f));
+            g.fillRect (juce::Rectangle<float> (ux - 0.5f, r.getY(), 1.0f, r.getHeight()));
+            const float vx = r.getX() + r.getWidth() * (vol / VOL_MAX);
+            g.setColour (juce::Colour (0xff35c0ff));
+            g.fillRoundedRectangle (vx - 1.6f, r.getY() - 1.0f, 3.2f, r.getHeight() + 2.0f, 1.2f);
         }
     }
     else
@@ -5707,21 +5717,28 @@ void DrumSequencerEditor::handleMidiMenuChange()
                           : "   [ch" + juce::String(L->getChannelForParam(pid)) + " cc" + juce::String(cc) + "]";
         };
         juce::PopupMenu m;
-        m.addSectionHeader("Buttons that act on the SELECTION (learn + press a pad)");
+        m.addSectionHeader("Act on the SELECTION (learn + press a pad)");
         m.addItem(1, "Next channel..."  + tag("ui_sel_chNext"));
         m.addItem(2, "Prev channel..."  + tag("ui_sel_chPrev"));
         m.addItem(3, "Next pattern..."  + tag("ui_sel_patNext"));
         m.addItem(4, "Prev pattern..."  + tag("ui_sel_patPrev"));
         m.addItem(5, "Slot 1 <-> 2..."  + tag("ui_sel_slotSel"));
         m.addItem(6, "TEST the selected channel..." + tag("ui_sel_test"));
-        m.addSeparator(); m.addItem(7, "Clear these assignments");
+        m.addSectionHeader("Global (knobs / pads)");
+        m.addItem(7, "BPM (knob)..."   + tag("ui_sel_bpm"));
+        m.addItem(8, "Swing (knob)..." + tag("ui_sel_swing"));
+        m.addItem(9, "Undo (pad)..."   + tag("ui_sel_undo"));
+        m.addItem(10, "Redo (pad)..."  + tag("ui_sel_redo"));
+        m.addSeparator(); m.addItem(11, "Clear these assignments");
         m.showMenuAsync(juce::PopupMenu::Options{}.withTargetComponent(&comboMidi).withMinimumWidth(260),
             [L](int r) {
-                static const char* pids[6] = { "ui_sel_chNext", "ui_sel_chPrev",
-                                               "ui_sel_patNext", "ui_sel_patPrev",
-                                               "ui_sel_slotSel", "ui_sel_test" };
-                if (r >= 1 && r <= 6) L->startLearning(pids[r - 1]);
-                else if (r == 7) for (auto* p : pids) L->clearParam(p);
+                static const char* pids[10] = { "ui_sel_chNext", "ui_sel_chPrev",
+                                                "ui_sel_patNext", "ui_sel_patPrev",
+                                                "ui_sel_slotSel", "ui_sel_test",
+                                                "ui_sel_bpm", "ui_sel_swing",
+                                                "ui_sel_undo", "ui_sel_redo" };
+                if (r >= 1 && r <= 10) L->startLearning(pids[r - 1]);
+                else if (r == 11) for (auto* p : pids) L->clearParam(p);
             });
     }
     else if (id == 9102)     // Refresh MIDI pattern folder
@@ -6022,6 +6039,15 @@ void DrumSequencerEditor::applySelCC(int t, float v, bool& slotDirty, bool& keys
         case P::SelPatPrev: selectPattern((currentPattern() + Sequencer::NUM_PATTERNS - 1) % Sequencer::NUM_PATTERNS); return;
         case P::SelFollow:  btnFollow.triggerClick(); return;
         case P::SelTest:    proc.requestTestTrigger(selectedChannel); return;
+        case P::SelChVol:   ch.volume = v * LevelMeter::VOL_MAX; return;   // handle follows next tick
+        case P::SelSwing:   sliderSwing.setValue(sliderSwing.getMinimum()
+                              + v * (sliderSwing.getMaximum() - sliderSwing.getMinimum()),
+                              juce::sendNotificationSync); return;
+        case P::SelBpm:     sliderBpm.setValue(sliderBpm.getMinimum()
+                              + v * (sliderBpm.getMaximum() - sliderBpm.getMinimum()),
+                              juce::sendNotificationSync); return;
+        case P::SelUndo:    doUndo(); return;
+        case P::SelRedo:    doRedo(); return;
         default: return;
     }
     ch.markDspDirty();
@@ -7111,6 +7137,15 @@ void DrumSequencerEditor::setupComponents()
         int ci = i;
 
         stripMeter[i].horizontal = true;
+        stripMeter[i].onVolume   = [this, i](float v) { proc.sequencer.channel(i).volume = v; };
+        stripMeter[i].onVolLearn = [this, i] {
+            showMidiLearnMenu(&stripMeter[i], proc.midiLearn,
+                              "p" + juce::String(currentPattern()) + "_ch" + juce::String(i) + "_volume", -1,
+                              "ui_sel_chVol", "SELECTED-channel Volume");
+        };
+        stripMeter[i].setTooltip("Channel meter + VOLUME: the cyan handle is this channel's volume.\n\n"
+                                 "- Drag left/right to set it; the faint notch = 100%; double-click = reset.\n"
+                                 "- Right-click = MIDI-learn (this exact channel, or the SELECTED channel).");
         content.addAndMakeVisible(stripMeter[i]);
 
         content.addAndMakeVisible(strip.numBtn);
@@ -9551,22 +9586,12 @@ void DrumSequencerEditor::copyPatternContent(int src, int dst)
 
 void DrumSequencerEditor::updateKnobParamIds()
 {
-    juce::String prefix = "p" + juce::String(currentPattern()) + "_ch" + juce::String(selectedChannel) + "_";
-    for (int s = 0; s < DrumChannel::NUM_SOURCES; ++s)
-    {
-        knobSrcAtk[s].paramId  = prefix + "atk" + juce::String(s);
-        knobSrcHold[s].paramId = prefix + "hld" + juce::String(s);
-        knobSrcDec[s].paramId  = prefix + "dec" + juce::String(s);
-    }
-    knobPitch.paramId    = prefix + "pitch";
-    knobVolume.paramId   = prefix + "volume";
-    knobPan.paramId      = prefix + "pan";
-    knobCutoff.paramId   = prefix + "filterCutoff";
-    knobReso.paramId     = prefix + "filterReso";
-    knobEnvAmt.paramId   = prefix + "filterEnvAmt";
-    knobDrive.paramId    = prefix + "drive";
-    // knobReverb/knobDelay (+ the rest of the FX row) keep FIXED ui_sel_* ids - they are
-    // selected-scope targets now, never re-addressed per channel.
+    // NO-HIDDEN-PARAMS RULE: every legacy pid here routed to a UI-less field (pan, pitch,
+    // channel filter/drive, layer atk/hld/dec) - all REMOVED with their routeCC branches.
+    // Channel VOLUME's learn surface = the strip METER's drag handle (addressed + ui_sel_chVol);
+    // the FX row keeps FIXED ui_sel_* ids. Nothing is re-addressed per selection any more.
+    // (The invisible legacy knob OBJECTS stay - v1.2.2 lesson: invisible != dead - but they
+    // carry no MIDI pids now, so learning them is impossible.)
 }
 
 void DrumSequencerEditor::updateStripParamIds()
@@ -10084,6 +10109,7 @@ void DrumSequencerEditor::timerCallback()
             const float d = toDisp(raw);
             ballistic(d, meterVal[i], meterPk[i], meterHold[i]);
             stripMeter[i].setLevel(meterVal[i], meterPk[i]);
+            stripMeter[i].setVol(proc.sequencer.channel(i).volume);   // the volume handle follows CC/state
         }
         const float dm[2] = { toDisp(proc.masterMeterL.load(std::memory_order_relaxed)),
                               toDisp(proc.masterMeterR.load(std::memory_order_relaxed)) };
@@ -10725,7 +10751,7 @@ void DrumSequencerEditor::layoutContent()
         st.btnSolo->setBounds    (sbPad + 245, y + 8, 23, 24);
         st.btnPoly.setBounds     (sbPad + 270, y + 8, 26, 24);
         st.comboSteps.setBounds  (sbPad + 300, y + 7, 108 - sbPad, 26);   // wider now Influence moved to the top bar (text was clipped)
-        stripMeter[i].setBounds  (sbPad + 27,  y + ROW_H - 5, 382 - sbPad, 4);  // thin level bar under the row
+        stripMeter[i].setBounds  (sbPad + 27,  y + ROW_H - 8, 382 - sbPad, 7);  // level bar + VOLUME handle (taller = grabbable)
     }
     channelBar.setVisible(canScroll);
     if (canScroll) {

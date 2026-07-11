@@ -1236,14 +1236,16 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
             { "ui_sel_uniCount", SelUniCount }, { "ui_sel_uniDet", SelUniDet }, { "ui_sel_uniVib", SelUniVib },
             { "ui_sel_uniWidth", SelUniWidth }, { "ui_sel_uniDrift", SelUniDrift },
             { "ui_sel_strum", SelStrum }, { "ui_sel_minVel", SelMinVel }, { "ui_sel_maxVel", SelMaxVel },
-            { "ui_sel_glide", SelGlide }, { "ui_sel_slotOfs", SelSlotOfs } };
+            { "ui_sel_glide", SelGlide }, { "ui_sel_slotOfs", SelSlotOfs },
+            { "ui_sel_chVol", SelChVol }, { "ui_sel_swing", SelSwing }, { "ui_sel_bpm", SelBpm } };
         for (auto& k : kSelKnobs) if (pid == k.first) { pushSelCC(k.second, norm); return; }
         static const std::pair<const char*, int> kSelBtns[] = {
             { "ui_sel_rec", SelRec }, { "ui_sel_mute", SelMute }, { "ui_sel_solo", SelSolo },
             { "ui_sel_overlap", SelOverlap }, { "ui_sel_slotSel", SelSlotSel },
             { "ui_sel_chNext", SelChNext }, { "ui_sel_chPrev", SelChPrev },
             { "ui_sel_patNext", SelPatNext }, { "ui_sel_patPrev", SelPatPrev },
-            { "ui_sel_follow", SelFollow }, { "ui_sel_test", SelTest } };
+            { "ui_sel_follow", SelFollow }, { "ui_sel_test", SelTest },
+            { "ui_sel_undo", SelUndo }, { "ui_sel_redo", SelRedo } };
         for (auto& k : kSelBtns) if (pid == k.first) { if (on) pushSelCC(k.second, 1.0f); return; }
         return;
     }
@@ -1293,24 +1295,10 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
         if (ch < 0 || ch >= Sequencer::NUM_CHANNELS) return;
 
         auto& dch = pat.channels[ch];
-        if      (param == "volume")  dch.volume     = norm;
-        else if (param == "pan")     dch.pan        = norm * 2.0f - 1.0f;
-        else if (param == "pitch")   dch.pitch      = (norm * 2.0f - 1.0f) * 24.0f;
-        else if (param.startsWith("atk")) { int s = param.substring(3).getIntValue();
-                                            if (s >= 0 && s < DrumChannel::NUM_SOURCES) dch.srcAtk[s]  = norm * 1.0f; }
-        else if (param.startsWith("hld")) { int s = param.substring(3).getIntValue();
-                                            if (s >= 0 && s < DrumChannel::NUM_SOURCES) dch.srcHold[s] = norm * 2.0f; }
-        else if (param.startsWith("dec")) { int s = param.substring(3).getIntValue();
-                                            if (s >= 0 && s < DrumChannel::NUM_SOURCES) dch.srcDec[s]  = norm * 4.0f; }
-        else if (param.startsWith("eq")) { int bi = param.substring(2).getIntValue();   // CC -> bell gain (3 bells)
-                                           if (bi >= 0 && bi < 3)
-                                               dch.eqBand[DrumChannel::EQ_B1 + bi].gainDb = (norm * 2.0f - 1.0f) * 18.0f; }
-        else if (param == "filterCutoff") dch.filterCutoff = 20.0f * std::pow(1000.0f, norm); // 20..20000 Hz
-        else if (param == "filterReso")   dch.filterReso   = 0.3f + norm * 11.7f;             // 0.3..12 Q
-        else if (param == "filterEnvAmt") dch.filterEnvAmt = norm * 2.0f - 1.0f;              // -1..1
-        else if (param == "drive")        dch.driveAmount  = norm;                            // 0..1
-        else if (param == "reverb")  dch.reverbSend = norm;
-        else if (param == "delay")   dch.delaySend  = norm;
+        // NO-HIDDEN-PARAMS RULE: the old routes to UI-less legacy fields (pan, pitch, channel
+        // filter/drive/sends, layer atk/hld/dec, eq bells) are REMOVED - a CC must never move
+        // something the user can't see. Channel VOLUME kept: its UI = the strip meter's handle.
+        if      (param == "volume")  dch.volume     = norm * 1.25f;   // matches the meter handle's range
         else if (param == "mute")    dch.mute       = on;
         else if (param == "solo")    dch.solo       = on;
         else if (param == "overlap") dch.allowOverlap = on;
