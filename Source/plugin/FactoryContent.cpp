@@ -1416,18 +1416,24 @@ static void gSteelGuitar(DC& c) {  // steel-string acoustic: bright, singing, a 
     c.strumAmt = 0.6f;                                   // strummed by default (strum is stepped 0/20/40/60/80/100%)
     c.volume = 0.8f;
 }
-static void gElecGuitar(DC& c) {   // electric through the AMP drive (v1.3.9, user order): crunchy edge
-    auto& s = mkGtr(c, 130.81f, 0.52f, 0.28f, 1.3f);
+static void gElecGuitar(DC& c) {   // electric = KS string DI'd into the GUITAR AMP (v1.3.9 round-2):
+    auto& s = mkGtr(c, 130.81f, 0.55f, 0.13f, 2.2f);     // bridge-ish pickup + LONG ring (electrics sustain)
     s.scaleOn = true; s.scaleType = 10; s.scaleKey = 0;  // guitar voicing by default (user order)
-    s.fxDriveType = DC::DriveAmp; s.fxDrive = 0.4f;      // the amp+cab voicing IS the sound now
+    s.fxDriveType = DC::DriveAmp; s.fxDrive = 0.55f;     // real crunch (the amp carries the identity)
     c.strumAmt = 0.4f;    // stepped strum grid (0/20/40/60/80/100%)
     c.volume = 0.8f;
 }
-static void gAmpBass(DC& c) {      // NEW (user order): finger bass driven through the AMP - growly,
-    auto& s = mkGtr(c, 65.41f, 0.45f, 0.3f, 0.85f);      // rounded, sits like a DI'd bass rig
-    s.fxDriveType = DC::DriveAmp; s.fxDrive = 0.5f;
+static void gAmpBass(DC& c) {      // finger bass through the BASS AMP split rig: fat lows, driven mids
+    auto& s = mkGtr(c, 65.41f, 0.45f, 0.3f, 0.85f);
+    s.fxDriveType = DC::DriveBassAmp; s.fxDrive = 0.55f;
     s.filterType = DC::LowPass; s.filterCutoff = 2200.0f; s.filterReso = 0.75f;
     c.volume = 0.85f;
+}
+static void gGrowlBass(DC& c) {    // NEW (user: "one can have high mids boosted"): a resonant LP peak
+    auto& s = mkGtr(c, 65.41f, 0.55f, 0.22f, 0.9f);      // at ~1 kHz feeds the Bass Amp = honky GROWL
+    s.filterType = DC::LowPass; s.filterCutoff = 1050.0f; s.filterReso = 2.8f;   // the boosted high-mids
+    s.fxDriveType = DC::DriveBassAmp; s.fxDrive = 0.6f;
+    c.volume = 0.82f;
 }
 static void gMutedGuitar(DC& c) {  // funk mute: the percussive "chick" scratch
     auto& s = mkGtr(c, 130.81f, 0.55f, 0.15f, 0.12f);
@@ -1962,7 +1968,8 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Pick Bass", gPickBass, "Bass" },
     { "Muted Bass", gMutedBass, "Bass" },
     { "Fuzz Bass", gFuzzBass, "Bass" },
-    { "Amp Bass", gAmpBass, "Bass" },            // NEW: KS bass through the Amp drive
+    { "Amp Bass", gAmpBass, "Bass" },            // KS bass through the BASS AMP split rig
+    { "Growl Bass", gGrowlBass, "Bass" },        // resonant 1 kHz peak into the Bass Amp
     { "Keys Bass", kKeysBass, "Bass" },
     { "Deep Sub", kSubBass, "Bass" },
     { "Notch Bass", nNotchBass, "Bass" },

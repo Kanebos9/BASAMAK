@@ -2080,9 +2080,12 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
     float blockSlotEnv[NUM_SLOTS] = {};
     // Drive post-smoothing coefficient (~8 kHz 1-pole at the engine rate) for the HARSH shapers.
     const float drvLpK = 1.0f - std::exp(-2.0f * (float) kPi * 8000.0f / (float) juce::jmax(1.0, sr));
-    // AMP drive voicing (fixed macro constants): 90 Hz pre-split + ~4.2 kHz cabinet poles.
-    const float drvAmpHpK  = 1.0f - std::exp(-2.0f * (float) kPi * 90.0f   / (float) juce::jmax(1.0, sr));
-    const float drvAmpCabK = 1.0f - std::exp(-2.0f * (float) kPi * 4200.0f / (float) juce::jmax(1.0, sr));
+    // AMP FAMILY voicing (fixed macro constants): guitar low-cut 120 Hz / bass split 180 Hz;
+    // guitar cab ~5.2 kHz / bass cab ~3.8 kHz (2-pole each).
+    const float drvAmpHpK   = 1.0f - std::exp(-2.0f * (float) kPi * 120.0f  / (float) juce::jmax(1.0, sr));
+    const float drvAmpBassK = 1.0f - std::exp(-2.0f * (float) kPi * 180.0f  / (float) juce::jmax(1.0, sr));
+    const float drvAmpCabK  = 1.0f - std::exp(-2.0f * (float) kPi * 5200.0f / (float) juce::jmax(1.0, sr));
+    const float drvAmpCab2K = 1.0f - std::exp(-2.0f * (float) kPi * 3800.0f / (float) juce::jmax(1.0, sr));
     // PUNCH transient followers: ~1.5 ms fast / ~50 ms slow.
     const float punchKf = 1.0f - std::exp(-1.0f / (0.0015f * (float) juce::jmax(1.0, sr)));
     const float punchKs = 1.0f - std::exp(-1.0f / (0.050f  * (float) juce::jmax(1.0, sr)));
@@ -2767,27 +2770,33 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 // === PER-SLOT EQ (end) ===
 
                 // Per-slot DRIVE (insert): shape THIS slot's signal with its own drive type/amount.
-                if (c.fxDrive > 0.0001f && c.fxDriveType == DriveAmp) {
-                    // AMP: a waveshaper wearing clothes (user: "amp sim... the current drives
-                    // aren't musical"). Pre-TILT brightens what hits the clip (the mids/highs
-                    // bite, the sub stays clean-ish), TWO cascaded soft stages saturate like an
-                    // amp instead of one hard knee, and a 2-pole ~4.2 kHz CABINET rolloff +
-                    // 90 Hz DC/rumble blocker voice the result. All constants fixed (macro
-                    // philosophy, like the chorus) - the one Drive amount is the gain.
-                    const float a2 = c.fxDrive * c.fxDrive;
-                    const float g1 = 1.0f + a2 * 16.0f, mk = 1.0f / (1.0f + (g1 - 1.0f) / 6.0f);
+                if (c.fxDrive > 0.0001f && c.fxDriveType >= DriveAmp) {
+                    // THE AMP FAMILY (user round-2: "guitar and bass amps work different... this
+                    // one doesn't even give distorted tones"). Three fixed voicings, one gain:
+                    //  GUITAR: tight 120 Hz LOW-CUT into asymmetric 2-stage crunch (up to ~34 dB),
+                    //          5.2 kHz 2-pole cab - chugs instead of mudding.
+                    //  BASS:   the SPLIT RIG - lows below ~180 Hz pass CLEAN and rejoin at the
+                    //          output; only the mids/highs are driven = fat, never farty.
+                    //  LEAD:   the guitar chain at ~3x the gain (up to ~41 dB) + a THIRD stage.
+                    const bool bass = c.fxDriveType == DriveBassAmp, lead = c.fxDriveType == DriveLeadAmp;
+                    const float aA = c.fxDrive, a2 = aA * aA;
+                    const float g1 = 1.0f + a2 * (bass ? 22.0f : lead ? 110.0f : 48.0f);
+                    const float mk = 1.0f / (1.0f + (g1 - 1.0f) / (bass ? 7.0f : 9.0f));
+                    const float preK = bass ? drvAmpBassK : drvAmpHpK;
+                    const float cabK = bass ? drvAmpCab2K : drvAmpCabK;
                     auto amp = [&](float y, int lr) -> float {
-                        sv.ampPre[lr] += drvAmpHpK * (y - sv.ampPre[lr]);
-                        const float lo = sv.ampPre[lr];
-                        float v = lo + (y - lo) * (1.0f + 1.6f * c.fxDrive);   // pre-tilt into the clip
-                        v = std::tanh(v * g1);                                  // stage 1 (the gain)
-                        v = std::tanh(v * 1.5f) * 1.15f;                        // stage 2 (the glue)
-                        sv.ampLp1[lr] += drvAmpCabK * (v - sv.ampLp1[lr]);      // 2-pole cabinet
-                        sv.ampLp2[lr] += drvAmpCabK * (sv.ampLp1[lr] - sv.ampLp2[lr]);
-                        v = sv.ampLp2[lr];
+                        sv.ampPre[lr] += preK * (y - sv.ampPre[lr]);
+                        const float lo = sv.ampPre[lr];                           // the low split
+                        float v = (y - lo) * (1.0f + (bass ? 0.6f : 2.2f) * aA);  // what the stages chew
+                        v = std::tanh(v * g1 + 0.12f) - std::tanh(0.12f);         // stage 1 (asym = amp evens)
+                        v = std::tanh(v * 1.5f) * 1.15f;                          // stage 2 (glue)
+                        if (lead) v = std::tanh(v * 1.3f) * 1.1f;                 // stage 3 (high-gain)
+                        sv.ampLp1[lr] += cabK * (v - sv.ampLp1[lr]);              // 2-pole cabinet
+                        sv.ampLp2[lr] += cabK * (sv.ampLp1[lr] - sv.ampLp2[lr]);
+                        v = sv.ampLp2[lr] * mk + (bass ? lo : 0.0f);              // bass: clean lows rejoin
                         const float dc = v - sv.drvDcX[lr] + 0.995f * sv.drvDcY[lr];   // rumble/DC block
                         sv.drvDcX[lr] = v; sv.drvDcY[lr] = dc;
-                        return dc * mk;
+                        return dc;
                     };
                     if (stereo) { sL = amp(sL, 0); sR = amp(sR, 1); }
                     else          sig = amp(sig, 0);

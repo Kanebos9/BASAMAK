@@ -7500,14 +7500,17 @@ void DrumSequencerEditor::setupComponents()
     comboDriveType.addItem("Foldback",  5);
     comboDriveType.addItem("Fuzz",      6);
     comboDriveType.addItem("Bitcrush",  7);
-    comboDriveType.addItem("Amp",       8);   // guitar/bass amp voicing (pre-tilt + 2 stages + cabinet)
+    comboDriveType.addItem("Guitar Amp", 8);    // tight low-cut + asym crunch + 5.2k cab
+    comboDriveType.addItem("Bass Amp",   9);    // SPLIT rig: clean lows + driven mids/highs
+    comboDriveType.addItem("Lead Amp",  10);    // the guitar chain at ~3x gain + a 3rd stage
     comboDriveType.setTooltip("Drive TYPE for this slot (the fader beside it = the amount).\n\n"
                               "- Soft Clip / Tube: warm, rounded saturation (Tube adds even harmonics).\n"
                               "- Hard Clip / Fuzz / Foldback: aggressive, buzzy, metallic.\n"
                               "- Bitcrush: digital lo-fi grit.\n"
-                              "- AMP: a real amp+cab voicing - a mid-tilt into TWO soft stages, then a "
-                              "cabinet-style rolloff (fixed constants, like the chorus). Made for the "
-                              "Karplus-Strong guitars and basses; the amount is the amp gain.");
+                              "- GUITAR AMP: tight low-cut into a 2-stage crunch + cabinet - chugs, never muds.\n"
+                              "- BASS AMP: the split rig - lows stay CLEAN, only mids/highs distort = fat.\n"
+                              "- LEAD AMP: the guitar chain at ~3x the gain - real high-gain distortion.\n"
+                              "All amp voicings are fixed (like the chorus); the amount is the amp GAIN.");
     comboDriveType.onChange = [this] {   // per-slot drive type
         if (ignoreKnobCallbacks) return;
         proc.sequencer.channel(selectedChannel).slots[envTargetSlot()].fxDriveType = comboDriveType.getSelectedId() - 1;

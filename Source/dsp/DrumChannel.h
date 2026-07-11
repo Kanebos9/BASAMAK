@@ -716,7 +716,8 @@ public:
 
     //-- Drive / distortion (sits after the filter, before the EQ)
     enum DriveType { DriveOff = 0, SoftClip, HardClip, Tube, Foldback, Fuzz, Bitcrush,
-                     DriveAmp };   // Amp = guitar/bass amp voicing (pre-tilt + 2 stages + cab)
+                     DriveAmp, DriveBassAmp, DriveLeadAmp };   // the AMP FAMILY: guitar crunch /
+                     // bass split-rig (clean lows) / high-gain lead - fixed voicings, one gain
     int   driveType   = DriveOff;
     float driveAmount = 0.0f;      // 0..1
 
