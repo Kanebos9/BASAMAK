@@ -1178,7 +1178,9 @@ void SlotEditor::init(int idx, MidiLearnManager& mlm, juce::LookAndFeel* knobLNF
     index = idx; getSlot = slotFn; onEdit = editFn;
     for (int i = 0; i < MAXK; ++i)
     {
-        auto k = std::make_unique<LearnableKnob>("slot" + juce::String(idx) + "_k" + juce::String(i), mlm);
+        // "ui_sel_p{N}" = the N-th knob of the SELECTED slot's engine grid (selected-scope MIDI;
+        // the old "slot{idx}_k{i}" pids were learnable but routed NOWHERE = dead assignments)
+        auto k = std::make_unique<LearnableKnob>("ui_sel_p" + juce::String(i + 1), mlm);
         k->setSliderStyle(juce::Slider::RotaryVerticalDrag);
         k->setLookAndFeel(knobLNF);
         k->setTextBoxStyle(juce::Slider::TextBoxBelow, true, 46, 13);
@@ -1266,8 +1268,9 @@ void SlotEditor::init(int idx, MidiLearnManager& mlm, juce::LookAndFeel* knobLNF
         addChildComponent(*f);
         return f;
     };
-    freqFader  = mkFader("freq");
-    depthFader = mkFader("fmdepth");
+    freqFader  = mkFader("freq");   depthFader = mkFader("fmdepth");
+    freqFader->paramId  = "ui_sel_slotFreq";    // selected-scope MIDI (log-mapped 20..4186 Hz)
+    depthFader->paramId = "ui_sel_slotFmAmt";
     // DOUBLE-CLICK -> the Analog+FM faders' FACTORY DEFAULTS (fresh Slot), like the other knobs.
     { DrumChannel::Slot d;
       freqFader->setDoubleClickReturnValue (true, 261.6255653);   // dbl-click = C4 (the roll's pin; user spec)
@@ -1308,6 +1311,7 @@ void SlotEditor::init(int idx, MidiLearnManager& mlm, juce::LookAndFeel* knobLNF
 
     // Warp (ANALOG section): phase skew / PWM. 0.5 = neutral. Distinct from FM (this reshapes the cycle).
     warpFader = mkFader("warp");
+    warpFader->paramId = "ui_sel_slotWarp";     // selected-scope MIDI
     warpFader->setRange(0.0, 1.0, 0.0);
     warpFader->setColour(juce::Slider::trackColourId, juce::Colour(0xff8a7adf));
     warpFader->textFromValueFunction = [](double v) { return juce::String(juce::roundToInt(v * 100.0)) + "%"; };
@@ -1321,6 +1325,7 @@ void SlotEditor::init(int idx, MidiLearnManager& mlm, juce::LookAndFeel* knobLNF
     // Single "Wave" selector: ONE horizontal fader ABOVE the visual that scans every shape (snaps to each;
     // shows "n-Name"). Replaces the old From/To vertical faders + the over-the-note morph (which sounded harsh).
     fromFader = mkFader("wave");   // reuse the fromFader slot as the single Wave fader (toFader retired)
+    fromFader->paramId = {};       // shape picking by CC = jumpy nonsense - not learnable
     fromFader->setTextBoxStyle(juce::Slider::TextBoxRight, true, 150, 16);  // WIDE read-out (track shrinks) - Custom explains itself (user)
     fromFader->setColour(juce::Slider::trackColourId, juce::Colour(0xff35c0ff));
     fromFader->setRange(0.0, (double) (DrumChannel::oscShapeCount() - 1), 1.0);
@@ -1685,6 +1690,8 @@ void showMidiLearnMenu(juce::Component* target, MidiLearnManager& mlm,
     const bool learningThis  = mlm.isLearning() && mlm.getLearningParam() == paramId;
     const bool learningOther = mlm.isLearning() && ! learningThis;
 
+    if (paramId.startsWith("ui_sel"))   // ui_sel_* + ui_selstep_*: they follow the selection
+        menu.addSectionHeader("Acts on the CURRENT selection (pattern / channel / slot).");
     if (learningThis)
     {
         menu.addSectionHeader("Listening... move a knob/fader on your MIDI device");
@@ -6046,6 +6053,21 @@ void DrumSequencerEditor::applySelCC(int t, float v, bool& slotDirty, bool& keys
         ch.steps[t - P::SelStepBase] = v >= 0.5f;
         return;
     }
+    if (t >= P::SelSlotPBase && t < P::SelSlotPBase + 8)
+    {   // the N-th knob of the SELECTED slot's engine grid - mirrors the on-screen knob, so what
+        // it controls follows the engine (FM Amount on Oscillator, Base Freq on Karplus-Strong...)
+        auto params = slotParamsFor(sl.engine);
+        const int i = t - P::SelSlotPBase;
+        if (i < params.size())
+        {
+            auto& sp = params.getReference(i);
+            double v2 = sp.min + (sp.max - sp.min) * (double) v;
+            if (! sp.choices.isEmpty()) v2 = std::round(v2);
+            sp.set(sl, v2);
+            ch.markDspDirty(); slotDirty = true;
+        }
+        return;
+    }
     switch (t)
     {
         case P::SelFxDrive: sl.fxDrive = v; break;
@@ -6106,6 +6128,9 @@ void DrumSequencerEditor::applySelCC(int t, float v, bool& slotDirty, bool& keys
                               juce::sendNotificationSync); return;
         case P::SelUndo:    doUndo(); return;
         case P::SelRedo:    doRedo(); return;
+        case P::SelSlotFreq:  sl.oscFreq = (float)(20.0 * std::pow(4186.0 / 20.0, (double) v)); break;   // log 20..4186 Hz
+        case P::SelSlotFmAmt: sl.fmDepth = v; break;
+        case P::SelSlotWarp:  sl.oscWarp = v; break;
         default: return;
     }
     ch.markDspDirty();

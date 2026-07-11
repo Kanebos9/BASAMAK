@@ -165,7 +165,9 @@ public:
                        SelRec, SelMute, SelSolo, SelOverlap, SelSlotSel,
                        SelChNext, SelChPrev, SelPatNext, SelPatPrev,
                        SelFollow, SelTest, SelChVol, SelSwing, SelBpm, SelUndo, SelRedo,
-                       SelStepBase = 2000 };   // 2000 + N = step N on the selected channel
+                       SelSlotFreq, SelSlotFmAmt, SelSlotWarp,   // the selected slot's Osc faders
+                       SelSlotPBase = 1000,    // 1000 + N = the N-th knob of the selected slot's engine grid
+                       SelStepBase  = 2000 };  // 2000 + N = step N on the selected channel
     struct SelCCEvt { int t; float v; };
     SelCCEvt selQ[64];
     std::atomic<int> selQHead { 0 }, selQTail { 0 };

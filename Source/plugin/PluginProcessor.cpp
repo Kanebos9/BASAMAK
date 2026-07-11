@@ -1239,7 +1239,9 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
             { "ui_sel_uniWidth", SelUniWidth }, { "ui_sel_uniDrift", SelUniDrift },
             { "ui_sel_strum", SelStrum }, { "ui_sel_minVel", SelMinVel }, { "ui_sel_maxVel", SelMaxVel },
             { "ui_sel_glide", SelGlide }, { "ui_sel_slotOfs", SelSlotOfs },
-            { "ui_sel_chVol", SelChVol }, { "ui_sel_swing", SelSwing }, { "ui_sel_bpm", SelBpm } };
+            { "ui_sel_chVol", SelChVol }, { "ui_sel_swing", SelSwing }, { "ui_sel_bpm", SelBpm },
+            { "ui_sel_slotFreq", SelSlotFreq }, { "ui_sel_slotFmAmt", SelSlotFmAmt },
+            { "ui_sel_slotWarp", SelSlotWarp } };
         for (auto& k : kSelKnobs) if (pid == k.first) { pushSelCC(k.second, norm); return; }
         static const std::pair<const char*, int> kSelBtns[] = {
             { "ui_sel_rec", SelRec }, { "ui_sel_mute", SelMute }, { "ui_sel_solo", SelSolo },
@@ -1249,6 +1251,14 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
             { "ui_sel_follow", SelFollow }, { "ui_sel_test", SelTest },
             { "ui_sel_undo", SelUndo }, { "ui_sel_redo", SelRedo } };
         for (auto& k : kSelBtns) if (pid == k.first) { if (on) pushSelCC(k.second, 1.0f); return; }
+        return;
+    }
+    // "ui_sel_p{N}" = the N-th knob of the SELECTED slot's engine grid (generic: what the knob
+    // does follows the engine, exactly like the on-screen knob it mirrors).
+    if (pid.startsWith("ui_sel_p"))
+    {
+        const int n = pid.substring(8).getIntValue();
+        if (n >= 1 && n <= 8) pushSelCC(SelSlotPBase + n - 1, norm);
         return;
     }
     // SELECTED-channel steps: "ui_selstep_{N}" sets step N on the SELECTED channel (value >= 64
