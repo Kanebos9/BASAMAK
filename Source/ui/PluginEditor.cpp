@@ -5822,19 +5822,28 @@ bool DrumSequencerEditor::keyPressed(const juce::KeyPress& k)
 
 // Step the SELECTED channel's sound through the bank in the PICKER's order (factory categories in
 // kSoundCatOrder, then Your Sound Bank; wraps at the ends). Driven by the ui_sound_* MIDI CCs.
+// The CURRENT sound is found by the channel's mixName - the one thing every pick path records
+// (the combo's selectedId is NOT set by the picker panel, so it can't be trusted here).
 void DrumSequencerEditor::stepSoundBank(int dir)
 {
+    const auto& c = proc.sequencer.channel(selectedChannel);
     juce::Array<int> order;                                    // the full bank in PICKER order
+    int pos = -1;                                              // where the channel's sound sits in it
     auto facNames = Factory::mixNames();
     auto facCats  = Factory::mixCategories();
     for (auto* cat : kSoundCatOrder)
         for (int i : factoryIndicesFor(cat, facNames, facCats, {}))
+        {
+            if (pos < 0 && c.mixName == facNames[i]) pos = order.size();
             order.add(FACTORY_MIX_BASE + i);
-    for (int i = 0; i < soundMixFiles.size(); ++i) order.add(i + 1);   // Your Sound Bank (file ids = idx+1)
+        }
+    for (int i = 0; i < soundMixFiles.size(); ++i)             // Your Sound Bank (file ids = idx+1)
+    {
+        if (pos < 0 && c.mixName == soundMixFiles[i].getFileNameWithoutExtension()) pos = order.size();
+        order.add(i + 1);
+    }
     if (order.isEmpty()) return;
-    const int cur = strips[selectedChannel].comboSound.getSelectedId();
-    int pos = order.indexOf(cur);
-    pos = pos < 0 ? (dir > 0 ? 0 : order.size() - 1)           // nothing/Init selected: start at an end
+    pos = pos < 0 ? (dir > 0 ? 0 : order.size() - 1)           // Init / unknown: start at an end
                   : (pos + dir + order.size()) % order.size(); // wrap
     applySoundPickId(selectedChannel, order[pos]);
 }
