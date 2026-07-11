@@ -1507,13 +1507,15 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
                     {
                         const int j = i - (L - half);   // position inside the tail window
                         const float bump = (j >= 0) ? 0.9f * std::sin((float) kPi * (float) j / (float) half) : 0.0f;
-                        sv.ksBuf[base + i] = bump + ((j >= 0) ? 0.06f * whiteNoise(rng) : 0.0f);
+                        sv.ksBuf[base + i] = bump + ((j >= 0) ? 0.15f * eb * whiteNoise(rng) : 0.0f);   // material fingerprint in the whisper
                     }
                 }
                 else
                 {
                     const int burst = (exc == 1) ? juce::jmax(2, L / 8) : L;   // Strike: a short hard SLAP
-                    const float amp = (exc == 1) ? 1.5f : 1.0f;
+                    // ~sqrt(L/burst) keeps the injected ENERGY near Pluck's (x1.5 left Strike
+                    // noticeably QUIETER while the tooltip said "harder" - user report)
+                    const float amp = (exc == 1) ? 2.4f : 1.0f;
                     float lp = 0.0f;
                     for (int i = 0; i < L; ++i) { lp += eb * (whiteNoise(rng) - lp); sv.ksBuf[base + i] = (i >= L - burst) ? lp * amp : 0.0f; }
                 }

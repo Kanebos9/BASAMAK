@@ -154,7 +154,11 @@ juce::Array<SlotParam> slotParamsFor(int engine)
                      "Inharmonicity: bends the overtones progressively SHARP - pure string -> stiff bar -> bell "
                      "(the fundamental stays in tune). Most obvious with a bright Tone and a longer Ring."));
             p.add(Ic("Excite", 0, 2, &S::physExcite, { "Pluck","Strike","Mallet" },
-                     "How the string is excited: Pluck (bright, narrow), Strike (harder, fuller), Mallet (soft, darker)."));
+                     "How the string is set in motion.\n\n"
+                     "- Pluck: the full rich burst - bright, sustaining.\n"
+                     "- Strike: a short sharp SLAP - snappier attack, similar loudness.\n"
+                     "- Mallet: a soft padded push - dark and thumpy. A smooth push has few overtones, "
+                     "so materials naturally sound closer together with it (real mallets do this too)."));
             break;   // pitch-env/Vibrato moved to the shared shape groups (4 params = knob grid)
         case DrumChannel::SrcSample:
             // NO Pitch knob here (user call: removed completely - per-step pitch + the pitch envelope
@@ -2281,10 +2285,14 @@ void LevelMeter::paint(juce::Graphics& g)
 
     if (horizontal)
     {
-        // Strips: the component is TALLER than the bar (10px hit area - the old 7px strip was
-        // nearly ungrabbable); the level bar draws SLIM at the bottom and the volume handle
-        // spans the full height, so it reads (and grabs) like a real control.
-        const auto bar = onVolume ? r.withTop (r.getBottom() - 5.0f) : r;
+        // Strips: a real fader TRACK (so the handle lives IN something instead of floating),
+        // with the level bar drawn slim inside it and the full-height cyan volume handle.
+        if (onVolume)
+        {
+            g.setColour (juce::Colour (0xff20203a)); g.fillRoundedRectangle (r, 3.0f);
+            g.setColour (juce::Colour (0xff33335a)); g.drawRoundedRectangle (r.reduced (0.4f), 3.0f, 0.8f);
+        }
+        const auto bar = onVolume ? r.reduced (1.0f).withTop (r.getBottom() - 5.0f) : r;
         // The VOLUME HANDLE is the level bar's CEILING on the strips (user design): the fill can
         // never pass the handle - pull the handle down and the whole bar squeezes with it.
         const float capW = onVolume ? r.getWidth() * (vol / VOL_MAX) : r.getWidth();
@@ -10811,7 +10819,7 @@ void DrumSequencerEditor::layoutContent()
         st.btnSolo->setBounds    (sbPad + 245, y + 8, 23, 24);
         st.btnPoly.setBounds     (sbPad + 270, y + 8, 26, 24);
         st.comboSteps.setBounds  (sbPad + 300, y + 7, 108 - sbPad, 26);   // wider now Influence moved to the top bar (text was clipped)
-        stripMeter[i].setBounds  (sbPad + 27,  y + ROW_H - 11, 382 - sbPad, 10);  // level bar + VOLUME handle (10px hit area - user: 7 was ungrabbable)
+        stripMeter[i].setBounds  (sbPad + 27,  y + ROW_H - 9, 382 - sbPad, 8);  // level bar + VOLUME handle (sits in the row gap, clear of the combos above)
     }
     channelBar.setVisible(canScroll);
     if (canScroll) {
