@@ -3108,18 +3108,25 @@ void LfoDisplay::paint(juce::Graphics& g)
         const float amp = amt_[dest_] * (a.getHeight() * 0.5f - 2.0f);
         g.setColour(kLfoDestCol[dest_]); g.strokePath(wavePath(effHz(dest_), amt_[dest_], shape_[dest_], curve_[dest_]), juce::PathStrokeType(1.8f));
 
-        // Live dot: RETRIG = the newest voice's real phase; FREE = the continuous timeline clock
-        // (it keeps travelling between notes - that IS what Free means).
+        // LIVE PLAYHEAD (user: "i wanna see where it is when i play live"): a vertical scan line +
+        // a glowing dot riding the drawn wave. RETRIG = the newest voice's real phase (nothing
+        // sounding = no LFO running = no playhead, honest); FREE = the continuous timeline clock
+        // (it keeps travelling between notes - that IS what Free means). The playhead sweeps ALL
+        // drawn cycles left-to-right (wraps at the right edge), and its y uses the SAME per-cycle
+        // formula as the drawn path, so the dot always sits ON the wave (incl. Random's steps).
         double dotFrac = -1.0;
         if (free_[dest_])      dotFrac = freeSec_ * (double) effHz(dest_);
         else if (phase_ >= 0.0) dotFrac = phase_ / (2.0 * juce::MathConstants<double>::pi);
         if (dotFrac >= 0.0)
         {
-            const uint32_t dcyc = (uint32_t) dotFrac;
-            const float frac = (float) (dotFrac - std::floor(dotFrac));   // within one cycle
-            const float px = a.getX() + frac * (a.getWidth() / cyc);
-            const float py = cy - amp * uiLfoShapeVal(shape_[dest_], (double) frac * 2.0 * juce::MathConstants<double>::pi, dcyc, curve_[dest_]);
-            g.setColour(juce::Colours::white); g.fillEllipse(px - 2.4f, py - 2.4f, 4.8f, 4.8f);
+            const double vf = std::fmod(dotFrac, (double) cyc);           // position across the VIEW
+            const double ph = vf * 2.0 * juce::MathConstants<double>::pi;
+            const float px = a.getX() + (float) (vf / (double) cyc) * a.getWidth();
+            const float py = cy - amp * uiLfoShapeVal(shape_[dest_], ph, cycBase + (uint32_t) vf, curve_[dest_]);
+            g.setColour(kLfoDestCol[dest_].withAlpha(0.40f));
+            g.drawLine(px, a.getY() + 1.0f, px, a.getBottom() - 1.0f, 1.2f);
+            g.setColour(kLfoDestCol[dest_].withAlpha(0.35f)); g.fillEllipse(px - 6.0f, py - 6.0f, 12.0f, 12.0f);
+            g.setColour(juce::Colours::white);                g.fillEllipse(px - 3.2f, py - 3.2f, 6.4f, 6.4f);
         }
     }
     // The FILT tab is selected but this slot's filter is off = silent no-op: say so (only on
@@ -3273,6 +3280,9 @@ juce::String LfoDisplay::getTooltip()
                     "editing (the others show as dim ghost waves; any mix can run at once). Drag LEFT/RIGHT = "
                     "speed (free Hz, or SNAPPED to musical rates when Sync is on - see the Sync button below), "
                     "UP/DOWN = amount (wave height; 0 = off). Double-click = off/restore.\n\n"
+                    "The vertical line + white dot = the LIVE PLAYHEAD: where the playing LFO is right now. "
+                    "Dot high = pushing its target up, dot low = pushing it down (on WAVE: high = toward frame D, "
+                    "low = toward A). With Retrig it appears while a note sounds; with Free it travels non-stop.\n\n"
                     "RECIPES:  Wobble bass = FILT, 1-3 Hz, high amount, slot filter ON with some resonance, long "
                     "per-step Length (at 120 BPM ~2 Hz feels like 1/8th notes, ~4 Hz like 1/16ths).  Siren/alarm = "
                     "PITCH, ~1 Hz, full amount on a long bright sound.  Vibrato = PITCH, 4-6 Hz, TINY amount "
