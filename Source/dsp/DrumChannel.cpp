@@ -1494,14 +1494,20 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
                 const int base = strIdx * KS_MAX;
                 const int L = juce::jlimit(2, KS_MAX - 2, (int) std::round(sr / juce::jmax(20.0f, freqK) - apComp));
                 uint32_t rng = sv.noiseState ^ (0x9e3779b9u + (uint32_t) strIdx * 0x85ebca6bu);
+                // PARTIAL excitations live at the END of the fill: the render's read pointer starts
+                // at (write - L') where L' SHRINKS with a pitch-drop material (Skin starts ~9 semis
+                // high) or heavy Stiffness compensation - a burst at the START sat behind the read
+                // pointer and was NEVER read ("Strike is silent on Skin"; Mallet died when Skin +
+                // full Stiffness stacked). Content at the end is always consumed before the write.
                 if (exc == 2)
-                {   // MALLET: a rounded half-cosine push over half the string + a whisper of noise -
+                {   // MALLET: a rounded half-cosine push over the LAST half + a whisper of noise -
                     // a padded hammer DISPLACING the string, not scratching it. Dark, thumpy.
                     const int half = juce::jmax(2, L / 2);
                     for (int i = 0; i < L; ++i)
                     {
-                        const float bump = (i < half) ? 0.9f * std::sin((float) kPi * (float) i / (float) half) : 0.0f;
-                        sv.ksBuf[base + i] = bump + ((i < half) ? 0.06f * whiteNoise(rng) : 0.0f);
+                        const int j = i - (L - half);   // position inside the tail window
+                        const float bump = (j >= 0) ? 0.9f * std::sin((float) kPi * (float) j / (float) half) : 0.0f;
+                        sv.ksBuf[base + i] = bump + ((j >= 0) ? 0.06f * whiteNoise(rng) : 0.0f);
                     }
                 }
                 else
@@ -1509,7 +1515,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
                     const int burst = (exc == 1) ? juce::jmax(2, L / 8) : L;   // Strike: a short hard SLAP
                     const float amp = (exc == 1) ? 1.5f : 1.0f;
                     float lp = 0.0f;
-                    for (int i = 0; i < L; ++i) { lp += eb * (whiteNoise(rng) - lp); sv.ksBuf[base + i] = (i < burst) ? lp * amp : 0.0f; }
+                    for (int i = 0; i < L; ++i) { lp += eb * (whiteNoise(rng) - lp); sv.ksBuf[base + i] = (i >= L - burst) ? lp * amp : 0.0f; }
                 }
                 // PLUCK POSITION: a DOUBLE full-depth feed-forward comb ((1 - z^-d)^2, d = position along
                 // the string) + a position-following tone tilt (middle plucks ROUNDER), with RMS make-up

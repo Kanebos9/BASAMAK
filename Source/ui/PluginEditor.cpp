@@ -2281,29 +2281,33 @@ void LevelMeter::paint(juce::Graphics& g)
 
     if (horizontal)
     {
+        // Strips: the component is TALLER than the bar (10px hit area - the old 7px strip was
+        // nearly ungrabbable); the level bar draws SLIM at the bottom and the volume handle
+        // spans the full height, so it reads (and grabs) like a real control.
+        const auto bar = onVolume ? r.withTop (r.getBottom() - 5.0f) : r;
         // The VOLUME HANDLE is the level bar's CEILING on the strips (user design): the fill can
         // never pass the handle - pull the handle down and the whole bar squeezes with it.
         const float capW = onVolume ? r.getWidth() * (vol / VOL_MAX) : r.getWidth();
         // green->amber->red gradient laid over the capped span, clipped to the filled portion.
-        juce::ColourGradient grad (green, r.getX(), 0.0f, red, r.getX() + juce::jmax (8.0f, capW), 0.0f, false);
+        juce::ColourGradient grad (green, bar.getX(), 0.0f, red, bar.getX() + juce::jmax (8.0f, capW), 0.0f, false);
         grad.addColour (0.78, amber);
         g.setGradientFill (grad);
-        g.fillRect (r.withWidth (capW * lv));
+        g.fillRect (bar.withWidth (capW * lv));
         if (pk > 0.01f)
         {
             g.setColour (juce::Colours::white.withAlpha (0.85f));
-            const float px = r.getX() + capW * pk;
-            g.fillRect (juce::Rectangle<float> (px - 0.75f, r.getY(), 1.5f, r.getHeight()));
+            const float px = bar.getX() + capW * pk;
+            g.fillRect (juce::Rectangle<float> (px - 0.75f, bar.getY(), 1.5f, bar.getHeight()));
         }
         if (onVolume)   // strips only (the logo master meter has no volume handle)
         {
             // UNITY (100%) marker: a clearly visible white tick (user: the old one was too faint).
             const float ux = r.getX() + r.getWidth() * (1.0f / VOL_MAX);
             g.setColour (juce::Colours::white.withAlpha (0.55f));
-            g.fillRect (juce::Rectangle<float> (ux - 1.0f, r.getY() - 1.0f, 2.0f, r.getHeight() + 2.0f));
+            g.fillRect (juce::Rectangle<float> (ux - 1.0f, bar.getY() - 2.0f, 2.0f, bar.getHeight() + 3.0f));
             const float vx = r.getX() + r.getWidth() * (vol / VOL_MAX);
             g.setColour (juce::Colour (0xff35c0ff));
-            g.fillRoundedRectangle (vx - 1.6f, r.getY() - 1.0f, 3.2f, r.getHeight() + 2.0f, 1.2f);
+            g.fillRoundedRectangle (vx - 2.2f, r.getY(), 4.4f, r.getHeight(), 1.6f);   // full-height, wide = grabbable
         }
     }
     else
@@ -10807,7 +10811,7 @@ void DrumSequencerEditor::layoutContent()
         st.btnSolo->setBounds    (sbPad + 245, y + 8, 23, 24);
         st.btnPoly.setBounds     (sbPad + 270, y + 8, 26, 24);
         st.comboSteps.setBounds  (sbPad + 300, y + 7, 108 - sbPad, 26);   // wider now Influence moved to the top bar (text was clipped)
-        stripMeter[i].setBounds  (sbPad + 27,  y + ROW_H - 8, 382 - sbPad, 7);  // level bar + VOLUME handle (taller = grabbable)
+        stripMeter[i].setBounds  (sbPad + 27,  y + ROW_H - 11, 382 - sbPad, 10);  // level bar + VOLUME handle (10px hit area - user: 7 was ungrabbable)
     }
     channelBar.setVisible(canScroll);
     if (canScroll) {
