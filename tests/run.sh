@@ -3,7 +3,7 @@
 # Builds the tests/ console apps into build_tests/ (separate from the plugin build) and runs them.
 # Exit 0 = all pass. Add new tests: drop tests/XTest.cpp + add to the CMake foreach + LIST below.
 cd "$(dirname "$0")/.."
-TESTS="PolyTest PRollTest MergeTest PresetTest DuckTest NudgeTest SlotNoteTest GlideTest ArpTest TunerTest GateWrapTest LiveRollTest RollAbsoluteTest WavetableTest AliveTest GrainTest"
+TESTS="PolyTest PRollTest MergeTest PresetTest DuckTest NudgeTest SlotNoteTest GlideTest ArpTest TunerTest GateWrapTest LiveRollTest RollAbsoluteTest WavetableTest AliveTest GrainTest ModMatrixTest"
 cmake -B build_tests -DBASAMAK_TESTS=ON > /dev/null || { echo "configure FAILED"; exit 1; }
 FAIL=0
 for T in $TESTS; do

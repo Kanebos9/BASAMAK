@@ -770,6 +770,13 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         }
         st.setProperty("drf", s.drift, nullptr);          // DRIFT (alive) amount
         st.setProperty("flDrv", s.filterDrive, nullptr);  // filter loop saturation
+        // MOD MATRIX: routes packed "src:tgt:amt;..." + the two matrix-created source params.
+        { juce::String mm;
+          for (int r = 0; r < MOD_ROUTES; ++r)
+              mm << (int) s.mod[r].src << ":" << (int) s.mod[r].tgt << ":" << juce::String(s.mod[r].amt, 4) << ";";
+          st.setProperty("mmx", mm, nullptr); }
+        st.setProperty("mEA", s.modEnvA, nullptr); st.setProperty("mED", s.modEnvD, nullptr);
+        st.setProperty("mLR", s.modLfoRate, nullptr); st.setProperty("mLS", s.modLfoShape, nullptr);
         parent.addChild(st, -1, nullptr);
     }
 }
@@ -923,6 +930,23 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         }
         s.drift       = juce::jlimit(0.0f, 1.0f, (float) st.getProperty("drf", d.drift));
         s.filterDrive = juce::jlimit(0.0f, 1.0f, (float) st.getProperty("flDrv", d.filterDrive));
+        // MOD MATRIX (old files have no "mmx" -> all routes stay Off = default = unchanged sound).
+        if (st.hasProperty("mmx"))
+        {
+            juce::StringArray rows; rows.addTokens(st.getProperty("mmx").toString(), ";", "");
+            for (int r = 0; r < MOD_ROUTES && r < rows.size(); ++r)
+            {
+                juce::StringArray f2; f2.addTokens(rows[r], ":", "");
+                if (f2.size() >= 3)
+                { s.mod[r].src = (int8_t) juce::jlimit(0, MS_COUNT - 1, f2[0].getIntValue());
+                  s.mod[r].tgt = (int8_t) juce::jlimit(0, MT_COUNT - 1, f2[1].getIntValue());
+                  s.mod[r].amt = juce::jlimit(-1.0f, 1.0f, f2[2].getFloatValue()); }
+            }
+        }
+        s.modEnvA = juce::jlimit(0.001f, 8.0f, (float) st.getProperty("mEA", d.modEnvA));
+        s.modEnvD = juce::jlimit(0.01f, 8.0f, (float) st.getProperty("mED", d.modEnvD));
+        s.modLfoRate = juce::jlimit(0.05f, 20.0f, (float) st.getProperty("mLR", d.modLfoRate));
+        s.modLfoShape = juce::jlimit(0, 6, (int) st.getProperty("mLS", d.modLfoShape));
         if (st.hasProperty("lfD") && ! st.hasProperty("lfA0"))
         {
             const int ld = juce::jlimit(0, 2, (int)st.getProperty("lfD", 0));
@@ -1436,6 +1460,10 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
             sv.driftGain    = 1.0f + (driftRng.nextFloat() - 0.5f) * 0.6f * d;          // level breath (+-30%)
             sv.driftFiltMul = std::pow(2.0f, (driftRng.nextFloat() - 0.5f) * 1.2f * d); // filter +-0.6 oct per note
         }
+        // MOD MATRIX: roll this note's Random source (0..1). TRUE random per hit (the drift
+        // precedent - passes differ microscopically; only recorded NOTES are reproduced, not the
+        // live take). Rolled only when the matrix is live, so drums stay bit-identical.
+        sv.modRand = sl.modActive() ? driftRng.nextFloat() : 0.5f;
 
         // SCALE mode (diatonic harmonizer): the chord depends on the played NOTE, so compute this voice's
         // per-note diatonic offsets now (keySemis is 0 for step/draw hits; keyDown recomputes for held keys).
@@ -1709,6 +1737,136 @@ void DrumChannel::keyUp()
         if (v.active() && v.isKey && v.keyOff < 0) v.keyOff = v.voiceSamples;
 }
 
+// ===================== MOD MATRIX (DSP) =========================================================
+// The grid-knob mirror: the numeric engine params in slotParamsFor()'s ORDER (choice/stepped params
+// occupy an index but return {nullptr} = not modulatable). Keep in sync with slotParamsFor().
+DrumChannel::GridKnob DrumChannel::modGridKnob(int engine, int idx)
+{
+    using S = Slot;
+    auto F  = [](float S::* f, float mn, float mx) { GridKnob g; g.field = f; g.mn = mn; g.mx = mx; return g; };
+    const GridKnob none;   // field == nullptr
+    switch (engine)
+    {
+        case SrcOsc:   switch (idx) { case 0: return F(&S::fmDepth,0,1); case 1: return F(&S::fmSpread,0,1);
+                                      case 2: return F(&S::fmFeedback,0,1); } break;
+        case SrcNoise: switch (idx) { case 0: return none;                          /* Type = choice */
+                                      case 1: return F(&S::noiseCenter,100,16000); case 2: return F(&S::noiseWidth,0,1);
+                                      case 3: return F(&S::noiseRes,0,1); case 4: return F(&S::noiseDrive,0,1);
+                                      case 5: return F(&S::noiseCrackle,0,1); } break;
+        case SrcFM:    switch (idx) { case 0: return F(&S::fmPitch,-24,24); case 1: return F(&S::fmSpread,0,1);
+                                      case 2: return F(&S::fmDepth,0,1); case 3: return F(&S::fmSub,0,1);
+                                      case 4: return F(&S::fmFeedback,0,1); } break;
+        case SrcPhys:  switch (idx) { case 0: return F(&S::physFreq,20,4186); case 1: return none;   /* Material */
+                                      case 2: return F(&S::physStiff,0,1); case 3: return none; } break;   /* Excite */
+        case SrcGrain: switch (idx) { case 0: return F(&S::grainPos,0,1); case 1: return F(&S::grainSize,0,1);
+                                      case 2: return F(&S::grainDens,0,1); case 3: return F(&S::grainSpray,0,1);
+                                      case 4: return F(&S::grainPitch,0,1); } break;
+        case SrcSample:switch (idx) { case 0: return F(&S::smpGain,0,4); case 1: return F(&S::smpCrush,0,1);
+                                      case 2: return F(&S::smpStretch,0.25f,4); } break;
+        case SrcModal: switch (idx) { case 0: return F(&S::oscFreq,20,4186); case 1: return none;   /* Material */
+                                      case 2: return F(&S::modalMorph,0,1); case 3: return F(&S::modalTone,0,1);
+                                      case 4: return F(&S::modalStruct,0,1); } break;
+        default: break;
+    }
+    return none;
+}
+
+// Sample the 6 sources once per block for slot s (block-rate = the config bake's rate). All reads come
+// from the NEWEST active voice + the slot's per-block state, so a poly stack samples one voice's cues
+// (mono-ish semantics, disclosed). Values: Vel/AmpEnv/Random/ModEnv in 0..1, Note/LFOs/ModLFO in -1..1.
+void DrumChannel::computeModSources(int s, const Slot& sl, float* out) const
+{
+    for (int i = 0; i < MS_COUNT; ++i) out[i] = 0.0f;
+    const Voice* nv = nullptr;
+    for (auto& v : voices) if (v.active() && (nv == nullptr || v.voiceSamples < nv->voiceSamples)) nv = &v;
+
+    out[MSVel]    = nv != nullptr ? juce::jlimit(0.0f, 1.0f, nv->velGain) : 0.0f;
+    { const float note = nv != nullptr ? (nv->keyNote >= 0 ? (float) nv->keyNote : 60.0f + nv->voicePitch) : 60.0f;
+      out[MSNote] = juce::jlimit(-1.0f, 1.0f, (note - 60.0f) / 24.0f); }         // +-24 st -> +-1
+    out[MSAmpEnv] = juce::jlimit(0.0f, 1.0f, slotFiltEnv[juce::jlimit(0, NUM_SLOTS - 1, s)]);   // prev-block amp level
+    out[MSRandom] = nv != nullptr ? nv->sv[juce::jlimit(0, NUM_SLOTS - 1, s)].modRand : 0.5f;
+
+    // Mod Env: stateless AD from the newest voice's age.
+    if (nv != nullptr)
+    {
+        const float t = (float) nv->voiceSamples / (float) juce::jmax(1.0, sr);
+        const float A = juce::jmax(0.001f, sl.modEnvA), D = juce::jmax(0.01f, sl.modEnvD);
+        out[MSModEnv] = t < A ? t / A : std::exp(-(t - A) * 3.0f / D);
+    }
+
+    // The four existing per-slot LFOs, read at the newest voice's block-start phase (retrig) or the
+    // timeline-anchored free phase. Value is the raw shape (-1..1); the route amount is the depth.
+    for (int d = 0; d < 4; ++d)
+    {
+        float cpb = sl.lfoSync[d];
+        if (cpb < 0.0f) cpb = (float) juce::jmax(1, drawMode ? lfoGridDiv : numSteps);
+        const float hz = (cpb > 0.0f) ? juce::jlimit(0.005f, 40.0f, cpb / juce::jmax(0.05f, lfoBarSeconds))
+                                      : juce::jlimit(0.05f, 30.0f, sl.lfoRate[d]);
+        double ph; uint32_t cyc;
+        if (sl.lfoFree[d])
+        {
+            const double sec = (lfoBarPos >= 0.0 ? lfoBarPos * (double) lfoBarSeconds : lfoFreeSec);
+            ph  = 2.0 * kPi * (double) hz * sec;
+            cyc = (uint32_t) juce::jmax(0.0, ph / (2.0 * kPi));
+        }
+        else if (nv != nullptr)
+        { ph = nv->sv[juce::jlimit(0, NUM_SLOTS - 1, s)].lfoPhase[d]; cyc = nv->sv[juce::jlimit(0, NUM_SLOTS - 1, s)].lfoCyc[d]; }
+        else { ph = 0.0; cyc = 0; }
+        out[MSLfoFilt + d] = lfoShapeVal(sl.lfoShape[d], ph, cyc, sl.lfoCurve[d]);
+    }
+
+    // Mod LFO: matrix-created free-run LFO, timeline-anchored so playback passes match.
+    {
+        const double sec = (lfoBarPos >= 0.0 ? lfoBarPos * (double) lfoBarSeconds : lfoFreeSec);
+        const double ph  = 2.0 * kPi * (double) juce::jlimit(0.05f, 20.0f, sl.modLfoRate) * sec;
+        out[MSModLfo] = lfoShapeVal(juce::jlimit(0, 6, sl.modLfoShape), ph, (uint32_t) juce::jmax(0.0, ph / (2.0 * kPi)));
+    }
+}
+
+// Apply the 6 routes onto a scratch Slot before the config bake. Cutoffs + pitch are MULTIPLICATIVE
+// (octaves); everything else is ADDITIVE over the target's native range, then clamped.
+void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals) const
+{
+    for (auto& r : tmp.mod)
+    {
+        if (r.tgt == MTOff || r.src == MSOff || std::abs(r.amt) < 1.0e-4f) continue;
+        const float m = r.amt * srcVals[juce::jlimit(0, MS_COUNT - 1, (int) r.src)];   // depth * source
+        auto add = [&](float& f, float mn, float mx) { f = juce::jlimit(mn, mx, f + m * (mx - mn)); };
+        switch (r.tgt)
+        {
+            case MTFilt1Cut: tmp.filterCutoff  = juce::jlimit(20.0f, 20000.0f, tmp.filterCutoff  * std::pow(2.0f, m * 4.0f)); break;
+            case MTFilt2Cut: tmp.filterCutoff2 = juce::jlimit(20.0f, 20000.0f, tmp.filterCutoff2 * std::pow(2.0f, m * 4.0f)); break;
+            case MTFilt1Res: tmp.filterReso  = juce::jlimit(0.4f, 12.0f, tmp.filterReso  + m * 11.6f); break;
+            case MTFilt2Res: tmp.filterReso2 = juce::jlimit(0.4f, 12.0f, tmp.filterReso2 + m * 11.6f); break;
+            case MTDrive:    add(tmp.fxDrive, 0, 1); break;
+            case MTRevSend:  add(tmp.fxReverbSend, 0, 1); break;
+            case MTDelSend:  add(tmp.fxDelaySend, 0, 1); break;
+            case MTChorus:   add(tmp.chorusMix, 0, 1); break;
+            case MTTone:     add(tmp.fxTone, -1, 1); break;
+            case MTPunch:    add(tmp.fxPunch, -1, 1); break;
+            case MTComp:     add(tmp.fxComp, 0, 1); break;
+            case MTAtk:      tmp.atk = juce::jlimit(0.0f, 6.0f, tmp.atk + m * 1.0f); break;
+            case MTDec:      tmp.dec = juce::jlimit(0.0f, 6.0f, tmp.dec + m * 2.0f); break;
+            case MTSus:      add(tmp.sustain, 0, 1); break;
+            case MTRel:      tmp.release = juce::jlimit(0.0f, 4.0f, tmp.release + m * 2.0f); break;
+            case MTPitch:    { float* bp = (tmp.engine == SrcPhys) ? &tmp.physFreq : &tmp.oscFreq;
+                               *bp = juce::jlimit(1.0f, 20000.0f, *bp * std::pow(2.0f, m)); } break;   // +-1 octave
+            case MTWavePos:  { float& f = (tmp.engine == SrcGrain) ? tmp.grainPos : tmp.addPos; f = juce::jlimit(0.0f, 1.0f, f + m); } break;
+            case MTDetune:   add(tmp.oscDetune, 0, 1); break;
+            case MTVibrato:  add(tmp.vibrato, 0, 1); break;
+            case MTWidth:    add(tmp.uniSpread, 0, 1); break;
+            case MTDrift:    add(tmp.drift, 0, 1); break;
+            default:
+                if (r.tgt >= MT_GRID_BASE && r.tgt < MT_COUNT)
+                {
+                    const GridKnob gk = modGridKnob(tmp.engine, r.tgt - MT_GRID_BASE);
+                    if (gk.field != nullptr) { float& f = tmp.*(gk.field); f = juce::jlimit(gk.mn, gk.mx, f + m * (gk.mx - gk.mn)); }
+                }
+                break;
+        }
+    }
+}
+
 void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, int numSamples, bool anySolo,
                              juce::AudioBuffer<float>* reverbSendBus, juce::AudioBuffer<float>* delaySendBus)
 {
@@ -1823,14 +1981,34 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         double lfoFreePh[4] = {}, lfoFreeInc[4] = {};   // block-start phase + per-sample increment
         float  drift = 0.0f;                // slot DRIFT amount (wander depth per block)
         float  filtDrive = 0.0f;            // filter loop saturation 0..1 (0 = clean = bit-identical)
+        bool   lfoSrcUsed[4] = {};          // MOD MATRIX: this LFO feeds a route as a SOURCE -> keep its phase advancing even at built-in amount 0
     } sc[NUM_SLOTS];
 
     bool anySlotActive = false;
     int  domSlot = -1; float domW = -1.0f;
     for (int s = 0; s < NUM_SLOTS; ++s)
     {
-        const Slot& sl = slots[s];
         SC& c = sc[s];
+        // MOD MATRIX (block-rate): if any route is live, sample the sources for this slot and apply
+        // them onto a scratch Slot copy, then bake from THAT. All routes off/0 = the copy is skipped
+        // and `sl` is the real slot = byte-for-byte the old path (bit-identical). The four audio-rate
+        // LFO paths still run unchanged; the matrix modulates the block config, not the sample loop.
+        Slot modTmp;
+        const Slot* slp = &slots[s];
+        if (slots[s].modActive())
+        {
+            modTmp = slots[s];
+            float srcVals[MS_COUNT] = {};
+            computeModSources(s, modTmp, srcVals);
+            applyModMatrix(modTmp, srcVals);
+            slp = &modTmp;
+            // Keep any LFO used as a matrix SOURCE advancing even if its own Amount is 0.
+            for (auto& r : modTmp.mod)
+                if (r.tgt != MTOff && std::abs(r.amt) > 1.0e-4f
+                    && r.src >= MSLfoFilt && r.src <= MSLfoWave)
+                    c.lfoSrcUsed[r.src - MSLfoFilt] = true;
+        }
+        const Slot& sl = *slp;
         if (sl.engine < 0 || sl.weight <= 0.0f) continue;
         if (sl.engine == SrcSample && slotSample[s].buf.getNumSamples() == 0) continue;
         c.engine = sl.engine; c.weight = sl.weight;
@@ -2948,7 +3126,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     if (stereo) { sL *= g; sR *= g; } else sig *= g;
                 }
                 for (int d2 = 0; d2 < 4; ++d2)
-                    if (c.lfoAmt[d2] > 0.001f) {
+                    if (c.lfoAmt[d2] > 0.001f || c.lfoSrcUsed[d2]) {   // advance also when it drives a mod-matrix route
                         sv.lfoPhase[d2] += 2.0 * kPi * (double) c.lfoRate[d2] / sr;
                         if (sv.lfoPhase[d2] > 2.0 * kPi) { sv.lfoPhase[d2] -= 2.0 * kPi; ++sv.lfoCyc[d2]; }
                     }

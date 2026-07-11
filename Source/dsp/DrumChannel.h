@@ -352,6 +352,23 @@ public:
     static constexpr int ADD_TBL    = 1024;  // baked custom-wave table length (power of two)
     void rebuildAddTables();                 // addH frames -> addTbl (MESSAGE THREAD; audio reads floats only)
     void rebuildGrainTables();   // granular source tables (grainTbl below, past NUM_SLOTS)
+    // ---- MOD MATRIX (per slot, 6 routes) ---------------------------------------------------------
+    // A real modulation matrix replacing the fixed LFO/env destinations: each route maps a SOURCE
+    // onto a TARGET by a bipolar amount. Applied BLOCK-RATE (config bake is per block) - the four
+    // audio-rate LFO paths still exist unchanged; the matrix extends REACH, not rate. All amounts 0
+    // = bit-identical (the render path is byte-for-byte unchanged when no route is active).
+    static constexpr int MOD_ROUTES = 6;
+    // SOURCES (order persisted - APPEND-ONLY). Values sampled once per block from the newest voice.
+    enum ModSrc { MSOff = 0, MSVel, MSNote, MSAmpEnv, MSLfoFilt, MSLfoPitch, MSLfoVol, MSLfoWave,
+                  MSRandom, MSModEnv, MSModLfo, MS_COUNT };
+    // TARGETS (order persisted - APPEND-ONLY). 0..MT_GRID_BASE-1 = fixed targets; MT_GRID_BASE+i =
+    // the engine's own knob i (0..7) via slotParamsFor - the dropdown shows its live name.
+    enum ModTgt { MTOff = 0, MTFilt1Cut, MTFilt1Res, MTFilt2Cut, MTFilt2Res, MTDrive, MTRevSend,
+                  MTDelSend, MTChorus, MTTone, MTPunch, MTComp, MTAtk, MTDec, MTSus, MTRel, MTPitch,
+                  MTWavePos, MTDetune, MTVibrato, MTWidth, MTDrift, MT_GRID_BASE };
+    static constexpr int MOD_TGT_GRID = 8;   // grid knobs MT_GRID_BASE .. MT_GRID_BASE+7
+    static constexpr int MT_COUNT = MT_GRID_BASE + MOD_TGT_GRID;
+    // (GridKnob + the mod-matrix DSP helpers are declared after the Slot struct, below.)
     // DRIFT visual honesty: the newest voice's REAL rolled detunes (cents) for the editor's unison
     // view - the drawn lines move with what actually played. Returns voice count (0 = none active).
     int  getDriftSnapshot(int slot, float* centsOut, int maxN) const;
@@ -617,8 +634,28 @@ public:
         //     the reverb's diffusion); the retired chRt/chDp file keys are ignored on load. ===
         float chorusMix = 0.0f;           // 0 = OFF (dry, bit-identical) .. 1 = full wet
         // === PER-SLOT CHORUS (end) ===
+        // === MOD MATRIX (begin) - 6 routes + two matrix-created sources (Mod Env / Mod LFO).
+        //     amt 0 (default) on every route = bit-identical (the render path is unchanged). ===
+        struct ModRoute { int8_t src = 0; int8_t tgt = 0; float amt = 0.0f; };   // amt bipolar -1..1
+        ModRoute mod[MOD_ROUTES];
+        float modEnvA = 0.005f, modEnvD = 0.30f;   // Mod Env: attack / decay seconds (per-note AD, stateless)
+        float modLfoRate = 1.0f;                    // Mod LFO: free-run rate (Hz 0.05..20, timeline-anchored)
+        int   modLfoShape = 0;                      // Mod LFO shape (lfoShapeVal 0..6; no Custom)
+        bool  modActive() const                     // any live route? (gates the whole matrix - zero cost when off)
+        { for (auto& r : mod) if (r.src != MSOff && r.tgt != MTOff && std::abs(r.amt) > 1.0e-4f) return true; return false; }
+        // === MOD MATRIX (end) ===
     };
     Slot slots[NUM_SLOTS];
+    // MOD MATRIX (DSP helpers - Slot is now defined). GRID-KNOB mirror: the numeric engine knob at UI
+    // index `idx` in slotParamsFor(engine) as a pointer-to-Slot-member + range. field == nullptr = no
+    // knob / a stepped choice (skipped; the UI dropdown disables those). MUST mirror slotParamsFor's
+    // ordering (the mirror rule, like uiLfoShapeVal <-> lfoShapeVal): UI reads NAMES there, DSP applies here.
+    struct GridKnob { float Slot::* field = nullptr; float mn = 0.0f, mx = 1.0f; };
+    static GridKnob modGridKnob(int engine, int idx);
+    // Sample the 6 mod sources for slot s (block-rate, newest voice + the slot's LFOs + the free clock)
+    // into out[MS_COUNT]; then apply the routes onto a scratch Slot before the config bake.
+    void computeModSources(int s, const Slot& sl, float* out) const;
+    void applyModMatrix(Slot& tmp, const float* srcVals) const;
     // Effective BASE frequency for a pitched slot. In PIANO ROLL every pitched engine plays a
     // C4-ABSOLUTE base (+ the Tune fader), independent of the Freq knob - so the roll is knob-free
     // (the knob is never forced/faded/parked; it stays the STEP-mode base). Slot 2 keeps its
@@ -1028,6 +1065,9 @@ private:
         float    driftWobMul = 1.0f;         // slow pitch-wander multiplier (advanced per block)
         double   driftWobPh  = 0.0;
         float    driftWobRate = 0.0f;
+        // MOD MATRIX: per-note random source (rolled once at trigger from driftRng = the drift
+        // precedent; true random per hit, disclosed). 0.5 when the matrix is off (unused).
+        float    modRand = 0.5f;
         // KEYS (on-screen keyboard): this slot re-tuned from its own base freq to the pressed
         // note, in semitones (multiplies pe3Mul, so it reaches every pitched engine incl. the
         // Modal strike-tuning). keyMute = the slot's engine can't be played by keys (Sample/
