@@ -580,11 +580,12 @@ public:
         //    2 = volume (tremolo). Any mix can run at once. Edited on the LFO visual (FX box). --
         float lfoRate[4] = { 4.0f, 4.0f, 4.0f, 4.0f };   // dest 3 = WAVE (wavetable position scan)
         float lfoAmt[4]  = { 0.0f, 0.0f, 0.0f, 0.0f };
-        // GENERIC LFOs (v1.3.9): the 4 LFOs are LFO1..LFO4 now, each with an ASSIGNABLE audio-rate
-        // destination (0 Filter / 1 Pitch / 2 Volume / 3 Wave / 4 Off). Default {0,1,2,3} = the old
-        // FIXED mapping, so every existing sound is BIT-IDENTICAL. Pick another dest to point an LFO
-        // elsewhere; the matrix ALSO routes them (block-rate) to targets beyond these 4. "lfDs0..3".
-        int  lfoDest[4] = { 0, 1, 2, 3 };
+        // GENERIC LFOs (v1.3.9): the 3 LFOs are LFO1/2/3, each with an ASSIGNABLE audio-rate
+        // destination (0 Filter / 1 Pitch / 2 Volume / 3 Wave / 4 = OFF). Default = ALL OFF: an LFO does
+        // NOTHING until you point it somewhere (RIGHT-click its tab for an audio-rate destination, or
+        // route it in the matrix). Factory sounds set their own dest; old files (no "lfDs") fall back to
+        // the classic {0,1,2,3} mapping in readSlots. "lfDs0..3".
+        int  lfoDest[4] = { 4, 4, 4, 4 };
         // LFO SHAPE per dest (0 Sine / 1 Triangle / 2 Saw down / 3 Square / 4 Random steps /
         // 5 Saw up / 6 Random glide / 7 CUSTOM = the drawn curve below) and FREE-RUN per dest
         // (false = RETRIG: the wave restarts at every note = the old behaviour; true = FREE:

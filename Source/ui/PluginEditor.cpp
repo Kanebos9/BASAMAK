@@ -3549,6 +3549,12 @@ void LfoDisplay::paint(juce::Graphics& g)
         g.drawText("Wave is not Custom - nothing to scan", a.reduced(3.0f, 1.0f),
                    juce::Justification::bottomLeft, false);
     }
+    if (lfoDest_[dest_] == 4 && amt_[dest_] > 0.001f)
+    {   // LFO is not routed anywhere (the default): tell the user how to make it do something
+        g.setColour(juce::Colour(0xffff7a4a)); g.setFont(juce::Font(9.0f));
+        g.drawText("not routed - right-click tab, or use the faders below", a.reduced(3.0f, 1.0f),
+                   juce::Justification::bottomLeft, false);
+    }
     // Bottom row: the SYNC button (click = Off -> Sync -> Grid) + the honest speed read-out.
     // Off = drag the wave for free Hz; Sync = dragging SNAPS through musical cycles/bar; Grid =
     // the rate follows the channel's grid automatically.

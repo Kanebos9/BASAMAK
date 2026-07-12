@@ -30,7 +30,7 @@ static void authFrames(DrumChannel& c, float pos, const float* segs, float waveL
         s.addH[f][f] = 1.0f;
     s.addPos = pos;
     for (int k = 0; k < DrumChannel::ADD_FRAMES - 1; ++k) s.addSeg[k] = segs ? segs[k] : 0.0f;
-    s.lfoAmt[3] = waveLfoAmt; s.lfoRate[3] = 6.0f;
+    s.lfoAmt[3] = waveLfoAmt; s.lfoRate[3] = 6.0f; if (waveLfoAmt > 0.0f) s.lfoDest[3] = 3;   // -> Wave (LFOs OFF by default now)
     s.atk = 0.002f; s.hold = 1.0f; s.dec = 1.5f;       // long flat body for clean windows
     c.rebuildAddTables();
 }

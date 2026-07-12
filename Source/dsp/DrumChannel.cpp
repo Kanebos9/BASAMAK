@@ -924,7 +924,7 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
             s.lfoShape[d2] = juce::jlimit(0, 7, (int) st.getProperty("lfSh" + juce::String(d2), d.lfoShape[d2]));
             s.lfoFree[d2]  = (bool) st.getProperty("lfFr" + juce::String(d2), d.lfoFree[d2]);
             s.lfoLegato[d2] = (bool) st.getProperty("lfLg" + juce::String(d2), d.lfoLegato[d2]);
-            s.lfoDest[d2]  = juce::jlimit(0, 4, (int) st.getProperty("lfDs" + juce::String(d2), d.lfoDest[d2]));   // old files -> default d2 = bit-identical
+            s.lfoDest[d2]  = juce::jlimit(0, 4, (int) st.getProperty("lfDs" + juce::String(d2), d2));   // no "lfDs" (pre-generic-LFO file) -> classic {0,1,2,3} mapping (was bit-identical then)
             if (st.hasProperty("lfCv" + juce::String(d2)))
             { juce::StringArray a; a.addTokens(st.getProperty("lfCv" + juce::String(d2)).toString(), ",", "");
               for (int k = 0; k < Slot::LFO_CURVE_N; ++k)

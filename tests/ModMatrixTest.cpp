@@ -96,17 +96,16 @@ int main()
         printf("[4b] StepMod A->Cutoff: lane0 vs lane1 maxdiff=%.4f (expect >0.02) -> %s\n",
                maxdiff(lo, hi), CHK(maxdiff(lo, hi) > 0.02f && finite(hi)) ? "OK" : "FAIL");
     }
-    {   // [5] GENERIC LFO destination: default {0,1,2,3} routes LFO0 -> filter (wobble); reassigning it
-        //     to Off gives EXACTLY the no-LFO baseline (proves the destination indirection is a no-op
-        //     at default and that reassignment truly re-routes).
-        auto flfo = [](DrumChannel& c){ voice(c); c.slots[0].hold = 1.0f;
+    {   // [5] GENERIC LFO destination: default is OFF (an LFO does nothing until routed). Assigning
+        //     LFO0 -> Filter makes it wobble; leaving it Off gives EXACTLY the no-LFO baseline.
+        auto lfoBase = [](DrumChannel& c){ voice(c); c.slots[0].hold = 1.0f;
             c.slots[0].lfoAmt[0] = 0.8f; c.slots[0].lfoRate[0] = 6.0f; c.slots[0].lfoSync[0] = 0.0f; };
-        auto onDef = render(flfo, 0.9f, 0.6);                                                     // default dest -> filter
-        auto offRt = render([&](DrumChannel& c){ flfo(c); c.slots[0].lfoDest[0] = 4; }, 0.9f, 0.6); // LFO0 -> Off
-        auto noLfo = render([](DrumChannel& c){ voice(c); c.slots[0].hold = 1.0f; }, 0.9f, 0.6);   // no LFO at all
-        const float wob = maxdiff(onDef, noLfo), gone = maxdiff(offRt, noLfo);
-        printf("[5] generic LFO: default->filter wob=%.4f (>0.02), reassign-Off vs no-LFO=%.6f (==0) -> %s\n",
-               wob, gone, CHK(wob > 0.02f && gone == 0.0f && finite(onDef)) ? "OK" : "FAIL");
+        auto onFilt = render([&](DrumChannel& c){ lfoBase(c); c.slots[0].lfoDest[0] = 0; }, 0.9f, 0.6);  // LFO0 -> Filter
+        auto offDef = render(lfoBase, 0.9f, 0.6);                                                        // dest OFF (default)
+        auto noLfo  = render([](DrumChannel& c){ voice(c); c.slots[0].hold = 1.0f; }, 0.9f, 0.6);        // no LFO at all
+        const float wob = maxdiff(onFilt, noLfo), gone = maxdiff(offDef, noLfo);
+        printf("[5] generic LFO: assign->filter wob=%.4f (>0.02), default OFF vs no-LFO=%.6f (==0) -> %s\n",
+               wob, gone, CHK(wob > 0.02f && gone == 0.0f && finite(onFilt)) ? "OK" : "FAIL");
     }
     {   // [4] every route maxed = finite
         auto x = render([](DrumChannel& c){ voice(c);
