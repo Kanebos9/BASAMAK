@@ -1400,10 +1400,10 @@ void SlotEditor::init(int idx, MidiLearnManager& mlm, juce::LookAndFeel* knobLNF
                       std::function<DrumChannel::Slot*()> slotFn, std::function<void()> editFn)
 {
     index = idx; getSlot = slotFn; onEdit = editFn;
-    addAndMakeVisible(dragGrip);   // top-right leaf drag handle (drag onto the other slot = copy)
-    dragGrip.slotIndex = idx;
-    dragGrip.setTooltip("Drag this grip onto the OTHER slot to copy this slot's whole setup onto it "
-                        "(engine, all params, envelope, filters, FX, and any loaded sample).");
+    // Drag-copy: watch presses on the box + all its children; a drag from a bare (non-control) area
+    // starts a slot copy (see BoxDragger). No visible handle - drag the box wherever there's no control.
+    boxDragger.ownerComp = this; boxDragger.slotIndex = idx;
+    addMouseListener(&boxDragger, true);
     for (int i = 0; i < MAXK; ++i)
     {
         // "ui_sel_p{N}" = the N-th knob of the SELECTED slot's engine grid (selected-scope MIDI;
@@ -1679,8 +1679,6 @@ void SlotEditor::place(int boxX, int yTop, int boxW, int boxH)
                             k->setTextBoxStyle(juce::Slider::TextBoxBelow, true, 46, 13); }
     fmLineY = resLineY = -1;
     if (oscLayout) placeOsc(boxW); else placeGeneric(boxW);
-    dragGrip.setBounds(boxW - 48, 2, 44, 15);             // top-right visible "copy" tab; above any centred preview
-    dragGrip.toFront(false);
     hookFreqReadouts();   // setTextBoxStyle recreates the value Labels -> re-attach the Hz<->note click
     repaint();                                            // section divider lines / labels (SrcOsc)
 }
@@ -1891,6 +1889,11 @@ void SlotEditor::paint(juce::Graphics& g)
         g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(1.0f), 4.0f, 2.0f);
         g.setFont(juce::Font(11.0f, juce::Font::bold));
         g.drawText("drop to load sample", getLocalBounds(), juce::Justification::centred, false);
+    }
+    // Slot drag-copy hover: a green outline shows this box will receive the drop (no text - user).
+    if (slotDropOver) {
+        g.setColour(juce::Colour(0x2635d07a)); g.fillRoundedRectangle(getLocalBounds().toFloat(), 4.0f);
+        g.setColour(juce::Colour(0xff35d07a)); g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(1.0f), 4.0f, 2.0f);
     }
     if (! oscLayout) return;
     const float right = (float) getWidth() - 6.0f;
@@ -11397,7 +11400,14 @@ void DrumSequencerEditor::layoutContent()
         // A Sample slot also shows its waveform/region/reverse above the knobs (compact for the short box).
         for (int b = 0; b < DrumChannel::NUM_SLOTS; ++b)
         {
-            if (boxEngine[b] < 0) { slotEd[b].setVisible(false); continue; }
+            if (boxEngine[b] < 0) {
+                // Empty slot: keep it a VISIBLE (transparent) drop target so a dragged slot can land on
+                // it and fill it in (it drew nothing before = nothing to drop onto). No "drop here" text.
+                slotEd[b].setVisible(true);
+                slotEd[b].setEngine(-1);
+                slotEd[b].place(sbx[b], sby[b] + 22, slotW, slotH - 22 - 4);
+                continue;
+            }
             slotEd[b].setVisible(true);
             slotEd[b].setEngine(boxEngine[b]);
             int knobTop = sby[b] + 22, knobX = sbx[b], knobW = slotW;

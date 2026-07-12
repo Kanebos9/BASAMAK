@@ -1076,32 +1076,25 @@ class SlotEditor : public juce::Component,
 {
 public:
     std::function<void(int srcSlot)> onCopyFromSlot;   // the other slot's box was dropped on this one
-    // LEAF DRAG HANDLE (top-right grip): the box itself never receives mouseDown - its child knobs/
-    // faders/labels tile 100% of it, and JUCE delivers mouseDrag only to the mouseDown recipient - so
-    // "drag the background" never fired. This tiny grip is the drag source instead (NumDragButton model).
-    struct DragGrip : public juce::Component, public juce::SettableTooltipClient
+    // DRAG-COPY SOURCE (user: "drag from where im not controlling knobs/faders", no handle/text): the
+    // box is draggable from any NON-CONTROL area - the bare background + the text labels. A knob/fader/
+    // combo or an interactive visual keeps its OWN drag (turning it must not also pick up the slot). A
+    // nested mouse listener watches presses on the box + all its children and starts the copy-drag only
+    // when the press did NOT land on a control. Dropping on the OTHER slot (incl. an empty one) copies it.
+    struct BoxDragger : public juce::MouseListener
     {
-        int slotIndex = 0; juce::Colour col { 0xff888888 };
-        DragGrip() { setMouseCursor(juce::MouseCursor::DraggingHandCursor); }
-        void paint(juce::Graphics& g) override
-        {   // a small VISIBLE tab (grip dots + "copy") so the drag source is discoverable, not a mystery corner
-            auto r = getLocalBounds().toFloat();
-            g.setColour(juce::Colour(0xcc1a1a2c)); g.fillRoundedRectangle(r, 3.0f);
-            g.setColour(col.withAlpha(0.9f));      g.drawRoundedRectangle(r.reduced(0.5f), 3.0f, 1.0f);
-            for (int rr = 0; rr < 3; ++rr) for (int cc = 0; cc < 2; ++cc)
-                g.fillEllipse(4.0f + (float) cc * 4.0f, 4.0f + (float) rr * 4.0f, 2.2f, 2.2f);   // 2x3 grip dots
-            g.setFont(juce::Font(8.5f, juce::Font::bold));
-            g.drawText("copy", r.withTrimmedLeft(14.0f).withTrimmedRight(2.0f), juce::Justification::centredLeft, false);
-        }
+        juce::Component* ownerComp = nullptr; int slotIndex = 0;
         void mouseDrag(const juce::MouseEvent& e) override
         {
-            if (e.getDistanceFromDragStart() < 5) return;
-            if (auto* dnd = juce::DragAndDropContainer::findParentDragContainerFor(this))
+            auto* ec = e.eventComponent;
+            const bool bare = (ec == ownerComp) || (dynamic_cast<juce::Label*>(ec) != nullptr);
+            if (! bare || e.getDistanceFromDragStart() < 6) return;   // on a knob/fader/combo/visual: leave it be
+            if (auto* dnd = juce::DragAndDropContainer::findParentDragContainerFor(ownerComp))
                 if (! dnd->isDragAndDropActive())
-                    dnd->startDragging("slotcopy:" + juce::String(slotIndex), this);
+                    dnd->startDragging("slotcopy:" + juce::String(slotIndex), ownerComp);
         }
     };
-    DragGrip dragGrip;
+    BoxDragger boxDragger;
     bool isInterestedInDragSource(const SourceDetails& d) override
     { return d.description.toString().startsWith("slotcopy:")
              && d.description.toString().substring(9).getIntValue() != index; }
@@ -1188,7 +1181,6 @@ public:
                                 k->setColour(juce::Slider::trackColourId, c); }   // filled side of the engine FADERS = slot colour
         for (auto* f : { freqFader.get(), depthFader.get(), fromFader.get(), warpFader.get() })
             if (f) f->setColour(juce::Slider::trackColourId, c);
-        dragGrip.col = c; dragGrip.repaint();
     }
     void setEngine(int eng);     // rebuild params + show/hide knobs
     void pushValues();           // slot -> knobs (no notification)
