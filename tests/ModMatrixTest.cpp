@@ -120,6 +120,36 @@ int main()
             0.9f, 0.6);
         printf("[4] extreme routes finite: rms=%.4f -> %s\n", rms(x), CHK(finite(x)) ? "OK" : "FAIL");
     }
+    {   // [6] PER-VOICE: two poly notes with Note -> Filter1 Cutoff each get their OWN cutoff (from their
+        //     own pitch), NOT the newest note's. So a poly chord == the SUM of the two single notes (each
+        //     voice filtered independently); the old newest-voice code filtered BOTH at the last cutoff.
+        const int bs = 256;
+        auto renderCh = [&](auto keys, double sec) {
+            DrumChannel ch;
+            for (auto& sl : ch.slots) sl = Slot();
+            auto& s = ch.slots[0];
+            s.engine = DrumChannel::SrcOsc; s.weight = 1.0f;
+            s.oscShape = s.oscShapeB = DrumChannel::WvSaw; s.oscFreq = 261.6256f;
+            s.atk = 0.002f; s.hold = 0.5f; s.dec = 0.5f;
+            s.filterType = DrumChannel::LowPass; s.filterCutoff = 1000.0f; s.filterReso = 1.4f;
+            s.mod[0].src = DrumChannel::MSNote; s.mod[0].tgt = DrumChannel::MTFilt1Cut; s.mod[0].amt = 0.6f;
+            ch.prepareToPlay(SR, bs);
+            keys(ch);
+            std::vector<float> out; juce::AudioBuffer<float> buf(2, bs);
+            for (int b = 0; b < (int)(sec * SR / bs); ++b)
+            { buf.clear(); ch.renderInto(buf, 0, bs, false); for (int i = 0; i < bs; ++i) out.push_back(buf.getSample(0, i)); }
+            return out;
+        };
+        auto outA  = renderCh([](DrumChannel& ch){ ch.keyDown(48, 1.0f, 0, true); }, 0.4);   // low note = dark
+        auto outB  = renderCh([](DrumChannel& ch){ ch.keyDown(72, 1.0f, 0, true); }, 0.4);   // high note = bright
+        auto outAB = renderCh([](DrumChannel& ch){ ch.keyDown(48, 1.0f, 0, true); ch.keyDown(72, 1.0f, 0, true); }, 0.4);
+        std::vector<float> sum(outAB.size(), 0.0f);
+        for (size_t i = 0; i < sum.size(); ++i) sum[i] = (i < outA.size() ? outA[i] : 0.0f) + (i < outB.size() ? outB[i] : 0.0f);
+        const float superpos = maxdiff(outAB, sum);   // per-voice: ~0 (voices independent); newest-voice: large
+        const float ab = maxdiff(outA, outB);          // the two notes ARE different = modulation active
+        printf("[6] per-voice Note->cutoff: chord-vs-(A+B) maxdiff=%.4f (per-voice ~0), A-vs-B=%.4f (>0.02) -> %s\n",
+               superpos, ab, CHK(superpos < 0.05f && ab > 0.02f && finite(outAB)) ? "OK" : "FAIL");
+    }
     printf(fails == 0 ? ">>> ModMatrixTest PASS\n" : ">>> ModMatrixTest FAIL (%d)\n", fails);
     return fails;
 }

@@ -666,9 +666,10 @@ public:
     // ordering (the mirror rule, like uiLfoShapeVal <-> lfoShapeVal): UI reads NAMES there, DSP applies here.
     struct GridKnob { float Slot::* field = nullptr; float mn = 0.0f, mx = 1.0f; };
     static GridKnob modGridKnob(int engine, int idx);
-    // Sample the 6 mod sources for slot s (block-rate, newest voice + the slot's LFOs + the free clock)
-    // into out[MS_COUNT]; then apply the routes onto a scratch Slot before the config bake.
-    void computeModSources(int s, const Slot& sl, float* out) const;
+private: struct Voice; public:   // forward decl (defined privately below) so the per-voice mod sampler can name it
+    // Sample the mod sources for slot s (into out[MS_COUNT]) then apply the routes onto a scratch Slot
+    // before the config bake. nvIn = the voice to sample (nullptr = newest active = block-rate base).
+    void computeModSources(int s, const Slot& sl, float* out, const Voice* nvIn = nullptr) const;
     void applyModMatrix(Slot& tmp, const float* srcVals) const;
     // Effective BASE frequency for a pitched slot. In PIANO ROLL every pitched engine plays a
     // C4-ABSOLUTE base (+ the Tune fader), independent of the Freq knob - so the roll is knob-free

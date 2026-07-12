@@ -1788,11 +1788,12 @@ DrumChannel::GridKnob DrumChannel::modGridKnob(int engine, int idx)
 // Sample the 6 sources once per block for slot s (block-rate = the config bake's rate). All reads come
 // from the NEWEST active voice + the slot's per-block state, so a poly stack samples one voice's cues
 // (mono-ish semantics, disclosed). Values: Vel/AmpEnv/Random/ModEnv in 0..1, Note/LFOs/ModLFO in -1..1.
-void DrumChannel::computeModSources(int s, const Slot& sl, float* out) const
+void DrumChannel::computeModSources(int s, const Slot& sl, float* out, const Voice* nvIn) const
 {
     for (int i = 0; i < MS_COUNT; ++i) out[i] = 0.0f;
-    const Voice* nv = nullptr;
-    for (auto& v : voices) if (v.active() && (nv == nullptr || v.voiceSamples < nv->voiceSamples)) nv = &v;
+    const Voice* nv = nvIn;   // PER-VOICE: sample THIS voice; nullptr = the newest active (block-rate base)
+    if (nv == nullptr)
+        for (auto& v : voices) if (v.active() && (nv == nullptr || v.voiceSamples < nv->voiceSamples)) nv = &v;
 
     out[MSVel]    = nv != nullptr ? juce::jlimit(0.0f, 1.0f, nv->velGain) : 0.0f;
     { const float note = nv != nullptr ? (nv->keyNote >= 0 ? (float) nv->keyNote : 60.0f + nv->voicePitch) : 60.0f;
@@ -2011,47 +2012,9 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
 
     bool anySlotActive = false;
     int  domSlot = -1; float domW = -1.0f;
-    for (int s = 0; s < NUM_SLOTS; ++s)
-    {
-        SC& c = sc[s];
-        // MOD MATRIX (block-rate): if any route is live, sample the sources for this slot and apply
-        // them onto a scratch Slot copy, then bake from THAT. All routes off/0 = the copy is skipped
-        // and `sl` is the real slot = byte-for-byte the old path (bit-identical). The four audio-rate
-        // LFO paths still run unchanged; the matrix modulates the block config, not the sample loop.
-        Slot modTmp;
-        const Slot* slp = &slots[s];
-        c.wtPosOfs = 0.0f;
-        if (slots[s].modActive())
+        // PER-VOICE-CAPABLE per-slot config bake (pure: writes only `c` from `sl` + block state).
+        auto bakeSlot = [&](int s, const Slot& sl, SC& c)
         {
-            modTmp = slots[s];
-            float srcVals[MS_COUNT] = {};
-            computeModSources(s, modTmp, srcVals);
-            applyModMatrix(modTmp, srcVals);
-            slp = &modTmp;
-            // WAVE / grain POSITION modulation is applied in the RENDER as an offset (so it works even
-            // when the wavetable is GLIDING, which overrides the static position) - bake the base position.
-            if (modTmp.engine == SrcGrain) { c.wtPosOfs = modTmp.grainPos - slots[s].grainPos; modTmp.grainPos = slots[s].grainPos; }
-            else                           { c.wtPosOfs = modTmp.addPos   - slots[s].addPos;   modTmp.addPos   = slots[s].addPos; }
-            // live snapshot for the editor's mod RINGS (raw modulated FX values)
-            slotModLiveFx[s][0] = modTmp.fxReverbSend; slotModLiveFx[s][1] = modTmp.fxDelaySend;
-            slotModLiveFx[s][2] = modTmp.chorusMix;    slotModLiveFx[s][3] = modTmp.fxTone;
-            slotModLiveFx[s][4] = modTmp.fxPunch;      slotModLiveFx[s][5] = modTmp.fxComp;
-            slotModLiveFx[s][6] = modTmp.fxDrive;
-            slotModLiveFx[s][7] = modTmp.filterCutoff; slotModLiveFx[s][8] = modTmp.filterCutoff2;
-            for (int gi = 0; gi < MOD_TGT_GRID; ++gi) {   // the 8 engine GRID knobs (FM Amount, Ratio, ...)
-                const GridKnob gk = modGridKnob(modTmp.engine, gi);
-                slotModLiveFx[s][9 + gi] = (gk.field != nullptr) ? (float)(modTmp.*(gk.field)) : -1000.0f;
-            }
-            // Keep any LFO used as a matrix SOURCE advancing even if its own Amount is 0.
-            for (auto& r : modTmp.mod)
-                if (r.tgt != MTOff && std::abs(r.amt) > 1.0e-4f
-                    && r.src >= MSLfoFilt && r.src <= MSLfoWave)
-                    c.lfoSrcUsed[r.src - MSLfoFilt] = true;
-        }
-        else for (auto& v : slotModLiveFx[s]) v = -1000.0f;   // matrix inactive -> no rings
-        const Slot& sl = *slp;
-        if (sl.engine < 0 || sl.weight <= 0.0f) continue;
-        if (sl.engine == SrcSample && slotSample[s].buf.getNumSamples() == 0) continue;
         c.engine = sl.engine; c.weight = sl.weight;
         c.fxDriveType = sl.fxDriveType; c.fxDrive = sl.fxDrive; c.fxRevSend = sl.fxReverbSend; c.fxDelSend = sl.fxDelaySend;  // per-slot FX
         for (int d2 = 0; d2 < 4; ++d2) {   // per-slot LFOs (free-Hz OR tempo-synced cycles/bar)
@@ -2077,8 +2040,6 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             } }
         c.drift     = juce::jlimit(0.0f, 1.0f, sl.drift);
         c.filtDrive = juce::jlimit(0.0f, 1.0f, sl.filterDrive);
-        if (s == 0)   // once per block: advance the free-run clock when the transport isn't driving us
-        { if (lfoBarPos >= 0.0) lfoFreeSec = 0.0; else lfoFreeSec += (double) numSamples / sr; }
         c.atk = sl.atk; c.hold = sl.hold; c.dec = sl.dec; c.sustain = sl.sustain; c.release = sl.release;
         // Release is FAITHFUL now (it has its own handle in the Strike/Ring editor for Phys/Modal
         // too): whatever the user sets IS the key-up fade. No hidden floor - that was overriding
@@ -2090,8 +2051,6 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         // Pitch-env time base = the AHD perceptual length the UI shows (atk+hold+dec); the voice itself still
         // renders its full exp tail (voiceEnd uses 3.2*dec) so nothing is cut - this just aligns the pitch timeline.
         c.voiceLenSamp = juce::jmax(1.0, (double)((sl.atk + sl.hold + sl.dec) * (float) sr));
-        anySlotActive = true;
-        if (sl.weight > domW) { domW = sl.weight; domSlot = s; }
         switch (sl.engine)
         {
             case SrcOsc:
@@ -2343,6 +2302,17 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             c.filt[fi].cutoff   = juce::jlimit(20.0, sr * 0.49, (double) fCu[fi]);
             c.filt[fi].reso     = juce::jlimit(0.3f, 12.0f, fRe[fi]);
             c.filt[fi].envAmt   = juce::jlimit(-1.0f, 1.0f, fEn[fi]);
+            // ZDF cutoff coeff + damping (was a separate block-level pass - here so PER-VOICE re-bakes get
+            // it too; env-follow uses the PREVIOUS block's per-slot amp level).
+            if (c.filt[fi].on)
+            {
+                double cutoff = c.filt[fi].cutoff;
+                if (c.filt[fi].envAmt != 0.0f)
+                    cutoff *= std::pow(2.0, (double) c.filt[fi].envAmt * (double) slotFiltEnv[s] * 5.0);
+                c.filt[fi].cutoffHz = juce::jlimit(20.0, sr * 0.49, cutoff);   // stash (Hz) so per-voice KEYTRACK re-tans from it
+                c.filt[fi].G = std::tan(kPi * c.filt[fi].cutoffHz / sr);       // ZDF prewarped cutoff target
+                c.filt[fi].K = 1.0 / juce::jmax(0.15, (double) c.filt[fi].reso);
+            }
         }
         // === PER-SLOT FILTERS (end) ===
         // === PER-SLOT CHORUS - lush multi-voice stereo widener (0 mix = off = bit-identical) ===
@@ -2380,6 +2350,53 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                            c.toneGL = juce::Decibels::decibelsToGain(-t * 6.0f);
                            c.toneGH = juce::Decibels::decibelsToGain( t * 6.0f); }
           else { c.toneK = 0.0f; c.toneGL = c.toneGH = 1.0f; } }
+        };
+    for (int s = 0; s < NUM_SLOTS; ++s)
+    {
+        SC& c = sc[s];
+        // MOD MATRIX (block-rate): if any route is live, sample the sources for this slot and apply
+        // them onto a scratch Slot copy, then bake from THAT. All routes off/0 = the copy is skipped
+        // and `sl` is the real slot = byte-for-byte the old path (bit-identical). The four audio-rate
+        // LFO paths still run unchanged; the matrix modulates the block config, not the sample loop.
+        Slot modTmp;
+        const Slot* slp = &slots[s];
+        c.wtPosOfs = 0.0f;
+        if (slots[s].modActive())
+        {
+            modTmp = slots[s];
+            float srcVals[MS_COUNT] = {};
+            computeModSources(s, modTmp, srcVals);
+            applyModMatrix(modTmp, srcVals);
+            slp = &modTmp;
+            // WAVE / grain POSITION modulation is applied in the RENDER as an offset (so it works even
+            // when the wavetable is GLIDING, which overrides the static position) - bake the base position.
+            if (modTmp.engine == SrcGrain) { c.wtPosOfs = modTmp.grainPos - slots[s].grainPos; modTmp.grainPos = slots[s].grainPos; }
+            else                           { c.wtPosOfs = modTmp.addPos   - slots[s].addPos;   modTmp.addPos   = slots[s].addPos; }
+            // live snapshot for the editor's mod RINGS (raw modulated FX values)
+            slotModLiveFx[s][0] = modTmp.fxReverbSend; slotModLiveFx[s][1] = modTmp.fxDelaySend;
+            slotModLiveFx[s][2] = modTmp.chorusMix;    slotModLiveFx[s][3] = modTmp.fxTone;
+            slotModLiveFx[s][4] = modTmp.fxPunch;      slotModLiveFx[s][5] = modTmp.fxComp;
+            slotModLiveFx[s][6] = modTmp.fxDrive;
+            slotModLiveFx[s][7] = modTmp.filterCutoff; slotModLiveFx[s][8] = modTmp.filterCutoff2;
+            for (int gi = 0; gi < MOD_TGT_GRID; ++gi) {   // the 8 engine GRID knobs (FM Amount, Ratio, ...)
+                const GridKnob gk = modGridKnob(modTmp.engine, gi);
+                slotModLiveFx[s][9 + gi] = (gk.field != nullptr) ? (float)(modTmp.*(gk.field)) : -1000.0f;
+            }
+            // Keep any LFO used as a matrix SOURCE advancing even if its own Amount is 0.
+            for (auto& r : modTmp.mod)
+                if (r.tgt != MTOff && std::abs(r.amt) > 1.0e-4f
+                    && r.src >= MSLfoFilt && r.src <= MSLfoWave)
+                    c.lfoSrcUsed[r.src - MSLfoFilt] = true;
+        }
+        else for (auto& v : slotModLiveFx[s]) v = -1000.0f;   // matrix inactive -> no rings
+        const Slot& sl = *slp;
+        if (sl.engine < 0 || sl.weight <= 0.0f) continue;
+        if (sl.engine == SrcSample && slotSample[s].buf.getNumSamples() == 0) continue;
+        bakeSlot(s, sl, c);
+        anySlotActive = true;
+        if (sl.weight > domW) { domW = sl.weight; domSlot = s; }
+        if (s == 0)   // once per block: advance the free-run clock when the transport isn't driving us
+        { if (lfoBarPos >= 0.0) lfoFreeSec = 0.0; else lfoFreeSec += (double) numSamples / sr; }
     }
 
     if (! anySlotActive)
@@ -2464,27 +2481,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
     // PUNCH transient followers: ~1.5 ms fast / ~50 ms slow.
     const float punchKf = 1.0f - std::exp(-1.0f / (0.0015f * (float) juce::jmax(1.0, sr)));
     const float punchKs = 1.0f - std::exp(-1.0f / (0.050f  * (float) juce::jmax(1.0, sr)));
-    {
-        const double nyq = sr * 0.49;
-        for (int s = 0; s < NUM_SLOTS; ++s)
-        {
-            SC& c = sc[s];
-            // LFO -> filter cutoff is a MOD MATRIX route now (block-rate, baked into filtCutoffHz already);
-            // no separate audio-rate LFO path. env-follow still uses the PREVIOUS block's per-slot amp level.
-            double lfoMul = 1.0;
-            for (int fi = 0; fi < 2; ++fi)
-            {
-                auto& f = c.filt[fi];
-                if (! f.on) continue;
-                double cutoff = f.cutoff * lfoMul;
-                if (f.envAmt != 0.0f)
-                    cutoff *= std::pow(2.0, (double) f.envAmt * (double) slotFiltEnv[s] * 5.0);   // +/-5 octaves
-                f.cutoffHz = juce::jlimit(20.0, nyq, cutoff);                  // stash (Hz) so per-voice KEYTRACK re-tans from it
-                f.G = std::tan(kPi * f.cutoffHz / sr);                         // ZDF prewarped cutoff target
-                f.K = 1.0 / juce::jmax(0.15, (double) f.reso);                 // damping (higher reso = lower k)
-            }
-        }
-    }
+    // (The per-slot filter cutoff/G/K bake moved INTO bakeSlot so per-voice re-bakes compute it too.)
     // === PER-SLOT FILTER (end) ===
 
     // ---- Voice loop -----------------------------------------------------------
@@ -2492,6 +2489,29 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
     {
         Voice& v = voices[vi];
         if (! v.active()) continue;
+
+        // PER-VOICE MODULATION: re-bake each slot's config from THIS voice's OWN sources (its velocity,
+        // note, amp/mod envelope, per-note random, retrig-LFO phase) so keytrack / velocity->cutoff /
+        // per-note pitch etc. are correct on chords - not the newest-voice approximation. Sounds with no
+        // live routes reuse the block config (cs -> sc), so unmodulated sounds pay nothing. The block bake
+        // (sc) still feeds chorus/comp/analysis; only THIS voice's render reads cs. GLOBAL sources
+        // (free-run LFO, mod wheel, step lanes) are shared; the amp-env SOURCE stays the slot's block level.
+        SC vsc[NUM_SLOTS];
+        const SC* cs[NUM_SLOTS];
+        for (int s = 0; s < NUM_SLOTS; ++s)
+        {
+            if (! slots[s].modActive()) { cs[s] = &sc[s]; continue; }
+            Slot vm = slots[s];
+            float sv2[MS_COUNT] = {};
+            computeModSources(s, vm, sv2, &v);   // sample THIS voice
+            applyModMatrix(vm, sv2);
+            const float wpo = (vm.engine == SrcGrain ? vm.grainPos - slots[s].grainPos : vm.addPos - slots[s].addPos);
+            if (vm.engine == SrcGrain) vm.grainPos = slots[s].grainPos; else vm.addPos = slots[s].addPos;
+            bakeSlot(s, vm, vsc[s]);
+            vsc[s].wtPosOfs = wpo;
+            for (int d = 0; d < 4; ++d) vsc[s].lfoSrcUsed[d] = sc[s].lfoSrcUsed[d];   // route-based -> keep phases advancing
+            cs[s] = &vsc[s];
+        }
 
         // Set noise band-pass coefficients once per voice (Noise + Synth-noise slots).
         for (int s = 0; s < NUM_SLOTS; ++s)
@@ -2578,7 +2598,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         for (int s = 0; s < NUM_SLOTS; ++s)
             for (int fi = 0; fi < 2; ++fi)
             {
-                auto& f = sc[s].filt[fi];
+                auto& f = cs[s]->filt[fi];   // per-voice filter config (cutoff modulation composes with keytrack)
                 const bool kt  = f.on && f.keyTrack > 0.0f;
                 const bool dfm = f.on && std::abs(v.sv[s].driftFiltMul - 1.0f) > 1.0e-4f;   // DRIFT per-note cutoff
                 if (kt || dfm)
@@ -2619,7 +2639,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
 
             for (int s = 0; s < NUM_SLOTS; ++s)
             {
-                const SC& c = sc[s];
+                const SC& c = *cs[s];   // PER-VOICE modulated config (falls back to the block config sc[s])
                 if (c.engine < 0) continue;
                 SlotVoice& sv = v.sv[s];
                 // HUMANIZE: this slot's whole onset is pushed back by startDelay (0 = on time). Skip it
