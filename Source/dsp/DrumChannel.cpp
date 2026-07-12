@@ -732,10 +732,8 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         // === PER-SLOT FILTER (begin) ===
         st.setProperty("flT", s.filterType, nullptr); st.setProperty("flC", s.filterCutoff, nullptr);
         st.setProperty("flR", s.filterReso, nullptr); st.setProperty("flE", s.filterEnvAmt, nullptr);
-        st.setProperty("flK", s.filterKeyTrack, nullptr);   // filter cutoff keytrack (0 = off)
         st.setProperty("flT2", s.filterType2, nullptr); st.setProperty("flC2", s.filterCutoff2, nullptr);   // FILTER 2 (series)
         st.setProperty("flR2", s.filterReso2, nullptr); st.setProperty("flE2", s.filterEnvAmt2, nullptr);
-        st.setProperty("flK2", s.filterKeyTrack2, nullptr);
         // === PER-SLOT FILTER (end) ===
         // === PER-SLOT CHORUS ===
         st.setProperty("chM", s.chorusMix, nullptr);   // (chRt/chDp retired - rate/depth are effect constants)
@@ -867,10 +865,10 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         // === PER-SLOT FILTER (begin) ===
         s.filterType = (int)st.getProperty("flT", d.filterType); s.filterCutoff = (float)st.getProperty("flC", d.filterCutoff);
         s.filterReso = (float)st.getProperty("flR", d.filterReso); s.filterEnvAmt = (float)st.getProperty("flE", d.filterEnvAmt);
-        s.filterKeyTrack = (float)st.getProperty("flK", d.filterKeyTrack);
+        const float legacyKt1 = (float) st.getProperty("flK", 0.0f);    // retired keytrack -> migrated to a Note->cutoff route below
         s.filterType2   = (int)  st.getProperty("flT2", d.filterType2);   s.filterCutoff2 = (float)st.getProperty("flC2", d.filterCutoff2);
         s.filterReso2   = (float)st.getProperty("flR2", d.filterReso2);   s.filterEnvAmt2 = (float)st.getProperty("flE2", d.filterEnvAmt2);
-        s.filterKeyTrack2 = (float)st.getProperty("flK2", d.filterKeyTrack2);
+        const float legacyKt2 = (float) st.getProperty("flK2", 0.0f);
         // === PER-SLOT FILTER (end) ===
         // === PER-SLOT CHORUS ===
         s.chorusMix   = (float)st.getProperty("chM",  d.chorusMix);   // old files' chRt/chDp ignored (constants now)
@@ -953,6 +951,21 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
             for (int d2 = 0; d2 < 4 && nr < MOD_ROUTES; ++d2)
                 if (s.lfoAmt[d2] > 0.001f)
                 { s.mod[nr].src = (int8_t)(MSLfoFilt + d2); s.mod[nr].tgt = (int8_t) classicTgt[d2]; s.mod[nr].amt = 1.0f; ++nr; }
+        }
+        // RETIRED FILTER KEYTRACK ("flK"/"flK2"): the dedicated per-filter keytrack is gone - recreate it
+        // as a per-voice matrix route. Equivalence: keytrack kt = cutoff x 2^(kt*semis/12); the Note source
+        // is semis/24 and the cutoff target applies 2^(amt*src*4) => amt = kt/2 (exact within +-24 st).
+        for (int fi = 0; fi < 2; ++fi)
+        {
+            const float kt = fi == 0 ? legacyKt1 : legacyKt2;
+            if (kt < 0.01f) continue;
+            bool have = false;   // don't double-add if the file already carries a Note->cutoff route
+            const int tgt = fi == 0 ? MTFilt1Cut : MTFilt2Cut;
+            for (auto& r : s.mod) have = have || (r.src == MSNote && r.tgt == tgt);
+            if (! have)
+                for (auto& r : s.mod)
+                    if (r.src == MSOff && r.tgt == MTOff)
+                    { r.src = MSNote; r.tgt = (int8_t) tgt; r.amt = juce::jlimit(0.0f, 1.0f, kt) * 0.5f; break; }
         }
         s.modEnvA = juce::jlimit(0.001f, 8.0f, (float) st.getProperty("mEA", d.modEnvA));
         s.modEnvD = juce::jlimit(0.01f, 8.0f, (float) st.getProperty("mED", d.modEnvD));
@@ -1980,7 +1993,6 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         // keytrack. Raw params here; coeffs recomputed per BLOCK (env-follow + LFO); state per-voice.
         struct FiltCfg {
             bool   on = false; int mode = 0;              // on + which SVF output (0 LP / 1 HP / 2 BP / 3 Notch)
-            float  keyTrack = 0.0f;                        // 0..1 = cutoff follows the note pitch
             double cutoff = 1000; float reso = 0.707f, envAmt = 0.0f;
             double cutoffHz = 1000, G = 0.1, K = 1.414;    // block coeffs (env+LFO); per-voice keytrack re-tans cutoffHz
         } filt[2];
@@ -2293,12 +2305,10 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         const float fCu[2] = { sl.filterCutoff, sl.filterCutoff2 };
         const float fRe[2] = { sl.filterReso,   sl.filterReso2 };
         const float fEn[2] = { sl.filterEnvAmt, sl.filterEnvAmt2 };
-        const float fKt[2] = { sl.filterKeyTrack, sl.filterKeyTrack2 };
         for (int fi = 0; fi < 2; ++fi)
         {
             c.filt[fi].on       = (fTy[fi] >= LowPass && fTy[fi] <= Notch);       // LP/HP/BP/Notch (Formant = legacy, off here)
             c.filt[fi].mode     = juce::jlimit(0, 3, fTy[fi] - LowPass);
-            c.filt[fi].keyTrack = juce::jlimit(0.0f, 1.0f, fKt[fi]);
             c.filt[fi].cutoff   = juce::jlimit(20.0, sr * 0.49, (double) fCu[fi]);
             c.filt[fi].reso     = juce::jlimit(0.3f, 12.0f, fRe[fi]);
             c.filt[fi].envAmt   = juce::jlimit(-1.0f, 1.0f, fEn[fi]);
@@ -2382,6 +2392,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 const GridKnob gk = modGridKnob(modTmp.engine, gi);
                 slotModLiveFx[s][9 + gi] = (gk.field != nullptr) ? (float)(modTmp.*(gk.field)) : -1000.0f;
             }
+            slotModLiveFx[s][17] = (modTmp.engine == SrcOsc) ? modTmp.oscWarp : -1000.0f;   // Warp (wave preview + fader)
             // Keep any LFO used as a matrix SOURCE advancing even if its own Amount is 0.
             for (auto& r : modTmp.mod)
                 if (r.tgt != MTOff && std::abs(r.amt) > 1.0e-4f
@@ -2592,25 +2603,15 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             }
             else svd.driftWobMul = 1.0f;
         }
-        // FILTER KEYTRACK (per voice, per block): shift the cutoff TARGET with the note's pitch offset
-        // from the slot base (voicePitch = step/roll pitch, keySemis = keyboard). keytrack 1 = cutoff
-        // tracks the note 1:1 (doubles per octave). Rides on top of filtCutoffHz (env-follow + LFO).
+        // DRIFT per-note cutoff (the dedicated FILTER KEYTRACK is GONE - keytracking is a per-voice
+        // matrix route now: Note -> Filter Cutoff; old flK saves + factory sounds were migrated).
         for (int s = 0; s < NUM_SLOTS; ++s)
             for (int fi = 0; fi < 2; ++fi)
             {
-                auto& f = cs[s]->filt[fi];   // per-voice filter config (cutoff modulation composes with keytrack)
-                const bool kt  = f.on && f.keyTrack > 0.0f;
-                const bool dfm = f.on && std::abs(v.sv[s].driftFiltMul - 1.0f) > 1.0e-4f;   // DRIFT per-note cutoff
-                if (kt || dfm)
-                {
-                    double hz = f.cutoffHz * (double) v.sv[s].driftFiltMul;
-                    if (kt)
-                    {
-                        const double noteSemis = (double) v.voicePitch + (double) v.sv[s].keySemis;
-                        hz *= std::pow(2.0, (double) f.keyTrack * noteSemis / 12.0);
-                    }
-                    v.sv[s].filtGkt[fi] = std::tan(kPi * juce::jlimit(20.0, sr * 0.49, hz) / sr);
-                }
+                auto& f = cs[s]->filt[fi];   // per-voice filter config
+                if (f.on && std::abs(v.sv[s].driftFiltMul - 1.0f) > 1.0e-4f)
+                    v.sv[s].filtGkt[fi] = std::tan(kPi * juce::jlimit(20.0, sr * 0.49,
+                                                    f.cutoffHz * (double) v.sv[s].driftFiltMul) / sr);
                 else v.sv[s].filtGkt[fi] = -1.0;
             }
         // HUMANIZE/STRUM push a slot's (and its chord notes') onset later, so keep the voice alive

@@ -298,6 +298,27 @@ public:
     void paint(juce::Graphics& g) override
     {
         juce::Slider::paint(g);
+        if (modRing >= 0.0f && (getSliderStyle() == juce::Slider::LinearHorizontal
+                             || getSliderStyle() == juce::Slider::LinearVertical
+                             || getSliderStyle() == juce::Slider::LinearBar))
+        {   // LINEAR faders (the Osc FM/Warp/Freq controls + stacked engine faders): a cyan band from
+            // the base value to the live modulated value + a bright marker at the modulated position.
+            const float b0 = (float) getPositionOfValue(getValue());
+            const float b1 = (float) getPositionOfValue(proportionOfLengthToValue(juce::jlimit(0.0, 1.0, (double) modRing)));
+            g.setColour(juce::Colour(0xff35c0ff));
+            if (isHorizontal())
+            {
+                const float y = (float) getHeight() * 0.5f;
+                g.setColour(juce::Colour(0x5535c0ff)); g.fillRect(juce::Rectangle<float>(juce::jmin(b0, b1), y - 4.0f, std::abs(b1 - b0), 8.0f));
+                g.setColour(juce::Colour(0xff35c0ff)); g.fillRect(b1 - 1.2f, y - 6.0f, 2.4f, 12.0f);
+            }
+            else
+            {
+                const float x = (float) getWidth() * 0.5f;
+                g.setColour(juce::Colour(0x5535c0ff)); g.fillRect(juce::Rectangle<float>(x - 4.0f, juce::jmin(b0, b1), 8.0f, std::abs(b1 - b0)));
+                g.setColour(juce::Colour(0xff35c0ff)); g.fillRect(x - 6.0f, b1 - 1.2f, 12.0f, 2.4f);
+            }
+        }
         if (modRing >= 0.0f && (getSliderStyle() == juce::Slider::RotaryVerticalDrag
                              || getSliderStyle() == juce::Slider::Rotary
                              || getSliderStyle() == juce::Slider::RotaryHorizontalVerticalDrag))
@@ -393,6 +414,12 @@ public:
     bool hoverEd = false;                          // hover = show the "click to edit" affordance (Custom only)
     bool fmMode = false;                           // FM: apply phase modulation to the drawing
     bool compact = false;                          // short form (no A/B label strip) when the box is tight
+    // LIVE MODULATION overrides: while the matrix modulates FM Amount / Ratio / Warp, the drawn wave
+    // follows the MODULATED values (fed per timer tick from the DSP snapshot; -1000 = not modulated).
+    float modFm = -1000.0f, modRatio = -1000.0f, modWarp = -1000.0f;
+    void setModLive(float fm, float ratio, float warp)
+    { if (std::abs(fm - modFm) > 0.004f || std::abs(ratio - modRatio) > 0.004f || std::abs(warp - modWarp) > 0.004f)
+      { modFm = fm; modRatio = ratio; modWarp = warp; repaint(); } }
     // GRANULAR: live grain read positions (0..1 across the source) + the source caption. The
     // dots are REAL grain positions from the engine (honest-visual rule); -1 = not a grain slot.
     float grainPos[DrumChannel::GRAINS_MAX] = {}; int grainN = -1;
@@ -583,6 +610,7 @@ public:
     std::function<void()> onClose;
     std::function<juce::String(int gridIdx)> gridKnobName;  // live engine-knob names for grid targets
     juce::Colour accent { 0xffe8bf4d };
+    int engine = -1;   // the slot's engine (set before openFor) - gates engine-specific targets (Warp = Osc only)
     RoutePicker();
     ~RoutePicker() override { juce::Desktop::getInstance().removeGlobalMouseListener(&closer); }
     void openFor(int curSrc, int curTgt);                   // (re)fill both lists, select current, become visible
@@ -1161,6 +1189,10 @@ public:
     void setGridModRings(const float* v, int n)
     { for (int i = 0; i < (int) knobs.size() && i < n; ++i)
         knobs[i]->setModRing(v[i] < -900.0f ? -1.0f : (float) knobs[i]->valueToProportionOfLength(v[i])); }
+    // Warp fader ring + the LIVE WAVE PREVIEW (the drawing follows the modulated FM/Warp, not just the knobs).
+    void setOscModLive(float warpRaw, float fmRaw, float ratioRaw)
+    { if (warpFader != nullptr) warpFader->setModRing(warpRaw < -900.0f ? -1.0f : (float) warpFader->valueToProportionOfLength(warpRaw));
+      morphView.setModLive(fmRaw, ratioRaw, warpRaw); }
     std::function<void(int srcSlot)> onCopyFromSlot;   // the other slot's box was dropped on this one
     // DRAG-COPY SOURCE (user: "drag from where im not controlling knobs/faders", no handle/text): the
     // box is draggable from any NON-CONTROL area - the bare background + the text labels. A knob/fader/
@@ -2545,8 +2577,6 @@ private:
     SlotDragFader chorusMixFader, chorusRateFader, chorusDepthFader;
     // (The LFO Sync/Rate faders were REMOVED - tempo sync lives INSIDE the LFO visual now: its Sync
     //  button cycles Off/Sync/Grid and dragging the wave snaps through the musical rates.)
-    SlotDragFader keytrackFader;     // F1 cutoff keytracking (right of the FILTER/EQ visual)
-    SlotDragFader keytrackFader2;    // F2 keytracking - its own fader (switching via the diamonds was "broken" - user)
     juce::dsp::FFT   fft { SpectrumTap::fftOrder };
     juce::dsp::WindowingFunction<float> fftWindow
         { (size_t) SpectrumTap::fftSize, juce::dsp::WindowingFunction<float>::hann };
@@ -2646,7 +2676,6 @@ private:
     void updateStripParamIds();
     void refreshDetailPanel();
     void updateFxFaders(const DrumChannel::Slot& sl);   // push FX/Chorus/Keytrack/Sync fader values + slot accent
-    void refreshKeytrackFader();                         // Keytrack fader follows the active filter (F1/F2)
     void refreshChannelStrips();
     void refreshPatternButtons();
 

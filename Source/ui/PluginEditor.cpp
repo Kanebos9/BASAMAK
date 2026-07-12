@@ -246,8 +246,9 @@ void WaveMorphDisplay::paint(juce::Graphics& g)
 
     auto* s = getSlot ? getSlot() : nullptr;
     const int   wave  = s ? juce::jlimit(0, DrumChannel::oscShapeCount() - 1, s->oscShape) : 0;  // the single Wave
-    const float ratio = s ? juce::jlimit(0.0f, 1.0f, s->fmSpread) : 0.0f;
-    const float depth = s ? juce::jlimit(0.0f, 1.0f, s->fmDepth)  : 0.0f;
+    // Live matrix modulation overrides the drawn FM/Warp (the preview moves with the modulated sound).
+    const float ratio = modRatio > -900.0f ? juce::jlimit(0.0f, 1.0f, modRatio) : (s ? juce::jlimit(0.0f, 1.0f, s->fmSpread) : 0.0f);
+    const float depth = modFm    > -900.0f ? juce::jlimit(0.0f, 1.0f, modFm)    : (s ? juce::jlimit(0.0f, 1.0f, s->fmDepth)  : 0.0f);
 
     g.setColour(juce::Colour(0xff2a2a44)); g.drawHorizontalLine((int) cy, in.getX(), in.getRight());
 
@@ -256,7 +257,8 @@ void WaveMorphDisplay::paint(juce::Graphics& g)
     const float twoPi   = juce::MathConstants<float>::twoPi;
     const float fmRatio = 1.0f + ratio * 5.0f;     // matches DSP fmModF = f*(1+spread*5)
     const float fmIndex = depth * 6.0f;            // radians of phase modulation (visual)
-    const float warp = s ? juce::jlimit(0.0f, 1.0f, s->oscWarp) : 0.0f;   // Warp = one-way WAVEFOLD (0 = off)
+    const float warp = modWarp > -900.0f ? juce::jlimit(0.0f, 1.0f, modWarp)
+                                         : (s ? juce::jlimit(0.0f, 1.0f, s->oscWarp) : 0.0f);   // Warp = one-way WAVEFOLD (0 = off)
     auto fold = [warp](float v) {                   // same fold as the DSP (adds harmonics as warp rises)
         if (warp < 0.001f) return v;
         const float folded = std::sin(v * (1.0f + warp * 4.0f) * 1.5707963f);
@@ -1013,7 +1015,12 @@ void RoutePicker::openFor(int cs, int ct)
     { if (i == DrumChannel::MSLfoWave || i == DrumChannel::MSModLfo) continue;   // LFO 4 slot is the Mod Env tab now; Mod LFO dropped
       srcModel.rows.push_back({ i, juce::String(kModSrcName[i]) }); }
     tgtModel.rows.clear();
-    for (int t = 0; t < DrumChannel::MT_GRID_BASE; ++t) tgtModel.rows.push_back({ t, juce::String(kModTgtFixedName[t]) });
+    for (int t = 0; t < DrumChannel::MT_GRID_BASE; ++t)
+    {   // ENGINE-GATED targets: only offer what this slot's engine can actually do (no dead routes).
+        if (t == DrumChannel::MTWarp    && engine != DrumChannel::SrcOsc) continue;                                   // wavefold = Oscillator only
+        if (t == DrumChannel::MTWavePos && engine != DrumChannel::SrcOsc && engine != DrumChannel::SrcGrain) continue; // wavetable/grain position
+        tgtModel.rows.push_back({ t, juce::String(kModTgtFixedName[t]) });
+    }
     for (int i = 0; i < DrumChannel::MOD_TGT_GRID; ++i)
     { const juce::String nm = gridKnobName ? gridKnobName(i) : juce::String();
       if (nm.isNotEmpty()) tgtModel.rows.push_back({ DrumChannel::MT_GRID_BASE + i, "Knob " + juce::String(i + 1) + ": " + nm }); }
@@ -5445,8 +5452,8 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         h = mix(h, sl.modalMaterial); h = mix(h, f(sl.modalDecay)); h = mix(h, f(sl.modalTone)); h = mix(h, f(sl.modalStruct)); h = mix(h, f(sl.modalHit)); h = mix(h, f(sl.modalDamp));
         for (int k = 0; k < DrumChannel::Slot::NPE; ++k) { h = mix(h, f(sl.pEnvP[k])); h = mix(h, f(sl.pEnvT[k])); }
         for (int e = 0; e < DrumChannel::NUM_EQ_BANDS; ++e) { const auto& eb = sl.eqBand[e]; h = mix(h, eb.on ? 1 : 0); h = mix(h, f(eb.freq)); h = mix(h, f(eb.gainDb)); h = mix(h, f(eb.q)); }
-        h = mix(h, sl.filterType); h = mix(h, f(sl.filterCutoff)); h = mix(h, f(sl.filterReso)); h = mix(h, f(sl.filterEnvAmt)); h = mix(h, f(sl.filterKeyTrack));   // per-slot filter 1
-        h = mix(h, sl.filterType2); h = mix(h, f(sl.filterCutoff2)); h = mix(h, f(sl.filterReso2)); h = mix(h, f(sl.filterEnvAmt2)); h = mix(h, f(sl.filterKeyTrack2));   // filter 2
+        h = mix(h, sl.filterType); h = mix(h, f(sl.filterCutoff)); h = mix(h, f(sl.filterReso)); h = mix(h, f(sl.filterEnvAmt));   // per-slot filter 1
+        h = mix(h, sl.filterType2); h = mix(h, f(sl.filterCutoff2)); h = mix(h, f(sl.filterReso2)); h = mix(h, f(sl.filterEnvAmt2));   // filter 2
         h = mix(h, f(sl.chorusMix));   // chorus (one macro; rate/depth are effect constants)
         h = mix(h, f(sl.fxTone)); h = mix(h, f(sl.fxPunch)); h = mix(h, f(sl.fxComp));   // Tone/Punch/Comp
         for (int fr = 0; fr < DrumChannel::ADD_FRAMES; ++fr)
@@ -7792,8 +7799,7 @@ void DrumSequencerEditor::setupComponents()
     freqDisplay.onEdit = [this] {
         if (ignoreKnobCallbacks) return;
         proc.sequencer.channel(selectedChannel).markDspDirty();
-        refreshKeytrackFader();   // the Keytrack fader follows the filter you just touched (F1 or F2)
-    };
+        };
     freqDisplay.onDragEnd = [this] { if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel); };
     // The resonant FILTER is PER SLOT with TWO in series (filterIdx 0/1). eqEditTarget = 1 or 2 picks
     // the slot; the display edits that slot's filter 1 or 2 (never the other slot's engine).
@@ -8170,23 +8176,8 @@ void DrumSequencerEditor::setupComponents()
         "- Per slot: slot 1 and slot 2 distort independently.\n- Drag left/right; double-click = off.\n"
         "- Right-click = MIDI-learn (acts on the selected slot).");
     fxDriveFader.mlm = &proc.midiLearn; fxDriveFader.learnPid = "ui_sel_fxDrive";
-    const auto ktFmt = [](float v){ return v <= 0.001f ? juce::String("Off") : juce::String(juce::roundToInt(v * 100.0f)) + "%"; };
-    setupFxFader(keytrackFader, "F1 Keytrack", 0.0f, ktFmt,
-        [this](float v){ proc.sequencer.channel(selectedChannel)
-                             .slots[juce::jlimit(0, DrumChannel::NUM_SLOTS - 1, eqEditTarget - 1)].filterKeyTrack = v; },
-        "FILTER 1 KEYTRACK: makes F1's cutoff FOLLOW the note pitch.\n\n"
-        "- 0 = fixed cutoff. 100% = tracks 1:1 (doubles per octave), so high notes stay bright.\n"
-        "- F1/F2 = the TWO FILTERS of this slot (the orange/cyan diamonds) - not the slots.\n"
-        "- Dimmed = filter 1 is Off (enable it: double-click its diamond).");
-    setupFxFader(keytrackFader2, "F2 Keytrack", 0.0f, ktFmt,
-        [this](float v){ proc.sequencer.channel(selectedChannel)
-                             .slots[juce::jlimit(0, DrumChannel::NUM_SLOTS - 1, eqEditTarget - 1)].filterKeyTrack2 = v; },
-        "FILTER 2 KEYTRACK: makes F2's cutoff FOLLOW the note pitch.\n\n"
-        "- 0 = fixed cutoff. 100% = tracks 1:1 (doubles per octave).\n"
-        "- F1/F2 = the TWO FILTERS of this slot (the orange/cyan diamonds) - not the slots.\n"
-        "- Dimmed = filter 2 is Off (enable it: double-click its diamond).");
-    keytrackFader.setAccent(FrequencyDisplay::filtColour(0));
-    keytrackFader2.setAccent(FrequencyDisplay::filtColour(1));
+    // (The F1/F2 KEYTRACK faders are GONE - keytracking is a per-voice MATRIX route now: Note -> Filter
+    //  Cutoff. Factory sounds + old "flK" saves were migrated to routes; the filter visual got the space.)
     setupKnob(knobReverbRoom,  lblRevRoom,  "Size",  0.0, 1.0,  0.5,   1.0, fmtPct);
     setupKnob(knobReverbDecay, lblRevDecay, "Decay", 0.0, 1.0,  0.5,   1.0, fmtPct);
     setupKnob(knobReverbWet,   lblRevWet,   "Wet",   0.0, 1.0,  0.4,   1.0, fmtPct);
@@ -10150,7 +10141,6 @@ void DrumSequencerEditor::updateFxFaders(const DrumChannel::Slot& sl)
     knobPunch.setValue  (sl.fxPunch,      juce::dontSendNotification);
     knobComp.setValue   (sl.fxComp,       juce::dontSendNotification);
     // (LFO tempo sync lives INSIDE the LfoDisplay now - setValues carries sl.lfoSync.)
-    refreshKeytrackFader();   // Keytrack follows the ACTIVE filter (F1/F2) with its colour + label
 }
 
 // LFO SHAPER: open the draw overlay for one LFO tab, loaded with that tab's current curve.
@@ -10168,19 +10158,9 @@ void DrumSequencerEditor::openRoutePicker(int route)
     routePickRoute = route;
     const int si = envTargetSlot();
     routePicker.accent = (si == 0) ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8);
+    routePicker.engine = proc.sequencer.channel(selectedChannel).slots[si].engine;   // gates Warp/WavePos targets
     routePicker.openFor(modFaders.src[route], modFaders.tgt[route]);   // bounds set in layoutContent
     routePicker.toFront(false);
-}
-
-// BOTH keytrack faders (F1 + F2) push their own filter's value; each dims when its filter is Off.
-void DrumSequencerEditor::refreshKeytrackFader()
-{
-    const int si = juce::jlimit(0, DrumChannel::NUM_SLOTS - 1, eqEditTarget - 1);
-    auto& sl = proc.sequencer.channel(selectedChannel).slots[si];
-    keytrackFader.setValue01(sl.filterKeyTrack);
-    keytrackFader2.setValue01(sl.filterKeyTrack2);
-    keytrackFader.setAlpha (sl.filterType  != 0 ? 1.0f : 0.32f);   // clearly dimmer when its filter is Off
-    keytrackFader2.setAlpha(sl.filterType2 != 0 ? 1.0f : 0.32f);
 }
 
 void DrumSequencerEditor::refreshDetailPanel()
@@ -10472,7 +10452,6 @@ void DrumSequencerEditor::refreshEqTarget()
     freqDisplay.setFilters(fsl.filterType,  fsl.filterCutoff,  fsl.filterReso,  fsl.filterEnvAmt,
                            fsl.filterType2, fsl.filterCutoff2, fsl.filterReso2, fsl.filterEnvAmt2, proc.spectrumRate());
     freqDisplay.setFilterDrive(fsl.filterDrive);
-    refreshKeytrackFader();   // BOTH keytrack faders re-read this slot (stale values read as "slot 2 rose too")
     proc.analysisSlot.store(si);   // spectrum follows the selected slot
     slotSelEq.sel = si; slotSelEq.repaint();
 }
@@ -10849,8 +10828,13 @@ void DrumSequencerEditor::timerCallback()
         freqDisplay.setModCutoff(0, c1 < -900.0f ? -1.0f : c1);
         freqDisplay.setModCutoff(1, c2 < -900.0f ? -1.0f : c2);
         // GRID knobs (the engine's own params - FM Amount, Ratio, ...): ring both slot boxes from [9..16].
+        // Osc slots also ring the Warp fader + push the modulated FM/Warp into the WAVE PREVIEW so the
+        // drawing itself moves with the modulation (user: "changing the sound wave too").
         for (int s = 0; s < DrumChannel::NUM_SLOTS; ++s)
+        {
             slotEd[s].setGridModRings(&mc.slotModLiveFx[s][9], DrumChannel::MOD_TGT_GRID);
+            slotEd[s].setOscModLive(mc.slotModLiveFx[s][17], mc.slotModLiveFx[s][9], mc.slotModLiveFx[s][10]);
+        }
     }
     {   // DRIFT visual honesty: push the last hit's REAL rolled detunes into the unison view
         auto& dc = proc.sequencer.channel(selectedChannel);
@@ -11493,13 +11477,10 @@ void DrumSequencerEditor::layoutContent()
           envEditor.setBounds (ax + 8, GRAPH_Y, ampEqW - 16, GRAPH_H);
           hdrEqBox.setBounds  (ax + 4, GRAPH_Y + GRAPH_H + 10, ampEqW - 8, hdrH);   // "FILTER / EQ" sub-title
           slotSelEq.setBounds (ax + 8, GRAPH_Y + GRAPH_H + 30, ampEqW - 16, 16);
-          // The EQ/filter display is shrunk a little to the LEFT so the vertical KEYTRACK fader sits on
-          // its right, under the same "FILTER / EQ" title (both control the resonant filter shown here).
-          const int ktW = 19, ktGap = 6, fdY = GRAPH_Y + GRAPH_H + 50, fdH = 124;   // TWO narrow faders (F1 + F2)
-          freqDisplay.setBounds (ax + 8, fdY, ampEqW - 16 - 2 * ktW - 2 - ktGap, fdH);
-          keytrackFader.setVertical(true);  keytrackFader2.setVertical(true);
-          keytrackFader.setBounds (ax + 8 + ampEqW - 16 - 2 * ktW - 2, fdY, ktW, fdH);
-          keytrackFader2.setBounds(ax + 8 + ampEqW - 16 - ktW,         fdY, ktW, fdH); }
+          // The filter/EQ display gets the FULL width (the keytrack faders are gone - keytrack is a
+          // Note -> Filter Cutoff matrix route now).
+          const int fdY = GRAPH_Y + GRAPH_H + 50, fdH = 124;
+          freqDisplay.setBounds (ax + 8, fdY, ampEqW - 16, fdH); }
 
         // -- PITCH ENVELOPE column: title on TOP, its 1/2 selector BELOW it (matches the amp-env column), graph aligned
         //    with the amp-env graph. Then "UNISON/DETUNE/VIBRATO" with ITS OWN 1/2 selector under it, the voice visual,

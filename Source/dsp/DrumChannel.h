@@ -627,7 +627,6 @@ public:
         //     the slot's EQ display (F diamond). Off by default = identical to before. ===
         int   filterType   = FilterOff;   // Off / LowPass / HighPass / BandPass / Notch (Formant = channel-only)
         float filterCutoff = 1000.0f, filterReso = 0.707f, filterEnvAmt = 0.0f;
-        float filterKeyTrack = 0.0f;      // 0..1: how much the cutoff FOLLOWS the note pitch (keyboard tracking)
         // FILTER 2: a SECOND independent resonant filter, applied in SERIES after filter 1 (e.g. HP + LP
         // = a band you shape). Same controls; Off by default. Persisted flT2/flC2/flR2/flE2/flK2.
         // DRIFT ("alive"): 0 = today's perfectly repeating notes (bit-identical). Above 0 every note
@@ -640,7 +639,6 @@ public:
         float filterDrive = 0.0f;
         int   filterType2   = FilterOff;
         float filterCutoff2 = 2500.0f, filterReso2 = 0.707f, filterEnvAmt2 = 0.0f;
-        float filterKeyTrack2 = 0.0f;
         // === PER-SLOT FILTER (end) ===
         // === PER-SLOT CHORUS (insert, after the filter/EQ) - lush multi-voice stereo widener.
         //     ONE macro control (user): mix only. Rate/depth are EFFECT CONSTANTS in the DSP (like
@@ -687,10 +685,10 @@ private: struct Voice; public:   // forward decl (defined privately below) so th
     // target this block (0-6 = Rev/Del/Chorus/Tone/Punch/Comp/Drive; 7-8 = Filter1/Filter2 cutoff Hz).
     // -1000 = matrix inactive (no ring). Written on the audio thread, read by the editor timer (torn-read
     // tolerant, like the other UI reads).
-    static constexpr int MOD_LIVE_N = 17;   // 0-8 Rev/Del/Chorus/Tone/Punch/Comp/Drive/Filt1Cut/Filt2Cut, 9-16 = the 8 engine GRID knobs
+    static constexpr int MOD_LIVE_N = 18;   // 0-8 Rev/Del/Chorus/Tone/Punch/Comp/Drive/Filt1Cut/Filt2Cut, 9-16 = the 8 engine GRID knobs, 17 = oscWarp (Osc only)
     float slotModLiveFx[NUM_SLOTS][MOD_LIVE_N] = {
-        { -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000 },
-        { -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000 } };
+        { -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000 },
+        { -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000 } };
     float chDrvLp[2] = {}, chDrvDcX[2] = {}, chDrvDcY[2] = {};   // channel drive post-smoothing + Fuzz DC blocker (legacy multi-slot drive stage)
     // PER-SLOT CHORUS runtime: a stereo delay line + 3 LFO phases per slot (lazy-sized in renderInto);
     // the insert runs on the slot's summed output AFTER the voice loop, so it never touches the other slot.

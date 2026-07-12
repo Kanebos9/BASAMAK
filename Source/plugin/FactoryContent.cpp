@@ -21,6 +21,14 @@ static void lfoRoute(DC::Slot& s, int lfoIdx, int tgt)
         if (r.src == DC::MSOff && r.tgt == DC::MTOff)
         { r.src = (int8_t)(DC::MSLfoFilt + lfoIdx); r.tgt = (int8_t) tgt; r.amt = 1.0f; return; }
 }
+// KEYTRACK as a matrix route (the dedicated filter keytrack was retired): Note -> Filter 1 Cutoff.
+// amt = kt/2 reproduces the old keytrack kt exactly within +-24 st (2^(amt*semis/24*4) == 2^(kt*semis/12)).
+static void ktRoute(DC::Slot& s, float kt)
+{
+    for (auto& r : s.mod)
+        if (r.src == DC::MSOff && r.tgt == DC::MTOff)
+        { r.src = (int8_t) DC::MSNote; r.tgt = (int8_t) DC::MTFilt1Cut; r.amt = kt * 0.5f; return; }
+}
 
 // Reset only the *sound* parameters of a channel to a clean, sample-free state.
 // Leaves the channel's identity (name/colour/MIDI note) and its step pattern
@@ -1490,7 +1498,7 @@ static void nDreamPluck(DC& c) {    // bright pluck that stays even across the k
     s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
     s.atk = 0.002f; s.dec = 0.5f; s.sustain = 0.0f; s.release = 0.35f;
     s.filterType = DC::LowPass; s.filterCutoff = 1200.0f; s.filterReso = 2.5f; s.filterEnvAmt = 0.5f;
-    s.filterKeyTrack = 0.8f;                    // cutoff tracks the note -> high notes stay bright, lows stay warm
+    ktRoute(s, 0.8f);                    // cutoff tracks the note -> high notes stay bright, lows stay warm
     s.chorusMix = 0.6f;
     c.reverbSend = 0.28f; c.volume = 0.66f;
 }
@@ -1499,7 +1507,7 @@ static void nNotchBass(DC& c) {     // phaser-ish bass: a swept NOTCH + keytrack
     s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 65.41f;         // C2
     s.atk = 0.004f; s.dec = 0.8f; s.sustain = 0.7f; s.release = 0.2f;
     s.filterType = DC::Notch; s.filterCutoff = 500.0f; s.filterReso = 3.0f;
-    s.filterKeyTrack = 0.5f;
+    ktRoute(s, 0.5f);
     s.lfoAmt[0] = 0.6f; s.lfoSync[0] = 2.0f; lfoRoute(s, 0, DC::MTFilt1Cut);   // 1/2-note notch sweep (tempo-synced) = phaser motion
     c.volume = 0.82f;
 }
@@ -1508,7 +1516,7 @@ static void nAcidHP(DC& c) {        // thin, buzzy acid lead: HIGH-PASS + resona
     s.oscShape = s.oscShapeB = DC::WvSquare; s.oscFreq = 130.81f;     // C3
     s.atk = 0.003f; s.dec = 0.4f; s.sustain = 0.5f; s.release = 0.15f;
     s.filterType = DC::HighPass; s.filterCutoff = 300.0f; s.filterReso = 5.0f; s.filterEnvAmt = 0.6f;
-    s.filterKeyTrack = 0.7f;
+    ktRoute(s, 0.7f);
     c.delaySend = 0.15f; c.volume = 0.72f;
 }
 static void nVoxBP(DC& c) {         // vocal-ish tone via a resonant BAND-PASS + full keytrack, softened with chorus
@@ -1516,7 +1524,7 @@ static void nVoxBP(DC& c) {         // vocal-ish tone via a resonant BAND-PASS +
     s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
     s.atk = 0.05f; s.dec = 1.0f; s.sustain = 0.7f; s.release = 0.4f;
     s.filterType = DC::BandPass; s.filterCutoff = 900.0f; s.filterReso = 4.0f;
-    s.filterKeyTrack = 1.0f;                    // the formant band tracks the note = a consistent 'vowel'
+    ktRoute(s, 1.0f);                    // the formant band tracks the note = a consistent 'vowel'
     s.chorusMix = 0.5f;
     c.reverbSend = 0.2f; c.volume = 0.62f;
 }
@@ -1593,7 +1601,7 @@ static void aClarinet(DC& c) {     // woody odd pipe: hollow start blooming into
     wtFrame(s, 2, {{1,0.9f},{2,0.08f},{3,0.85f},{5,0.65f},{7,0.35f},{9,0.45f},{11,0.2f}}); // C: overblown bright
     wtFrame(s, 3, {{1,0.9f},{2,0.08f},{3,0.85f},{5,0.65f},{7,0.35f},{9,0.45f},{11,0.2f}});
     s.atk = 0.07f; s.dec = 0.5f; s.sustain = 0.85f; s.release = 0.22f;
-    s.filterType = DC::LowPass; s.filterCutoff = 2400.0f; s.filterReso = 0.8f; s.filterKeyTrack = 0.5f;
+    s.filterType = DC::LowPass; s.filterCutoff = 2400.0f; s.filterReso = 0.8f; ktRoute(s, 0.5f);
     s.fxTone = -0.25f; s.drift = 0.2f; s.vibrato = 0.10f;
     windMotion(s, 0.09f, 0.14f, 0.6f);
     s.addLoop = true;                     // user: loop the glide (the tone breathes out AND back)
@@ -1619,7 +1627,7 @@ static void aOboe(DC& c) {         // "Reed Piano" (user: it reads as a piano, n
     wtFrame(s, 2, {{1,0.45f},{2,0.8f},{3,1.0f},{4,0.85f},{5,0.6f},{6,0.45f},{8,0.3f},{10,0.15f}}); // C: pressed
     wtFrame(s, 3, {{1,0.45f},{2,0.8f},{3,1.0f},{4,0.85f},{5,0.6f},{6,0.45f},{8,0.3f},{10,0.15f}});
     s.atk = 0.05f; s.dec = 0.5f; s.sustain = 0.85f; s.release = 0.2f;
-    s.filterType = DC::BandPass; s.filterCutoff = 1100.0f; s.filterReso = 1.3f; s.filterKeyTrack = 0.35f;
+    s.filterType = DC::BandPass; s.filterCutoff = 1100.0f; s.filterReso = 1.3f; ktRoute(s, 0.35f);
     s.filterType2 = DC::LowPass; s.filterCutoff2 = 5200.0f; s.filterReso2 = 0.7f;
     s.drift = 0.22f; s.vibrato = 0.12f;
     windMotion(s, 0.07f, 0.12f, 0.8f);
@@ -1635,7 +1643,7 @@ static void aHollowBass(DC& c) {   // fundamental + a lonely 3rd = hollow, woody
     auto& s = mkAdd(c, {{1,1.0f},{3,0.45f},{5,0.12f}});
     s.atk = 0.004f; s.dec = 0.7f; s.sustain = 0.7f; s.release = 0.12f;
     s.oscFreq = 65.41f;
-    s.filterType = DC::LowPass; s.filterCutoff = 900.0f; s.filterReso = 1.2f; s.filterKeyTrack = 0.6f;
+    s.filterType = DC::LowPass; s.filterCutoff = 900.0f; s.filterReso = 1.2f; ktRoute(s, 0.6f);
     s.fxComp = 0.4f; c.volume = 0.82f;
 }
 static void aQuintLead(DC& c) {    // strong 3rd harmonic = a built-in fifth colour (organ-quint trick)
@@ -1715,7 +1723,7 @@ static void xGlueBass(DC& c) {     // heavy one-knob comp holding a saw+sub toge
     auto& s = mkSlot(c, DC::SrcOsc);
     s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 55.0f;
     s.atk = 0.004f; s.dec = 0.6f; s.sustain = 0.75f; s.release = 0.12f;
-    s.filterType = DC::LowPass; s.filterCutoff = 800.0f; s.filterReso = 1.0f; s.filterKeyTrack = 0.5f;
+    s.filterType = DC::LowPass; s.filterCutoff = 800.0f; s.filterReso = 1.0f; ktRoute(s, 0.5f);
     s.fxComp = 0.7f; s.fxTone = -0.2f;
     auto& b = mkSlot2(c, DC::SrcOsc, 0.6f);
     b.oscShape = b.oscShapeB = DC::WvSine; b.oscFreq = 55.0f;
@@ -1870,7 +1878,7 @@ static void nProwlBass(DC& c) {  // filter-forward bass (Hungry Bass's cousin, O
     s.atk = 0.004f; s.dec = 0.9f; s.sustain = 0.65f; s.release = 0.25f;
     s.drift = 0.15f;
     s.filterType = DC::LowPass; s.filterCutoff = 480.0f; s.filterReso = 2.6f;
-    s.filterEnvAmt = 0.45f; s.filterKeyTrack = 0.35f;
+    s.filterEnvAmt = 0.45f; ktRoute(s, 0.35f);
     s.lfoAmt[0] = 0.3f; s.lfoSync[0] = 0.5f; s.lfoFree[0] = true; lfoRoute(s, 0, DC::MTFilt1Cut);   // half a cycle per bar, free-run
     s.fxDriveType = DC::DriveBassAmp; s.fxDrive = 0.4f;
     c.volume = 0.85f;
@@ -1911,7 +1919,7 @@ static void grScatterLead(DC& c) {   // gritty scattered saw lead
     auto& s = grSlot(c, 4);          // Saw
     s.grainPos = 0.5f; s.grainSize = 0.25f; s.grainDens = 0.7f; s.grainSpray = 0.1f; s.grainPitch = 0.08f;
     s.atk = 0.004f; s.dec = 0.8f; s.sustain = 0.7f; s.release = 0.2f;
-    s.filterType = DC::LowPass; s.filterCutoff = 2600.0f; s.filterReso = 1.2f; s.filterKeyTrack = 0.5f;
+    s.filterType = DC::LowPass; s.filterCutoff = 2600.0f; s.filterReso = 1.2f; ktRoute(s, 0.5f);
     c.volume = 0.8f;
 }
 static void grParticlePerc(DC& c) {  // sparse micro-grains = pitched particle percussion
