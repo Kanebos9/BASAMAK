@@ -608,6 +608,7 @@ class RoutePicker : public juce::Component
 public:
     std::function<void(int src, int tgt)> onPicked;         // chosen source enum + target enum (live-apply)
     std::function<void(float amt)> onAmt;                   // route AMOUNT edited on the picker's own fader
+    std::function<void()> onAmtDragEnd;                     // amount fader released (auto-audition)
     std::function<void()> onClose;
     std::function<juce::String(int gridIdx)> gridKnobName;  // live engine-knob names for grid targets
     juce::Colour accent { 0xffe8bf4d };
@@ -620,7 +621,9 @@ public:
     void paint(juce::Graphics& g) override;
     void mouseDown(const juce::MouseEvent& e) override;     // the bottom AMOUNT fader
     void mouseDrag(const juce::MouseEvent& e) override;
+    void mouseUp(const juce::MouseEvent& e) override;
 private:
+    bool amtDrag = false;
     struct Col : public juce::ListBoxModel
     {
         RoutePicker& owner; bool isSrc;
@@ -670,12 +673,14 @@ public:
     int   src[NR] = {}, tgt[NR] = {};
     float amt[NR] = {};
     std::function<void()> onChange;                 // write src/tgt/amt back into the slot
+    std::function<void()> onDragEnd;                // released (auto-audition)
     std::function<void(int route)> onPickRoute;     // right-click a fader -> open the picker for it
     std::function<juce::String(int gridIdx)> gridKnobName;
     void setValues(const DrumChannel::Slot& sl);
     void paint(juce::Graphics& g) override;
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
+    void mouseUp(const juce::MouseEvent& e) override;
     void mouseDoubleClick(const juce::MouseEvent& e) override;
     juce::String getTooltip() override
     { return "12 modulation routes (this slot).\n\n"
@@ -1532,6 +1537,9 @@ public:
     // DRIFT visual honesty: the DSP's real rolled per-voice detunes (cents) from the newest playing
     // voice - the drawn lines move with what actually just played (change-gated repaint).
     void setDriftLive(const float* cents, int n);
+    // LIVE MODULATION: a cyan ring at each dot's modulated position (detune/vib/width/drift; -1 = no
+    // active route) - so a param targeted in the matrix visibly moves, like the FX-knob mod rings.
+    void setModLive(float det, float vib, float width, float drift);
     void setSupport(bool uniSupported, bool vibSupported, juce::String naReason);
     void setMaxUni(int m) { const int c = juce::jlimit(1, kMaxUni, m); if (c == maxUni) return; maxUni = c; if (uni > maxUni) uni = maxUni; if (uniChord > maxUni) uniChord = maxUni; if (uniScale > maxUni) uniScale = maxUni; repaint(); }  // per-engine unison cap
     std::function<void(int unison, float detune, float vibrato, bool centre, int detuneMode, int chordMode, bool scaleOn, int scaleType, int scaleKey, float uniSpread, float drift)> onChange;
@@ -1553,6 +1561,7 @@ private:
     float uniWidth = 0.0f;   // stereo WIDTH of the unison/chord voices (top-left mini bar; NOT 'spread' - paint() has a pixel local by that name)
     float driftAmt = 0.0f;   // DRIFT: per-note randomness (phase scatter + micro-detune + level breath)
     float driftLive[17] = {}; int driftLiveN = 0;   // the last hit's REAL rolled detunes (cents)
+    float modLive[4] = { -1.0f, -1.0f, -1.0f, -1.0f };   // live modulated detune/vib/width/drift (-1 = no active route)
     bool  centre = false;          // also play the original/undetuned pitch (toggled by double-click on Detune)
     int   mode = 0;                // detune direction: 0 = symmetric (drag right), 1 = up (drag up), 2 = down (drag down)
     bool  uniOn = true, vibOn = true;
@@ -2396,10 +2405,10 @@ private:
     LearnableKnob knobTone    { "ui_sel_fxTone",  proc.midiLearn };   // per-slot TONE tilt (dark..bright)
     LearnableKnob knobPunch   { "ui_sel_fxPunch", proc.midiLearn };   // per-slot PUNCH transient shaper
     LearnableKnob knobComp    { "ui_sel_fxComp",  proc.midiLearn };   // per-slot one-knob COMPRESSOR
-    LearnableKnob knobCrush   { "ui_sel_fxCrush", proc.midiLearn };   // per-slot bitcrush + downsample
-    LearnableKnob knobAir     { "ui_sel_fxAir",   proc.midiLearn };   // per-slot high-shelf AIR
-    LearnableKnob knobRing    { "ui_sel_fxRing",  proc.midiLearn };   // per-slot RING modulator
-    juce::Label   lblChMix, lblTone, lblPunch, lblComp, lblCrush, lblAir, lblRing;
+    LearnableKnob knobFlanger { "ui_sel_fxFlanger", proc.midiLearn };   // per-slot bus FLANGER
+    LearnableKnob knobPhaser  { "ui_sel_fxPhaser",  proc.midiLearn };   // per-slot bus PHASER
+    LearnableKnob knobRing    { "ui_sel_fxRing",    proc.midiLearn };   // per-slot RING modulator
+    juce::Label   lblChMix, lblTone, lblPunch, lblComp, lblFlanger, lblPhaser, lblRing;
     // REVERB MODE: clicking the "REVERB" header cycles Room -> Hall -> Plate -> Shimmer (whole
     // preset, like the other master flavour controls). A tiny MouseListener makes the Label clickable.
     struct HdrClick : juce::MouseListener

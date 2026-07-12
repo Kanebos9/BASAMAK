@@ -739,7 +739,7 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("chM", s.chorusMix, nullptr);   // (chRt/chDp retired - rate/depth are effect constants)
         st.setProperty("fxTn", s.fxTone, nullptr); st.setProperty("fxPn", s.fxPunch, nullptr);
         st.setProperty("fxCp", s.fxComp, nullptr);
-        st.setProperty("fxCr", s.fxCrush, nullptr); st.setProperty("fxAr", s.fxAir, nullptr); st.setProperty("fxRg", s.fxRing, nullptr);
+        st.setProperty("fxFl", s.fxFlanger, nullptr); st.setProperty("fxPh", s.fxPhaser, nullptr); st.setProperty("fxRg", s.fxRing, nullptr);
         for (int f = 0; f < ADD_FRAMES; ++f)            // ADDITIVE WAVETABLE: 4 drawn frames (CSV per frame)
         { juce::String hs, ps;
           for (int k = 0; k < ADD_HARM; ++k) { const juce::String c2 = k < ADD_HARM - 1 ? "," : "";
@@ -876,7 +876,7 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         s.fxTone  = (float)st.getProperty("fxTn", d.fxTone);
         s.fxPunch = (float)st.getProperty("fxPn", d.fxPunch);
         s.fxComp  = (float)st.getProperty("fxCp", d.fxComp);
-        s.fxCrush = (float)st.getProperty("fxCr", d.fxCrush); s.fxAir = (float)st.getProperty("fxAr", d.fxAir); s.fxRing = (float)st.getProperty("fxRg", d.fxRing);
+        s.fxFlanger = (float)st.getProperty("fxFl", d.fxFlanger); s.fxPhaser = (float)st.getProperty("fxPh", d.fxPhaser); s.fxRing = (float)st.getProperty("fxRg", d.fxRing);
         {   // ADDITIVE WAVETABLE frames (aH0..aH3/aP0..aP3 + aMt/aPos). LEGACY 2-spectrum files
             // (aH/aP = A, aHB/aPB = B, aMt = A->B seconds) migrate to frames {A,B,B,B} with
             // morphSec x3: the new glide crosses A->B in the first THIRD of the strip, so
@@ -1458,11 +1458,10 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         sv.greyZ1 = sv.greyZ2 = 0.0f;
         for (int fi = 0; fi < 2; ++fi) {   // both SVFs start clean each hit (no retrigger click); snap the smoothed cutoff
             sv.filtIc1[fi][0] = sv.filtIc1[fi][1] = sv.filtIc2[fi][0] = sv.filtIc2[fi][1] = 0.0; sv.filtGm[fi] = -1.0; }
-        for (int lr = 0; lr < 2; ++lr) {   // drive smoothing/DC + tone + punch + crush/air state start clean each hit
+        for (int lr = 0; lr < 2; ++lr) {   // drive smoothing/DC + tone + punch state start clean each hit
             sv.drvLp[lr] = sv.drvDcX[lr] = sv.drvDcY[lr] = 0.0f;
-            sv.toneZ[lr] = 0.0f; sv.pFast[lr] = sv.pSlow[lr] = 0.0f;
-            sv.crushHold[lr] = 0.0f; sv.airZ[lr] = 0.0f; }
-        sv.crushCnt = 0; sv.ringPh = 0.0;
+            sv.toneZ[lr] = 0.0f; sv.pFast[lr] = sv.pSlow[lr] = 0.0f; }
+        sv.ringPh = 0.0;
         sv.fmCarrier = sv.fmMod = sv.fmSubPhase = 0.0; sv.fmFbState = 0.0f;
         sv.wtPhase = 0.0; sv.modalInit = false; sv.modalHold = false;   // re-strike the modal bank on this hit
         for (auto& row : sv.modalY1) for (auto& v2 : row) v2 = 0.0f;   // clean resonator state every hit
@@ -1891,15 +1890,15 @@ void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals) const
             case MTRel:      tmp.release = juce::jlimit(0.0f, 4.0f, tmp.release + m * 2.0f); break;
             case MTPitch:    { float* bp = (tmp.engine == SrcPhys) ? &tmp.physFreq : &tmp.oscFreq;
                                *bp = juce::jlimit(1.0f, 20000.0f, *bp * std::pow(2.0f, m)); } break;   // +-1 octave
-            case MTWavePos:  { float& f = (tmp.engine == SrcGrain) ? tmp.grainPos : tmp.addPos; f = juce::jlimit(0.0f, 1.0f, f + m); } break;
+            case MTWavePos:  tmp.addPos = juce::jlimit(0.0f, 1.0f, tmp.addPos + m); break;   // Osc wavetable frame (granular grain position = the "Position" grid knob)
             case MTDetune:   add(tmp.oscDetune, 0, 1); break;
             case MTVibrato:  add(tmp.vibrato, 0, 1); break;
             case MTWidth:    add(tmp.uniSpread, 0, 1); break;
             case MTDrift:    add(tmp.drift, 0, 1); break;
             case MTVol:      add(tmp.weight, 0, 1); break;   // slot level = tremolo (block-rate)
             case MTWarp:     add(tmp.oscWarp, 0, 1); break;  // wavefold amount
-            case MTCrush:    add(tmp.fxCrush, 0, 1); break;
-            case MTAir:      add(tmp.fxAir, 0, 1); break;
+            case MTFlanger:  add(tmp.fxFlanger, 0, 1); break;
+            case MTPhaser:   add(tmp.fxPhaser, 0, 1); break;
             case MTRing:     add(tmp.fxRing, 0, 1); break;
             default:
                 if (r.tgt >= MT_GRID_BASE && r.tgt < MT_COUNT)
@@ -2017,7 +2016,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         float  toneK = 0.0f, toneGL = 1.0f, toneGH = 1.0f;   // TONE tilt (1-pole split + complementary gains)
         float  punch = 0.0f;   // PUNCH transient shaper (-1 soften .. +1 punch)
         float  comp  = 0.0f;   // one-knob COMPRESSOR amount (applied on the slot bus post-loop)
-        float  crush = 0.0f, air = 0.0f, ring = 0.0f;   // CRUSH (bitcrush+downsample) / AIR (hi-shelf) / RING (mod)
+        float  flanger = 0.0f, phaser = 0.0f, ring = 0.0f;   // FLANGER + PHASER (bus inserts) / RING (per-voice mod)
         // === PER-SLOT FILTER (end) ===
         // Per-slot LFOs (3 independent sines, restart each hit). Index: 0 filter cutoff / 1 pitch / 2 volume.
         float  lfoRate[4] = { 4.0f, 4.0f, 4.0f, 4.0f }, lfoAmt[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
@@ -2363,8 +2362,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         else { for (int f = 0; f < ADD_FRAMES; ++f) c.wtFrm[f] = nullptr; c.wtPos = 0.0f; c.wtGlide = false; }
         c.punch   = juce::jlimit(-1.0f, 1.0f, sl.fxPunch);
         c.comp    = juce::jlimit(0.0f, 1.0f, sl.fxComp);
-        c.crush   = juce::jlimit(0.0f, 1.0f, sl.fxCrush);
-        c.air     = juce::jlimit(0.0f, 1.0f, sl.fxAir);
+        c.flanger = juce::jlimit(0.0f, 1.0f, sl.fxFlanger);
+        c.phaser  = juce::jlimit(0.0f, 1.0f, sl.fxPhaser);
         c.ring    = juce::jlimit(0.0f, 1.0f, sl.fxRing);
         { const float t = juce::jlimit(-1.0f, 1.0f, sl.fxTone);          // TONE tilt: +/-6 dB around ~800 Hz
           if (t != 0.0f) { c.toneK  = 1.0f - std::exp(-2.0f * (float) kPi * 800.0f / (float) juce::jmax(1.0, sr));
@@ -2404,7 +2403,13 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 slotModLiveFx[s][9 + gi] = (gk.field != nullptr) ? (float)(modTmp.*(gk.field)) : -1000.0f;
             }
             slotModLiveFx[s][17] = (modTmp.engine == SrcOsc) ? modTmp.oscWarp : -1000.0f;   // Warp (wave preview + fader)
-            slotModLiveFx[s][18] = modTmp.fxCrush; slotModLiveFx[s][19] = modTmp.fxAir; slotModLiveFx[s][20] = modTmp.fxRing;
+            slotModLiveFx[s][18] = modTmp.fxFlanger; slotModLiveFx[s][19] = modTmp.fxPhaser; slotModLiveFx[s][20] = modTmp.fxRing;
+            // UNISON dots (detune/vib/width/drift): a ring only when a route actually targets them.
+            auto uniTgt = [&](int tg) { for (auto& r : modTmp.mod) if (r.tgt == tg && r.src != MSOff && std::abs(r.amt) > 1.0e-4f) return true; return false; };
+            slotModLiveFx[s][21] = uniTgt(MTDetune)  ? modTmp.oscDetune : -1000.0f;
+            slotModLiveFx[s][22] = uniTgt(MTVibrato) ? modTmp.vibrato   : -1000.0f;
+            slotModLiveFx[s][23] = uniTgt(MTWidth)   ? modTmp.uniSpread : -1000.0f;
+            slotModLiveFx[s][24] = uniTgt(MTDrift)   ? modTmp.drift     : -1000.0f;
             // Keep any LFO used as a matrix SOURCE advancing even if its own Amount is 0.
             for (auto& r : modTmp.mod)
                 if (r.tgt != MTOff && std::abs(r.amt) > 1.0e-4f
@@ -2466,11 +2471,13 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
     // CHORUS: when a slot's chorus is on, its (fully panned/gained) output is summed into a per-slot
     // block buffer here instead of into the main mix; after the voice loop the insert runs on that
     // buffer and adds to the output. All-off = the buffer is never touched = bit-identical.
-    bool slotChorus[NUM_SLOTS], slotComp[NUM_SLOTS], slotBus[NUM_SLOTS];
+    bool slotChorus[NUM_SLOTS], slotComp[NUM_SLOTS], slotFlang[NUM_SLOTS], slotPhase[NUM_SLOTS], slotBus[NUM_SLOTS];
     bool anyChorus = false;
-    for (int s = 0; s < NUM_SLOTS; ++s) { slotChorus[s] = sc[s].chMix > 0.001f;
-                                          slotComp[s]   = sc[s].comp  > 0.001f;
-                                          slotBus[s]    = slotChorus[s] || slotComp[s];
+    for (int s = 0; s < NUM_SLOTS; ++s) { slotChorus[s] = sc[s].chMix   > 0.001f;
+                                          slotComp[s]   = sc[s].comp    > 0.001f;
+                                          slotFlang[s]  = sc[s].flanger > 0.001f;
+                                          slotPhase[s]  = sc[s].phaser  > 0.001f;
+                                          slotBus[s]    = slotChorus[s] || slotComp[s] || slotFlang[s] || slotPhase[s];
                                           anyChorus |= slotBus[s]; }
     float* chorInL[NUM_SLOTS] = {}; float* chorInR[NUM_SLOTS] = {};
     if (anyChorus)
@@ -2504,7 +2511,6 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
     // PUNCH transient followers: ~1.5 ms fast / ~50 ms slow.
     const float punchKf = 1.0f - std::exp(-1.0f / (0.0015f * (float) juce::jmax(1.0, sr)));
     const float punchKs = 1.0f - std::exp(-1.0f / (0.050f  * (float) juce::jmax(1.0, sr)));
-    const float airK    = 1.0f - std::exp(-2.0f * (float) kPi * 3500.0f / (float) juce::jmax(1.0, sr));  // AIR: ~3.5 kHz hi-shelf split
     const double ringInc = 2.0 * kPi * 200.0 / juce::jmax(1.0, sr);   // RING: fixed ~200 Hz carrier
     // (The per-slot filter cutoff/G/K bake moved INTO bakeSlot so per-voice re-bakes compute it too.)
     // === PER-SLOT FILTER (end) ===
@@ -3295,23 +3301,6 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                                                     : 1.0f / (1.0f + (-c.punch) * tr * 1.2f);
                     if (stereo) { sL *= pg; sR *= pg; } else sig *= pg;
                 }
-                // CRUSH (per slot): bit reduction + sample-rate reduction (digital lo-fi). 0 = clean.
-                if (c.crush > 0.0f) {
-                    const float levels = std::pow(2.0f, 1.0f + (1.0f - c.crush) * 13.0f);   // ~15 bits (clean) -> 2 bits (full)
-                    if (sv.crushCnt <= 0) {                                                  // sample-hold = downsample
-                        sv.crushHold[0] = std::round(juce::jlimit(-4.0f, 4.0f, stereo ? sL : sig) * levels) / levels;
-                        sv.crushHold[1] = std::round(juce::jlimit(-4.0f, 4.0f, stereo ? sR : sig) * levels) / levels;
-                        sv.crushCnt = 1 + (int)(c.crush * c.crush * 20.0f);
-                    }
-                    --sv.crushCnt;
-                    if (stereo) { sL = sv.crushHold[0]; sR = sv.crushHold[1]; } else sig = sv.crushHold[0];
-                }
-                // AIR (per slot): high-shelf presence lift - add back the HF content above ~3.5 kHz.
-                if (c.air > 0.0f) {
-                    auto airF = [&](float x, int lr) -> float { sv.airZ[lr] += airK * (x - sv.airZ[lr]);
-                                                                return x + c.air * 1.8f * (x - sv.airZ[lr]); };
-                    if (stereo) { sL = airF(sL, 0); sR = airF(sR, 1); } else sig = airF(sig, 0);
-                }
                 // RING (per slot): ring modulation with a fixed ~200 Hz carrier (metallic / inharmonic).
                 if (c.ring > 0.0f) {
                     sv.ringPh += ringInc; if (sv.ringPh > 2.0 * kPi) sv.ringPh -= 2.0 * kPi;
@@ -3391,7 +3380,60 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 }
                 compEnv[s] = env;
             }
-            if (! slotChorus[s])                                  // comp only: the bus goes straight to the mix
+            // FLANGER (per slot, bus): a swept short delay + feedback = the metallic jet sweep. In-place.
+            if (slotFlang[s])
+            {
+                const int flen = juce::jmax(64, (int) (0.012 * sr));   // ~12 ms line (max tap ~5 ms + margin)
+                std::vector<float>& dL = flangDL[s]; std::vector<float>& dR = flangDR[s];
+                if ((int) dL.size() != flen) { dL.assign((size_t) flen, 0.0f); dR.assign((size_t) flen, 0.0f); flangW[s] = 0; flangPh[s] = 0.0; }
+                int w = flangW[s]; double ph = flangPh[s];
+                const double dPh   = 2.0 * kPi * 0.20 / sr;           // EFFECT CONSTANT rate ~0.20 Hz
+                const float  baseS = (float) (0.0010 * sr), depthS = (float) (0.0040 * sr);   // 1 ms centre, +/-4 ms swing
+                const float  amt = sc[s].flanger, fb = 0.7f * amt, mix = amt;
+                float* iL = chorInL[s]; float* iR = chorInR[s];
+                auto rd = [&](const std::vector<float>& buf, float delay) -> float {
+                    float rp = (float) w - delay; while (rp < 0.0f) rp += (float) flen;
+                    const int i0 = (int) rp; const float fr = rp - (float) i0;
+                    const int i1 = (i0 + 1 < flen) ? i0 + 1 : 0;
+                    return buf[(size_t) i0] + (buf[(size_t) i1] - buf[(size_t) i0]) * fr; };
+                for (int i = 0; i < numSamples; ++i)
+                {
+                    const float d = baseS + depthS * (0.5f + 0.5f * (float) std::sin(ph));   // 1..5 ms
+                    const float wL = rd(dL, d), wR = rd(dR, d);
+                    dL[(size_t) w] = juce::jlimit(-4.0f, 4.0f, iL[i] + wL * fb);   // feedback (anti-gunshot clamp)
+                    dR[(size_t) w] = juce::jlimit(-4.0f, 4.0f, iR[i] + wR * fb);
+                    iL[i] = iL[i] * (1.0f - 0.5f * mix) + wL * (0.5f * mix);       // unity-safe blend (like chorus)
+                    iR[i] = iR[i] * (1.0f - 0.5f * mix) + wR * (0.5f * mix);
+                    if (++w >= flen) w = 0;
+                    ph += dPh; if (ph > 2.0 * kPi) ph -= 2.0 * kPi;
+                }
+                flangW[s] = w; flangPh[s] = ph;
+            }
+            // PHASER (per slot, bus): 6 swept allpass stages + feedback = the swirly non-harmonic notches. In-place.
+            if (slotPhase[s])
+            {
+                const int N = 6;
+                double ph = phPh[s];
+                const double dPh = 2.0 * kPi * 0.30 / sr;             // EFFECT CONSTANT rate ~0.30 Hz
+                const float amt = sc[s].phaser, fb = 0.6f * amt;
+                float* zL = phZL[s]; float* zR = phZR[s];
+                float fbL = phFbL[s], fbR = phFbR[s];
+                float* iL = chorInL[s]; float* iR = chorInR[s];
+                for (int i = 0; i < numSamples; ++i)
+                {
+                    const float lfo = 0.5f + 0.5f * (float) std::sin(ph);
+                    const float a = -0.2f + 1.1f * lfo;               // allpass coeff sweep (cheap, no tan): notches move
+                    float xL = iL[i] + fbL * fb, xR = iR[i] + fbR * fb;
+                    for (int k = 0; k < N; ++k) { const float yL = -a * xL + zL[k]; zL[k] = xL + a * yL; xL = yL;
+                                                  const float yR = -a * xR + zR[k]; zR[k] = xR + a * yR; xR = yR; }
+                    fbL = xL; fbR = xR;
+                    iL[i] = iL[i] * (1.0f - 0.5f * amt) + xL * (0.5f * amt);
+                    iR[i] = iR[i] * (1.0f - 0.5f * amt) + xR * (0.5f * amt);
+                    ph += dPh; if (ph > 2.0 * kPi) ph -= 2.0 * kPi;
+                }
+                phPh[s] = ph; phFbL[s] = juce::jlimit(-4.0f, 4.0f, fbL); phFbR[s] = juce::jlimit(-4.0f, 4.0f, fbR);
+            }
+            if (! slotChorus[s])                                  // comp/flanger/phaser only: the bus goes straight to the mix
             {
                 float* iL = chorInL[s]; float* iR = chorInR[s];
                 for (int i = 0; i < numSamples; ++i) { outL[i] += iL[i]; outR[i] += iR[i]; }

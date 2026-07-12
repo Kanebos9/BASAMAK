@@ -150,6 +150,15 @@ int main()
         printf("[6] per-voice Note->cutoff: chord-vs-(A+B) maxdiff=%.4f (per-voice ~0), A-vs-B=%.4f (>0.02) -> %s\n",
                superpos, ab, CHK(superpos < 0.05f && ab > 0.02f && finite(outAB)) ? "OK" : "FAIL");
     }
+    {   // [7] FLANGER + PHASER (per-slot bus inserts): render FINITE + audibly change the tone; 0 = bit-identical.
+        auto dry = render(voice, 0.9f, 0.6);
+        auto flg = render([](DrumChannel& c){ voice(c); c.slots[0].fxFlanger = 1.0f; }, 0.9f, 0.6);
+        auto phs = render([](DrumChannel& c){ voice(c); c.slots[0].fxPhaser  = 1.0f; }, 0.9f, 0.6);
+        const float fd = maxdiff(dry, flg), pd = maxdiff(dry, phs);
+        printf("[7] flanger d=%.4f finite=%d, phaser d=%.4f finite=%d (both >0.001) -> %s\n",
+               fd, (int) finite(flg), pd, (int) finite(phs),
+               CHK(fd > 0.001f && pd > 0.001f && finite(flg) && finite(phs)) ? "OK" : "FAIL");
+    }
     printf(fails == 0 ? ">>> ModMatrixTest PASS\n" : ">>> ModMatrixTest FAIL (%d)\n", fails);
     return fails;
 }

@@ -375,7 +375,7 @@ public:
     // the engine's own knob i (0..7) via slotParamsFor - the dropdown shows its live name.
     enum ModTgt { MTOff = 0, MTFilt1Cut, MTFilt1Res, MTFilt2Cut, MTFilt2Res, MTDrive, MTRevSend,
                   MTDelSend, MTChorus, MTTone, MTPunch, MTComp, MTAtk, MTDec, MTSus, MTRel, MTPitch,
-                  MTWavePos, MTDetune, MTVibrato, MTWidth, MTDrift, MTVol, MTWarp, MTCrush, MTAir, MTRing, MT_GRID_BASE };
+                  MTWavePos, MTDetune, MTVibrato, MTWidth, MTDrift, MTVol, MTWarp, MTFlanger, MTPhaser, MTRing, MT_GRID_BASE };
     static constexpr int MOD_TGT_GRID = 8;   // grid knobs MT_GRID_BASE .. MT_GRID_BASE+7
     static constexpr int MT_COUNT = MT_GRID_BASE + MOD_TGT_GRID;
     // (GridKnob + the mod-matrix DSP helpers are declared after the Slot struct, below.)
@@ -560,9 +560,9 @@ public:
         float fxTone  = 0.0f;                   // tilt EQ -1 dark .. +1 bright (~800 Hz pivot, +/-6 dB)
         float fxPunch = 0.0f;                   // transient shaper -1 soften .. +1 punch (per hit)
         float fxComp  = 0.0f;                   // one-knob compressor 0..1 (squash + makeup, per slot)
-        float fxCrush = 0.0f;                   // bitcrush + sample-rate reduction 0..1 (0 = clean = bit-identical)
-        float fxAir   = 0.0f;                   // high-shelf "air" / presence lift 0..1
-        float fxRing  = 0.0f;                   // ring modulator 0..1 (dry -> ring-modulated, ~200 Hz carrier)
+        float fxFlanger = 0.0f;                 // per-slot bus FLANGER 0..1 (swept short delay + feedback; 0 = bypass = bit-identical)
+        float fxPhaser  = 0.0f;                 // per-slot bus PHASER 0..1 (swept allpass notches + feedback; 0 = bypass)
+        float fxRing    = 0.0f;                 // ring modulator 0..1 (dry -> ring-modulated, ~200 Hz carrier; per voice)
         // -- ADDITIVE WAVETABLE (Wave = "Custom"): FOUR user-DRAWN harmonic frames (A/B/C/D), each
         //    baked to a table; addPos (0..1) scans across them (0 = A, 1 = D, linear crossfade of
         //    the two neighbours). addPh = each harmonic's phase (radians) - set by the freehand WAVE
@@ -688,16 +688,23 @@ private: struct Voice; public:   // forward decl (defined privately below) so th
     // target this block (0-6 = Rev/Del/Chorus/Tone/Punch/Comp/Drive; 7-8 = Filter1/Filter2 cutoff Hz).
     // -1000 = matrix inactive (no ring). Written on the audio thread, read by the editor timer (torn-read
     // tolerant, like the other UI reads).
-    static constexpr int MOD_LIVE_N = 21;   // 0-8 FX/filters, 9-16 grid, 17 oscWarp, 18-20 Crush/Air/Ring
+    static constexpr int MOD_LIVE_N = 25;   // 0-8 FX/filters, 9-16 grid, 17 oscWarp, 18-20 Flanger/Phaser/Ring, 21-24 detune/vib/width/drift
     float slotModLiveFx[NUM_SLOTS][MOD_LIVE_N] = {
-        { -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000 },
-        { -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000 } };
+        { -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000 },
+        { -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000 } };
     float chDrvLp[2] = {}, chDrvDcX[2] = {}, chDrvDcY[2] = {};   // channel drive post-smoothing + Fuzz DC blocker (legacy multi-slot drive stage)
     // PER-SLOT CHORUS runtime: a stereo delay line + 3 LFO phases per slot (lazy-sized in renderInto);
     // the insert runs on the slot's summed output AFTER the voice loop, so it never touches the other slot.
     std::vector<float> chorusDL[NUM_SLOTS], chorusDR[NUM_SLOTS];
     int    chorusW[NUM_SLOTS]  = {};
     double chorusPh[NUM_SLOTS] = {};
+    // PER-SLOT FLANGER + PHASER runtime (same bus-insert model as chorus; lazy state in renderInto).
+    std::vector<float> flangDL[NUM_SLOTS], flangDR[NUM_SLOTS];   // flanger delay lines
+    int    flangW[NUM_SLOTS]  = {};
+    double flangPh[NUM_SLOTS] = {};
+    float  phZL[NUM_SLOTS][6] = {}, phZR[NUM_SLOTS][6] = {};     // phaser allpass states (6 stages, stereo)
+    float  phFbL[NUM_SLOTS] = {}, phFbR[NUM_SLOTS] = {};         // phaser feedback
+    double phPh[NUM_SLOTS] = {};
     float  addTbl[NUM_SLOTS][ADD_FRAMES][ADD_TBL] = {};  // baked wavetable frames per slot - see rebuildAddTables()
     juce::Random driftRng { 0x9e3779b9 };    // DRIFT dice (audio thread only)
     double lfoBarPos  = -1.0;   // set by the Sequencer per block while PLAYING: bars into the playing
@@ -1064,9 +1071,7 @@ private:
         float    ampPre[2] = {}, ampLp1[2] = {}, ampLp2[2] = {};  // BASS AMP: low split + 2-pole cabinet state
         float    toneZ[2] = {};                       // per-slot TONE tilt (1-pole split state)
         float    pFast[2] = {}, pSlow[2] = {};        // per-slot PUNCH transient followers (fast/slow)
-        float    crushHold[2] = {}; int crushCnt = 0; // CRUSH sample-hold (downsample) state
-        float    airZ[2] = {};                        // AIR high-shelf 1-pole state
-        double   ringPh = 0.0;                        // RING modulator carrier phase
+        double   ringPh = 0.0;                        // RING modulator carrier phase (per voice)
         double   filtIc1[2][2] = {}, filtIc2[2][2] = {};   // TPT/ZDF SVF integrators [filter 0/1][stereo side]
         double   filtGm[2]  = { -1.0, -1.0 };              // per-sample smoothed cutoff coeff per filter (-1 = snap)
         double   filtGkt[2] = { -1.0, -1.0 };              // per-voice KEYTRACK target per filter (tan coeff; -1 = off)
