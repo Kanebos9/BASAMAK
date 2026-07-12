@@ -739,6 +739,7 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("chM", s.chorusMix, nullptr);   // (chRt/chDp retired - rate/depth are effect constants)
         st.setProperty("fxTn", s.fxTone, nullptr); st.setProperty("fxPn", s.fxPunch, nullptr);
         st.setProperty("fxCp", s.fxComp, nullptr);
+        st.setProperty("fxCr", s.fxCrush, nullptr); st.setProperty("fxAr", s.fxAir, nullptr); st.setProperty("fxRg", s.fxRing, nullptr);
         for (int f = 0; f < ADD_FRAMES; ++f)            // ADDITIVE WAVETABLE: 4 drawn frames (CSV per frame)
         { juce::String hs, ps;
           for (int k = 0; k < ADD_HARM; ++k) { const juce::String c2 = k < ADD_HARM - 1 ? "," : "";
@@ -875,6 +876,7 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         s.fxTone  = (float)st.getProperty("fxTn", d.fxTone);
         s.fxPunch = (float)st.getProperty("fxPn", d.fxPunch);
         s.fxComp  = (float)st.getProperty("fxCp", d.fxComp);
+        s.fxCrush = (float)st.getProperty("fxCr", d.fxCrush); s.fxAir = (float)st.getProperty("fxAr", d.fxAir); s.fxRing = (float)st.getProperty("fxRg", d.fxRing);
         {   // ADDITIVE WAVETABLE frames (aH0..aH3/aP0..aP3 + aMt/aPos). LEGACY 2-spectrum files
             // (aH/aP = A, aHB/aPB = B, aMt = A->B seconds) migrate to frames {A,B,B,B} with
             // morphSec x3: the new glide crosses A->B in the first THIRD of the strip, so
@@ -1456,9 +1458,11 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         sv.greyZ1 = sv.greyZ2 = 0.0f;
         for (int fi = 0; fi < 2; ++fi) {   // both SVFs start clean each hit (no retrigger click); snap the smoothed cutoff
             sv.filtIc1[fi][0] = sv.filtIc1[fi][1] = sv.filtIc2[fi][0] = sv.filtIc2[fi][1] = 0.0; sv.filtGm[fi] = -1.0; }
-        for (int lr = 0; lr < 2; ++lr) {   // drive smoothing/DC + tone + punch state start clean each hit
+        for (int lr = 0; lr < 2; ++lr) {   // drive smoothing/DC + tone + punch + crush/air state start clean each hit
             sv.drvLp[lr] = sv.drvDcX[lr] = sv.drvDcY[lr] = 0.0f;
-            sv.toneZ[lr] = 0.0f; sv.pFast[lr] = sv.pSlow[lr] = 0.0f; }
+            sv.toneZ[lr] = 0.0f; sv.pFast[lr] = sv.pSlow[lr] = 0.0f;
+            sv.crushHold[lr] = 0.0f; sv.airZ[lr] = 0.0f; }
+        sv.crushCnt = 0; sv.ringPh = 0.0;
         sv.fmCarrier = sv.fmMod = sv.fmSubPhase = 0.0; sv.fmFbState = 0.0f;
         sv.wtPhase = 0.0; sv.modalInit = false; sv.modalHold = false;   // re-strike the modal bank on this hit
         for (auto& row : sv.modalY1) for (auto& v2 : row) v2 = 0.0f;   // clean resonator state every hit
@@ -1783,14 +1787,14 @@ DrumChannel::GridKnob DrumChannel::modGridKnob(int engine, int idx)
         case SrcFM:    switch (idx) { case 0: return F(&S::fmPitch,-24,24); case 1: return F(&S::fmSpread,0,1);
                                       case 2: return F(&S::fmDepth,0,1); case 3: return F(&S::fmSub,0,1);
                                       case 4: return F(&S::fmFeedback,0,1); } break;
-        case SrcPhys:  switch (idx) { case 0: return F(&S::physFreq,20,4186); case 1: return none;   /* Material */
+        case SrcPhys:  switch (idx) { case 0: return none;   /* Base Freq: NOT modulatable (use Pitch) */  case 1: return none;   /* Material */
                                       case 2: return F(&S::physStiff,0,1); case 3: return none; } break;   /* Excite */
         case SrcGrain: switch (idx) { case 0: return F(&S::grainPos,0,1); case 1: return F(&S::grainSize,0,1);
                                       case 2: return F(&S::grainDens,0,1); case 3: return F(&S::grainSpray,0,1);
                                       case 4: return F(&S::grainPitch,0,1); } break;
         case SrcSample:switch (idx) { case 0: return F(&S::smpGain,0,4); case 1: return F(&S::smpCrush,0,1);
                                       case 2: return F(&S::smpStretch,0.25f,4); } break;
-        case SrcModal: switch (idx) { case 0: return F(&S::oscFreq,20,4186); case 1: return none;   /* Material */
+        case SrcModal: switch (idx) { case 0: return none;   /* Base Freq: NOT modulatable (use Pitch) */  case 1: return none;   /* Material */
                                       case 2: return F(&S::modalMorph,0,1); case 3: return F(&S::modalTone,0,1);
                                       case 4: return F(&S::modalStruct,0,1); } break;
         default: break;
@@ -1894,6 +1898,9 @@ void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals) const
             case MTDrift:    add(tmp.drift, 0, 1); break;
             case MTVol:      add(tmp.weight, 0, 1); break;   // slot level = tremolo (block-rate)
             case MTWarp:     add(tmp.oscWarp, 0, 1); break;  // wavefold amount
+            case MTCrush:    add(tmp.fxCrush, 0, 1); break;
+            case MTAir:      add(tmp.fxAir, 0, 1); break;
+            case MTRing:     add(tmp.fxRing, 0, 1); break;
             default:
                 if (r.tgt >= MT_GRID_BASE && r.tgt < MT_COUNT)
                 {
@@ -2010,6 +2017,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         float  toneK = 0.0f, toneGL = 1.0f, toneGH = 1.0f;   // TONE tilt (1-pole split + complementary gains)
         float  punch = 0.0f;   // PUNCH transient shaper (-1 soften .. +1 punch)
         float  comp  = 0.0f;   // one-knob COMPRESSOR amount (applied on the slot bus post-loop)
+        float  crush = 0.0f, air = 0.0f, ring = 0.0f;   // CRUSH (bitcrush+downsample) / AIR (hi-shelf) / RING (mod)
         // === PER-SLOT FILTER (end) ===
         // Per-slot LFOs (3 independent sines, restart each hit). Index: 0 filter cutoff / 1 pitch / 2 volume.
         float  lfoRate[4] = { 4.0f, 4.0f, 4.0f, 4.0f }, lfoAmt[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
@@ -2355,6 +2363,9 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         else { for (int f = 0; f < ADD_FRAMES; ++f) c.wtFrm[f] = nullptr; c.wtPos = 0.0f; c.wtGlide = false; }
         c.punch   = juce::jlimit(-1.0f, 1.0f, sl.fxPunch);
         c.comp    = juce::jlimit(0.0f, 1.0f, sl.fxComp);
+        c.crush   = juce::jlimit(0.0f, 1.0f, sl.fxCrush);
+        c.air     = juce::jlimit(0.0f, 1.0f, sl.fxAir);
+        c.ring    = juce::jlimit(0.0f, 1.0f, sl.fxRing);
         { const float t = juce::jlimit(-1.0f, 1.0f, sl.fxTone);          // TONE tilt: +/-6 dB around ~800 Hz
           if (t != 0.0f) { c.toneK  = 1.0f - std::exp(-2.0f * (float) kPi * 800.0f / (float) juce::jmax(1.0, sr));
                            c.toneGL = juce::Decibels::decibelsToGain(-t * 6.0f);
@@ -2393,6 +2404,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 slotModLiveFx[s][9 + gi] = (gk.field != nullptr) ? (float)(modTmp.*(gk.field)) : -1000.0f;
             }
             slotModLiveFx[s][17] = (modTmp.engine == SrcOsc) ? modTmp.oscWarp : -1000.0f;   // Warp (wave preview + fader)
+            slotModLiveFx[s][18] = modTmp.fxCrush; slotModLiveFx[s][19] = modTmp.fxAir; slotModLiveFx[s][20] = modTmp.fxRing;
             // Keep any LFO used as a matrix SOURCE advancing even if its own Amount is 0.
             for (auto& r : modTmp.mod)
                 if (r.tgt != MTOff && std::abs(r.amt) > 1.0e-4f
@@ -2492,6 +2504,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
     // PUNCH transient followers: ~1.5 ms fast / ~50 ms slow.
     const float punchKf = 1.0f - std::exp(-1.0f / (0.0015f * (float) juce::jmax(1.0, sr)));
     const float punchKs = 1.0f - std::exp(-1.0f / (0.050f  * (float) juce::jmax(1.0, sr)));
+    const float airK    = 1.0f - std::exp(-2.0f * (float) kPi * 3500.0f / (float) juce::jmax(1.0, sr));  // AIR: ~3.5 kHz hi-shelf split
+    const double ringInc = 2.0 * kPi * 200.0 / juce::jmax(1.0, sr);   // RING: fixed ~200 Hz carrier
     // (The per-slot filter cutoff/G/K bake moved INTO bakeSlot so per-voice re-bakes compute it too.)
     // === PER-SLOT FILTER (end) ===
 
@@ -3280,6 +3294,30 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     const float pg = c.punch > 0.0f ? 1.0f + c.punch * tr * 1.2f
                                                     : 1.0f / (1.0f + (-c.punch) * tr * 1.2f);
                     if (stereo) { sL *= pg; sR *= pg; } else sig *= pg;
+                }
+                // CRUSH (per slot): bit reduction + sample-rate reduction (digital lo-fi). 0 = clean.
+                if (c.crush > 0.0f) {
+                    const float levels = std::pow(2.0f, 1.0f + (1.0f - c.crush) * 13.0f);   // ~15 bits (clean) -> 2 bits (full)
+                    if (sv.crushCnt <= 0) {                                                  // sample-hold = downsample
+                        sv.crushHold[0] = std::round(juce::jlimit(-4.0f, 4.0f, stereo ? sL : sig) * levels) / levels;
+                        sv.crushHold[1] = std::round(juce::jlimit(-4.0f, 4.0f, stereo ? sR : sig) * levels) / levels;
+                        sv.crushCnt = 1 + (int)(c.crush * c.crush * 20.0f);
+                    }
+                    --sv.crushCnt;
+                    if (stereo) { sL = sv.crushHold[0]; sR = sv.crushHold[1]; } else sig = sv.crushHold[0];
+                }
+                // AIR (per slot): high-shelf presence lift - add back the HF content above ~3.5 kHz.
+                if (c.air > 0.0f) {
+                    auto airF = [&](float x, int lr) -> float { sv.airZ[lr] += airK * (x - sv.airZ[lr]);
+                                                                return x + c.air * 1.8f * (x - sv.airZ[lr]); };
+                    if (stereo) { sL = airF(sL, 0); sR = airF(sR, 1); } else sig = airF(sig, 0);
+                }
+                // RING (per slot): ring modulation with a fixed ~200 Hz carrier (metallic / inharmonic).
+                if (c.ring > 0.0f) {
+                    sv.ringPh += ringInc; if (sv.ringPh > 2.0 * kPi) sv.ringPh -= 2.0 * kPi;
+                    const float m = (float) std::sin(sv.ringPh), rg = c.ring;
+                    if (stereo) { sL = sL * (1.0f - rg) + sL * m * rg; sR = sR * (1.0f - rg) + sR * m * rg; }
+                    else          sig = sig * (1.0f - rg) + sig * m * rg;
                 }
                 vEnv = juce::jmax(vEnv, env);
                 // HUMANIZE velocity jitter: sv.velScale (~1) loosens this slot's level per hit (1 = identical).

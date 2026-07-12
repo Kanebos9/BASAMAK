@@ -607,16 +607,19 @@ class RoutePicker : public juce::Component
 {
 public:
     std::function<void(int src, int tgt)> onPicked;         // chosen source enum + target enum (live-apply)
+    std::function<void(float amt)> onAmt;                   // route AMOUNT edited on the picker's own fader
     std::function<void()> onClose;
     std::function<juce::String(int gridIdx)> gridKnobName;  // live engine-knob names for grid targets
     juce::Colour accent { 0xffe8bf4d };
     int engine = -1;   // the slot's engine (set before openFor) - gates engine-specific targets (Warp = Osc only)
     RoutePicker();
     ~RoutePicker() override { juce::Desktop::getInstance().removeGlobalMouseListener(&closer); }
-    void openFor(int curSrc, int curTgt);                   // (re)fill both lists, select current, become visible
+    void openFor(int curSrc, int curTgt, float amt);        // (re)fill both lists, select current, become visible
     void visibilityChanged() override;
     void resized() override;
     void paint(juce::Graphics& g) override;
+    void mouseDown(const juce::MouseEvent& e) override;     // the bottom AMOUNT fader
+    void mouseDrag(const juce::MouseEvent& e) override;
 private:
     struct Col : public juce::ListBoxModel
     {
@@ -631,6 +634,11 @@ private:
     juce::ListBox srcList, tgtList;
     juce::Label lblSrc, lblTgt;
     int curSrc = 0, curTgt = 0;
+    float curAmt = 0.0f;                    // the route's amount (edited on the bottom fader)
+    juce::Rectangle<float> amtRect() const  // the horizontal AMOUNT fader (bottom, under the SOURCE column)
+    { const float pad = 6.0f, h = 26.0f;
+      return { pad, (float) getHeight() - h - pad, getWidth() * 0.5f - pad * 1.5f, h }; }
+    void setAmtFromX(float x);
     void selectCurrentRows();
     struct Closer : public juce::MouseListener
     {
@@ -671,10 +679,13 @@ public:
     void mouseDoubleClick(const juce::MouseEvent& e) override;
     juce::String getTooltip() override
     { return "12 modulation routes (this slot).\n\n"
-             "- RIGHT-CLICK a fader: choose its SOURCE (left column) and TARGET (right column).\n"
+             "- RIGHT-CLICK a fader: choose its SOURCE (left column) and TARGET (right column), and set "
+             "the amount on the long fader there.\n"
              "- DRAG / click inside a fader: the amount - centre is 0, left negative, right positive "
              "(double-click = 0).\n"
-             "- Yellow = slot 1, pink = slot 2. Modulation is applied per block."; }
+             "- Yellow = slot 1, pink = slot 2. Per-voice on chords.\n"
+             "- MOD WHEEL is a source (CC1 by default). Learn it to any CC via the MIDI dropdown -> "
+             "\"MIDI-learn: selection controls...\" -> Mod Wheel."; }
     juce::String routeSrcName(int r) const;
     juce::String routeTgtName(int r) const;
 private:
@@ -2385,7 +2396,10 @@ private:
     LearnableKnob knobTone    { "ui_sel_fxTone",  proc.midiLearn };   // per-slot TONE tilt (dark..bright)
     LearnableKnob knobPunch   { "ui_sel_fxPunch", proc.midiLearn };   // per-slot PUNCH transient shaper
     LearnableKnob knobComp    { "ui_sel_fxComp",  proc.midiLearn };   // per-slot one-knob COMPRESSOR
-    juce::Label   lblChMix, lblTone, lblPunch, lblComp;
+    LearnableKnob knobCrush   { "ui_sel_fxCrush", proc.midiLearn };   // per-slot bitcrush + downsample
+    LearnableKnob knobAir     { "ui_sel_fxAir",   proc.midiLearn };   // per-slot high-shelf AIR
+    LearnableKnob knobRing    { "ui_sel_fxRing",  proc.midiLearn };   // per-slot RING modulator
+    juce::Label   lblChMix, lblTone, lblPunch, lblComp, lblCrush, lblAir, lblRing;
     // REVERB MODE: clicking the "REVERB" header cycles Room -> Hall -> Plate -> Shimmer (whole
     // preset, like the other master flavour controls). A tiny MouseListener makes the Label clickable.
     struct HdrClick : juce::MouseListener

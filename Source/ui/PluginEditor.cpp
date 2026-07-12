@@ -959,7 +959,14 @@ static const char* kModSrcName[DrumChannel::MS_COUNT] =   // the LFOs are GENERI
 static const char* kModTgtFixedName[DrumChannel::MT_GRID_BASE] =
 { "Off", "Filter 1 Cutoff", "Filter 1 Reso", "Filter 2 Cutoff", "Filter 2 Reso", "Drive",
   "Reverb Send", "Delay Send", "Chorus", "Tone", "Punch", "Comp", "Attack", "Decay", "Sustain",
-  "Release", "Pitch", "Wave/Grain Pos", "Detune", "Vibrato", "Width", "Drift", "Volume", "Warp" };
+  "Release", "Pitch", "Wave/Grain Position", "Detune", "Vibrato", "Width", "Drift", "Volume", "Warp",
+  "Crush", "Air", "Ring" };
+// Engine display name (matches the slot engine dropdown) for the mod-target parentheses "(Oscillator)" etc.
+static juce::String engineDisplayName(int engine)
+{
+    static const char* eng[9] = { "Sample", "Noise", "Oscillator", "FM", "Karplus-Strong", "Synth", "Wavetable", "Modal", "Granular" };
+    return (engine >= 0 && engine < 9) ? juce::String(eng[engine]) : juce::String();
+}
 // Which of the 4 LFOs (index 0..3) feed at least one mod-matrix route (for the LFO "not routed" hint).
 static void lfoRoutedMask(const DrumChannel::Slot& sl, bool routed[4])
 {
@@ -1007,9 +1014,9 @@ void RoutePicker::visibilityChanged()
     if (isVisible() && ! hooked)      { juce::Desktop::getInstance().addGlobalMouseListener(&closer); hooked = true; }
     else if (! isVisible() && hooked) { juce::Desktop::getInstance().removeGlobalMouseListener(&closer); hooked = false; }
 }
-void RoutePicker::openFor(int cs, int ct)
+void RoutePicker::openFor(int cs, int ct, float amt)
 {
-    curSrc = cs; curTgt = ct;
+    curSrc = cs; curTgt = ct; curAmt = juce::jlimit(-1.0f, 1.0f, amt);
     srcModel.rows.clear();
     for (int i = 0; i < DrumChannel::MS_COUNT; ++i)
     { if (i == DrumChannel::MSLfoWave || i == DrumChannel::MSModLfo) continue;   // LFO 4 slot is the Mod Env tab now; Mod LFO dropped
@@ -1019,11 +1026,16 @@ void RoutePicker::openFor(int cs, int ct)
     {   // ENGINE-GATED targets: only offer what this slot's engine can actually do (no dead routes).
         if (t == DrumChannel::MTWarp    && engine != DrumChannel::SrcOsc) continue;                                   // wavefold = Oscillator only
         if (t == DrumChannel::MTWavePos && engine != DrumChannel::SrcOsc && engine != DrumChannel::SrcGrain) continue; // wavetable/grain position
-        tgtModel.rows.push_back({ t, juce::String(kModTgtFixedName[t]) });
+        juce::String nm = kModTgtFixedName[t];
+        if (t == DrumChannel::MTWarp) nm << " (Oscillator)";   // engine-specific fixed target = say which engine (user)
+        tgtModel.rows.push_back({ t, nm });
     }
+    // GRID knobs = the current engine's OWN params. Label them "<param> (<Engine>)", not "Knob N" (user).
+    const juce::String eng = engineDisplayName(engine);
     for (int i = 0; i < DrumChannel::MOD_TGT_GRID; ++i)
     { const juce::String nm = gridKnobName ? gridKnobName(i) : juce::String();
-      if (nm.isNotEmpty()) tgtModel.rows.push_back({ DrumChannel::MT_GRID_BASE + i, "Knob " + juce::String(i + 1) + ": " + nm }); }
+      if (nm.isNotEmpty()) tgtModel.rows.push_back({ DrumChannel::MT_GRID_BASE + i,
+                              eng.isNotEmpty() ? (nm + " (" + eng + ")") : nm }); }
     srcList.updateContent(); tgtList.updateContent();
     selectCurrentRows();
     setVisible(true); toFront(true);
@@ -1039,14 +1051,36 @@ void RoutePicker::resized()
     auto hdr = b.removeFromTop(15);
     lblSrc.setBounds(hdr.removeFromLeft(hdr.getWidth() / 2));
     lblTgt.setBounds(hdr);
+    b.removeFromBottom(26 + 6);   // reserve the bottom strip for the AMOUNT fader (under the source column)
     auto left = b.removeFromLeft(b.getWidth() / 2).reduced(2, 0);
     srcList.setBounds(left);
     tgtList.setBounds(b.reduced(2, 0));
 }
+void RoutePicker::setAmtFromX(float x)
+{
+    auto fr = amtRect();
+    const float cx = fr.getCentreX(), half = fr.getWidth() * 0.5f - 4.0f;
+    float a = juce::jlimit(-1.0f, 1.0f, (x - cx) / juce::jmax(1.0f, half));
+    if (std::abs(a) < 0.03f) a = 0.0f;
+    curAmt = a; if (onAmt) onAmt(a); repaint();
+}
+void RoutePicker::mouseDown(const juce::MouseEvent& e) { if (amtRect().contains(e.position)) setAmtFromX(e.position.x); }
+void RoutePicker::mouseDrag(const juce::MouseEvent& e) { if (amtRect().contains(e.mouseDownPosition)) setAmtFromX(e.position.x); }
 void RoutePicker::paint(juce::Graphics& g)
 {
     g.setColour(juce::Colour(0xff11111c)); g.fillRoundedRectangle(getLocalBounds().toFloat(), 6.0f);
     g.setColour(accent.withAlpha(0.6f)); g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(0.75f), 6.0f, 1.5f);
+    // AMOUNT fader (bipolar, centre = 0) - long, with the exact % written IN it (user).
+    auto fr = amtRect();
+    g.setColour(juce::Colour(0xff181828)); g.fillRoundedRectangle(fr, 4.0f);
+    const float cx = fr.getCentreX(), half = fr.getWidth() * 0.5f - 4.0f, px = cx + curAmt * half;
+    if (std::abs(curAmt) > 1.0e-4f)
+    { g.setColour(accent.withAlpha(0.32f)); g.fillRect(juce::Rectangle<float>(juce::jmin(cx, px), fr.getY() + 3.0f, std::abs(px - cx), fr.getHeight() - 6.0f));
+      g.setColour(accent); g.fillRect(px - 1.2f, fr.getY() + 3.0f, 2.4f, fr.getHeight() - 6.0f); }
+    g.setColour(juce::Colour(0xff4a4a66)); g.fillRect(cx - 0.5f, fr.getY() + 4.0f, 1.0f, fr.getHeight() - 8.0f);   // 0 tick
+    g.setColour(juce::Colours::white); g.setFont(juce::Font(11.0f, juce::Font::bold));
+    g.drawText("AMOUNT  " + juce::String(curAmt >= 0 ? "+" : "") + juce::String(juce::roundToInt(curAmt * 100.0f)) + "%",
+               fr, juce::Justification::centred, false);
 }
 
 //==============================================================================
@@ -1058,8 +1092,9 @@ juce::String ModFaderMatrix::routeTgtName(int r) const
 {
     const int t = tgt[r];
     if (t <= 0) return {};
-    if (t < DrumChannel::MT_GRID_BASE) return juce::String(kModTgtFixedName[t]);
-    return "Knob " + juce::String(t - DrumChannel::MT_GRID_BASE + 1);
+    if (t < DrumChannel::MT_GRID_BASE) return juce::String(kModTgtFixedName[t]);   // fixed targets = short name (no engine parens on the fader)
+    const juce::String nm = gridKnobName ? gridKnobName(t - DrumChannel::MT_GRID_BASE) : juce::String();   // grid = the param's own name
+    return nm.isNotEmpty() ? nm : ("Knob " + juce::String(t - DrumChannel::MT_GRID_BASE + 1));
 }
 juce::Rectangle<float> ModFaderMatrix::faderRect(int i) const
 {
@@ -1764,7 +1799,9 @@ void SlotEditor::placeGeneric(int boxW)
     if (grainSrc) {
         // GRANULAR: the Wave fader right under the preview = the grain SOURCE, fully visible
         // (it was silently read from oscShape with no control = a hidden param - user caught it).
-        fromFader->setBounds(mL, yTop, innerW, 16);
+        // A "Waves" tag on the left (like the Oscillator group's "Wave" tag) - drawn in paint().
+        const int tag = 42;
+        fromFader->setBounds(mL + tag, yTop, innerW - tag, 16);
         yTop += 19;
     }
     if (waveView.isVisible()) {                           // Wavetable: the current waveform across the top
@@ -1903,6 +1940,14 @@ void SlotEditor::paint(juce::Graphics& g)
     if (slotDropOver) {
         g.setColour(juce::Colour(0x2635d07a)); g.fillRoundedRectangle(getLocalBounds().toFloat(), 4.0f);
         g.setColour(juce::Colour(0xff35d07a)); g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(1.0f), 4.0f, 2.0f);
+    }
+    // GRANULAR: label the grain-source Wave fader "Waves" on its left (like the Oscillator group).
+    if (! oscLayout && fromFader != nullptr && fromFader->isVisible() && morphView.isVisible())
+    {
+        g.setFont(juce::Font(10.0f, juce::Font::bold));
+        g.setColour(juce::Colour(0xff9a9ac0));
+        auto fb = fromFader->getBounds();
+        g.drawText("Waves", 6, fb.getY(), juce::jmax(1, fb.getX() - 8), fb.getHeight(), juce::Justification::centredLeft, false);
     }
     if (! oscLayout) return;
     const float right = (float) getWidth() - 6.0f;
@@ -5456,6 +5501,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         h = mix(h, sl.filterType2); h = mix(h, f(sl.filterCutoff2)); h = mix(h, f(sl.filterReso2)); h = mix(h, f(sl.filterEnvAmt2));   // filter 2
         h = mix(h, f(sl.chorusMix));   // chorus (one macro; rate/depth are effect constants)
         h = mix(h, f(sl.fxTone)); h = mix(h, f(sl.fxPunch)); h = mix(h, f(sl.fxComp));   // Tone/Punch/Comp
+        h = mix(h, f(sl.fxCrush)); h = mix(h, f(sl.fxAir)); h = mix(h, f(sl.fxRing));   // Crush/Air/Ring
         for (int fr = 0; fr < DrumChannel::ADD_FRAMES; ++fr)
             for (int k = 0; k < DrumChannel::ADD_HARM; ++k)
             { h = mix(h, f(sl.addH[fr][k])); h = mix(h, f(sl.addPh[fr][k])); }   // wavetable frames
@@ -6088,15 +6134,17 @@ void DrumSequencerEditor::handleMidiMenuChange()
         m.addItem(8, "Swing (knob)..." + tag("ui_sel_swing"));
         m.addItem(9, "Undo (pad)..."   + tag("ui_sel_undo"));
         m.addItem(10, "Redo (pad)..."  + tag("ui_sel_redo"));
+        m.addItem(12, "Mod Wheel (knob/CC)..." + tag("ui_sel_modWheel"));   // the MOD WHEEL modulation source (also CC1 by default)
         m.addSeparator(); m.addItem(11, "Clear these assignments");
         m.showMenuAsync(juce::PopupMenu::Options{}.withTargetComponent(&comboMidi).withMinimumWidth(260),
             [L](int r) {
-                static const char* pids[10] = { "ui_sel_chNext", "ui_sel_chPrev",
+                static const char* pids[11] = { "ui_sel_chNext", "ui_sel_chPrev",
                                                 "ui_sel_patNext", "ui_sel_patPrev",
                                                 "ui_sel_slotSel", "ui_sel_test",
                                                 "ui_sel_bpm", "ui_sel_swing",
-                                                "ui_sel_undo", "ui_sel_redo" };
+                                                "ui_sel_undo", "ui_sel_redo", "ui_sel_modWheel" };
                 if (r >= 1 && r <= 10) L->startLearning(pids[r - 1]);
+                else if (r == 12) L->startLearning(pids[10]);
                 else if (r == 11) for (auto* p : pids) L->clearParam(p);
             });
     }
@@ -6371,6 +6419,9 @@ void DrumSequencerEditor::applySelCC(int t, float v, bool& slotDirty, bool& keys
         case P::SelFxTone:  sl.fxTone  = v * 2.0f - 1.0f; break;
         case P::SelFxPunch: sl.fxPunch = v * 2.0f - 1.0f; break;
         case P::SelFxComp:  sl.fxComp = v; break;
+        case P::SelFxCrush: sl.fxCrush = v; break;
+        case P::SelFxAir:   sl.fxAir  = v; break;
+        case P::SelFxRing:  sl.fxRing = v; break;
         case P::SelEnvA: case P::SelEnvH: case P::SelEnvD: case P::SelEnvS: case P::SelEnvR:
         {   // read the current 5 (Modal mirrors the Ring read-back), replace ONE, write via the
             // ONE apply path so the per-engine mapping stays identical to dragging the editor
@@ -8024,7 +8075,16 @@ void DrumSequencerEditor::setupComponents()
     knobTone.onValueChange  = [this]{ if(!ignoreKnobCallbacks) proc.sequencer.channel(selectedChannel).slots[envTargetSlot()].fxTone  = (float)knobTone.getValue(); };
     knobPunch.onValueChange = [this]{ if(!ignoreKnobCallbacks) proc.sequencer.channel(selectedChannel).slots[envTargetSlot()].fxPunch = (float)knobPunch.getValue(); };
     knobComp.onValueChange  = [this]{ if(!ignoreKnobCallbacks) proc.sequencer.channel(selectedChannel).slots[envTargetSlot()].fxComp  = (float)knobComp.getValue(); };
-    for (auto* k : { &knobTone, &knobPunch, &knobComp })
+    setupKnob(knobCrush, lblCrush, "Crush", 0.0, 1.0, 0.0, 1.0,
+              [](double v){ return v <= 0.001 ? juce::String("Off") : juce::String(juce::roundToInt(v * 100.0)) + "%"; });
+    setupKnob(knobAir,   lblAir,   "Air",   0.0, 1.0, 0.0, 1.0,
+              [](double v){ return v <= 0.001 ? juce::String("Off") : juce::String(juce::roundToInt(v * 100.0)) + "%"; });
+    setupKnob(knobRing,  lblRing,  "Ring",  0.0, 1.0, 0.0, 1.0,
+              [](double v){ return v <= 0.001 ? juce::String("Off") : juce::String(juce::roundToInt(v * 100.0)) + "%"; });
+    knobCrush.onValueChange = [this]{ if(!ignoreKnobCallbacks) proc.sequencer.channel(selectedChannel).slots[envTargetSlot()].fxCrush = (float)knobCrush.getValue(); };
+    knobAir.onValueChange   = [this]{ if(!ignoreKnobCallbacks) proc.sequencer.channel(selectedChannel).slots[envTargetSlot()].fxAir   = (float)knobAir.getValue(); };
+    knobRing.onValueChange  = [this]{ if(!ignoreKnobCallbacks) proc.sequencer.channel(selectedChannel).slots[envTargetSlot()].fxRing  = (float)knobRing.getValue(); };
+    for (auto* k : { &knobTone, &knobPunch, &knobComp, &knobCrush, &knobAir, &knobRing })
         k->onDragEnd = [this]{ if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel); };
     knobTone.setTooltip("TONE (per slot): one-knob tilt EQ around ~800 Hz.\n\n"
         "- Left = darker/warmer (highs down, lows up), right = brighter/thinner (+/-6 dB).\n"
@@ -8035,6 +8095,15 @@ void DrumSequencerEditor::setupComponents()
     knobComp.setTooltip("COMP (per slot): one-knob compressor on this slot's summed output.\n\n"
         "- Turn up to squash peaks + raise the body (automatic makeup): fatter drums, more even keys.\n"
         "- Fixed fast attack / musical release; 0 = off.");
+    knobCrush.setTooltip("CRUSH (per slot): bit reduction + sample-rate downsample together.\n\n"
+        "- Up = fewer bits + a coarser sample-hold: lo-fi grit, digital aliasing, 8-bit character.\n"
+        "- Post-drive on this slot; 0 = clean.");
+    knobAir.setTooltip("AIR (per slot): high-shelf presence lift above ~3.5 kHz.\n\n"
+        "- Up = open/breathy top end (vocals, cymbals, pads sparkle) without touching the body.\n"
+        "- A gentle exciter-style sheen; 0 = untouched.");
+    knobRing.setTooltip("RING (per slot): ring modulator against a fixed ~200 Hz carrier.\n\n"
+        "- Up = metallic/bell/clangorous sidebands blended over the dry tone.\n"
+        "- Great on mallets, FX and toms for inharmonic colour; 0 = dry.");
 
     // Per-slot LFO visual (FX box bottom): the drawn sine IS the parameters. Three independent
     // LFOs per slot - the drag edits ONLY the tab-selected one.
@@ -8156,6 +8225,13 @@ void DrumSequencerEditor::setupComponents()
         ch.markDspDirty();
         modFaders.setValues(sl);   // reflect the new source/target on the fader immediately
         refreshDetailPanel();      // the LFO visual shows its now-active wave
+    };
+    routePicker.onAmt = [this](float amt) {   // the picker's own AMOUNT fader (big, with a % read-out)
+        if (routePickRoute < 0 || routePickRoute >= DrumChannel::MOD_ROUTES) return;
+        auto& ch = proc.sequencer.channel(selectedChannel);
+        ch.slots[envTargetSlot()].mod[routePickRoute].amt = juce::jlimit(-1.0f, 1.0f, amt);
+        ch.markDspDirty();
+        modFaders.setValues(ch.slots[envTargetSlot()]);   // the 12-fader matrix reflects it too
     };
 
     // ---- Per-slot FX + Chorus + Keytrack + LFO-sync DRAG-FADERS (Arp Rate-fader style, slot-coloured).
@@ -10140,6 +10216,9 @@ void DrumSequencerEditor::updateFxFaders(const DrumChannel::Slot& sl)
     knobTone.setValue   (sl.fxTone,       juce::dontSendNotification);
     knobPunch.setValue  (sl.fxPunch,      juce::dontSendNotification);
     knobComp.setValue   (sl.fxComp,       juce::dontSendNotification);
+    knobCrush.setValue  (sl.fxCrush,      juce::dontSendNotification);
+    knobAir.setValue    (sl.fxAir,        juce::dontSendNotification);
+    knobRing.setValue   (sl.fxRing,       juce::dontSendNotification);
     // (LFO tempo sync lives INSIDE the LfoDisplay now - setValues carries sl.lfoSync.)
 }
 
@@ -10159,7 +10238,7 @@ void DrumSequencerEditor::openRoutePicker(int route)
     const int si = envTargetSlot();
     routePicker.accent = (si == 0) ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8);
     routePicker.engine = proc.sequencer.channel(selectedChannel).slots[si].engine;   // gates Warp/WavePos targets
-    routePicker.openFor(modFaders.src[route], modFaders.tgt[route]);   // bounds set in layoutContent
+    routePicker.openFor(modFaders.src[route], modFaders.tgt[route], modFaders.amt[route]);   // bounds set in layoutContent
     routePicker.toFront(false);
 }
 
@@ -10816,24 +10895,29 @@ void DrumSequencerEditor::timerCallback()
     {
         const auto& mc = proc.sequencer.channel(selectedChannel);
         const int ms = envTargetSlot();
-        LearnableKnob* rk[6] = { &knobReverb, &knobDelay, &knobChMix, &knobTone, &knobPunch, &knobComp };
-        for (int i = 0; i < 6; ++i)
-        {
-            const float raw = mc.slotModLiveFx[ms][i];
-            rk[i]->setModRing(raw < -900.0f ? -1.0f : (float) rk[i]->valueToProportionOfLength(raw));
-        }
-        const float drv = mc.slotModLiveFx[ms][6];   // Drive is a fader (0..1)
+        // A slot with NO active routes clears its rings IMMEDIATELY (the DSP snapshot only updates while
+        // the channel renders, so a new preset would otherwise leave a stale blue ring - user bug).
+        auto liveFx = [&mc](int s, int i) -> float
+        { return mc.slots[s].modActive() ? mc.slotModLiveFx[s][i] : -1000.0f; };
+        struct RK { LearnableKnob* k; int idx; };
+        const RK rk[9] = { { &knobReverb, 0 }, { &knobDelay, 1 }, { &knobChMix, 2 },
+                           { &knobTone, 3 }, { &knobPunch, 4 }, { &knobComp, 5 },
+                           { &knobCrush, 18 }, { &knobAir, 19 }, { &knobRing, 20 } };
+        for (auto& r : rk)
+        { const float raw = liveFx(ms, r.idx); r.k->setModRing(raw < -900.0f ? -1.0f : (float) r.k->valueToProportionOfLength(raw)); }
+        const float drv = liveFx(ms, 6);   // Drive is a fader (0..1)
         fxDriveFader.setModRing(drv < -900.0f ? -1.0f : juce::jlimit(0.0f, 1.0f, drv));
-        const float c1 = mc.slotModLiveFx[ms][7], c2 = mc.slotModLiveFx[ms][8];   // filter 1/2 cutoff (Hz)
-        freqDisplay.setModCutoff(0, c1 < -900.0f ? -1.0f : c1);
-        freqDisplay.setModCutoff(1, c2 < -900.0f ? -1.0f : c2);
+        freqDisplay.setModCutoff(0, liveFx(ms, 7) < -900.0f ? -1.0f : liveFx(ms, 7));   // filter 1/2 cutoff (Hz)
+        freqDisplay.setModCutoff(1, liveFx(ms, 8) < -900.0f ? -1.0f : liveFx(ms, 8));
         // GRID knobs (the engine's own params - FM Amount, Ratio, ...): ring both slot boxes from [9..16].
         // Osc slots also ring the Warp fader + push the modulated FM/Warp into the WAVE PREVIEW so the
         // drawing itself moves with the modulation (user: "changing the sound wave too").
         for (int s = 0; s < DrumChannel::NUM_SLOTS; ++s)
         {
-            slotEd[s].setGridModRings(&mc.slotModLiveFx[s][9], DrumChannel::MOD_TGT_GRID);
-            slotEd[s].setOscModLive(mc.slotModLiveFx[s][17], mc.slotModLiveFx[s][9], mc.slotModLiveFx[s][10]);
+            float grid[DrumChannel::MOD_TGT_GRID];
+            for (int i = 0; i < DrumChannel::MOD_TGT_GRID; ++i) grid[i] = liveFx(s, 9 + i);
+            slotEd[s].setGridModRings(grid, DrumChannel::MOD_TGT_GRID);
+            slotEd[s].setOscModLive(liveFx(s, 17), liveFx(s, 9), liveFx(s, 10));
         }
     }
     {   // DRIFT visual honesty: push the last hit's REAL rolled detunes into the unison view
@@ -11434,7 +11518,7 @@ void DrumSequencerEditor::layoutContent()
         // Master volume: horizontal fader across the top (kept horizontal - user).
         knobMasterVol.setBounds(sx + 8, colTop + 22, masterW - 16, 16); lblMasterVol.setBounds(0, 0, 0, 0);
         // vertical-fader placer: fader + a centred Label below it. Spread across the (now wider) box.
-        const int FPITCH = (masterW - 16) / 5, FW = FPITCH - 8, FH = 60;
+        const int FPITCH = (masterW - 16) / 5, FW = FPITCH - 8, FH = 76;   // taller = fill the column (no empty space below - user)
         auto vf = [&](int idx, juce::Label& lbl, int col, int fy) {
             const int fx = sx + 8 + col * FPITCH;
             masterVF[idx].setVisible(true); masterVF[idx].setBounds(fx, fy, FW, FH);
@@ -11452,22 +11536,22 @@ void DrumSequencerEditor::layoutContent()
           lblMasterMono.setBounds(mx - 5, fy + 8, FW + 10, 11); swMasterMono.setBounds(mx, fy + 22, 30, 16); }
         // Row 2: REVERB - Size / Decay / Wet / Pre / Width
         { hdrReverb.setVisible(true); refreshReverbModeHeader();
-          hdrReverb.setBounds(sx + 6, colTop + 116, masterW - 12, hdrH);
-          const int fy = colTop + 134;
+          hdrReverb.setBounds(sx + 6, colTop + 130, masterW - 12, hdrH);
+          const int fy = colTop + 148;
           vf(4, lblRevRoom, 0, fy); vf(5, lblRevDecay, 1, fy); vf(6, lblRevWet, 2, fy);
           vf(7, lblRevPre, 3, fy); vf(8, lblRevWidth, 4, fy); }
         // Row 3: DELAY - Time / F.back / Wet + Sync / Ping toggles (cols 4-5, stacked)
         { hdrDelayG.setVisible(true); hdrDelayG.setText("DELAY", juce::dontSendNotification);
-          hdrDelayG.setBounds(sx + 6, colTop + 206, masterW - 12, hdrH);
-          const int fy = colTop + 224;
+          hdrDelayG.setBounds(sx + 6, colTop + 238, masterW - 12, hdrH);
+          const int fy = colTop + 256;
           vf(9, lblDelTime, 0, fy); vf(10, lblDelFB, 1, fy); vf(11, lblDelWet, 2, fy);
           const int cx3 = sx + 8 + 3 * FPITCH, cx4 = sx + 8 + 4 * FPITCH;
           lblDelaySync.setVisible(true); lblDelaySync.setJustificationType(juce::Justification::centred);
           lblDelaySync.setFont(juce::Font(9.5f, juce::Font::bold));
-          lblDelaySync.setBounds(cx3 - 5, fy + 2, FW + 10, 11); swDelaySync.setBounds(cx3, fy + 16, 30, 16);
+          lblDelaySync.setBounds(cx3 - 5, fy + 8, FW + 10, 11); swDelaySync.setBounds(cx3, fy + 22, 30, 16);
           lblDelayPingPong.setVisible(true); lblDelayPingPong.setJustificationType(juce::Justification::centred);
           lblDelayPingPong.setFont(juce::Font(9.5f, juce::Font::bold)); lblDelayPingPong.setMinimumHorizontalScale(0.7f);
-          lblDelayPingPong.setBounds(cx4 - 5, fy + 2, FW + 10, 11); swDelayPingPong.setBounds(cx4, fy + 16, 30, 16); }
+          lblDelayPingPong.setBounds(cx4 - 5, fy + 8, FW + 10, 11); swDelayPingPong.setBounds(cx4, fy + 22, 30, 16); }
 
         // -- AMP ENVELOPE + EQ column. The amp-env graph top is GRAPH_Y so it aligns with the pitch-env graph. --
         const int GRAPH_Y = colTop + 38, GRAPH_H = 118;
@@ -11618,9 +11702,11 @@ void DrumSequencerEditor::layoutContent()
             kn.setBounds(fxX + col * cw + (cw - KSB) / 2, y, KSB, KSB + kboxH);
             l.setBounds(fxX + col * cw, y + KSB + kboxH, cw, 12);
         };
-        const int row2 = colTop + 66, row3 = colTop + 66 + KSB + kboxH + 14;
+        const int fxRowStep = KSB + kboxH + 14;
+        const int row2 = colTop + 66, row3 = row2 + fxRowStep, row4 = row3 + fxRowStep;
         kFx(knobReverb, lblRev, 0, row2); kFx(knobDelay, lblDel, 1, row2); kFx(knobChMix, lblChMix, 2, row2);
         kFx(knobTone, lblTone, 0, row3); kFx(knobPunch, lblPunch, 1, row3); kFx(knobComp, lblComp, 2, row3);
+        kFx(knobCrush, lblCrush, 0, row4); kFx(knobAir, lblAir, 1, row4); kFx(knobRing, lblRing, 2, row4);
         // (The MOD/LFO visual moved OUT of the FX column into the new MODULATION column - see below.)
 
         // ===== MODULATION column (new, user 2026-07-12): holds the MOD (= LFO) visual for now; the
