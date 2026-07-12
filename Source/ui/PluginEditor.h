@@ -1084,15 +1084,21 @@ public:
         int slotIndex = 0; juce::Colour col { 0xff888888 };
         DragGrip() { setMouseCursor(juce::MouseCursor::DraggingHandCursor); }
         void paint(juce::Graphics& g) override
-        {
-            g.setColour(col.withAlpha(0.85f));
-            for (int r = 0; r < 3; ++r) for (int c = 0; c < 2; ++c)
-                g.fillEllipse(3.0f + (float) c * 6.0f, 2.0f + (float) r * 4.0f, 2.4f, 2.4f);   // 2x3 grip dots
+        {   // a small VISIBLE tab (grip dots + "copy") so the drag source is discoverable, not a mystery corner
+            auto r = getLocalBounds().toFloat();
+            g.setColour(juce::Colour(0xcc1a1a2c)); g.fillRoundedRectangle(r, 3.0f);
+            g.setColour(col.withAlpha(0.9f));      g.drawRoundedRectangle(r.reduced(0.5f), 3.0f, 1.0f);
+            for (int rr = 0; rr < 3; ++rr) for (int cc = 0; cc < 2; ++cc)
+                g.fillEllipse(4.0f + (float) cc * 4.0f, 4.0f + (float) rr * 4.0f, 2.2f, 2.2f);   // 2x3 grip dots
+            g.setFont(juce::Font(8.5f, juce::Font::bold));
+            g.drawText("copy", r.withTrimmedLeft(14.0f).withTrimmedRight(2.0f), juce::Justification::centredLeft, false);
         }
-        void mouseDrag(const juce::MouseEvent&) override
+        void mouseDrag(const juce::MouseEvent& e) override
         {
+            if (e.getDistanceFromDragStart() < 5) return;
             if (auto* dnd = juce::DragAndDropContainer::findParentDragContainerFor(this))
-                dnd->startDragging("slotcopy:" + juce::String(slotIndex), this);
+                if (! dnd->isDragAndDropActive())
+                    dnd->startDragging("slotcopy:" + juce::String(slotIndex), this);
         }
     };
     DragGrip dragGrip;
@@ -1107,6 +1113,8 @@ public:
         if (onCopyFromSlot) onCopyFromSlot(d.description.toString().substring(9).getIntValue());
     }
     bool slotDropOver = false;   // paint a green outline while the other slot hovers here
+    std::function<void()> onSelect;   // click the box (bare area) -> make this the slot being edited
+    void mouseDown(const juce::MouseEvent&) override { if (onSelect) onSelect(); }
 public:
     static constexpr int MAXK = 24;            // Synth engine needs the most knobs
     static constexpr int KNOB = 42, GAP = 6;   // bigger, easier-to-grab knobs (slots are wide now)

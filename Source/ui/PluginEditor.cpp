@@ -978,8 +978,8 @@ void ModMatrixEditor::styleFader(juce::Slider& s, double lo, double hi, double d
     s.setColour(juce::Slider::textBoxTextColourId, juce::Colours::white);
     s.setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
     s.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
-    s.setTextBoxStyle(juce::Slider::TextBoxRight, true, 58, 15);
-    s.setTextValueSuffix(suf);
+    s.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);   // values are DRAWN in paint() (no truncation)
+    juce::ignoreUnused(suf);
     addAndMakeVisible(s);
 }
 
@@ -993,22 +993,18 @@ ModMatrixEditor::ModMatrixEditor()
         styleCombo(tgtCombo[r]);   // items filled by rebuildTargets()
         tgtCombo[r].onChange = [this, r] { tgt[r] = tgtCombo[r].getSelectedId() - 1; if (onChange) onChange(); };
         amtSlider[r].setSliderStyle(juce::Slider::LinearHorizontal);
-        // The fader POSITION is -1..1, but the stored amount = sign(pos)*pos^2 = FINE near the centre
-        // (a light Ratio/pitch mod is easy to dial) and reaches +-100% at the ends. The read-out shows
-        // the REAL amount %, and setValues inverts it (sqrt) so a loaded route parks the thumb right.
+        // The fader POSITION is -1..1, but the stored amount = sign(pos)*|pos|^3 = VERY fine near the
+        // centre (dial 0.x% comfortably; a light Ratio/pitch mod stays controllable) and still reaches
+        // +-100% at the ends. NO text box (JUCE ignored textFromValue here + it truncated to "0.00...") -
+        // the % is DRAWN in paint() from amt[r], so it never ellipsises. setValues inverts (cbrt).
         amtSlider[r].setRange(-1.0, 1.0, 0.0);
         amtSlider[r].setDoubleClickReturnValue(true, 0.0);
         amtSlider[r].setColour(juce::Slider::trackColourId, accent);
         amtSlider[r].setColour(juce::Slider::thumbColourId, accent);
         amtSlider[r].setColour(juce::Slider::backgroundColourId, juce::Colour(0xff2a2a44));
-        amtSlider[r].setColour(juce::Slider::textBoxTextColourId, juce::Colours::white);
-        amtSlider[r].setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
-        amtSlider[r].setColour(juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
-        amtSlider[r].setTextBoxStyle(juce::Slider::TextBoxRight, true, 52, 15);
-        amtSlider[r].textFromValueFunction = [](double pos) { const double a = (pos < 0 ? -1.0 : 1.0) * pos * pos;
-            return (a > 0 ? "+" : "") + juce::String(juce::roundToInt(a * 100.0)) + "%"; };
+        amtSlider[r].setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
         amtSlider[r].onValueChange = [this, r] { const double p = amtSlider[r].getValue();
-            amt[r] = (float) ((p < 0 ? -1.0 : 1.0) * p * p); if (onChange) onChange(); };
+            amt[r] = (float) ((p < 0 ? -1.0 : 1.0) * p * p * p); if (onChange) onChange(); repaint(); };
         addAndMakeVisible(amtSlider[r]);
     }
     lblEnv.setText("Mod Env", juce::dontSendNotification); lblEnv.setFont(juce::Font(10.0f, juce::Font::bold));
@@ -1018,9 +1014,9 @@ ModMatrixEditor::ModMatrixEditor()
     styleFader(envA, 0.001, 2.0, 0.005, " s");  envA.setSkewFactor(0.4); envA.setTooltip("Mod Env ATTACK: rise time.");
     styleFader(envD, 0.01, 4.0, 0.30, " s");    envD.setSkewFactor(0.4); envD.setTooltip("Mod Env DECAY: fall time back to 0.");
     styleFader(lfoRate, 0.05, 20.0, 1.0, " Hz"); lfoRate.setSkewFactor(0.3); lfoRate.setTooltip("Mod LFO rate (free-run, timeline-anchored so playback passes match).");
-    envA.onValueChange    = [this] { modEnvA = (float) envA.getValue(); if (onChange) onChange(); };
-    envD.onValueChange    = [this] { modEnvD = (float) envD.getValue(); if (onChange) onChange(); };
-    lfoRate.onValueChange = [this] { modLfoRate = (float) lfoRate.getValue(); if (onChange) onChange(); };
+    envA.onValueChange    = [this] { modEnvA = (float) envA.getValue(); if (onChange) onChange(); repaint(); };
+    envD.onValueChange    = [this] { modEnvD = (float) envD.getValue(); if (onChange) onChange(); repaint(); };
+    lfoRate.onValueChange = [this] { modLfoRate = (float) lfoRate.getValue(); if (onChange) onChange(); repaint(); };
     styleCombo(lfoShapeCombo);
     for (int i = 0; i < 7; ++i) lfoShapeCombo.addItem(kModLfoShapeName[i], i + 1);
     lfoShapeCombo.onChange = [this] { modLfoShape = lfoShapeCombo.getSelectedId() - 1; if (onChange) onChange(); };
@@ -1053,8 +1049,8 @@ void ModMatrixEditor::setValues(const DrumChannel::Slot& sl)
         tgt[r] = juce::jlimit(0, DrumChannel::MT_COUNT - 1, (int) sl.mod[r].tgt);
         amt[r] = juce::jlimit(-1.0f, 1.0f, sl.mod[r].amt);
         srcCombo[r].setSelectedId(src[r] + 1, juce::dontSendNotification);
-        // invert the square curve so the thumb sits where the stored amount actually is
-        amtSlider[r].setValue((amt[r] < 0 ? -1.0f : 1.0f) * std::sqrt(std::abs(amt[r])), juce::dontSendNotification);
+        // invert the cubic curve so the thumb sits where the stored amount actually is
+        amtSlider[r].setValue((amt[r] < 0 ? -1.0f : 1.0f) * std::cbrt(std::abs(amt[r])), juce::dontSendNotification);
     }
     modEnvA = sl.modEnvA; modEnvD = sl.modEnvD; modLfoRate = sl.modLfoRate; modLfoShape = sl.modLfoShape;
     envA.setValue(modEnvA, juce::dontSendNotification);
@@ -1065,21 +1061,45 @@ void ModMatrixEditor::setValues(const DrumChannel::Slot& sl)
     repaint();
 }
 
+// Layout constants shared by paint() + resized() so the drawn values line up with the faders.
+static constexpr int MMX0 = 12, MMSRCW = 150, MMTGTW = 210, MMGAP = 8, MMROWY0 = 40, MMROWH = 26, MMVALW = 54;
+static juce::String modSecText(double s)   // seconds -> "5 ms" / "0.30 s"
+{ return s < 1.0 ? juce::String(juce::roundToInt(s * 1000.0)) + " ms" : juce::String(s, 2) + " s"; }
+
 void ModMatrixEditor::paint(juce::Graphics& g)
 {
     auto b = getLocalBounds().toFloat();
-    g.setColour(juce::Colour(0xf2141422)); g.fillRoundedRectangle(b, 6.0f);
+    g.setColour(juce::Colour(0xf5141422)); g.fillRoundedRectangle(b, 6.0f);
     g.setColour(accent.withAlpha(0.7f)); g.drawRoundedRectangle(b.reduced(0.5f), 6.0f, 1.4f);
     g.setColour(accent); g.setFont(juce::Font(13.0f, juce::Font::bold));
     g.drawText("MOD MATRIX - SLOT " + juce::String(slotIdx + 1), 10, 4, getWidth() - 40, 16,
                juce::Justification::centredLeft, false);
+    const int amtX = MMX0 + MMSRCW + MMGAP + MMTGTW + MMGAP;
     // column captions
     g.setColour(juce::Colour(0xff9aa6c0)); g.setFont(juce::Font(10.0f, juce::Font::bold));
-    const int x0 = 12, srcW = 150, tgtW = 210, colGap = 8;
-    const int amtX = x0 + srcW + colGap + tgtW + colGap;
-    g.drawText("SOURCE", x0, 24, srcW, 12, juce::Justification::centredLeft, false);
-    g.drawText("TARGET", x0 + srcW + colGap, 24, tgtW, 12, juce::Justification::centredLeft, false);
+    g.drawText("SOURCE", MMX0, 24, MMSRCW, 12, juce::Justification::centredLeft, false);
+    g.drawText("TARGET", MMX0 + MMSRCW + MMGAP, 24, MMTGTW, 12, juce::Justification::centredLeft, false);
     g.drawText("AMOUNT", amtX, 24, getWidth() - amtX - 10, 12, juce::Justification::centredLeft, false);
+    // per-row amount % (DRAWN, right of each fader - never truncates). Sub-1% shows a decimal.
+    g.setFont(juce::Font(11.0f, juce::Font::bold));
+    for (int r = 0; r < NR; ++r)
+    {
+        const int y = MMROWY0 + r * MMROWH;
+        const float a = amt[r];
+        const bool active = (src[r] != 0 && tgt[r] != 0 && std::abs(a) > 1.0e-4f);
+        juce::String t = (std::abs(a) < 0.095f && std::abs(a) > 1.0e-4f)
+            ? (a > 0 ? "+" : "") + juce::String(a * 100.0f, 1) + "%"
+            : (a > 0 ? "+" : "") + juce::String(juce::roundToInt(a * 100.0f)) + "%";
+        g.setColour(active ? juce::Colours::white : juce::Colour(0xff5a5f74));
+        g.drawText(t, getWidth() - MMVALW - 8, y, MMVALW, MMROWH - 5, juce::Justification::centredRight, false);
+    }
+    // footer read-outs (drawn), right of each footer fader
+    g.setColour(juce::Colour(0xffcfd6ea)); g.setFont(juce::Font(10.5f, juce::Font::bold));
+    const int fy = MMROWY0 + NR * MMROWH + 8;
+    g.drawText(modSecText(modEnvA), MMX0 + 62 + 96 + 2, fy, 48, 18, juce::Justification::centredLeft, false);
+    g.drawText(modSecText(modEnvD), MMX0 + 62 + 96 + 2 + 50 + 96 + 4, fy, 48, 18, juce::Justification::centredLeft, false);
+    g.drawText(juce::String(modLfoRate, modLfoRate < 10.0f ? 2 : 1) + " Hz",
+               MMX0 + 62 + 96 + 2, fy + 24, 52, 18, juce::Justification::centredLeft, false);
     // close X
     auto cr = closeRect();
     g.setColour(juce::Colour(0xff9aa6c0)); g.setFont(juce::Font(14.0f, juce::Font::bold));
@@ -1088,24 +1108,23 @@ void ModMatrixEditor::paint(juce::Graphics& g)
 
 void ModMatrixEditor::resized()
 {
-    const int x0 = 12, srcW = 150, tgtW = 210, colGap = 8;
-    const int rowY0 = 40, rowH = 26;
-    const int amtX = x0 + srcW + colGap + tgtW + colGap, amtW = getWidth() - amtX - 10;
+    const int amtX = MMX0 + MMSRCW + MMGAP + MMTGTW + MMGAP;
+    const int amtW = getWidth() - amtX - MMVALW - 12;   // leave room for the DRAWN value on the right
     for (int r = 0; r < NR; ++r)
     {
-        const int y = rowY0 + r * rowH;
-        srcCombo[r].setBounds(x0, y, srcW, rowH - 5);
-        tgtCombo[r].setBounds(x0 + srcW + colGap, y, tgtW, rowH - 5);
-        amtSlider[r].setBounds(amtX, y, amtW, rowH - 5);
+        const int y = MMROWY0 + r * MMROWH;
+        srcCombo[r].setBounds(MMX0, y, MMSRCW, MMROWH - 5);
+        tgtCombo[r].setBounds(MMX0 + MMSRCW + MMGAP, y, MMTGTW, MMROWH - 5);
+        amtSlider[r].setBounds(amtX, y, amtW, MMROWH - 5);
     }
-    // Footer: Mod Env [A][D] + Mod LFO [Rate][Shape], on two clear rows with room to breathe.
-    const int fy = rowY0 + NR * rowH + 8;
-    lblEnv.setBounds(x0, fy, 60, 18);
-    envA.setBounds(x0 + 62, fy, 150, 18);
-    envD.setBounds(x0 + 62 + 158, fy, 150, 18);
-    lblLfo.setBounds(x0, fy + 24, 60, 18);
-    lfoRate.setBounds(x0 + 62, fy + 24, 150, 18);
-    lfoShapeCombo.setBounds(x0 + 62 + 158, fy + 24, 120, 18);
+    // Footer: Mod Env [A]+val [D]+val ; Mod LFO [Rate]+val [Shape]
+    const int fy = MMROWY0 + NR * MMROWH + 8;
+    lblEnv.setBounds(MMX0, fy, 56, 18);
+    envA.setBounds(MMX0 + 62, fy, 96, 18);
+    envD.setBounds(MMX0 + 62 + 96 + 2 + 50, fy, 96, 18);
+    lblLfo.setBounds(MMX0, fy + 24, 56, 18);
+    lfoRate.setBounds(MMX0 + 62, fy + 24, 96, 18);
+    lfoShapeCombo.setBounds(MMX0 + 62 + 96 + 2 + 52, fy + 24, 110, 18);
 }
 
 void ModMatrixEditor::mouseDown(const juce::MouseEvent& e)
@@ -1660,7 +1679,7 @@ void SlotEditor::place(int boxX, int yTop, int boxW, int boxH)
                             k->setTextBoxStyle(juce::Slider::TextBoxBelow, true, 46, 13); }
     fmLineY = resLineY = -1;
     if (oscLayout) placeOsc(boxW); else placeGeneric(boxW);
-    dragGrip.setBounds(boxW - 18, 2, 15, 14);             // top-right corner; above any centred preview
+    dragGrip.setBounds(boxW - 48, 2, 44, 15);             // top-right visible "copy" tab; above any centred preview
     dragGrip.toFront(false);
     hookFreqReadouts();   // setTextBoxStyle recreates the value Labels -> re-attach the Hz<->note click
     repaint();                                            // section divider lines / labels (SrcOsc)
@@ -8240,6 +8259,10 @@ void DrumSequencerEditor::setupComponents()
         };
         // Hz <-> note read-out mode is session-wide: when one slot toggles it, refresh the other too.
         slotEd[b].onFreqModeToggled = [this, b] { slotEd[1 - b].pushValues(); };
+        // Clicking a slot box (bare area) selects it as the edit target (user: "clicking the slot
+        // should switch to it"). Child knobs/faders/combos consume their own clicks, so this only
+        // fires on the box background - a harmless convenience on top of the 1/2 slot selectors.
+        slotEd[b].onSelect = [this, b] { if (! ignoreKnobCallbacks) setShapeSlot(b); };
         // Per-slot accent: Slot 1 = yellow, Slot 2 = pink (knobs + faders).
         slotEd[b].setAccent(b == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8));
         // Drop an audio file on the box (any engine) or on its waveform -> this slot becomes a
