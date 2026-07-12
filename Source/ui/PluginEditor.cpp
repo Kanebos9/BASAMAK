@@ -1201,8 +1201,8 @@ void ModRoutePanel::paint(juce::Graphics& g)
     auto b = getLocalBounds().toFloat();
     g.setColour(juce::Colour(0xff11111c)); g.fillRoundedRectangle(b, 5.0f);
     g.setColour(accent.withAlpha(0.4f)); g.drawRoundedRectangle(b.reduced(0.5f), 5.0f, 1.0f);
-    g.setColour(juce::Colour(0xff9aa6c0)); g.setFont(juce::Font(9.5f, juce::Font::bold));
-    g.drawText("ROUTE THIS SOURCE", 8, 3, getWidth() - 16, 11, juce::Justification::centredLeft, false);
+    g.setColour(accent); g.setFont(juce::Font(9.5f, juce::Font::bold));
+    g.drawText("ROUTE - SLOT " + juce::String(slotIdx + 1), 8, 3, getWidth() - 16, 11, juce::Justification::centredLeft, false);
     // per-row amount % (drawn, right of each fader)
     g.setFont(juce::Font(10.0f, juce::Font::bold));
     const int rowY0 = 40, rowH = 22, valW = 44;
@@ -8208,7 +8208,9 @@ void DrumSequencerEditor::setupComponents()
         auto params = slotParamsFor(sl.engine);
         return (gridIdx < params.size()) ? params[gridIdx].label : juce::String();
     };
-    modRoutePanel.onOpenMatrix = [this] { openModMatrix(); };
+    // Defer the open: opening synchronously means the overlay's click-outside watcher sees THIS
+    // click (which landed on the panel, not the overlay) and instantly re-closes it.
+    modRoutePanel.onOpenMatrix = [this] { juce::MessageManager::callAsync([this] { openModMatrix(); }); };
     modRoutePanel.onChange = [this] {
         if (ignoreKnobCallbacks) return;
         auto& ch = proc.sequencer.channel(selectedChannel);
@@ -9199,6 +9201,10 @@ void DrumSequencerEditor::setShapeSlot(int s)
     updateFxFaders(sl);
     lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)), (sl.oscShape >= DrumChannel::WvCustom || sl.engine == DrumChannel::SrcGrain),
                          envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8));
+    // The inline routing follows the selected slot too - so it's clear WHICH slot you're wiring.
+    modRoutePanel.slotIdx = envTargetSlot();
+    modRoutePanel.accent = envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8);
+    modRoutePanel.setValues(sl);
     // The EQ target follows the selected slot too (user: picking a slot shouldn't leave EQ on
     // "All"). Picking "All" on the EQ selector afterward still works - it just isn't the default.
     eqEditTarget = s + 1;
