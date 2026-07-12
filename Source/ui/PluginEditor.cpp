@@ -4979,7 +4979,7 @@ DrumSequencerEditor::DrumSequencerEditor(DrumSequencerProcessor& p)
         const juce::Component* hdrs[NUM_ZOOM] = {
             &hdrSounds, &hdrSamplerG, &hdrOscG, &hdrNoiseG, &hdrFmG, &hdrPhysG,
             &hdrEq, &hdrSend, &hdrFilter, &hdrChan, &hdrMasterFX, &hdrMasterOut,
-            &hdrAmpEnv, &hdrPitch };   // <- amp/eq + pitch columns added (they had no zoom)
+            &hdrAmpEnv, &hdrPitch, &hdrModulation };   // amp/eq + pitch + MODULATION columns
         for (int i = 0; i < NUM_ZOOM; ++i)
         {
             content.addAndMakeVisible(zoomBtns[i]);
@@ -8419,6 +8419,7 @@ void DrumSequencerEditor::setupComponents()
     content.addAndMakeVisible(slotSelPitch); slotSelPitch.onSelect = pickSlot;
     content.addAndMakeVisible(slotSelVoice); slotSelVoice.onSelect = pickSlot;   // under UNISON/DETUNE/VIBRATO
     content.addAndMakeVisible(slotSelFx);    slotSelFx.onSelect    = pickSlot;
+    content.addAndMakeVisible(slotSelMod);   slotSelMod.onSelect   = pickSlot;   // MODULATION box 1/2 picker
     setupGroupHeader(hdrPitch, "PITCH ENVELOPE");
     setupGroupHeader(hdrVoice, "UNISON");   // sub-title above the voice visual (detune/vibrato; SCALE moved above the keyboard)
     setupGroupHeader(hdrAmpEnv, "AMP ENVELOPE");
@@ -9031,9 +9032,9 @@ int DrumSequencerEditor::envTargetSlot() const { return juce::jlimit(0, 2, slotS
 void DrumSequencerEditor::setShapeSlot(int s)
 {
     s = juce::jlimit(0, 2, s);
-    slotSelAmp.sel = slotSelPitch.sel = slotSelVoice.sel = slotSelFx.sel = s;
+    slotSelAmp.sel = slotSelPitch.sel = slotSelVoice.sel = slotSelFx.sel = slotSelMod.sel = s;
     proc.sequencer.channel(selectedChannel).envEditMode = s + 1;   // remembered per channel
-    slotSelAmp.repaint(); slotSelPitch.repaint(); slotSelVoice.repaint(); slotSelFx.repaint();
+    slotSelAmp.repaint(); slotSelPitch.repaint(); slotSelVoice.repaint(); slotSelFx.repaint(); slotSelMod.repaint();
     content.repaint();   // redraw the slot-box highlight (the selected slot is emphasised)
     loadEnvIntoEditor();
     loadPitchAndVoice();
@@ -11304,14 +11305,17 @@ void DrumSequencerEditor::layoutContent()
     const int colBot = detailY + 360;
     const int colH   = colBot - colTop;                 // full column height
     const int gp     = 10;                              // gap between columns
-    // Column widths (user 2026-07-12): amp/filter + pitch/unison shrunk to 3/4, MASTER to 3/5; the
-    // freed space becomes a new MODULATION column (holds the MOD/LFO visual). FX + slots unchanged.
-    const int slotsColW = 376, ampEqW = 248, pitchW = 188, fxColW = 200, modW = 250, masterW = 174;
+    // Column widths (user 2026-07-12): the FIVE right boxes (amp/filter | pitch/unison | FX |
+    // MODULATION | MASTER) all share ONE width now; only the left SLOTS column keeps its own size.
+    const int slotsColW = 376;
+    // [12 | slots 376 | gp | 5 x colW5 with a gp between each | 12] = DESIGN_W(1510) -> colW5 = 212, edges symmetric.
+    const int colW5 = (DESIGN_W - 12 - slotsColW - 5 * gp - 12) / 5;   // = 212
+    const int ampEqW = colW5, pitchW = colW5, fxColW = colW5, modW = colW5, masterW = colW5;
     const int cxSlots  = 12;
     const int cxAmp    = cxSlots + slotsColW + gp;
     const int cxPitch  = cxAmp   + ampEqW   + gp;
     const int cxFx     = cxPitch + pitchW   + gp;
-    const int cxMod    = cxFx    + fxColW   + gp;        // NEW: MODULATION group
+    const int cxMod    = cxFx    + fxColW   + gp;        // MODULATION group
     const int cxMaster = cxMod   + modW     + gp;        // right edge
     // Slots: two half-height boxes stacked on the LEFT edge; a vertical blend fader to their right.
     const int slotBoxW = slotsColW - 50;                // leave a wide column for the blend fader + % read-outs
@@ -11336,8 +11340,8 @@ void DrumSequencerEditor::layoutContent()
           for (auto* k : hk) { k->setVisible(false); k->setBounds(0, 0, 0, 0); } }   // hidden model behind the faders
         // Master volume: horizontal fader across the top (kept horizontal - user).
         knobMasterVol.setBounds(sx + 8, colTop + 22, masterW - 16, 16); lblMasterVol.setBounds(0, 0, 0, 0);
-        // vertical-fader placer: fader + a centred Label below it.
-        const int FW = 26, FPITCH = 31, FH = 56;
+        // vertical-fader placer: fader + a centred Label below it. Spread across the (now wider) box.
+        const int FPITCH = (masterW - 16) / 5, FW = FPITCH - 8, FH = 60;
         auto vf = [&](int idx, juce::Label& lbl, int col, int fy) {
             const int fx = sx + 8 + col * FPITCH;
             masterVF[idx].setVisible(true); masterVF[idx].setBounds(fx, fy, FW, FH);
@@ -11533,7 +11537,8 @@ void DrumSequencerEditor::layoutContent()
         //       sources/targets routing will fill the space below in the next steps. =====
         hdrModulation.setVisible(true);
         hdrModulation.setBounds(cxMod, colTop, modW, hdrH);
-        lfoDisplay.setBounds(cxMod + 6, colTop + 24, modW - 12, 132);   // wider (more room) but same height, moved up
+        slotSelMod.setBounds(cxMod + 6, colTop + 18, modW - 12, 16);    // 1/2 slot picker (like the other boxes)
+        lfoDisplay.setBounds(cxMod + 6, colTop + 38, modW - 12, 132);   // wider, same height, below the picker
     }
 
     // DRAW HARMONICS overlay: parked over the amp/pitch columns (opened from the Custom wave preview;
@@ -11550,7 +11555,7 @@ void DrumSequencerEditor::layoutContent()
         const juce::Component* zh[NUM_ZOOM] = {
             &hdrSounds, &hdrSamplerG, &hdrOscG, &hdrNoiseG, &hdrFmG, &hdrPhysG,
             &hdrEq, &hdrSend, &hdrFilter, &hdrChan, &hdrMasterFX, &hdrMasterOut,
-            &hdrAmpEnv, &hdrPitch };
+            &hdrAmpEnv, &hdrPitch, &hdrModulation };
         for (int i = 0; i < NUM_ZOOM; ++i)
         {
             auto b = (zh[i] == &hdrMasterOut) ? juce::Rectangle<int>() : zh[i]->getBounds();

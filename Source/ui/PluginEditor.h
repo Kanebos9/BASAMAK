@@ -1958,7 +1958,7 @@ private:
     //-- Group zoom: a "Zoom" button beside each group title lifts ONLY that group's
     //   controls into a floating panel, enlarged; the rest of the UI is untouched.
     //   Click outside (the transparent catcher) or Close to return.
-    static constexpr int NUM_ZOOM = 14;    // master + 2 slots + amp/eq + pitch + fx (+ legacy/hidden headers)
+    static constexpr int NUM_ZOOM = 15;    // master + 2 slots + amp/eq + pitch + fx + MODULATION (+ legacy/hidden headers)
     PlusButton zoomBtns[NUM_ZOOM];
     int        zoomBoxH[NUM_ZOOM] = {};    // each box's height (set in layoutContent; used by the zoom popup)
     FadeOverlay srcFade[DrumChannel::NUM_SOURCES];  // dims a source group when its source is off
@@ -2304,6 +2304,7 @@ private:
     VoiceModDisplay  voiceMod;                    // unison/detune/vibrato visual (replaces the 3 knobs)
     SlotSelector     slotSelAmp, slotSelPitch, slotSelFx;   // 1/2 slot pickers (synced via setShapeSlot)
     SlotSelector     slotSelVoice;                          // 1/2 picker under UNISON/DETUNE/VIBRATO (synced with slotSelPitch)
+    SlotSelector     slotSelMod;                            // 1/2 picker in the MODULATION box (the MOD/LFO is per-slot)
     juce::Label      hdrAmpEnv, hdrEqBox, hdrVoice;   // box/section titles (row 1)
     // === PER-SLOT EQ (begin) - target picker: 0 = All (channel EQ), 1/2/3 = that slot's EQ ===
     SlotSelector     slotSelEq;
