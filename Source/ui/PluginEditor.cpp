@@ -1004,7 +1004,7 @@ ModMatrixEditor::ModMatrixEditor()
         amtSlider[r].setColour(juce::Slider::backgroundColourId, juce::Colour(0xff2a2a44));
         amtSlider[r].setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
         amtSlider[r].onValueChange = [this, r] { const double p = amtSlider[r].getValue();
-            amt[r] = (float) ((p < 0 ? -1.0 : 1.0) * p * p * p); if (onChange) onChange(); repaint(); };
+            amt[r] = (float) (p * p * p); if (onChange) onChange(); repaint(); };   // cube preserves sign (left = negative)
         addAndMakeVisible(amtSlider[r]);
     }
     lblEnv.setText("Mod Env", juce::dontSendNotification); lblEnv.setFont(juce::Font(10.0f, juce::Font::bold));
@@ -1049,8 +1049,8 @@ void ModMatrixEditor::setValues(const DrumChannel::Slot& sl)
         tgt[r] = juce::jlimit(0, DrumChannel::MT_COUNT - 1, (int) sl.mod[r].tgt);
         amt[r] = juce::jlimit(-1.0f, 1.0f, sl.mod[r].amt);
         srcCombo[r].setSelectedId(src[r] + 1, juce::dontSendNotification);
-        // invert the cubic curve so the thumb sits where the stored amount actually is
-        amtSlider[r].setValue((amt[r] < 0 ? -1.0f : 1.0f) * std::cbrt(std::abs(amt[r])), juce::dontSendNotification);
+        // invert the cubic curve so the thumb sits where the stored amount actually is (cbrt keeps sign)
+        amtSlider[r].setValue((double) std::cbrt((double) amt[r]), juce::dontSendNotification);
     }
     modEnvA = sl.modEnvA; modEnvD = sl.modEnvD; modLfoRate = sl.modLfoRate; modLfoShape = sl.modLfoShape;
     envA.setValue(modEnvA, juce::dontSendNotification);
@@ -1161,7 +1161,7 @@ ModRoutePanel::ModRoutePanel()
         amtSlider[r].setColour(juce::Slider::backgroundColourId, juce::Colour(0xff2a2a44));
         amtSlider[r].setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
         amtSlider[r].onValueChange = [this, r] { const double p = amtSlider[r].getValue();
-            amt[r] = (float) ((p < 0 ? -1.0 : 1.0) * p * p * p); if (onChange) onChange(); repaint(); };
+            amt[r] = (float) (p * p * p); if (onChange) onChange(); repaint(); };   // cube preserves sign (left = negative)
         addAndMakeVisible(amtSlider[r]);
     }
 }
@@ -1192,7 +1192,7 @@ void ModRoutePanel::setValues(const DrumChannel::Slot& sl)
         { tgt[n] = sl.mod[r].tgt; amt[n] = juce::jlimit(-1.0f, 1.0f, sl.mod[r].amt); ++n; }
     srcCombo.setSelectedId(src, juce::dontSendNotification);
     for (int r = 0; r < NT; ++r)
-        amtSlider[r].setValue((amt[r] < 0 ? -1.0f : 1.0f) * std::cbrt(std::abs(amt[r])), juce::dontSendNotification);
+        amtSlider[r].setValue((double) std::cbrt((double) amt[r]), juce::dontSendNotification);   // cbrt keeps the sign
     rebuildTargets();
     repaint();
 }
