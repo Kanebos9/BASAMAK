@@ -8204,6 +8204,36 @@ void DrumSequencerEditor::setupComponents()
         for (auto& p : proc.sequencer.patterns) { p.master.delayTime = (float) v; if (p.master.delaySync) p.master.delayDivision = div; }
     };
 
+    // MASTER vertical drag-faders (the narrow 3/5 strip): visual PROXIES over the 12 knobs above.
+    // Each reuses the knob's range/skew/format/default/MIDI-learn (proportionOfLengthToValue), so no
+    // master DSP/persistence/learn changed - dragging the fader just drives its hidden knob.
+    {
+        struct MV { LearnableKnob* k; juce::Label* l; };
+        const MV mv[NMVF] = {
+            { &knobMasterTilt,  &lblMasterTilt  }, { &knobMasterSat,   &lblMasterSat   },
+            { &knobMasterGlue,  &lblMasterGlue  }, { &knobMasterLimit, &lblMasterLimit },
+            { &knobReverbRoom,  &lblRevRoom     }, { &knobReverbDecay, &lblRevDecay    },
+            { &knobReverbWet,   &lblRevWet      }, { &knobReverbPre,   &lblRevPre      },
+            { &knobReverbWidth, &lblRevWidth    }, { &knobDelayTime,   &lblDelTime     },
+            { &knobDelayFB,     &lblDelFB       }, { &knobDelayWet,    &lblDelWet      } };
+        auto masterAud = [this] { if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel); };
+        for (int i = 0; i < NMVF; ++i)
+        {
+            auto* k = mv[i].k;  auto& f = masterVF[i];
+            f.setVertical(true);
+            f.setAccent(juce::Colour(0xffffc24a));   // amber = master
+            f.setLabel({});                          // name goes in the Label BELOW; the fader shows only the value
+            f.format    = [k](float v01) { return k->getTextFromValue(k->proportionOfLengthToValue((double) v01)); };
+            f.onChange  = [this, k](float v01) { if (! ignoreKnobCallbacks) k->setValue(k->proportionOfLengthToValue((double) v01), juce::sendNotificationSync); };
+            f.onDragEnd = masterAud;
+            f.setDefault((float) k->valueToProportionOfLength(k->getDoubleClickReturnValue()));
+            f.mlm = &proc.midiLearn;  f.learnPid = k->paramId;
+            f.setTooltip(k->getTooltip());
+            content.addAndMakeVisible(f);
+        }
+    }
+    setupGroupHeader(hdrModulation, "MODULATION");   // new group (holds the MOD/LFO visual for now)
+
     //-- Sample pitch envelope (knobs live in the "Pitch & Level" group now)
     setupKnob(knobPEnvAmt,  lblPEnvAmt,  "P.Env",  -48.0, 48.0, 0.0,  1.0, fmtSemi);
     setupKnob(knobPEnvTime, lblPEnvTime, "P.Time", 0.001, 1.0,  0.05, 0.3, fmtMs);
@@ -10137,6 +10167,11 @@ void DrumSequencerEditor::refreshDetailPanel()
     knobMasterTilt.setValue (proc.masterFX().tilt,             juce::dontSendNotification);
     knobMasterSat.setValue  (proc.masterFX().sat,             juce::dontSendNotification);
     swMasterMono.setToggleState(proc.masterFX().mono,           juce::dontSendNotification);
+    // Sync the MASTER vertical faders from their (just-updated) proxy knobs.
+    { LearnableKnob* mvk[NMVF] = { &knobMasterTilt, &knobMasterSat, &knobMasterGlue, &knobMasterLimit,
+        &knobReverbRoom, &knobReverbDecay, &knobReverbWet, &knobReverbPre, &knobReverbWidth,
+        &knobDelayTime, &knobDelayFB, &knobDelayWet };
+      for (int i = 0; i < NMVF; ++i) masterVF[i].setValue01((float) mvk[i]->valueToProportionOfLength(mvk[i]->getValue())); }
 
     knobPEnvAmt.setValue  (ch.pitchEnvAmt,  juce::dontSendNotification);
     knobPEnvTime.setValue (ch.pitchEnvTime, juce::dontSendNotification);
@@ -10956,8 +10991,8 @@ void DrumSequencerEditor::paintContent(juce::Graphics& g)
         auto b = hdr.getBounds().toFloat();
         box(b.getX() - 3.0f, b.getY() - 3.0f, b.getWidth() + 6.0f, h);
     };
-    // Full-height columns: AMP ENV+EQ | PITCH ENV | FX. (Slots are half-height; MASTER is special below.)
-    boxGroup(hdrAmpEnv, (float) colH); boxGroup(hdrSend, (float) colH);
+    // Full-height columns: AMP ENV+EQ | PITCH ENV | FX | MODULATION. (Slots are half-height; MASTER special below.)
+    boxGroup(hdrAmpEnv, (float) colH); boxGroup(hdrSend, (float) colH); boxGroup(hdrModulation, (float) colH);
     // PITCH box outline: from the column top (the "PITCH ENVELOPE" title) down the full column height.
     if (hdrPitch.getWidth() > 0) {
         auto pb = hdrPitch.getBounds().toFloat();
@@ -11269,12 +11304,15 @@ void DrumSequencerEditor::layoutContent()
     const int colBot = detailY + 360;
     const int colH   = colBot - colTop;                 // full column height
     const int gp     = 10;                              // gap between columns
-    const int slotsColW = 376, ampEqW = 330, pitchW = 250, fxColW = 200, masterW = 290;
+    // Column widths (user 2026-07-12): amp/filter + pitch/unison shrunk to 3/4, MASTER to 3/5; the
+    // freed space becomes a new MODULATION column (holds the MOD/LFO visual). FX + slots unchanged.
+    const int slotsColW = 376, ampEqW = 248, pitchW = 188, fxColW = 200, modW = 250, masterW = 174;
     const int cxSlots  = 12;
     const int cxAmp    = cxSlots + slotsColW + gp;
     const int cxPitch  = cxAmp   + ampEqW   + gp;
     const int cxFx     = cxPitch + pitchW   + gp;
-    const int cxMaster = cxFx    + fxColW   + gp;        // right edge (== rightEdge)
+    const int cxMod    = cxFx    + fxColW   + gp;        // NEW: MODULATION group
+    const int cxMaster = cxMod   + modW     + gp;        // right edge
     // Slots: two half-height boxes stacked on the LEFT edge; a vertical blend fader to their right.
     const int slotBoxW = slotsColW - 50;                // leave a wide column for the blend fader + % read-outs
     const int slotVGap = 6;
@@ -11283,51 +11321,56 @@ void DrumSequencerEditor::layoutContent()
     const int sbx[DrumChannel::NUM_SLOTS] = { cxSlots, cxSlots };
     const int sby[DrumChannel::NUM_SLOTS] = { colTop, colTop + slotH + slotVGap };
     {
-        const int KSB = 46;                            // bigger knobs for the (now full-height) MASTER box
-        auto kB = [&](LearnableKnob& k, juce::Label& l, int kx, int ky) {
-            k.setVisible(true); l.setVisible(true);
-            k.setBounds(kx, ky, KSB, KSB + boxH);
-            l.setBounds(kx - 7, ky + KSB + boxH, KSB + 14, 12);
-        };
-
-        // ===== MASTER box (RIGHT edge, distinct amber, full height): master Vol fader + Limit + Mono + meters +
-        //       the SHARED reverb/delay flavour. Spread to fill the tall box (no empty space below). =====
+        // ===== MASTER box (RIGHT edge, amber) = a NARROW 3/5-width strip. Volume stays a horizontal
+        //       fader; every knob is a VERTICAL drag-fader (value inside, name in the Label below).
+        //       The 12 proxy knobs are hidden (they stay the model). =====
         int sx = cxMaster;
-        hdrSounds.setBounds(sx, colTop, masterW, hdrH);   // "MASTER" (text set in setup)
+        hdrSounds.setBounds(sx, colTop, masterW, hdrH);   // "MASTER"
         for (int i = 0; i < 5; ++i) { srcSwitch[i].setBounds(0, 0, 0, 0); lblSrc[i].setBounds(0, 0, 0, 0); }
         btnPadLayout.setBounds(0, 0, 0, 0); lblPadHint.setBounds(0, 0, 0, 0);
         soundPad.setBounds(0, 0, 0, 0);
-        hdrMasterOut.setBounds(0, 0, 0, 0); hdrMasterOut.setVisible(false);   // box header is "MASTER" now
-        // Master OUT: Volume fader + tall meters, then Limit + Mono.
-        knobMasterVol.setBounds(sx + 14, colTop + 30, masterW - 28, 20); lblMasterVol.setBounds(0, 0, 0, 0);
-        // Master TONE + dynamics row, LEFT->RIGHT in signal order: Tilt -> Sat -> Glue -> Limiter,
-        // then the Mono switch in the 5th column. SAME big knobs + column pitch as the REVERB row
-        // below (user: the 4-knob row shouldn't be smaller than reverb's 5 knobs; the Limit read-out
-        // was unreadable). Row nudged up + REVERB nudged down so the bigger labels don't collide.
-        { const int rstep = 55, rx = sx + 12;
-          kB(knobMasterTilt,  lblMasterTilt,  rx,             colTop + 52);
-          kB(knobMasterSat,   lblMasterSat,   rx + rstep,     colTop + 52);
-          kB(knobMasterGlue,  lblMasterGlue,  rx + 2 * rstep, colTop + 52);
-          kB(knobMasterLimit, lblMasterLimit, rx + 3 * rstep, colTop + 52);
-          // Mono in column 5 (label above, toggle below - clears the Limit knob to its left).
-          lblMasterMono.setBounds(rx + 4 * rstep - 8, colTop + 66, 64, 11);
-          swMasterMono.setBounds (rx + 4 * rstep + 6, colTop + 82, 34, 16); }
-        // Shared REVERB flavour (Size/Decay/Wet/Pre/Width) + DELAY flavour (Time/FB + Sync/Ping), big knobs.
-        { const int rstep = 55, rx = sx + 12;
-          hdrReverb.setVisible(true);  refreshReverbModeHeader();
-          hdrReverb.setBounds(sx + 8, colTop + 134, masterW - 16, hdrH);
-          kB(knobReverbRoom,  lblRevRoom,  rx,             colTop + 150);
-          kB(knobReverbDecay, lblRevDecay, rx + rstep,     colTop + 150);
-          kB(knobReverbWet,   lblRevWet,   rx + 2 * rstep, colTop + 150);
-          kB(knobReverbPre,   lblRevPre,   rx + 3 * rstep, colTop + 150);
-          kB(knobReverbWidth, lblRevWidth, rx + 4 * rstep, colTop + 150);
-          hdrDelayG.setVisible(true);  hdrDelayG.setText("DELAY", juce::dontSendNotification);
-          hdrDelayG.setBounds(sx + 8, colTop + 228, masterW - 16, hdrH);
-          kB(knobDelayTime,   lblDelTime,  rx,             colTop + 248);
-          kB(knobDelayFB,     lblDelFB,    rx + rstep,     colTop + 248);
-          kB(knobDelayWet,    lblDelWet,   rx + 2 * rstep, colTop + 248);
-          lblDelaySync.setBounds(rx + 3 * rstep, colTop + 256, 48, 11);   swDelaySync.setBounds(rx + 3 * rstep + 8, colTop + 270, 34, 16);
-          lblDelayPingPong.setBounds(rx + 4 * rstep, colTop + 256, 48, 11); swDelayPingPong.setBounds(rx + 4 * rstep + 8, colTop + 270, 34, 16); }
+        hdrMasterOut.setBounds(0, 0, 0, 0); hdrMasterOut.setVisible(false);
+        { LearnableKnob* hk[NMVF] = { &knobMasterTilt, &knobMasterSat, &knobMasterGlue, &knobMasterLimit,
+            &knobReverbRoom, &knobReverbDecay, &knobReverbWet, &knobReverbPre, &knobReverbWidth,
+            &knobDelayTime, &knobDelayFB, &knobDelayWet };
+          for (auto* k : hk) { k->setVisible(false); k->setBounds(0, 0, 0, 0); } }   // hidden model behind the faders
+        // Master volume: horizontal fader across the top (kept horizontal - user).
+        knobMasterVol.setBounds(sx + 8, colTop + 22, masterW - 16, 16); lblMasterVol.setBounds(0, 0, 0, 0);
+        // vertical-fader placer: fader + a centred Label below it.
+        const int FW = 26, FPITCH = 31, FH = 56;
+        auto vf = [&](int idx, juce::Label& lbl, int col, int fy) {
+            const int fx = sx + 8 + col * FPITCH;
+            masterVF[idx].setVisible(true); masterVF[idx].setBounds(fx, fy, FW, FH);
+            lbl.setVisible(true); lbl.setJustificationType(juce::Justification::centred);
+            lbl.setFont(juce::Font(9.5f, juce::Font::bold)); lbl.setMinimumHorizontalScale(0.7f);
+            lbl.setBounds(fx - 5, fy + FH + 1, FW + 10, 11);
+        };
+        // Row 1: Tilt / Sat / Glue / Limit + Mono toggle (col 5)
+        { const int fy = colTop + 44;
+          vf(0, lblMasterTilt, 0, fy); vf(1, lblMasterSat, 1, fy);
+          vf(2, lblMasterGlue, 2, fy); vf(3, lblMasterLimit, 3, fy);
+          const int mx = sx + 8 + 4 * FPITCH;
+          lblMasterMono.setVisible(true); lblMasterMono.setJustificationType(juce::Justification::centred);
+          lblMasterMono.setFont(juce::Font(9.5f, juce::Font::bold));
+          lblMasterMono.setBounds(mx - 5, fy + 8, FW + 10, 11); swMasterMono.setBounds(mx, fy + 22, 30, 16); }
+        // Row 2: REVERB - Size / Decay / Wet / Pre / Width
+        { hdrReverb.setVisible(true); refreshReverbModeHeader();
+          hdrReverb.setBounds(sx + 6, colTop + 116, masterW - 12, hdrH);
+          const int fy = colTop + 134;
+          vf(4, lblRevRoom, 0, fy); vf(5, lblRevDecay, 1, fy); vf(6, lblRevWet, 2, fy);
+          vf(7, lblRevPre, 3, fy); vf(8, lblRevWidth, 4, fy); }
+        // Row 3: DELAY - Time / F.back / Wet + Sync / Ping toggles (cols 4-5, stacked)
+        { hdrDelayG.setVisible(true); hdrDelayG.setText("DELAY", juce::dontSendNotification);
+          hdrDelayG.setBounds(sx + 6, colTop + 206, masterW - 12, hdrH);
+          const int fy = colTop + 224;
+          vf(9, lblDelTime, 0, fy); vf(10, lblDelFB, 1, fy); vf(11, lblDelWet, 2, fy);
+          const int cx3 = sx + 8 + 3 * FPITCH, cx4 = sx + 8 + 4 * FPITCH;
+          lblDelaySync.setVisible(true); lblDelaySync.setJustificationType(juce::Justification::centred);
+          lblDelaySync.setFont(juce::Font(9.5f, juce::Font::bold));
+          lblDelaySync.setBounds(cx3 - 5, fy + 2, FW + 10, 11); swDelaySync.setBounds(cx3, fy + 16, 30, 16);
+          lblDelayPingPong.setVisible(true); lblDelayPingPong.setJustificationType(juce::Justification::centred);
+          lblDelayPingPong.setFont(juce::Font(9.5f, juce::Font::bold)); lblDelayPingPong.setMinimumHorizontalScale(0.7f);
+          lblDelayPingPong.setBounds(cx4 - 5, fy + 2, FW + 10, 11); swDelayPingPong.setBounds(cx4, fy + 16, 30, 16); }
 
         // -- AMP ENVELOPE + EQ column. The amp-env graph top is GRAPH_Y so it aligns with the pitch-env graph. --
         const int GRAPH_Y = colTop + 38, GRAPH_H = 118;
@@ -11484,16 +11527,20 @@ void DrumSequencerEditor::layoutContent()
         const int row2 = colTop + 66, row3 = colTop + 66 + KSB + kboxH + 14;
         kFx(knobReverb, lblRev, 0, row2); kFx(knobDelay, lblDel, 1, row2); kFx(knobChMix, lblChMix, 2, row2);
         kFx(knobTone, lblTone, 0, row3); kFx(knobPunch, lblPunch, 1, row3); kFx(knobComp, lblComp, 2, row3);
-        // LFO visual fills everything left - tempo sync lives INSIDE it (Sync button + snapped drag).
-        const int lfoTop = row3 + KSB + kboxH + 16;
-        lfoDisplay.setBounds(fxX, lfoTop, fxW, juce::jmax(74, colTop + colH - lfoTop - 7));   // stop just above the FX box outline
+        // (The MOD/LFO visual moved OUT of the FX column into the new MODULATION column - see below.)
+
+        // ===== MODULATION column (new, user 2026-07-12): holds the MOD (= LFO) visual for now; the
+        //       sources/targets routing will fill the space below in the next steps. =====
+        hdrModulation.setVisible(true);
+        hdrModulation.setBounds(cxMod, colTop, modW, hdrH);
+        lfoDisplay.setBounds(cxMod + 6, colTop + 24, modW - 12, 132);   // wider (more room) but same height, moved up
     }
 
     // DRAW HARMONICS overlay: parked over the amp/pitch columns (opened from the Custom wave preview;
     // hidden again at the top of every layoutContent like the sound picker).
     harmEd.setBounds(cxAmp, colTop, ampEqW + gp + pitchW + gp + fxColW, colH);   // covers amp..FX (user-outlined area)
     lfoCurveEd.setBounds(cxPitch, colTop + 60, pitchW + gp + fxColW, 220);   // LFO SHAPER overlay (near the LFO box)
-    modMatrixEd.setBounds(cxAmp, colTop, ampEqW + gp + pitchW, colH);   // MOD MATRIX overlay: amp+pitch columns (NOT the FX area - user)
+    modMatrixEd.setBounds(cxAmp, colTop, ampEqW + gp + pitchW + gp + fxColW, colH);   // MOD MATRIX overlay (wide enough after the column shrink)
 
     hdrDrive.setBounds(0, 0, 0, 0);
     lblSampleSel.setBounds(0, 0, 0, 0);

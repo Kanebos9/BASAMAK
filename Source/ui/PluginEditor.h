@@ -726,7 +726,8 @@ public:
         else           g.fillRoundedRectangle(r.withWidth(juce::jmax(5.0f, val_ * r.getWidth())), 4.0f);
         g.setColour(accent_.withAlpha(0.55f)); g.drawRoundedRectangle(r, 4.0f, 1.0f);
         g.setColour(juce::Colour(0xffeaf0fa)); g.setFont(juce::Font(11.5f, juce::Font::bold));
-        juce::String t = name_; if (format) t += "  " + format(val_);
+        juce::String t = name_.isEmpty() ? (format ? format(val_) : juce::String())   // value-only (name in a Label below)
+                                         : (format ? name_ + "  " + format(val_) : name_);
         if (vertical_)
         {   // draw the label rotated 90 deg so it reads up the narrow column
             juce::Graphics::ScopedSaveState ss(g);
@@ -2413,6 +2414,12 @@ private:
     LearnableKnob    knobMasterSat   { "global_masterSat",   proc.midiLearn };
     ToggleSwitch     swMasterMono;
     juce::Label      lblRevDecay, lblMasterVol, lblMasterLimit, lblMasterMono, lblMasterGlue, lblMasterTilt, lblMasterSat;
+    // MASTER = a narrow 3/5-width strip now: every master KNOB is shown as a VERTICAL drag-fader
+    // (value inside, rotated; name in the Label below). These are VISUAL PROXIES over the hidden
+    // knobs above - they reuse each knob's range/skew/format/default/MIDI, so no master logic changed.
+    static constexpr int NMVF = 12;
+    SlotDragFader    masterVF[NMVF];
+    juce::Label      hdrModulation;         // "MODULATION" group header (holds the MOD/LFO visual for now)
 
     // (EQ knobs removed - the EQ is drawn/dragged on freqDisplay now.)
     juce::Label lblPit,lblVol,lblPan;
