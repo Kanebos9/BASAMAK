@@ -617,6 +617,41 @@ private:
 };
 
 //==============================================================================
+// ModRoutePanel: the INLINE per-source routing that lives in the MODULATION box (no popup). Pick a
+// SOURCE at the top, then wire up to 4 [Target][Amount] rows for it - no Source column, so the
+// target names get the full width (no truncation in the narrow column). Edits the slot's flat
+// mod[] route pool (routes whose src == the selected source). The wide MATRIX overlay still shows
+// every route at once. Value-only faders (drawn %, cubic curve) - the same as ModMatrixEditor.
+class ModRoutePanel : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    static constexpr int NT = 4;                     // targets shown per source
+    juce::Colour accent { 0xffb96bff };
+    int  slotIdx = 0;
+    int  src = 1;                                    // selected source (default Velocity)
+    int  tgt[NT] = {}; float amt[NT] = {};           // its up-to-4 target rows
+    std::function<void()> onChange;                  // write the rows back into the slot's mod[]
+    std::function<void()> onOpenMatrix;              // "Matrix" -> the wide full-view overlay
+    std::function<juce::String(int gridIdx)> gridKnobName;   // live engine-knob names (empty = skip)
+    ModRoutePanel();
+    void setValues(const DrumChannel::Slot& sl);     // pick src's routes into tgt/amt + refresh widgets
+    void rebuildTargets();                           // fill the 4 target combos with live grid names
+    void paint(juce::Graphics& g) override;
+    void resized() override;
+    void mouseDown(const juce::MouseEvent& e) override;   // the "Matrix" button hit
+    juce::String getTooltip() override
+    { return "Route this MOD source to targets, right here.\n\n"
+             "- Pick a SOURCE at the top, then send it to up to 4 targets with an amount each.\n"
+             "- Drag an amount (double-click = 0); it's fine near zero.\n"
+             "- MATRIX (bottom) opens the full table of every route on both slots."; }
+private:
+    juce::ComboBox srcCombo, tgtCombo[NT];
+    juce::Slider   amtSlider[NT];
+    void styleCombo(juce::ComboBox& c);
+    juce::Rectangle<float> matrixBtnRect() const { return { 6.0f, (float) getHeight() - 20.0f, (float) getWidth() - 12.0f, 16.0f }; }
+};
+
+//==============================================================================
 // A sliding on/off switch: green with the knob to the right when on, grey with
 // the knob to the left when off. (Declared early so SlotEditor can hold one.)
 class ToggleSwitch : public juce::Button
@@ -2278,7 +2313,8 @@ private:
     void openModMatrix();                // MOD MATRIX overlay (per selected slot)
     HarmonicEditor harmEd;    // ADDITIVE draw-harmonics overlay (content child)
     LfoCurveEditor lfoCurveEd;             // LFO SHAPER overlay (draw the Custom LFO cycle)
-    ModMatrixEditor modMatrixEd;           // MOD MATRIX overlay (6 routes for the selected slot)
+    ModMatrixEditor modMatrixEd;           // MOD MATRIX overlay (full flat table of every route)
+    ModRoutePanel   modRoutePanel;         // INLINE per-source routing in the MODULATION box
     int            lfoCurveEdDest = 0;     // which LFO tab the overlay edits
     int            harmEdSlot = 0;
 

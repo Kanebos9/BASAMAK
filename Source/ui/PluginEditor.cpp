@@ -1132,6 +1132,116 @@ void ModMatrixEditor::mouseDown(const juce::MouseEvent& e)
     if (closeRect().contains(e.position)) { setVisible(false); if (onClose) onClose(); }
 }
 
+//==============================================================================
+// ModRoutePanel (inline per-source routing in the MODULATION box)
+//==============================================================================
+void ModRoutePanel::styleCombo(juce::ComboBox& c)
+{
+    c.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff181828));
+    c.setColour(juce::ComboBox::textColourId, juce::Colours::white);
+    c.setColour(juce::ComboBox::outlineColourId, juce::Colour(0xff33335a));
+    c.setColour(juce::ComboBox::arrowColourId, accent);
+    addAndMakeVisible(c);
+}
+ModRoutePanel::ModRoutePanel()
+{
+    styleCombo(srcCombo);
+    for (int i = 1; i < DrumChannel::MS_COUNT; ++i) srcCombo.addItem(kModSrcName[i], i);   // id = source enum (Off skipped)
+    srcCombo.onChange = [this] { src = juce::jlimit(1, DrumChannel::MS_COUNT - 1, srcCombo.getSelectedId());
+                                 if (onChange) onChange(); };   // editor re-reads this src's routes
+    for (int r = 0; r < NT; ++r)
+    {
+        styleCombo(tgtCombo[r]);
+        tgtCombo[r].onChange = [this, r] { tgt[r] = tgtCombo[r].getSelectedId() - 1; if (onChange) onChange(); repaint(); };
+        amtSlider[r].setSliderStyle(juce::Slider::LinearHorizontal);
+        amtSlider[r].setRange(-1.0, 1.0, 0.0);
+        amtSlider[r].setDoubleClickReturnValue(true, 0.0);
+        amtSlider[r].setColour(juce::Slider::trackColourId, accent);
+        amtSlider[r].setColour(juce::Slider::thumbColourId, accent);
+        amtSlider[r].setColour(juce::Slider::backgroundColourId, juce::Colour(0xff2a2a44));
+        amtSlider[r].setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
+        amtSlider[r].onValueChange = [this, r] { const double p = amtSlider[r].getValue();
+            amt[r] = (float) ((p < 0 ? -1.0 : 1.0) * p * p * p); if (onChange) onChange(); repaint(); };
+        addAndMakeVisible(amtSlider[r]);
+    }
+}
+void ModRoutePanel::rebuildTargets()
+{
+    for (int r = 0; r < NT; ++r)
+    {
+        tgtCombo[r].clear(juce::dontSendNotification);
+        for (int t = 0; t < DrumChannel::MT_GRID_BASE; ++t) tgtCombo[r].addItem(kModTgtFixedName[t], t + 1);
+        for (int i = 0; i < DrumChannel::MOD_TGT_GRID; ++i)
+        {
+            const juce::String nm = gridKnobName ? gridKnobName(i) : juce::String();
+            if (nm.isNotEmpty()) tgtCombo[r].addItem("Knob " + juce::String(i + 1) + ": " + nm,
+                                                     DrumChannel::MT_GRID_BASE + i + 1);
+        }
+        const int id = tgt[r] + 1;
+        if (tgtCombo[r].indexOfItemId(id) >= 0) tgtCombo[r].setSelectedId(id, juce::dontSendNotification);
+        else { tgtCombo[r].setSelectedId(1, juce::dontSendNotification); tgt[r] = 0; }
+    }
+}
+void ModRoutePanel::setValues(const DrumChannel::Slot& sl)
+{
+    // Collect the routes whose source == the selected source into the 4 rows (rest = Off).
+    for (int r = 0; r < NT; ++r) { tgt[r] = 0; amt[r] = 0.0f; }
+    int n = 0;
+    for (int r = 0; r < DrumChannel::MOD_ROUTES && n < NT; ++r)
+        if (sl.mod[r].src == src && sl.mod[r].tgt != DrumChannel::MTOff)
+        { tgt[n] = sl.mod[r].tgt; amt[n] = juce::jlimit(-1.0f, 1.0f, sl.mod[r].amt); ++n; }
+    srcCombo.setSelectedId(src, juce::dontSendNotification);
+    for (int r = 0; r < NT; ++r)
+        amtSlider[r].setValue((amt[r] < 0 ? -1.0f : 1.0f) * std::cbrt(std::abs(amt[r])), juce::dontSendNotification);
+    rebuildTargets();
+    repaint();
+}
+void ModRoutePanel::paint(juce::Graphics& g)
+{
+    auto b = getLocalBounds().toFloat();
+    g.setColour(juce::Colour(0xff11111c)); g.fillRoundedRectangle(b, 5.0f);
+    g.setColour(accent.withAlpha(0.4f)); g.drawRoundedRectangle(b.reduced(0.5f), 5.0f, 1.0f);
+    g.setColour(juce::Colour(0xff9aa6c0)); g.setFont(juce::Font(9.5f, juce::Font::bold));
+    g.drawText("ROUTE THIS SOURCE", 8, 3, getWidth() - 16, 11, juce::Justification::centredLeft, false);
+    // per-row amount % (drawn, right of each fader)
+    g.setFont(juce::Font(10.0f, juce::Font::bold));
+    const int rowY0 = 40, rowH = 22, valW = 44;
+    for (int r = 0; r < NT; ++r)
+    {
+        const int y = rowY0 + r * rowH;
+        const float a = amt[r];
+        const bool on = (tgt[r] != 0 && std::abs(a) > 1.0e-4f);
+        juce::String t = (std::abs(a) < 0.095f && std::abs(a) > 1.0e-4f)
+            ? (a > 0 ? "+" : "") + juce::String(a * 100.0f, 1) + "%"
+            : (a > 0 ? "+" : "") + juce::String(juce::roundToInt(a * 100.0f)) + "%";
+        g.setColour(on ? juce::Colours::white : juce::Colour(0xff5a5f74));
+        g.drawText(t, getWidth() - valW - 6, y, valW, rowH - 4, juce::Justification::centredRight, false);
+    }
+    // the MATRIX button (opens the wide full-view overlay)
+    auto mb = matrixBtnRect();
+    g.setColour(juce::Colour(0xff2a2a4a)); g.fillRoundedRectangle(mb, 3.0f);
+    g.setColour(juce::Colour(0xffb96bff)); g.drawRoundedRectangle(mb.reduced(0.5f), 3.0f, 1.0f);
+    g.setColour(juce::Colour(0xffcfa6ff)); g.setFont(juce::Font(9.5f, juce::Font::bold));
+    g.drawText("MATRIX - all routes", mb, juce::Justification::centred, false);
+}
+void ModRoutePanel::resized()
+{
+    const int x0 = 8, w = getWidth() - 16;
+    srcCombo.setBounds(x0, 16, w, 20);
+    const int rowY0 = 40, rowH = 22, valW = 44;
+    for (int r = 0; r < NT; ++r)
+    {
+        const int y = rowY0 + r * rowH;
+        const int tW = (w * 52) / 100;              // target ~52% of the row
+        tgtCombo[r].setBounds(x0, y, tW, rowH - 4);
+        amtSlider[r].setBounds(x0 + tW + 4, y, w - tW - 4 - valW - 2, rowH - 4);
+    }
+}
+void ModRoutePanel::mouseDown(const juce::MouseEvent& e)
+{
+    if (matrixBtnRect().contains(e.position)) { if (onOpenMatrix) onOpenMatrix(); }
+}
+
 juce::String WaveMorphDisplay::getTooltip()
 {
     return "The oscillator's waveform (the picture is the real tone). Pick the wave with the WAVE fader above; "
@@ -3451,7 +3561,7 @@ void LfoDisplay::paint(juce::Graphics& g)
     // Top strip: title + the 3 LFO tabs (selected = bright; a dot marks the ones that are ON).
     g.setFont(juce::Font(9.0f, juce::Font::bold));
     g.setColour(juce::Colour(0xff8090b0));
-    g.drawText("LFO", 6, 3, 40, 12, juce::Justification::centredLeft, false);
+    g.drawText("MOD", 6, 3, 40, 12, juce::Justification::centredLeft, false);
     static const char* dn[4] = { "FILT", "PITCH", "VOL", "WAVE" };
     const float bw = bb.getWidth() * 0.2075f;
     for (int d = 0; d < 4; ++d)
@@ -8090,6 +8200,30 @@ void DrumSequencerEditor::setupComponents()
     };
     modMatrixEd.onClose = [this] { modMatrixEd.setVisible(false); };
 
+    // INLINE per-source routing panel (lives in the MODULATION box; no popup needed for basic wiring).
+    content.addAndMakeVisible(modRoutePanel);
+    modRoutePanel.gridKnobName = [this](int gridIdx) -> juce::String {
+        auto& sl = proc.sequencer.channel(selectedChannel).slots[envTargetSlot()];
+        if (DrumChannel::modGridKnob(sl.engine, gridIdx).field == nullptr) return {};
+        auto params = slotParamsFor(sl.engine);
+        return (gridIdx < params.size()) ? params[gridIdx].label : juce::String();
+    };
+    modRoutePanel.onOpenMatrix = [this] { openModMatrix(); };
+    modRoutePanel.onChange = [this] {
+        if (ignoreKnobCallbacks) return;
+        auto& ch = proc.sequencer.channel(selectedChannel);
+        auto& sl = ch.slots[envTargetSlot()];
+        const int8_t src = (int8_t) modRoutePanel.src;
+        for (auto& r : sl.mod) if (r.src == src) r = DrumChannel::Slot::ModRoute{};   // clear this source's routes
+        for (int i = 0; i < ModRoutePanel::NT; ++i) {
+            if (modRoutePanel.tgt[i] == DrumChannel::MTOff || std::abs(modRoutePanel.amt[i]) < 1.0e-4f) continue;
+            for (auto& r : sl.mod)
+                if (r.src == DrumChannel::MSOff && r.tgt == DrumChannel::MTOff)
+                { r.src = src; r.tgt = (int8_t) modRoutePanel.tgt[i]; r.amt = modRoutePanel.amt[i]; break; }
+        }
+        ch.markDspDirty();
+    };
+
     // ---- Per-slot FX + Chorus + Keytrack + LFO-sync DRAG-FADERS (Arp Rate-fader style, slot-coloured).
     //      All write the SELECTED slot; the accent follows the FX slot selector (yellow 1 / pink 2).
     auto pctFader = [](float v){ return juce::String(juce::roundToInt(v * 100.0f)) + "%"; };
@@ -10157,7 +10291,10 @@ void DrumSequencerEditor::refreshDetailPanel()
       comboDriveType.setSelectedId(sl.fxDriveType + 1, juce::dontSendNotification);
       updateFxFaders(sl);
       lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)), (sl.oscShape >= DrumChannel::WvCustom || sl.engine == DrumChannel::SrcGrain),
-                           envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8)); }
+                           envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8));
+      modRoutePanel.slotIdx = envTargetSlot();
+      modRoutePanel.accent = envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8);
+      modRoutePanel.setValues(sl); }   // inline routing follows the selected slot
     refreshKeysPanel();   // the KEYS panel follows the selected channel/slot too
 
     // Double-click on any master knob returns it to its FACTORY DEFAULT (set once in setupKnob) -
@@ -11554,7 +11691,9 @@ void DrumSequencerEditor::layoutContent()
         hdrModulation.setVisible(true);
         hdrModulation.setBounds(cxMod, colTop, modW, hdrH);
         slotSelMod.setBounds(cxMod + 6, colTop + 18, modW - 12, 16);    // 1/2 slot picker (like the other boxes)
-        lfoDisplay.setBounds(cxMod + 6, colTop + 38, modW - 12, 132);   // wider, same height, below the picker
+        lfoDisplay.setBounds(cxMod + 6, colTop + 38, modW - 12, 132);   // the MOD (LFO) visual
+        modRoutePanel.setVisible(true);                                 // inline per-source routing below it
+        modRoutePanel.setBounds(cxMod + 6, colTop + 176, modW - 12, colH - 176 - 6);
     }
 
     // DRAW HARMONICS overlay: parked over the amp/pitch columns (opened from the Custom wave preview;
