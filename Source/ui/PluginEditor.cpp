@@ -1056,13 +1056,18 @@ void RoutePicker::resized()
     srcList.setBounds(left);
     tgtList.setBounds(b.reduced(2, 0));
 }
+// Amount fader response = CUBIC (user): the fader starts slow (fine sub-1% control near the
+// centre) and accelerates toward the ends. pos = the linear finger position -1..1; amt = pos^3
+// (sign-preserving). Drawing inverts it (cbrt) so the handle tracks the finger, not the value.
+static float modAmtFromPos(float p) { p = juce::jlimit(-1.0f, 1.0f, p); return p * p * p; }
+static float modPosFromAmt(float a) { return std::cbrt(juce::jlimit(-1.0f, 1.0f, a)); }
 void RoutePicker::setAmtFromX(float x)
 {
     auto fr = amtRect();
     const float cx = fr.getCentreX(), half = fr.getWidth() * 0.5f - 4.0f;
-    float a = juce::jlimit(-1.0f, 1.0f, (x - cx) / juce::jmax(1.0f, half));
-    if (std::abs(a) < 0.03f) a = 0.0f;
-    curAmt = a; if (onAmt) onAmt(a); repaint();
+    float p = juce::jlimit(-1.0f, 1.0f, (x - cx) / juce::jmax(1.0f, half));
+    if (std::abs(p) < 0.02f) p = 0.0f;             // snap the finger to dead-centre = exactly 0
+    curAmt = modAmtFromPos(p); if (onAmt) onAmt(curAmt); repaint();
 }
 void RoutePicker::mouseDown(const juce::MouseEvent& e) { if (amtRect().contains(e.position)) setAmtFromX(e.position.x); }
 void RoutePicker::mouseDrag(const juce::MouseEvent& e) { if (amtRect().contains(e.mouseDownPosition)) setAmtFromX(e.position.x); }
@@ -1073,14 +1078,15 @@ void RoutePicker::paint(juce::Graphics& g)
     // AMOUNT fader (bipolar, centre = 0) - long, with the exact % written IN it (user).
     auto fr = amtRect();
     g.setColour(juce::Colour(0xff181828)); g.fillRoundedRectangle(fr, 4.0f);
-    const float cx = fr.getCentreX(), half = fr.getWidth() * 0.5f - 4.0f, px = cx + curAmt * half;
+    const float cx = fr.getCentreX(), half = fr.getWidth() * 0.5f - 4.0f, px = cx + modPosFromAmt(curAmt) * half;
     if (std::abs(curAmt) > 1.0e-4f)
     { g.setColour(accent.withAlpha(0.32f)); g.fillRect(juce::Rectangle<float>(juce::jmin(cx, px), fr.getY() + 3.0f, std::abs(px - cx), fr.getHeight() - 6.0f));
       g.setColour(accent); g.fillRect(px - 1.2f, fr.getY() + 3.0f, 2.4f, fr.getHeight() - 6.0f); }
     g.setColour(juce::Colour(0xff4a4a66)); g.fillRect(cx - 0.5f, fr.getY() + 4.0f, 1.0f, fr.getHeight() - 8.0f);   // 0 tick
     g.setColour(juce::Colours::white); g.setFont(juce::Font(11.0f, juce::Font::bold));
-    g.drawText("AMOUNT  " + juce::String(curAmt >= 0 ? "+" : "") + juce::String(juce::roundToInt(curAmt * 100.0f)) + "%",
-               fr, juce::Justification::centred, false);
+    const float pct = curAmt * 100.0f;   // sub-10% shows one decimal so the fine sub-1% range is readable
+    const juce::String pctS = std::abs(pct) < 9.95f ? juce::String(pct, 1) : juce::String(juce::roundToInt(pct));
+    g.drawText("AMOUNT  " + juce::String(curAmt >= 0 ? "+" : "") + pctS + "%", fr, juce::Justification::centred, false);
 }
 
 //==============================================================================
@@ -1110,9 +1116,9 @@ void ModFaderMatrix::setAmtFromX(int r, float x)
 {
     auto fr = faderRect(r);
     const float cx = fr.getCentreX(), half = fr.getWidth() * 0.5f - 4.0f;
-    float a = juce::jlimit(-1.0f, 1.0f, (x - cx) / juce::jmax(1.0f, half));
-    if (std::abs(a) < 0.04f) a = 0.0f;                // snap-to-centre (0)
-    amt[r] = a; if (onChange) onChange(); repaint();
+    float p = juce::jlimit(-1.0f, 1.0f, (x - cx) / juce::jmax(1.0f, half));
+    if (std::abs(p) < 0.02f) p = 0.0f;                // snap the finger to dead-centre (0)
+    amt[r] = modAmtFromPos(p); if (onChange) onChange(); repaint();
 }
 void ModFaderMatrix::setValues(const DrumChannel::Slot& sl)
 {
@@ -1137,8 +1143,8 @@ void ModFaderMatrix::paint(juce::Graphics& g)
         g.setColour(juce::Colour(0xff181828)); g.fillRoundedRectangle(fr, 3.0f);
         const float cx = fr.getCentreX(), half = fr.getWidth() * 0.5f - 4.0f;
         if (active && std::abs(amt[i]) > 1.0e-4f)
-        {   // bipolar fill from the centre + a bright thumb
-            const float px = cx + amt[i] * half;
+        {   // bipolar fill from the centre + a bright thumb (handle in cube-root space = tracks the finger)
+            const float px = cx + modPosFromAmt(amt[i]) * half;
             g.setColour(accent.withAlpha(0.32f));
             g.fillRect(juce::Rectangle<float>(juce::jmin(cx, px), fr.getY() + 2.0f, std::abs(px - cx), fr.getHeight() - 4.0f));
             g.setColour(accent); g.fillRect(px - 1.0f, fr.getY() + 2.0f, 2.0f, fr.getHeight() - 4.0f);
@@ -1705,8 +1711,10 @@ void SlotEditor::pushValues()
         freqFader->setValue (s->oscFreq,  juce::dontSendNotification); freqFader->updateText();
         depthFader->setValue(s->fmDepth,  juce::dontSendNotification); depthFader->updateText();
         warpFader->setValue (s->oscWarp,  juce::dontSendNotification); warpFader->updateText();
-        fromFader->setValue (s->oscShape, juce::dontSendNotification); fromFader->updateText();   // the Wave fader
         fmEnvSw.setToggleState(s->fmEnvFollow, juce::dontSendNotification);
+    }
+    if (oscLayout || engine == DrumChannel::SrcGrain) {   // the Wave fader is shown for Osc AND Granular (the grain source)
+        fromFader->setValue (s->oscShape, juce::dontSendNotification); fromFader->updateText();
     }
     morphView.repaint();          // reflect this slot's wave (+ warp + FM)
     physView.repaint(); modalView.repaint();   // reflect Position/Tone / Hit Pos/Damp + material looks
@@ -9922,6 +9930,7 @@ void DrumSequencerEditor::onSlotEngineChange(int box)
 {
     const int id = slotCombo[box].getSelectedId();
     auto& ch = proc.sequencer.channel(selectedChannel);
+    const int oldEng = boxEngine[box];   // to detect a real engine change (cancel now-meaningless sound-engine mod routes)
 
     if (id == ID_BROWSE)
     {
@@ -9954,6 +9963,21 @@ void DrumSequencerEditor::onSlotEngineChange(int box)
         ch.silenceAllVoices();   // don't let a voice ringing on the OLD engine get re-read as the new one (= noise)
         ch.ensureKsBuffers();    // KS lines are lazily allocated; a KS engine just got assigned (message thread)
         ch.rebuildGrainTables(); // a slot may have just become (or left) Granular (message thread)
+    }
+    // ENGINE CHANGED -> cancel this slot's mod routes that targeted the OLD engine's own params (they'd
+    // otherwise silently modulate a DIFFERENT param on the new engine, or show a stale "Knob N"). Only the
+    // sound-engine-specific targets: the grid knobs + Warp (Osc-only) + Wave/Grain Position (Osc/Grain).
+    if (boxEngine[box] != oldEng)
+    {
+        const int ne = boxEngine[box];
+        for (auto& r : ch.slots[box].mod)
+        {
+            const bool gridTgt = (r.tgt >= DrumChannel::MT_GRID_BASE);
+            const bool warpTgt = (r.tgt == DrumChannel::MTWarp    && ne != DrumChannel::SrcOsc);
+            const bool wposTgt = (r.tgt == DrumChannel::MTWavePos && ne != DrumChannel::SrcOsc && ne != DrumChannel::SrcGrain);
+            if (gridTgt || warpTgt || wposTgt) { r.src = DrumChannel::MSOff; r.tgt = DrumChannel::MTOff; r.amt = 0.0f; }
+        }
+        // (layoutContent() -> refreshDetailPanel() below re-reads modFaders from the selected slot.)
     }
     syncPadFromSlots (true);   // adding/removing a slot rebalances the blend
     ch.markDspDirty();
@@ -11518,7 +11542,7 @@ void DrumSequencerEditor::layoutContent()
         // Master volume: horizontal fader across the top (kept horizontal - user).
         knobMasterVol.setBounds(sx + 8, colTop + 22, masterW - 16, 16); lblMasterVol.setBounds(0, 0, 0, 0);
         // vertical-fader placer: fader + a centred Label below it. Spread across the (now wider) box.
-        const int FPITCH = (masterW - 16) / 5, FW = FPITCH - 8, FH = 76;   // taller = fill the column (no empty space below - user)
+        const int FPITCH = (masterW - 16) / 5, FW = FPITCH - 8, FH = 64;   // sized so all 3 rows + labels fit INSIDE the box (colH 338)
         auto vf = [&](int idx, juce::Label& lbl, int col, int fy) {
             const int fx = sx + 8 + col * FPITCH;
             masterVF[idx].setVisible(true); masterVF[idx].setBounds(fx, fy, FW, FH);
@@ -11536,14 +11560,14 @@ void DrumSequencerEditor::layoutContent()
           lblMasterMono.setBounds(mx - 5, fy + 8, FW + 10, 11); swMasterMono.setBounds(mx, fy + 22, 30, 16); }
         // Row 2: REVERB - Size / Decay / Wet / Pre / Width
         { hdrReverb.setVisible(true); refreshReverbModeHeader();
-          hdrReverb.setBounds(sx + 6, colTop + 130, masterW - 12, hdrH);
-          const int fy = colTop + 148;
+          hdrReverb.setBounds(sx + 6, colTop + 126, masterW - 12, hdrH);
+          const int fy = colTop + 144;
           vf(4, lblRevRoom, 0, fy); vf(5, lblRevDecay, 1, fy); vf(6, lblRevWet, 2, fy);
           vf(7, lblRevPre, 3, fy); vf(8, lblRevWidth, 4, fy); }
         // Row 3: DELAY - Time / F.back / Wet + Sync / Ping toggles (cols 4-5, stacked)
         { hdrDelayG.setVisible(true); hdrDelayG.setText("DELAY", juce::dontSendNotification);
-          hdrDelayG.setBounds(sx + 6, colTop + 238, masterW - 12, hdrH);
-          const int fy = colTop + 256;
+          hdrDelayG.setBounds(sx + 6, colTop + 230, masterW - 12, hdrH);
+          const int fy = colTop + 248;
           vf(9, lblDelTime, 0, fy); vf(10, lblDelFB, 1, fy); vf(11, lblDelWet, 2, fy);
           const int cx3 = sx + 8 + 3 * FPITCH, cx4 = sx + 8 + 4 * FPITCH;
           lblDelaySync.setVisible(true); lblDelaySync.setJustificationType(juce::Justification::centred);

@@ -1962,7 +1962,7 @@ static void uEvilLaugh(DC& c)   // "evil laugh": pulsing resonant pink noise + a
     s.noiseType = 1; s.noiseCenter = 102.6f; s.noiseWidth = 0.197f; s.noiseDrive = 0.338f;
     s.atk = 0.001f; s.dec = 1.02f; s.release = 0.06f;
     s.filterType = DC::LowPass; s.filterCutoff = 1186.0f; s.filterReso = 4.73f; s.filterEnvAmt = -1.0f;
-    s.lfoRate[2] = 5.4f; s.lfoAmt[2] = 0.914f; lfoRoute(s, 2, DC::MTVol);   // the ha-ha-ha pulse (VOL LFO)
+    s.lfoRate[2] = 5.4f; s.lfoAmt[2] = 0.457f; lfoRoute(s, 2, DC::MTVol);   // the ha-ha-ha pulse (VOL LFO; halved - matrix MTVol is bipolar around the 0.5 weight, 0.914 drove it to silence)
 }
 
 static const struct { const char* name; Builder build; const char* cat; } kMixes[] = {
