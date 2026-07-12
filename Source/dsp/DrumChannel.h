@@ -651,7 +651,8 @@ public:
         //     amt 0 (default) on every route = bit-identical (the render path is unchanged). ===
         struct ModRoute { int8_t src = 0; int8_t tgt = 0; float amt = 0.0f; };   // amt bipolar -1..1
         ModRoute mod[MOD_ROUTES];
-        float modEnvA = 0.005f, modEnvD = 0.30f;   // Mod Env: attack / decay seconds (per-note AD, stateless)
+        float modEnvA = 0.005f, modEnvD = 0.30f;   // Mod Env: attack / decay seconds
+        float modEnvH = 0.0f, modEnvS = 0.0f, modEnvR = 0.10f;   // hold sec / sustain level 0..1 / release sec (full A-H-D-S-R, gated like the amp env)
         float modLfoRate = 1.0f;                    // Mod LFO: free-run rate (Hz 0.05..20, timeline-anchored)
         int   modLfoShape = 0;                      // Mod LFO shape (lfoShapeVal 0..6; no Custom)
         bool  modActive() const                     // any live route? (gates the whole matrix - zero cost when off)

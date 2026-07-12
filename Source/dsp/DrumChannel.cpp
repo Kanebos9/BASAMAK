@@ -776,6 +776,7 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
               mm << (int) s.mod[r].src << ":" << (int) s.mod[r].tgt << ":" << juce::String(s.mod[r].amt, 4) << ";";
           st.setProperty("mmx", mm, nullptr); }
         st.setProperty("mEA", s.modEnvA, nullptr); st.setProperty("mED", s.modEnvD, nullptr);
+        st.setProperty("mEH", s.modEnvH, nullptr); st.setProperty("mES", s.modEnvS, nullptr); st.setProperty("mER", s.modEnvR, nullptr);
         st.setProperty("mLR", s.modLfoRate, nullptr); st.setProperty("mLS", s.modLfoShape, nullptr);
         parent.addChild(st, -1, nullptr);
     }
@@ -955,6 +956,9 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         }
         s.modEnvA = juce::jlimit(0.001f, 8.0f, (float) st.getProperty("mEA", d.modEnvA));
         s.modEnvD = juce::jlimit(0.01f, 8.0f, (float) st.getProperty("mED", d.modEnvD));
+        s.modEnvH = juce::jlimit(0.0f, 4.0f, (float) st.getProperty("mEH", d.modEnvH));
+        s.modEnvS = juce::jlimit(0.0f, 1.0f, (float) st.getProperty("mES", d.modEnvS));
+        s.modEnvR = juce::jlimit(0.0f, 8.0f, (float) st.getProperty("mER", d.modEnvR));
         s.modLfoRate = juce::jlimit(0.05f, 20.0f, (float) st.getProperty("mLR", d.modLfoRate));
         s.modLfoShape = juce::jlimit(0, 6, (int) st.getProperty("mLS", d.modLfoShape));
         if (st.hasProperty("lfD") && ! st.hasProperty("lfA0"))
@@ -1796,13 +1800,11 @@ void DrumChannel::computeModSources(int s, const Slot& sl, float* out) const
     out[MSAmpEnv] = juce::jlimit(0.0f, 1.0f, slotFiltEnv[juce::jlimit(0, NUM_SLOTS - 1, s)]);   // prev-block amp level
     out[MSRandom] = nv != nullptr ? nv->sv[juce::jlimit(0, NUM_SLOTS - 1, s)].modRand : 0.5f;
 
-    // Mod Env: stateless AD from the newest voice's age.
+    // Mod Env: a full A-H-D-S-R (same evaluator + gate as the amp env, so Sustain HOLDS while the note
+    // is held and Release falls after it ends), read from the newest voice's age.
     if (nv != nullptr)
-    {
-        const float t = (float) nv->voiceSamples / (float) juce::jmax(1.0, sr);
-        const float A = juce::jmax(0.001f, sl.modEnvA), D = juce::jmax(0.01f, sl.modEnvD);
-        out[MSModEnv] = t < A ? t / A : std::exp(-(t - A) * 3.0f / D);
-    }
+        out[MSModEnv] = juce::jlimit(0.0f, 1.0f, keyAdsr(nv->voiceSamples, nv->isKey ? nv->keyOff : nv->gateLen,
+                                                          sl.modEnvA, sl.modEnvH, sl.modEnvD, sl.modEnvS, sl.modEnvR));
 
     // The per-slot LFOs, read at the newest voice's block-start phase (retrig) or the timeline-anchored
     // free phase. Value = the LFO Amount (depth) x shape; the matrix route amount scales it further.

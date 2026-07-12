@@ -3203,12 +3203,15 @@ void FrequencyDisplay::paint(juce::Graphics& g)
     const auto a = plotArea();
     const float left = a.getX(), right = a.getRight(), top = a.getY(), bottom = a.getBottom(), w = a.getWidth(), h = a.getHeight();
 
-    // 0 dB centre line + frequency grid with labels.
+    // 0 dB centre line + frequency grid. Gridlines are drawn for every decade tick, but only a SPARSE
+    // set is LABELLED (the full set overlapped + was unreadable - user).
     g.setColour(juce::Colour(0xff242440)); g.drawHorizontalLine((int) a.getCentreY(), left, right);
     for (float f : { 50.0f, 100.0f, 200.0f, 500.0f, 1000.0f, 2000.0f, 5000.0f, 10000.0f, 20000.0f })
     {
         const float x = xForFreq(a, f);
         g.setColour(juce::Colour(0xff20203a)); g.drawVerticalLine((int) x, top, bottom);
+        const bool labelled = (f == 50.0f || f == 200.0f || f == 1000.0f || f == 5000.0f || f == 20000.0f);
+        if (! labelled) continue;
         g.setColour(juce::Colour(0xff7d86a8)); g.setFont(juce::Font(10.0f, juce::Font::bold));
         juce::String lbl = f >= 1000.0f ? juce::String((int)(f / 1000)) + "k" : juce::String((int) f);
         const bool nearEdge = (x > right - 26.0f);
@@ -3584,21 +3587,20 @@ void LfoDisplay::paintModEnv(juce::Graphics& g)
     const auto r = envRect();
     const juce::Colour hue (0xffb46bff);
     g.setColour(juce::Colour(0xff242440)); g.drawHorizontalLine((int) r.getBottom(), r.getX(), r.getRight());
-    const float aF = std::log(juce::jlimit(0.001f, 2.0f, modEnvA_) / 0.001f) / std::log(2.0f / 0.001f);
-    const float dF = std::log(juce::jlimit(0.01f, 4.0f, modEnvD_) / 0.01f) / std::log(4.0f / 0.01f);
-    const float peakX = r.getX() + aF * 0.5f * r.getWidth();
-    const float endX  = peakX + dF * (r.getRight() - peakX);
+    juce::Point<float> pk, hd, dc, rl; float peX = 0.0f;
+    modEnvHandles(pk, hd, dc, rl, peX);
+    // A-H-D-S-R polyline: rise to peak, hold flat, decay to sustain, sustain plateau, release to 0.
     juce::Path p; p.startNewSubPath(r.getX(), r.getBottom());
-    p.lineTo(peakX, r.getY()); p.lineTo(endX, r.getBottom());
-    g.setColour(hue.withAlpha(0.22f)); g.fillPath(juce::Path(p));   // filled area under the env
+    p.lineTo(pk); p.lineTo(hd); p.lineTo(dc); p.lineTo(peX, dc.y); p.lineTo(rl);
+    g.setColour(hue.withAlpha(0.22f)); g.fillPath(juce::Path(p));
     g.setColour(hue); g.strokePath(p, juce::PathStrokeType(1.8f));
     g.setColour(juce::Colours::white);
-    g.fillEllipse(peakX - 3.5f, r.getY() - 3.5f, 7.0f, 7.0f);       // attack handle (peak)
-    g.fillEllipse(endX - 3.5f, r.getBottom() - 3.5f, 7.0f, 7.0f);   // decay handle (end)
-    g.setColour(juce::Colour(0xffaeb8d4)); g.setFont(juce::Font(9.5f, juce::Font::bold));
-    auto secTxt = [](float s){ return s < 1.0f ? juce::String((int) std::round(s * 1000.0f)) + " ms"
-                                               : juce::String(s, 2) + " s"; };
-    g.drawText("Mod Env   A " + secTxt(modEnvA_) + "   D " + secTxt(modEnvD_),
+    for (auto& h : { pk, hd, dc, rl }) g.fillEllipse(h.x - 3.3f, h.y - 3.3f, 6.6f, 6.6f);
+    g.setColour(juce::Colour(0xffaeb8d4)); g.setFont(juce::Font(9.0f, juce::Font::bold));
+    auto secTxt = [](float s){ return s < 1.0f ? juce::String((int) std::round(s * 1000.0f)) + "ms"
+                                               : juce::String(s, 2) + "s"; };
+    g.drawText("A " + secTxt(modEnvA_) + " H " + secTxt(modEnvH_) + " D " + secTxt(modEnvD_)
+                 + " S " + juce::String((int) std::round(modEnvS_ * 100.0f)) + "% R " + secTxt(modEnvR_),
                6, getHeight() - 15, getWidth() - 12, 12, juce::Justification::centredLeft, false);
 }
 
@@ -3610,13 +3612,13 @@ void LfoDisplay::mouseDown(const juce::MouseEvent& e)
         if (d != dest_) { dest_ = d; repaint(); if (onDestChange) onDestChange(d); } return;
     }
     if (dest_ == 3)
-    {   // TAB 4 = Mod Env: grab the nearest handle (attack peak or decay end) and drag it.
-        const auto r = envRect();
-        const float aF = std::log(juce::jlimit(0.001f, 2.0f, modEnvA_) / 0.001f) / std::log(2.0f / 0.001f);
-        const float dF = std::log(juce::jlimit(0.01f, 4.0f, modEnvD_) / 0.01f) / std::log(4.0f / 0.01f);
-        const float peakX = r.getX() + aF * 0.5f * r.getWidth();
-        const float endX  = peakX + dF * (r.getRight() - peakX);
-        envDrag_ = (e.position.getDistanceFrom({ endX, r.getBottom() }) < e.position.getDistanceFrom({ peakX, r.getY() })) ? 1 : 0;
+    {   // TAB 4 = Mod Env: grab the NEAREST of the 4 handles (attack / hold / decay+sustain / release).
+        juce::Point<float> pk, hd, dc, rl; float peX;
+        modEnvHandles(pk, hd, dc, rl, peX);
+        const juce::Point<float> hs[4] = { pk, hd, dc, rl };
+        int best = 0; float bd = 1.0e9f;
+        for (int i = 0; i < 4; ++i) { const float dd = e.position.getDistanceFrom(hs[i]); if (dd < bd) { bd = dd; best = i; } }
+        envDrag_ = best;
         mouseDrag(e);   // apply immediately
         return;
     }
@@ -3662,12 +3664,19 @@ void LfoDisplay::mouseDown(const juce::MouseEvent& e)
 void LfoDisplay::mouseDrag(const juce::MouseEvent& e)
 {
     if (dest_ == 3 && envDrag_ >= 0)
-    {   // Mod Env: attack handle moves the peak (attack time), decay handle moves the end (decay time)
+    {   // Mod Env A-H-D-S-R: each handle maps its X into its band (decay handle's Y = sustain level).
         const auto r = envRect();
-        if (envDrag_ == 0) modEnvA_ = envAFromX(e.position.x, r);
-        else { const float aF = std::log(juce::jlimit(0.001f, 2.0f, modEnvA_) / 0.001f) / std::log(2.0f / 0.001f);
-               modEnvD_ = envDFromX(e.position.x, r.getX() + aF * 0.5f * r.getWidth(), r); }
-        if (onModEnvChange) onModEnvChange(modEnvA_, modEnvD_);
+        const float x0 = r.getX(), w = juce::jmax(1.0f, r.getWidth());
+        const float fx = (e.position.x - x0) / w;   // 0..1 across the whole graph
+        switch (envDrag_)
+        {
+            case 0: modEnvA_ = f2A(fx / bA_); break;
+            case 1: modEnvH_ = juce::jlimit(0.0f, 2.0f, (fx - bA_) / bH_ * 2.0f); break;
+            case 2: modEnvD_ = f2D((fx - bA_ - bH_) / bD_);
+                    modEnvS_ = juce::jlimit(0.0f, 1.0f, (r.getBottom() - e.position.y) / juce::jmax(1.0f, r.getHeight())); break;
+            case 3: modEnvR_ = f2R((fx - (bA_ + bH_ + bD_ + bS_)) / (1.0f - (bA_ + bH_ + bD_ + bS_))); break;
+        }
+        if (onModEnvChange) onModEnvChange(modEnvA_, modEnvH_, modEnvD_, modEnvS_, modEnvR_);
         repaint(); return;
     }
     if (! dragging_) return;
@@ -3732,10 +3741,10 @@ juce::String LfoDisplay::getTooltip()
     {
         const int tab = destAt(getMouseXYRelative().toFloat());
         if (tab == 3)
-            return "Mod Env - a simple attack/decay envelope you can route as a SOURCE in the matrix below.\n\n"
-                   "- Drag the top handle = ATTACK time, the bottom-right handle = DECAY time.\n"
-                   "- It fires once per note. Route it (right-click a matrix fader) to sweep a filter, "
-                   "pitch, wave position, anything.";
+            return "Mod Env - a full A-H-D-S-R envelope you can route as a SOURCE in the matrix below.\n\n"
+                   "- Drag the 4 handles: ATTACK peak, HOLD, DECAY (its height = SUSTAIN level), RELEASE.\n"
+                   "- Like the amp envelope, it HOLDS at Sustain while the note is held and falls on Release.\n"
+                   "- Route it (right-click a matrix fader) to sweep a filter, pitch, wave position, anything.";
         if (tab >= 0)
             return "LFO " + juce::String(tab + 1) + " - click to edit its wave, rate and shape.\n\n"
                    "- An LFO does NOTHING on its own: route it in the MATRIX faders below "
@@ -5453,7 +5462,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         h = mix(h, f(sl.drift)); h = mix(h, f(sl.filterDrive));   // DRIFT (alive) + filter loop drive
         for (int r = 0; r < DrumChannel::MOD_ROUTES; ++r)   // MOD MATRIX routes + created sources
         { h = mix(h, sl.mod[r].src); h = mix(h, sl.mod[r].tgt); h = mix(h, f(sl.mod[r].amt)); }
-        h = mix(h, f(sl.modEnvA)); h = mix(h, f(sl.modEnvD)); h = mix(h, f(sl.modLfoRate)); h = mix(h, sl.modLfoShape);
+        h = mix(h, f(sl.modEnvA)); h = mix(h, f(sl.modEnvD)); h = mix(h, f(sl.modEnvH)); h = mix(h, f(sl.modEnvS)); h = mix(h, f(sl.modEnvR)); h = mix(h, f(sl.modLfoRate)); h = mix(h, sl.modLfoShape);
     }
     h = mix(h, c.layerOscShape); h = mix(h, f(c.layerSineFreq)); h = mix(h, f(c.layerSinePEnvAmt)); h = mix(h, f(c.layerSinePEnvTime)); h = mix(h, f(c.layerSinePOffset));
     h = mix(h, c.oscUnison); h = mix(h, f(c.oscDetune)); h = mix(h, f(c.oscSustain)); h = mix(h, f(c.fmSustain)); h = mix(h, f(c.physSustain));
@@ -8091,12 +8100,12 @@ void DrumSequencerEditor::setupComponents()
     };
     lfoDisplay.onDragEnd = [this] { if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel); };
 
-    // TAB 4 of the LFO visual = the Mod Env: dragging its A/D writes the selected slot.
-    lfoDisplay.onModEnvChange = [this](float a, float d) {
+    // TAB 4 of the LFO visual = the Mod Env: dragging its A-H-D-S-R writes the selected slot.
+    lfoDisplay.onModEnvChange = [this](float a, float h, float d, float s, float r) {
         if (ignoreKnobCallbacks) return;
-        auto& ch = proc.sequencer.channel(selectedChannel);
-        ch.slots[envTargetSlot()].modEnvA = a; ch.slots[envTargetSlot()].modEnvD = d;
-        ch.markDspDirty();
+        auto& sl = proc.sequencer.channel(selectedChannel).slots[envTargetSlot()];
+        sl.modEnvA = a; sl.modEnvH = h; sl.modEnvD = d; sl.modEnvS = s; sl.modEnvR = r;
+        proc.sequencer.channel(selectedChannel).markDspDirty();
     };
 
     // 12-FADER MOD MATRIX (inline in the MODULATION box). Each fader = one route; right-click opens the
@@ -9118,7 +9127,7 @@ void DrumSequencerEditor::setShapeSlot(int s)
     modFaders.slotIdx = envTargetSlot();
     modFaders.accent = envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8);
     modFaders.setValues(sl);
-    lfoDisplay.setModEnv(sl.modEnvA, sl.modEnvD);
+    lfoDisplay.setModEnv(sl.modEnvA, sl.modEnvH, sl.modEnvD, sl.modEnvS, sl.modEnvR);
     // The EQ target follows the selected slot too (user: picking a slot shouldn't leave EQ on
     // "All"). Picking "All" on the EQ selector afterward still works - it just isn't the default.
     eqEditTarget = s + 1;
@@ -10216,7 +10225,7 @@ void DrumSequencerEditor::refreshDetailPanel()
       modFaders.slotIdx = envTargetSlot();
       modFaders.accent = envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8);
       modFaders.setValues(sl);
-      lfoDisplay.setModEnv(sl.modEnvA, sl.modEnvD); }   // 12-fader matrix + Mod Env follow the selected slot
+      lfoDisplay.setModEnv(sl.modEnvA, sl.modEnvH, sl.modEnvD, sl.modEnvS, sl.modEnvR); }   // 12-fader matrix + Mod Env follow the selected slot
     refreshKeysPanel();   // the KEYS panel follows the selected channel/slot too
 
     // Double-click on any master knob returns it to its FACTORY DEFAULT (set once in setupKnob) -

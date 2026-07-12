@@ -843,8 +843,10 @@ public:
     std::function<void(int dest)> onOpenCurveEditor;   // Custom: a plain CLICK on the wave opens the draw window
     std::function<void(int dest, int shape)> onShapeChange;   // Shape button cycled
     std::function<void(int dest, bool freeRun, bool legato)> onTrigChange; // Retrig/Free/Legato cycled
-    std::function<void(float atk, float dec)> onModEnvChange;  // TAB 4 = Mod Env: attack/decay dragged
-    void setModEnv(float a, float d) { if (a != modEnvA_ || d != modEnvD_) { modEnvA_ = a; modEnvD_ = d; if (dest_ == 3) repaint(); } }
+    std::function<void(float a, float h, float d, float s, float r)> onModEnvChange;  // TAB 4 = Mod Env A-H-D-S-R dragged
+    void setModEnv(float a, float h, float d, float s, float r)
+    { if (a != modEnvA_ || h != modEnvH_ || d != modEnvD_ || s != modEnvS_ || r != modEnvR_)
+      { modEnvA_ = a; modEnvH_ = h; modEnvD_ = d; modEnvS_ = s; modEnvR_ = r; if (dest_ == 3) repaint(); } }
     void setFreeClockSec(double s) { if (std::abs(s - freeSec_) > 1.0e-4) { freeSec_ = s;
         if (free_[dest_] && amt_[dest_] > 0.001f) repaint(); } }   // dot keeps moving between notes
     // Live tempo/grid info so the drawn wave + read-out show the TRUE synced speed (never the ignored
@@ -905,17 +907,31 @@ private:
         if (p.y > 16.0f || p.x < w * 0.17f) return -1;   // below the strip / over the title
         return juce::jlimit(0, 3, (int) ((p.x - w * 0.17f) / (w * 0.2075f)));
     }
-    // TAB 4 = Mod Env: an envelope graph inside waveArea() (drag the PEAK = attack, the END = decay;
-    // times log-mapped A 0.001..2 s / D 0.01..4 s). Same math as the retired matrix overlay.
-    float modEnvA_ = 0.005f, modEnvD_ = 0.30f;
-    int   envDrag_ = -1;                // 0 = attack handle, 1 = decay handle, -1 = none
+    // TAB 4 = Mod Env: a full A-H-D-S-R graph. Fixed visual bands (A .22 | H .16 | D .24 | Sus .16 |
+    // R rest) keep the 4 handles apart in the small area; each handle's position within its band =
+    // the (log/linear) time, and the decay handle's Y = the sustain level.
+    float modEnvA_ = 0.005f, modEnvH_ = 0.0f, modEnvD_ = 0.30f, modEnvS_ = 0.0f, modEnvR_ = 0.10f;
+    int   envDrag_ = -1;                // 0 attack / 1 hold / 2 decay+sustain / 3 release; -1 none
     juce::Rectangle<float> envRect() const { return waveArea().reduced(6.0f, 4.0f); }
-    static float envAFromX(float x, juce::Rectangle<float> r)
-    { const float f = juce::jlimit(0.0f, 0.5f, (x - r.getX()) / r.getWidth());
-      return 0.001f * std::pow(2.0f / 0.001f, f / 0.5f); }
-    static float envDFromX(float x, float peakX, juce::Rectangle<float> r)
-    { const float f = juce::jlimit(0.0f, 1.0f, (x - peakX) / juce::jmax(1.0f, r.getRight() - peakX));
-      return 0.01f * std::pow(4.0f / 0.01f, f); }
+    static float A2f(float a){ return std::log(juce::jlimit(0.001f,2.0f,a)/0.001f)/std::log(2.0f/0.001f); }
+    static float f2A(float f){ return 0.001f*std::pow(2.0f/0.001f, juce::jlimit(0.0f,1.0f,f)); }
+    static float D2f(float d){ return std::log(juce::jlimit(0.01f,4.0f,d)/0.01f)/std::log(4.0f/0.01f); }
+    static float f2D(float f){ return 0.01f*std::pow(4.0f/0.01f, juce::jlimit(0.0f,1.0f,f)); }
+    static float R2f(float r){ return r<=0.01f ? 0.0f : std::log(r/0.01f)/std::log(8.0f/0.01f); }
+    static float f2R(float f){ return f<=0.001f ? 0.0f : 0.01f*std::pow(8.0f/0.01f, juce::jlimit(0.0f,1.0f,f)); }
+    static constexpr float bA_=0.22f, bH_=0.16f, bD_=0.24f, bS_=0.16f;   // band widths (R = the remainder)
+    void modEnvHandles(juce::Point<float>& pk, juce::Point<float>& hd,
+                       juce::Point<float>& dc, juce::Point<float>& rl, float& plateauEndX) const
+    {
+        const auto r = envRect();
+        const float x0 = r.getX(), w = r.getWidth(), top = r.getY(), bot = r.getBottom();
+        pk = { x0 + A2f(modEnvA_) * bA_ * w, top };
+        hd = { x0 + (bA_ + juce::jlimit(0.0f,1.0f, modEnvH_/2.0f) * bH_) * w, top };
+        const float susY = bot - juce::jlimit(0.0f,1.0f, modEnvS_) * (bot - top);
+        dc = { x0 + (bA_ + bH_ + D2f(modEnvD_) * bD_) * w, susY };
+        plateauEndX = x0 + (bA_ + bH_ + bD_ + bS_) * w;
+        rl = { plateauEndX + R2f(modEnvR_) * (1.0f - (bA_+bH_+bD_+bS_)) * w, bot };
+    }
     void paintModEnv(juce::Graphics& g);
 };
 
