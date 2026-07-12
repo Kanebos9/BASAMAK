@@ -87,6 +87,8 @@ void StepGridComponent::update(const Sequencer& seq, bool hasSolo)
                 merge[ch][d]   = c.stepMerge[s];
                 pan[ch][d]     = c.stepPan[s];
                 nudge[ch][d]   = c.stepNudge[s];
+                modA[ch][d]    = c.stepModA[s];
+                modB[ch][d]    = c.stepModB[s];
                 condLen[ch][d]  = c.stepCondLen[s];
                 condMask[ch][d] = c.stepCondMask[s];
             }
@@ -249,6 +251,16 @@ void StepGridComponent::paintValueCell(juce::Graphics& g, int ch, int step, juce
                     const double ms = nd * 0.5 * (barMs / (double) stepsInBar);
                     txt = nd == 0.0f ? juce::String("0")
                                      : (ms > 0 ? "+" : "") + juce::String(juce::roundToInt(ms)) + "ms";
+                }
+                else if (editMode == ModeModA || editMode == ModeModB)
+                {
+                    // STEP MOD LANE: a drawn 0..1 value (a modulation source; route it in the MOD box).
+                    // Vertical bar from the bottom, like Velocity, in the lane's colour (A cyan / B violet).
+                    const float mv = juce::jlimit(0.0f, 1.0f, (editMode == ModeModA ? modA : modB)[ch][step]);
+                    const float h = mv * r.getHeight();
+                    g.setColour((editMode == ModeModA ? juce::Colour(0xff35c0ff) : juce::Colour(0xffb46bff)).withAlpha(alpha));
+                    g.fillRect(juce::Rectangle<float>(r.getX(), r.getBottom() - h, r.getWidth(), h).reduced(1.0f, 0.0f));
+                    txt = juce::String(juce::roundToInt(mv * 100.0f)) + "%";
                 }
                 else if (editMode == ModeProb)
                 {
@@ -945,6 +957,8 @@ void StepGridComponent::applyInfluence(int ch, int srcStep)
         else if (editMode == ModePitch) { pit[ch][s] = pit[ch][srcStep]; slide[ch][s] = slide[ch][srcStep]; }
         else if (editMode == ModeProb)  { condLen[ch][s] = condLen[ch][srcStep]; condMask[ch][s] = condMask[ch][srcStep]; }
         else if (editMode == ModePan)   pan[ch][s]  = pan[ch][srcStep];
+        else if (editMode == ModeModA)  modA[ch][s] = modA[ch][srcStep];
+        else if (editMode == ModeModB)  modB[ch][s] = modB[ch][srcStep];
         else if (editMode == ModeRoll)  { roll[ch][s] = roll[ch][srcStep]; rollDec[ch][s] = rollDec[ch][srcStep]; }
     }
     if (onInfluenceApply) onInfluenceApply(ch, srcStep); // write through to the channel data
@@ -979,6 +993,8 @@ void StepGridComponent::handleValueDrag(juce::Point<int> pos)
         vel[ch][step] = value;                           // Y = velocity
     else if (editMode == ModePitch) pit[ch][step]  = value;
     else if (editMode == ModePan)   pan[ch][step]  = value;
+    else if (editMode == ModeModA)  modA[ch][step] = value;   // Y = step-mod lane value 0..1
+    else if (editMode == ModeModB)  modB[ch][step] = value;
     else if (editMode == ModeRoll) {
         roll[ch][step] = (int) value;
         // 2D pad: Y = ratchet count, X = the per-hit RAMP across the ratchet. Centre = flat,
@@ -1061,6 +1077,8 @@ void StepGridComponent::mouseDoubleClick(const juce::MouseEvent& e)
                         break;
         case ModePan:   pan[ch][step] = 0.0f; prim = 0.0f; break;
         case ModeNudge: nudge[ch][step] = 0.0f; prim = 0.0f; break;
+        case ModeModA:  modA[ch][step] = 0.0f; prim = 0.0f; break;
+        case ModeModB:  modB[ch][step] = 0.0f; prim = 0.0f; break;
         case ModeRoll:  roll[ch][step] = 1; rollDec[ch][step] = 0.0f; prim = 1.0f; break;
         default: return;
     }

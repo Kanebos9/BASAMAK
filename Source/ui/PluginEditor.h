@@ -10,7 +10,7 @@ class StepGridComponent : public juce::Component, public juce::SettableTooltipCl
 {
 public:
     // Step edit mode: 0 = on/off, 1 = Velocity, 2 = Pitch, 3 = Probability(Loop), 4 = Roll, 5 = Pan, 6 = Length.
-    enum EditMode { ModeSteps = 0, ModeVel, ModePitch, ModeProb, ModeRoll, ModePan, ModeLen, ModeNudge };
+    enum EditMode { ModeSteps = 0, ModeVel, ModePitch, ModeProb, ModeRoll, ModePan, ModeLen, ModeNudge, ModeModA, ModeModB };
     int editMode = ModeSteps;
     bool influenceArmed[Sequencer::NUM_CHANNELS] = {};   // per channel: next touched step propagates to all
 
@@ -82,6 +82,8 @@ private:
     float noteLen[NCH][DrumChannel::MAX_STEPS] = {};   // per-step GATE length 0..1 of one step (0 = off/natural)
     float pan[NCH][DrumChannel::MAX_STEPS]   = {};      // per-step stereo pan -1..+1 (Pan mode; 0 = centre)
     float nudge[NCH][DrumChannel::MAX_STEPS] = {};      // per-step micro-timing -1..+1 (Nudge mode; 0 = on the grid)
+    float modA[NCH][DrumChannel::MAX_STEPS]  = {};      // STEP MOD LANE A: drawn 0..1 value per step (a mod source; 0 = none)
+    float modB[NCH][DrumChannel::MAX_STEPS]  = {};      // STEP MOD LANE B
     bool  slide[NCH][DrumChannel::MAX_STEPS] = {};      // 303 slide flag (toggled in Pitch mode's bottom strip)
     bool  merge[NCH][DrumChannel::MAX_STEPS] = {};      // MERGE continuation flags (cmd/shift+click a step)
     int   condLen[NCH][DrumChannel::MAX_STEPS]  = {};   // per-step loop-condition cycle length (Prob mode)
@@ -2130,6 +2132,7 @@ private:
     uint32_t lastHeartbeat = 0; int heartbeatStaleTicks = 0; bool hostFrozen = false;
     // Step-grid edit-mode radio buttons (none selected = normal on/off steps).
     LearnableButton btnModeVel { "Vel" }, btnModeLen { "Gate" }, btnModePitch { "Pitch" }, btnModeProb { "Loop" }, btnModeRoll { "Roll" }, btnModePan { "Pan" }, btnModeNudge { "Nudge" };
+    LearnableButton btnModeModA { "Mod A" }, btnModeModB { "Mod B" };   // STEP MOD lanes (drawable modulation sources)
     juce::Label      lblEditMode;
     void setStepEditMode(int mode);   // 0 normal, 1 vel, 2 pitch, 3 prob
 

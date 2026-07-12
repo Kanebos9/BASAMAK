@@ -129,6 +129,7 @@ public:
             steps[i] = false; stepVel[i] = 1.0f; stepPitch[i] = 0.0f; stepRoll[i] = 1;
             stepRollDecay[i] = 0.0f; stepNoteLen[i] = 0.0f; stepPan[i] = 0.0f; stepNudge[i] = 0.0f;
             stepSlide[i] = false; stepMerge[i] = false; stepCondLen[i] = 1; stepCondMask[i] = 0;
+            stepModA[i] = 0.0f; stepModB[i] = 0.0f;   // step mod lanes (mod sources; 0 = no effect)
         }
     }
 
@@ -249,6 +250,14 @@ public:
     // cycle length N (1 = every loop = default); stepCondMask = bitmask of which loops (0-based) within the cycle fire.
     int    stepCondLen[MAX_STEPS];    // 1..10 (1 = always)
     int    stepCondMask[MAX_STEPS];   // bit b set = fire on loop b of the cycle (0 = no restriction = every loop)
+    // STEP MOD LANES (v1.3.9, modulation-source rework): two drawable per-step value lanes that are
+    // pure MOD SOURCES (Step Mod A / B in the matrix) - they never touch Vel/Pitch/Pan. 0..1, default 0
+    // (0 everywhere = no effect = bit-identical). Per channel (both slots' matrices read the same lane).
+    float  stepModA[MAX_STEPS] = {};
+    float  stepModB[MAX_STEPS] = {};
+    // Set by the Sequencer per block = the currently-playing step position (integer step + fraction,
+    // 0..numSteps); -1 = not playing. The step-mod sources read the lane value at this position.
+    float  modStepPos = -1.0f;
     int    numSteps          = 8;
     int    midiNote          = 36; // default C2, overridden per channel
     int    ccRangeStart      = 1;  // first CC number for this channel
@@ -360,7 +369,7 @@ public:
     static constexpr int MOD_ROUTES = 6;
     // SOURCES (order persisted - APPEND-ONLY). Values sampled once per block from the newest voice.
     enum ModSrc { MSOff = 0, MSVel, MSNote, MSAmpEnv, MSLfoFilt, MSLfoPitch, MSLfoVol, MSLfoWave,
-                  MSRandom, MSModEnv, MSModLfo, MS_COUNT };
+                  MSRandom, MSModEnv, MSModLfo, MSStepModA, MSStepModB, MS_COUNT };
     // TARGETS (order persisted - APPEND-ONLY). 0..MT_GRID_BASE-1 = fixed targets; MT_GRID_BASE+i =
     // the engine's own knob i (0..7) via slotParamsFor - the dropdown shows its live name.
     enum ModTgt { MTOff = 0, MTFilt1Cut, MTFilt1Res, MTFilt2Cut, MTFilt2Res, MTDrive, MTRevSend,

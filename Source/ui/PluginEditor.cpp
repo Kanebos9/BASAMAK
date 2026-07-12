@@ -953,7 +953,7 @@ void LfoCurveEditor::mouseDrag(const juce::MouseEvent& e)
 //==============================================================================
 static const char* kModSrcName[DrumChannel::MS_COUNT] =
 { "Off", "Velocity", "Note", "Amp Env", "LFO Filter", "LFO Pitch", "LFO Vol", "LFO Wave",
-  "Random", "Mod Env", "Mod LFO" };
+  "Random", "Mod Env", "Mod LFO", "Step Mod A", "Step Mod B" };
 static const char* kModTgtFixedName[DrumChannel::MT_GRID_BASE] =
 { "Off", "Filter 1 Cutoff", "Filter 1 Reso", "Filter 2 Cutoff", "Filter 2 Reso", "Drive",
   "Reverb Send", "Delay Send", "Chorus", "Tone", "Punch", "Comp", "Attack", "Decay", "Sustain",
@@ -5487,7 +5487,7 @@ juce::int64 DrumSequencerEditor::stateHash() const
             h = mix(h, ch.duckBy + 2); h = mix(h, f(ch.duckAmt));   // sidechain duck (undoable)
             juce::int64 st = 0; for (int i = 0; i < DrumChannel::MAX_STEPS; ++i) st = (st << 1) | (ch.steps[i] ? 1 : 0);
             h = mix(h, st); h = mix(h, ch.mute ? 1 : 0); h = mix(h, ch.solo ? 2 : 0);
-            for (int i = 0; i < ch.numSteps; ++i) { h = mix(h, f(ch.stepVel[i])); h = mix(h, f(ch.stepPitch[i])); h = mix(h, f(ch.stepNoteLen[i])); h = mix(h, ch.stepSlide[i] ? 1 : 0); h = mix(h, ch.stepMerge[i] ? 1 : 0); h = mix(h, ch.stepRoll[i]); h = mix(h, f(ch.stepRollDecay[i])); h = mix(h, f(ch.stepPan[i])); h = mix(h, f(ch.stepNudge[i])); h = mix(h, ch.stepCondLen[i]); h = mix(h, ch.stepCondMask[i]); }
+            for (int i = 0; i < ch.numSteps; ++i) { h = mix(h, f(ch.stepVel[i])); h = mix(h, f(ch.stepPitch[i])); h = mix(h, f(ch.stepNoteLen[i])); h = mix(h, ch.stepSlide[i] ? 1 : 0); h = mix(h, ch.stepMerge[i] ? 1 : 0); h = mix(h, ch.stepRoll[i]); h = mix(h, f(ch.stepRollDecay[i])); h = mix(h, f(ch.stepPan[i])); h = mix(h, f(ch.stepNudge[i])); h = mix(h, f(ch.stepModA[i])); h = mix(h, f(ch.stepModB[i])); h = mix(h, ch.stepCondLen[i]); h = mix(h, ch.stepCondMask[i]); }
             h = mix(h, ch.drawMode ? 1 : 0);
             if (ch.drawMode) { h = mix(h, f(ch.drawVel)); h = mix(h, f(ch.drawPan)); h = mix(h, f(ch.drawTuneCents));
                 for (int i = 0; i < ch.drawNoteCount; ++i) { const auto& nt = ch.drawNotes[i];
@@ -6569,12 +6569,18 @@ void DrumSequencerEditor::setupComponents()
     lblEditMode.setColour(juce::Label::textColourId, juce::Colour(0xff7799cc));
     lblEditMode.setJustificationType(juce::Justification::centredRight);
     lblEditMode.setMinimumHorizontalScale(0.7f);   // squeeze "Edit:" rather than clip it ("Ed...") on wider fonts
-    for (auto* b : { &btnModeVel, &btnModeLen, &btnModePitch, &btnModeProb, &btnModeRoll, &btnModePan, &btnModeNudge })
+    for (auto* b : { &btnModeVel, &btnModeLen, &btnModePitch, &btnModeProb, &btnModeRoll, &btnModePan, &btnModeNudge, &btnModeModA, &btnModeModB })
     {
         content.addAndMakeVisible(*b);
         b->setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2a2a4a));
         b->setColour(juce::TextButton::textColourOffId, juce::Colours::lightgrey);
     }
+    btnModeModA.onClick  = [this] { setStepEditMode(stepGrid.editMode == StepGridComponent::ModeModA  ? 0 : StepGridComponent::ModeModA);  };
+    btnModeModB.onClick  = [this] { setStepEditMode(stepGrid.editMode == StepGridComponent::ModeModB  ? 0 : StepGridComponent::ModeModB);  };
+    btnModeModA.setTooltip("Step Mod A: draw a value (0-100%) per step. It's a MODULATION SOURCE - "
+                           "route it in the MODULATION box (source \"Step Mod A\") to move any target in "
+                           "time with the pattern. Separate from Vel/Pitch/Pan; drawing it changes nothing else.");
+    btnModeModB.setTooltip("Step Mod B: a second drawable per-step modulation lane (route it as \"Step Mod B\").");
     btnModeVel.onClick   = [this] { setStepEditMode(stepGrid.editMode == StepGridComponent::ModeVel   ? 0 : StepGridComponent::ModeVel);   };
     btnModeLen.onClick   = [this] { setStepEditMode(stepGrid.editMode == StepGridComponent::ModeLen   ? 0 : StepGridComponent::ModeLen);   };
     btnModePitch.onClick = [this] { setStepEditMode(stepGrid.editMode == StepGridComponent::ModePitch ? 0 : StepGridComponent::ModePitch); };
@@ -7259,6 +7265,8 @@ void DrumSequencerEditor::setupComponents()
         else if (mode == StepGridComponent::ModePitch) c.stepPitch[ls] = value;
         else if (mode == StepGridComponent::ModePan)   c.stepPan[ls]   = value;   // X = pan -1..+1
         else if (mode == StepGridComponent::ModeNudge) c.stepNudge[ls] = value;   // X = micro-timing -1..+1
+        else if (mode == StepGridComponent::ModeModA)  c.stepModA[ls]  = value;   // Y = step mod lane A 0..1
+        else if (mode == StepGridComponent::ModeModB)  c.stepModB[ls]  = value;
         else if (mode == StepGridComponent::ModeRoll) {
             c.stepRoll[ls]      = juce::jlimit(1, 6, (int) value);       // Y = ratchet count
             c.stepRollDecay[ls] = stepGrid.getRollDec(ch, concat);       // X = per-hit ramp (grid mirrors concat)
@@ -7463,6 +7471,8 @@ void DrumSequencerEditor::setupComponents()
             else if (mode == StepGridComponent::ModeProb)  { c.stepCondLen[s] = c.stepCondLen[srcStep]; c.stepCondMask[s] = c.stepCondMask[srcStep]; }
             else if (mode == StepGridComponent::ModePan)   c.stepPan[s]   = c.stepPan[srcStep];
             else if (mode == StepGridComponent::ModeNudge) c.stepNudge[s] = c.stepNudge[srcStep];
+            else if (mode == StepGridComponent::ModeModA)  c.stepModA[s]  = c.stepModA[srcStep];
+            else if (mode == StepGridComponent::ModeModB)  c.stepModB[s]  = c.stepModB[srcStep];
             else if (mode == StepGridComponent::ModeRoll)  { c.stepRoll[s] = c.stepRoll[srcStep]; c.stepRollDecay[s] = c.stepRollDecay[srcStep]; }
         }
     };
@@ -9881,6 +9891,8 @@ void DrumSequencerEditor::setStepEditMode(int mode)
     hl(btnModeRoll,  mode == StepGridComponent::ModeRoll);
     hl(btnModePan,   mode == StepGridComponent::ModePan);
     hl(btnModeNudge, mode == StepGridComponent::ModeNudge);
+    hl(btnModeModA,  mode == StepGridComponent::ModeModA);
+    hl(btnModeModB,  mode == StepGridComponent::ModeModB);
     stepGrid.repaint();
 }
 
@@ -9980,7 +9992,7 @@ void DrumSequencerEditor::refreshDrawModeButtons()
     // PIANO ROLL: every per-note property (velocity, pan, gate, pitch, glide, strum, slot) is edited
     // INSIDE the roll - by pointer gestures and the right-click note menu. So ALL step edit-mode
     // buttons AND Influence are disabled/faded here (user); only Clear stays live. Step mode keeps them.
-    for (auto* b : { &btnModeVel, &btnModeLen, &btnModePitch, &btnModeProb, &btnModeRoll, &btnModePan, &btnModeNudge })
+    for (auto* b : { &btnModeVel, &btnModeLen, &btnModePitch, &btnModeProb, &btnModeRoll, &btnModePan, &btnModeNudge, &btnModeModA, &btnModeModB })
     { b->setEnabled(! draw); b->setAlpha(draw ? 0.4f : 1.0f); }
     btnInfluenceTop.setEnabled(! draw); btnInfluenceTop.setAlpha(draw ? 0.4f : 1.0f);
     if (draw && stepGrid.editMode != StepGridComponent::ModeSteps)
@@ -10607,6 +10619,7 @@ void DrumSequencerEditor::timerCallback()
             }
             btnModeVel.repaint();  btnModeLen.repaint();  btnModePitch.repaint();
             btnModeProb.repaint(); btnModeRoll.repaint(); btnModePan.repaint();
+            btnModeNudge.repaint(); btnModeModA.repaint(); btnModeModB.repaint();
             stepGrid.repaint();    // steps are learnable too
             content.repaint();
         }
@@ -11192,17 +11205,19 @@ void DrumSequencerEditor::layoutContent()
     patModeBtn.setBounds(664, PAT_Y + 8, 210, 26);   // widened into the old dead gap (longer chain text fits)
     // Channel-count (8/16) + pattern-count (16/32) toggles, right next to the loop dropdown (Follow moved to the top bar).
 
-    sliderSwing.setBounds(944, PAT_Y + 3, 92, 20);    // + a touch wider/right: the row breathes evenly now
-    lblSwing.setBounds   (944, PAT_Y + 24, 92, 12);   // ...live caption under it, e.g. Swing 66%
-    // Step edit-mode radio buttons, then the purple Influence button, then Clear (flush right).
-    lblEditMode.setBounds (1044, PAT_Y + 8, 30, 24);   // "Edit:" (minimumHorizontalScale squeezes it)
-    btnModeVel.setBounds  (1078, PAT_Y + 8, 36, 24);   // (Slide has no button - it lives in Pitch mode's bottom band)
-    btnModeLen.setBounds  (1118, PAT_Y + 8, 36, 24);
-    btnModePitch.setBounds(1158, PAT_Y + 8, 42, 24);
-    btnModeProb.setBounds (1204, PAT_Y + 8, 38, 24);
-    btnModeRoll.setBounds (1246, PAT_Y + 8, 36, 24);
-    btnModePan.setBounds  (1286, PAT_Y + 8, 32, 24);
-    btnModeNudge.setBounds(1322, PAT_Y + 8, 56, 24);   // wide enough for the full word (42 showed Nud...)
+    sliderSwing.setBounds(884, PAT_Y + 3, 92, 20);    // shifted left to make room for the Mod A/B buttons
+    lblSwing.setBounds   (884, PAT_Y + 24, 92, 12);   // ...live caption under it, e.g. Swing 66%
+    // Step edit-mode radio buttons (+ the two STEP MOD lanes), then Influence, then Clear (flush right).
+    lblEditMode.setBounds (980,  PAT_Y + 8, 28, 24);   // "Edit:" (minimumHorizontalScale squeezes it)
+    btnModeVel.setBounds  (1010, PAT_Y + 8, 32, 24);   // (Slide has no button - it lives in Pitch mode's bottom band)
+    btnModeLen.setBounds  (1044, PAT_Y + 8, 34, 24);
+    btnModePitch.setBounds(1080, PAT_Y + 8, 40, 24);
+    btnModeProb.setBounds (1122, PAT_Y + 8, 34, 24);
+    btnModeRoll.setBounds (1158, PAT_Y + 8, 32, 24);
+    btnModePan.setBounds  (1192, PAT_Y + 8, 30, 24);
+    btnModeNudge.setBounds(1224, PAT_Y + 8, 44, 24);
+    btnModeModA.setBounds (1270, PAT_Y + 8, 44, 24);   // STEP MOD lanes (drawable modulation sources)
+    btnModeModB.setBounds (1316, PAT_Y + 8, 44, 24);
     btnInfluenceTop.setBounds(1384, PAT_Y + 8, 44, 24);// purple-outlined; left of Clear
     btnClearPat.setBounds (1434, PAT_Y + 8, 70, 24);   // Clear - flush near the right edge
 

@@ -109,6 +109,10 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
             chan.lfoBarPos = juce::jmax(0.0,
                 (double)(playPattern - groupHead(playPattern)) + barPosition
                 - (double)(numSamples - segStart) / juce::jmax(1.0, blockBarSeconds * sampleRate));
+            // STEP MOD lanes: the current step position (within-bar fraction * numSteps) at this segment.
+            { double bf = barPosition - (double)(numSamples - segStart) / juce::jmax(1.0, blockBarSeconds * sampleRate);
+              bf -= std::floor(bf);   // wrap into 0..1 of the bar
+              chan.modStepPos = (float) (bf * (double) juce::jmax(1, chan.numSteps)); }
             const int ob = chan.outputBus;   // 0 = Main; 1..numAux = a discrete aux out
             const bool toMain = ! (ob >= 1 && ob <= numAux && auxBuses != nullptr && auxBuses[ob - 1] != nullptr);
             juce::AudioBuffer<float>* dest = toMain ? &audio : auxBuses[ob - 1];
@@ -132,7 +136,7 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
         {
             auto& fc = patterns[fadeOutPattern].channels[ch];
             fc.lfoBarSeconds = (float) blockBarSeconds; fc.lfoGridDiv = uiGridDiv;
-            if (! fc.midiOut) { fc.lfoBarPos = -1.0; fc.renderInto(audio, 0, numSamples, soloFade); }   // dry tail into Main
+            if (! fc.midiOut) { fc.lfoBarPos = -1.0; fc.modStepPos = -1.0f; fc.renderInto(audio, 0, numSamples, soloFade); }   // dry tail into Main
             if (fc.anyVoiceActive()) anyRinging = true;
         }
         if (! anyRinging) fadeOutPattern = -1;   // all tails finished
@@ -156,6 +160,8 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
                 {   // ringing group members share the playing unit's timeline anchor
                     gc.lfoBarPos = juce::jmax(0.0, (double)(playPattern - groupHead(playPattern)) + barPosition
                                                    - (double) numSamples / juce::jmax(1.0, blockBarSeconds * sampleRate));
+                    { double bf = barPosition - (double) numSamples / juce::jmax(1.0, blockBarSeconds * sampleRate);
+                      bf -= std::floor(bf); gc.modStepPos = (float) (bf * (double) juce::jmax(1, gc.numSteps)); }
                     gc.renderInto(audio, 0, numSamples, soloG);
                 }
             }
@@ -172,7 +178,7 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
             patterns[currentPattern].channels[ch].lfoBarSeconds = (float) blockBarSeconds;
             patterns[currentPattern].channels[ch].lfoGridDiv    = uiGridDiv;
             { auto& vc = patterns[currentPattern].channels[ch];
-              vc.lfoBarPos = -1.0;   // viewed-but-not-playing audition: free clock
+              vc.lfoBarPos = -1.0; vc.modStepPos = -1.0f;   // viewed-but-not-playing audition
               vc.renderInto(audio, 0, numSamples, soloView); }
         }
     }

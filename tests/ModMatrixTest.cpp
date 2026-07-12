@@ -85,6 +85,15 @@ int main()
         printf("[3] Mod LFO bar1 vs bar2: maxdiff=%.6f (expect ~0) -> %s\n",
                maxdiff(b1, b2), CHK(maxdiff(b1, b2) < 1.0e-4f && finite(x)) ? "OK" : "FAIL");
     }
+    {   // [4b] Step Mod Lane A -> Filter1 Cutoff: two different lane values render differently
+        auto mk = [](float laneVal){ return [laneVal](DrumChannel& c){ voice(c);
+            for (int i = 0; i < 8; ++i) c.stepModA[i] = laneVal;   // whole lane = laneVal
+            c.slots[0].mod[0].src = DrumChannel::MSStepModA; c.slots[0].mod[0].tgt = DrumChannel::MTFilt1Cut;
+            c.slots[0].mod[0].amt = 0.8f; }; };
+        auto lo = render(mk(0.0f), 0.9f, 0.6), hi = render(mk(1.0f), 0.9f, 0.6);
+        printf("[4b] StepMod A->Cutoff: lane0 vs lane1 maxdiff=%.4f (expect >0.02) -> %s\n",
+               maxdiff(lo, hi), CHK(maxdiff(lo, hi) > 0.02f && finite(hi)) ? "OK" : "FAIL");
+    }
     {   // [4] every route maxed = finite
         auto x = render([](DrumChannel& c){ voice(c);
             const int tg[6] = { DrumChannel::MTFilt1Cut, DrumChannel::MTPitch, DrumChannel::MTDrive,

@@ -1704,7 +1704,7 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
     chState.setProperty("mixMod",    ch.mixModified, nullptr);
     chState.setProperty("envMode",   ch.envEditMode, nullptr);   // UI: envelope-target dropdown (per channel)
 
-    juce::String stepStr, velStr, pitchStr, rollStr, rollDecStr, noteLenStr, panStr, nudgeStr, condLenStr, condMaskStr;
+    juce::String stepStr, velStr, pitchStr, rollStr, rollDecStr, noteLenStr, panStr, nudgeStr, condLenStr, condMaskStr, modAStr, modBStr;
     for (int s = 0; s < DrumChannel::MAX_STEPS; ++s)
     {
         stepStr += (ch.steps[s] ? "1" : "0");
@@ -1717,7 +1717,11 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
         nudgeStr += juce::String(ch.stepNudge[s], 3) + ",";
         condLenStr  += juce::String(ch.stepCondLen[s])  + ",";
         condMaskStr += juce::String(ch.stepCondMask[s]) + ",";
+        modAStr  += juce::String(ch.stepModA[s], 3) + ",";
+        modBStr  += juce::String(ch.stepModB[s], 3) + ",";
     }
+    chState.setProperty("stepModA", modAStr, nullptr);   // step mod lanes (modulation sources)
+    chState.setProperty("stepModB", modBStr, nullptr);
     chState.setProperty("steps", stepStr, nullptr);
     chState.setProperty("stepVel",   velStr,   nullptr);
     chState.setProperty("stepPitch", pitchStr, nullptr);
@@ -1893,6 +1897,8 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
                                   : juce::jlimit(0.0f, 1.0f, 0.1f + 3.9f * v);
             }
         loadArr("stepPan", ch.stepPan, 0.0f);
+        loadArr("stepModA", ch.stepModA, 0.0f);   // step mod lanes (old files: 0 = no effect)
+        loadArr("stepModB", ch.stepModB, 0.0f);
         {
             juce::String rs = child.getProperty("stepRoll", "").toString();
             auto toks = juce::StringArray::fromTokens(rs, ",", "");

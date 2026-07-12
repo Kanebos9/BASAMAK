@@ -1821,6 +1821,15 @@ void DrumChannel::computeModSources(int s, const Slot& sl, float* out) const
         const double ph  = 2.0 * kPi * (double) juce::jlimit(0.05f, 20.0f, sl.modLfoRate) * sec;
         out[MSModLfo] = lfoShapeVal(juce::jlimit(0, 6, sl.modLfoShape), ph, (uint32_t) juce::jmax(0.0, ph / (2.0 * kPi)));
     }
+
+    // STEP MOD lanes A / B: the value drawn on the currently-playing step (0..1). modStepPos is set
+    // by the Sequencer each block; channel-level (both slots read the same lane). Stepped read for now.
+    if (modStepPos >= 0.0f && numSteps > 0)
+    {
+        const int st = juce::jlimit(0, numSteps - 1, (int) modStepPos);
+        out[MSStepModA] = juce::jlimit(0.0f, 1.0f, stepModA[st]);
+        out[MSStepModB] = juce::jlimit(0.0f, 1.0f, stepModB[st]);
+    }
 }
 
 // Apply the 6 routes onto a scratch Slot before the config bake. Cutoffs + pitch are MULTIPLICATIVE
