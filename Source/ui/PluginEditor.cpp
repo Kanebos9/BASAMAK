@@ -3365,6 +3365,14 @@ void FrequencyDisplay::paint(juce::Graphics& g)
                     if (! started) { resp.startNewSubPath(left + px, y); started = true; } else resp.lineTo(left + px, y);
                 }
                 if (fOn) { g.setColour(fcol.withAlpha(0.9f)); g.strokePath(resp, juce::PathStrokeType(2.0f)); }
+                // live MODULATED cutoff marker (a bright vertical line where modulation pushes the cutoff)
+                if (fOn && modCutoff[fi] > 0.0f && std::abs(modCutoff[fi] - fCutoff[fi]) > fCutoff[fi] * 0.02f)
+                {
+                    const float mx = xForFreq(a, juce::jlimit(20.0f, 20000.0f, modCutoff[fi]));
+                    g.setColour(fcol.brighter(0.5f).withAlpha(0.9f));
+                    g.drawVerticalLine((int) mx, top, bottom);
+                    g.fillEllipse(mx - 2.5f, top + 1.0f, 5.0f, 5.0f);
+                }
             }
             if (fOn && std::abs(fEnvAmt[fi]) > 0.02f)   // envelope sweep arrow
             {
@@ -10913,6 +10921,11 @@ void DrumSequencerEditor::timerCallback()
             const float raw = mc.slotModLiveFx[ms][i];
             rk[i]->setModRing(raw < -900.0f ? -1.0f : (float) rk[i]->valueToProportionOfLength(raw));
         }
+        const float drv = mc.slotModLiveFx[ms][6];   // Drive is a fader (0..1)
+        fxDriveFader.setModRing(drv < -900.0f ? -1.0f : juce::jlimit(0.0f, 1.0f, drv));
+        const float c1 = mc.slotModLiveFx[ms][7], c2 = mc.slotModLiveFx[ms][8];   // filter 1/2 cutoff (Hz)
+        freqDisplay.setModCutoff(0, c1 < -900.0f ? -1.0f : c1);
+        freqDisplay.setModCutoff(1, c2 < -900.0f ? -1.0f : c2);
     }
     {   // DRIFT visual honesty: push the last hit's REAL rolled detunes into the unison view
         auto& dc = proc.sequencer.channel(selectedChannel);

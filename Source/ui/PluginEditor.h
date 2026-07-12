@@ -772,6 +772,8 @@ public:
     std::function<juce::String(float)> format;       // 0..1 -> display text (e.g. "42%", "Off", "2 /bar")
     void setAccent(juce::Colour c)  { if (c != accent_) { accent_ = c; repaint(); } }
     void setValue01(float v)        { v = juce::jlimit(0.0f, 1.0f, v); if (std::abs(v - val_) > 1.0e-4f) { val_ = v; repaint(); } }
+    float modRing_ = -1.0f;         // live modulated position 0..1 (a cyan marker); -1 = none
+    void setModRing(float v)        { if (std::abs(v - modRing_) > 0.004f) { modRing_ = v; repaint(); } }
     void setLabel(const juce::String& s) { if (s != name_) { name_ = s; repaint(); } }
     void setDefault(float d)        { dflt_ = juce::jlimit(0.0f, 1.0f, d); }
     void setVertical(bool v)        { vertical_ = v; }   // vertical fills bottom->top; drag maps Y
@@ -784,6 +786,9 @@ public:
         if (vertical_) g.fillRoundedRectangle(r.withTop(r.getBottom() - juce::jmax(5.0f, val_ * r.getHeight())), 4.0f);
         else           g.fillRoundedRectangle(r.withWidth(juce::jmax(5.0f, val_ * r.getWidth())), 4.0f);
         g.setColour(accent_.withAlpha(0.55f)); g.drawRoundedRectangle(r, 4.0f, 1.0f);
+        if (modRing_ >= 0.0f && ! vertical_)   // live modulated position = a cyan marker line
+        { const float mx = r.getX() + juce::jlimit(0.0f, 1.0f, modRing_) * r.getWidth();
+          g.setColour(juce::Colour(0xff35c0ff)); g.fillRect(mx - 1.0f, r.getY() + 1.0f, 2.0f, r.getHeight() - 2.0f); }
         g.setColour(juce::Colour(0xffeaf0fa)); g.setFont(juce::Font(11.5f, juce::Font::bold));
         juce::String t = name_.isEmpty() ? (format ? format(val_) : juce::String())   // value-only (name in a Label below)
                                          : (format ? name_ + "  " + format(val_) : name_);
@@ -1536,6 +1541,8 @@ public:
     std::function<void(float)> onFilterDriveEdit;   // FILTER DRIVE drag-box (one amount, drives BOTH filters)
     void setFilterDrive(float v) { v = juce::jlimit(0.0f, 1.0f, v); if (std::abs(v - fDrive) > 1.0e-4f) { fDrive = v; repaint(); } }
     int  active() const { return activeFilt; }   // which of the 2 filters the keytrack fader edits (last touched)
+    void setModCutoff(int fi, float hz) { fi = juce::jlimit(0, 1, fi);   // live modulation ring: the modulated cutoff
+        if (std::abs(hz - modCutoff[fi]) > (hz > 0 ? hz * 0.01f : 0.5f)) { modCutoff[fi] = hz; repaint(); } }
     static juce::Colour filtColour(int fi) { return fi == 0 ? juce::Colour(0xffff7a4a) : juce::Colour(0xff35c0ff); }  // F1 orange / F2 cyan
     void pushSpectrum(const float* mags, int n);
     void decayTick();                            // call on a timer to fade slowly
@@ -1555,6 +1562,7 @@ private:
     juce::Rectangle<float> driveRect() const { return { (float) getWidth() - 98.0f, 2.0f, 94.0f, 14.0f }; }
     int   fType[2] = { 0, 0 };   // NOLINT
     float fCutoff[2] = { 1000.0f, 1000.0f }, fReso[2] = { 0.707f, 0.707f }, fEnvAmt[2] = { 0.0f, 0.0f };
+    float modCutoff[2] = { -1.0f, -1.0f };        // live modulated cutoff Hz per filter (-1 = not modulated)
     int   activeFilt = 0;                         // which filter the diamond drag / keytrack edits (last touched)
     bool  showFilter = true;
     // Handle ids: diamond of filter fi = 100+fi ; envelope end handle = 102+fi.

@@ -2016,6 +2016,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             slotModLiveFx[s][0] = modTmp.fxReverbSend; slotModLiveFx[s][1] = modTmp.fxDelaySend;
             slotModLiveFx[s][2] = modTmp.chorusMix;    slotModLiveFx[s][3] = modTmp.fxTone;
             slotModLiveFx[s][4] = modTmp.fxPunch;      slotModLiveFx[s][5] = modTmp.fxComp;
+            slotModLiveFx[s][6] = modTmp.fxDrive;
+            slotModLiveFx[s][7] = modTmp.filterCutoff; slotModLiveFx[s][8] = modTmp.filterCutoff2;
             // Keep any LFO used as a matrix SOURCE advancing even if its own Amount is 0.
             for (auto& r : modTmp.mod)
                 if (r.tgt != MTOff && std::abs(r.amt) > 1.0e-4f
