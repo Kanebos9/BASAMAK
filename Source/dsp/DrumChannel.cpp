@@ -2012,12 +2012,17 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             computeModSources(s, modTmp, srcVals);
             applyModMatrix(modTmp, srcVals);
             slp = &modTmp;
+            // live snapshot for the editor's mod RINGS (raw modulated FX values)
+            slotModLiveFx[s][0] = modTmp.fxReverbSend; slotModLiveFx[s][1] = modTmp.fxDelaySend;
+            slotModLiveFx[s][2] = modTmp.chorusMix;    slotModLiveFx[s][3] = modTmp.fxTone;
+            slotModLiveFx[s][4] = modTmp.fxPunch;      slotModLiveFx[s][5] = modTmp.fxComp;
             // Keep any LFO used as a matrix SOURCE advancing even if its own Amount is 0.
             for (auto& r : modTmp.mod)
                 if (r.tgt != MTOff && std::abs(r.amt) > 1.0e-4f
                     && r.src >= MSLfoFilt && r.src <= MSLfoWave)
                     c.lfoSrcUsed[r.src - MSLfoFilt] = true;
         }
+        else for (auto& v : slotModLiveFx[s]) v = -1000.0f;   // matrix inactive -> no rings
         const Slot& sl = *slp;
         if (sl.engine < 0 || sl.weight <= 0.0f) continue;
         if (sl.engine == SrcSample && slotSample[s].buf.getNumSamples() == 0) continue;

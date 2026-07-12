@@ -291,9 +291,31 @@ class LearnableKnob : public juce::Slider
 public:
     LearnableKnob(const juce::String& paramId, MidiLearnManager& mlm);
     void mouseDown(const juce::MouseEvent& e) override;
+    // MODULATION RING (Vital-style): -1 = none; else the live modulated position (0..1 of the range).
+    // The knob's thumb stays at the user's base value; a cyan arc shows where modulation pushes it.
+    float modRing = -1.0f;
+    void setModRing(float v) { if (std::abs(v - modRing) > 0.003f) { modRing = v; repaint(); } }
     void paint(juce::Graphics& g) override
     {
         juce::Slider::paint(g);
+        if (modRing >= 0.0f && (getSliderStyle() == juce::Slider::RotaryVerticalDrag
+                             || getSliderStyle() == juce::Slider::Rotary
+                             || getSliderStyle() == juce::Slider::RotaryHorizontalVerticalDrag))
+        {   // arc from the base value (thumb) to the live modulated value
+            const auto rp = getRotaryParameters();
+            const float span = rp.endAngleRadians - rp.startAngleRadians;
+            const float base01 = (float) juce::jlimit(0.0, 1.0, valueToProportionOfLength(getValue()));
+            const float a0 = rp.startAngleRadians + base01 * span;
+            const float a1 = rp.startAngleRadians + juce::jlimit(0.0f, 1.0f, modRing) * span;
+            if (std::abs(a1 - a0) > 0.01f) {
+                auto r = getLocalBounds().toFloat();
+                const float sz = juce::jmin(r.getWidth(), r.getHeight());
+                const float cx = r.getCentreX(), cy = r.getY() + sz * 0.5f, rad = sz * 0.5f - 1.5f;
+                juce::Path arc; arc.addCentredArc(cx, cy, rad, rad, 0.0f, a0, a1, true);
+                g.setColour(juce::Colour(0xff35c0ff));
+                g.strokePath(arc, juce::PathStrokeType(2.4f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            }
+        }
         if (midiLearn.isLearning() && midiLearn.getLearningParam() == paramId)
         {   // amber wash + ring on the rotary while this control waits to learn a CC
             auto r = getLocalBounds().toFloat();

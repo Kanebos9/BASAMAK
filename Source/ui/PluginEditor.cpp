@@ -10902,6 +10902,18 @@ void DrumSequencerEditor::timerCallback()
     // Live LFO dot: the REAL phase of the newest playing voice on the selected channel/slot.
     lfoDisplay.setPhase(proc.sequencer.channel(selectedChannel).getLfoPhase(envTargetSlot(), lfoDisplay.selDest()));
     lfoDisplay.setLiveCycle(proc.sequencer.channel(selectedChannel).getLfoCycle(envTargetSlot(), lfoDisplay.selDest()));
+    // MOD RINGS: the FX knobs show a cyan arc at the live modulated value (Vital-style; the knob
+    // itself stays at your base setting). Fed from the DSP's per-block modLiveFx snapshot.
+    {
+        const auto& mc = proc.sequencer.channel(selectedChannel);
+        const int ms = envTargetSlot();
+        LearnableKnob* rk[6] = { &knobReverb, &knobDelay, &knobChMix, &knobTone, &knobPunch, &knobComp };
+        for (int i = 0; i < 6; ++i)
+        {
+            const float raw = mc.slotModLiveFx[ms][i];
+            rk[i]->setModRing(raw < -900.0f ? -1.0f : (float) rk[i]->valueToProportionOfLength(raw));
+        }
+    }
     {   // DRIFT visual honesty: push the last hit's REAL rolled detunes into the unison view
         auto& dc = proc.sequencer.channel(selectedChannel);
         float dcents[DrumChannel::UNI_MAX + 1];

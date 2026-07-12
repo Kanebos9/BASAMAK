@@ -678,6 +678,10 @@ public:
         return (s == 1 && keysSlot2Down != 0) ? c4 * std::pow(2.0, -(double) keysSlot2Down / 12.0) : c4;
     }
     float slotFiltEnv[NUM_SLOTS] = {}; // runtime: per-slot amp-env level from the PREVIOUS block, feeds the per-slot filter's env-follow sweep
+    // LIVE modulation snapshot for the editor's RINGS (per slot): the modulated value of each ring-able
+    // FX target this block (Rev/Del/Chorus/Tone/Punch/Comp raw). -1000 = matrix inactive (no ring).
+    // Written on the audio thread, read by the editor timer (torn-read tolerant, like the other UI reads).
+    float slotModLiveFx[NUM_SLOTS][6] = { { -1000, -1000, -1000, -1000, -1000, -1000 }, { -1000, -1000, -1000, -1000, -1000, -1000 } };
     float chDrvLp[2] = {}, chDrvDcX[2] = {}, chDrvDcY[2] = {};   // channel drive post-smoothing + Fuzz DC blocker (legacy multi-slot drive stage)
     // PER-SLOT CHORUS runtime: a stereo delay line + 3 LFO phases per slot (lazy-sized in renderInto);
     // the insert runs on the slot's summed output AFTER the voice loop, so it never touches the other slot.
