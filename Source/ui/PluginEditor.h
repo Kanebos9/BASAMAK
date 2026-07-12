@@ -1157,6 +1157,10 @@ class SlotEditor : public juce::Component,
                    public juce::DragAndDropTarget       // drag the OTHER slot's box here = copy its settings
 {
 public:
+    // MOD RINGS on the engine GRID knobs: v[i] = the live modulated value of knob i (-1000 = not modulated).
+    void setGridModRings(const float* v, int n)
+    { for (int i = 0; i < (int) knobs.size() && i < n; ++i)
+        knobs[i]->setModRing(v[i] < -900.0f ? -1.0f : (float) knobs[i]->valueToProportionOfLength(v[i])); }
     std::function<void(int srcSlot)> onCopyFromSlot;   // the other slot's box was dropped on this one
     // DRAG-COPY SOURCE (user: "drag from where im not controlling knobs/faders", no handle/text): the
     // box is draggable from any NON-CONTROL area - the bare background + the text labels. A knob/fader/

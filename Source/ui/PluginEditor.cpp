@@ -8143,8 +8143,13 @@ void DrumSequencerEditor::setupComponents()
         auto& ch = proc.sequencer.channel(selectedChannel);
         auto& sl = ch.slots[envTargetSlot()];
         sl.mod[routePickRoute].src = (int8_t) src; sl.mod[routePickRoute].tgt = (int8_t) tgt;
+        // The LFO's OWN amount is its depth (source = amount x shape). LFOs are off (amount 0) by default,
+        // so routing one that's still at 0 would do nothing - turn it on so the route works immediately.
+        if (src >= DrumChannel::MSLfoFilt && src <= DrumChannel::MSLfoWave)
+        { const int d = src - DrumChannel::MSLfoFilt; if (sl.lfoAmt[d] < 0.05f) sl.lfoAmt[d] = 1.0f; }
         ch.markDspDirty();
         modFaders.setValues(sl);   // reflect the new source/target on the fader immediately
+        refreshDetailPanel();      // the LFO visual shows its now-active wave
     };
 
     // ---- Per-slot FX + Chorus + Keytrack + LFO-sync DRAG-FADERS (Arp Rate-fader style, slot-coloured).
@@ -10843,6 +10848,9 @@ void DrumSequencerEditor::timerCallback()
         const float c1 = mc.slotModLiveFx[ms][7], c2 = mc.slotModLiveFx[ms][8];   // filter 1/2 cutoff (Hz)
         freqDisplay.setModCutoff(0, c1 < -900.0f ? -1.0f : c1);
         freqDisplay.setModCutoff(1, c2 < -900.0f ? -1.0f : c2);
+        // GRID knobs (the engine's own params - FM Amount, Ratio, ...): ring both slot boxes from [9..16].
+        for (int s = 0; s < DrumChannel::NUM_SLOTS; ++s)
+            slotEd[s].setGridModRings(&mc.slotModLiveFx[s][9], DrumChannel::MOD_TGT_GRID);
     }
     {   // DRIFT visual honesty: push the last hit's REAL rolled detunes into the unison view
         auto& dc = proc.sequencer.channel(selectedChannel);

@@ -1986,6 +1986,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         float  chMix = 0.0f;   // per-slot CHORUS insert (0 mix = off; rate/depth = effect constants)
         const float* wtFrm[ADD_FRAMES] = {};  // ADDITIVE WAVETABLE: the slot's 4 baked frame tables (null = not Custom)
         float wtPos = 0.0f;                   // static position 0..1 (addPos)
+        float wtPosOfs = 0.0f;                // MOD MATRIX wave-position offset (added in the render so it works even with glide)
         bool  wtGlide = false;                // per-note glide on (addSeg[0] > 0) - overrides wtPos
         bool  wtLoop  = false;                // ping-pong the glide forever (out and back)
         float wtLoopEnd = 1.0f;               // journey end time (samples) = travel to the first hold
@@ -2019,6 +2020,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         // LFO paths still run unchanged; the matrix modulates the block config, not the sample loop.
         Slot modTmp;
         const Slot* slp = &slots[s];
+        c.wtPosOfs = 0.0f;
         if (slots[s].modActive())
         {
             modTmp = slots[s];
@@ -2026,12 +2028,20 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             computeModSources(s, modTmp, srcVals);
             applyModMatrix(modTmp, srcVals);
             slp = &modTmp;
+            // WAVE / grain POSITION modulation is applied in the RENDER as an offset (so it works even
+            // when the wavetable is GLIDING, which overrides the static position) - bake the base position.
+            if (modTmp.engine == SrcGrain) { c.wtPosOfs = modTmp.grainPos - slots[s].grainPos; modTmp.grainPos = slots[s].grainPos; }
+            else                           { c.wtPosOfs = modTmp.addPos   - slots[s].addPos;   modTmp.addPos   = slots[s].addPos; }
             // live snapshot for the editor's mod RINGS (raw modulated FX values)
             slotModLiveFx[s][0] = modTmp.fxReverbSend; slotModLiveFx[s][1] = modTmp.fxDelaySend;
             slotModLiveFx[s][2] = modTmp.chorusMix;    slotModLiveFx[s][3] = modTmp.fxTone;
             slotModLiveFx[s][4] = modTmp.fxPunch;      slotModLiveFx[s][5] = modTmp.fxComp;
             slotModLiveFx[s][6] = modTmp.fxDrive;
             slotModLiveFx[s][7] = modTmp.filterCutoff; slotModLiveFx[s][8] = modTmp.filterCutoff2;
+            for (int gi = 0; gi < MOD_TGT_GRID; ++gi) {   // the 8 engine GRID knobs (FM Amount, Ratio, ...)
+                const GridKnob gk = modGridKnob(modTmp.engine, gi);
+                slotModLiveFx[s][9 + gi] = (gk.field != nullptr) ? (float)(modTmp.*(gk.field)) : -1000.0f;
+            }
             // Keep any LFO used as a matrix SOURCE advancing even if its own Amount is 0.
             for (auto& r : modTmp.mod)
                 if (r.tgt != MTOff && std::abs(r.amt) > 1.0e-4f
@@ -2730,8 +2740,9 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                                     else                  wtp = 1.0f;
                                 }
                                 else wtp = c.wtPos;
-                                // LFO -> wave position is a MOD MATRIX route now (block-rate: baked into addPos).
-                                wtp = juce::jlimit(0.0f, 1.0f, wtp);
+                                // matrix WAVE-position modulation is a per-block offset added HERE (works on
+                                // top of the glide clock too, not just the static position).
+                                wtp = juce::jlimit(0.0f, 1.0f, wtp + c.wtPosOfs);
                                 sv.wtPosCur = wtp;   // live position read-out (UI Position strip)
                                 wtp *= (float)(ADD_FRAMES - 1);
                                 const int   f0 = juce::jmin((int) wtp, ADD_FRAMES - 2);
@@ -2962,7 +2973,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                                                       * std::pow(2.0, (double) (r2 * c.grPitch));   // +-12 st max
                                     gr.len = juce::jmax(64, c.grLenSamp);
                                     gr.age = 0; gr.amp = 1.0f;
-                                    const float lfoP = 0.0f;   // WAVE->grain-position is a MOD MATRIX route now (baked into grainPos)
+                                    const float lfoP = c.wtPosOfs;   // matrix WAVE->grain-position modulation (per-block offset)
                                     if (smp)
                                     {
                                         const double span = (double) (c.grHi - c.grLo);

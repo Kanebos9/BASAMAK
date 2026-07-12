@@ -686,10 +686,10 @@ public:
     // target this block (0-6 = Rev/Del/Chorus/Tone/Punch/Comp/Drive; 7-8 = Filter1/Filter2 cutoff Hz).
     // -1000 = matrix inactive (no ring). Written on the audio thread, read by the editor timer (torn-read
     // tolerant, like the other UI reads).
-    static constexpr int MOD_LIVE_N = 9;
+    static constexpr int MOD_LIVE_N = 17;   // 0-8 Rev/Del/Chorus/Tone/Punch/Comp/Drive/Filt1Cut/Filt2Cut, 9-16 = the 8 engine GRID knobs
     float slotModLiveFx[NUM_SLOTS][MOD_LIVE_N] = {
-        { -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000 },
-        { -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000 } };
+        { -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000 },
+        { -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000 } };
     float chDrvLp[2] = {}, chDrvDcX[2] = {}, chDrvDcY[2] = {};   // channel drive post-smoothing + Fuzz DC blocker (legacy multi-slot drive stage)
     // PER-SLOT CHORUS runtime: a stereo delay line + 3 LFO phases per slot (lazy-sized in renderInto);
     // the insert runs on the slot's summed output AFTER the voice loop, so it never touches the other slot.
