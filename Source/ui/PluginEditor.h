@@ -847,17 +847,19 @@ public:
     std::function<void(int dest, float rate, float amt)> onChange;
     std::function<void()> onDragEnd;
     std::function<void(int dest)> onDestChange;      // a tab was selected
+    std::function<void(int lfoIdx, int dest)> onSetDest;   // GENERIC LFO: right-click a tab -> reassign its audio-rate destination
     std::function<void(int dest, float sync)> onSyncChange;   // Sync mode/value edited (0 off / cpb / -1 grid)
     static constexpr int CVN = 64;   // = DrumChannel::Slot::LFO_CURVE_N (drawn LFO cycle points)
     void setValues(const float* rates, const float* amts, const float* syncs, const int* shapes,
-                   const bool* frees, const bool* legs, const float (*curves)[CVN], bool filterOn, bool waveOn,
-                   juce::Colour accent)
+                   const bool* frees, const bool* legs, const float (*curves)[CVN], const int* dests,
+                   bool filterOn, bool waveOn, juce::Colour accent)
     {
         bool ch = (filterOn != filtOn_) || (waveOn != waveOn_) || (accent != accent_);
         for (int d = 0; d < 4; ++d) { ch = ch || rates[d] != rate_[d] || amts[d] != amt_[d] || syncs[d] != sync_[d]
-                                              || shapes[d] != shape_[d] || frees[d] != free_[d] || legs[d] != leg_[d];
+                                              || shapes[d] != shape_[d] || frees[d] != free_[d] || legs[d] != leg_[d]
+                                              || dests[d] != lfoDest_[d];
                                       rate_[d] = rates[d]; amt_[d] = amts[d]; sync_[d] = syncs[d];
-                                      shape_[d] = shapes[d]; free_[d] = frees[d]; leg_[d] = legs[d];
+                                      shape_[d] = shapes[d]; free_[d] = frees[d]; leg_[d] = legs[d]; lfoDest_[d] = dests[d];
                                       for (int k = 0; k < CVN; ++k)
                                       { ch = ch || std::abs(curves[d][k] - curve_[d][k]) > 1.0e-4f;
                                         curve_[d][k] = curves[d][k]; } }
@@ -895,6 +897,7 @@ private:
     int   shape_[4] = {};                          // 0 Sine .. 7 Custom (the drawn curve)
     bool  free_[4]  = {};                          // FREE-RUN (timeline-anchored) vs RETRIG per note
     bool  leg_[4]   = {};                          // LEGATO: overlapping notes inherit the phase
+    int   lfoDest_[4] = { 0, 1, 2, 3 };            // GENERIC LFO: 0 Filter / 1 Pitch / 2 Vol / 3 Wave / 4 Off (default = fixed mapping)
     float curve_[4][CVN] = {};                     // shape 7: the drawn cycle (-1..1)
     bool  dnMoved_ = false;                        // click vs drag (a plain click in Custom opens the editor)
     double freeSec_ = 0.0;                         // live free-run clock (editor timer)
@@ -910,6 +913,9 @@ private:
     // The wave's true speed in Hz for dest d (what the DSP actually plays - synced rates included).
     float effHz(int d) const { const float s = sync_[d];
         return s == 0.0f ? rate_[d] : (s < 0.0f ? gridCpb_ : s) / barSec_; }
+    // GENERIC LFO: the hue follows what the LFO AFFECTS (its assigned destination), so the wave
+    // colour tells you its effect at a glance; Off = neutral grey.
+    juce::Colour destCol(int lfoIdx) const;   // impl in .cpp (needs kLfoDestCol)
     // Bottom = ONE button row [Shape][Retrig][Sync] + the speed read-out on its OWN line below
     // (user layout; the box grew into the spare strip under it).
     juce::Rectangle<float> shapeBtnRect() const { return { 4.0f,   (float) getHeight() - 31.0f, 56.0f, 13.0f }; }

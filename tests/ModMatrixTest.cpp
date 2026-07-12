@@ -5,6 +5,8 @@
 //       identical with it off (proves the source reaches the target).
 //   [3] Mod LFO is REPEATABLE: bar 1 == bar 2 (the free clock is timeline-anchored).
 //   [4] Extreme amounts on every route stay finite.
+//   [5] GENERIC LFO destination: default lfoDest {0,1,2,3} routes LFO0->filter (wobble); reassigning
+//       LFO0 to Off removes it = the no-LFO baseline (the indirection is a no-op at default).
 #include "Sequencer.h"
 #include <cstdio>
 #include <cmath>
@@ -93,6 +95,18 @@ int main()
         auto lo = render(mk(0.0f), 0.9f, 0.6), hi = render(mk(1.0f), 0.9f, 0.6);
         printf("[4b] StepMod A->Cutoff: lane0 vs lane1 maxdiff=%.4f (expect >0.02) -> %s\n",
                maxdiff(lo, hi), CHK(maxdiff(lo, hi) > 0.02f && finite(hi)) ? "OK" : "FAIL");
+    }
+    {   // [5] GENERIC LFO destination: default {0,1,2,3} routes LFO0 -> filter (wobble); reassigning it
+        //     to Off gives EXACTLY the no-LFO baseline (proves the destination indirection is a no-op
+        //     at default and that reassignment truly re-routes).
+        auto flfo = [](DrumChannel& c){ voice(c); c.slots[0].hold = 1.0f;
+            c.slots[0].lfoAmt[0] = 0.8f; c.slots[0].lfoRate[0] = 6.0f; c.slots[0].lfoSync[0] = 0.0f; };
+        auto onDef = render(flfo, 0.9f, 0.6);                                                     // default dest -> filter
+        auto offRt = render([&](DrumChannel& c){ flfo(c); c.slots[0].lfoDest[0] = 4; }, 0.9f, 0.6); // LFO0 -> Off
+        auto noLfo = render([](DrumChannel& c){ voice(c); c.slots[0].hold = 1.0f; }, 0.9f, 0.6);   // no LFO at all
+        const float wob = maxdiff(onDef, noLfo), gone = maxdiff(offRt, noLfo);
+        printf("[5] generic LFO: default->filter wob=%.4f (>0.02), reassign-Off vs no-LFO=%.6f (==0) -> %s\n",
+               wob, gone, CHK(wob > 0.02f && gone == 0.0f && finite(onDef)) ? "OK" : "FAIL");
     }
     {   // [4] every route maxed = finite
         auto x = render([](DrumChannel& c){ voice(c);
