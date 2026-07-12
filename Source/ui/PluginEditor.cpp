@@ -978,7 +978,7 @@ void ModMatrixEditor::styleFader(juce::Slider& s, double lo, double hi, double d
     s.setColour(juce::Slider::textBoxTextColourId, juce::Colours::white);
     s.setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
     s.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
-    s.setTextBoxStyle(juce::Slider::TextBoxRight, true, 44, 15);
+    s.setTextBoxStyle(juce::Slider::TextBoxRight, true, 58, 15);
     s.setTextValueSuffix(suf);
     addAndMakeVisible(s);
 }
@@ -993,6 +993,9 @@ ModMatrixEditor::ModMatrixEditor()
         styleCombo(tgtCombo[r]);   // items filled by rebuildTargets()
         tgtCombo[r].onChange = [this, r] { tgt[r] = tgtCombo[r].getSelectedId() - 1; if (onChange) onChange(); };
         amtSlider[r].setSliderStyle(juce::Slider::LinearHorizontal);
+        // The fader POSITION is -1..1, but the stored amount = sign(pos)*pos^2 = FINE near the centre
+        // (a light Ratio/pitch mod is easy to dial) and reaches +-100% at the ends. The read-out shows
+        // the REAL amount %, and setValues inverts it (sqrt) so a loaded route parks the thumb right.
         amtSlider[r].setRange(-1.0, 1.0, 0.0);
         amtSlider[r].setDoubleClickReturnValue(true, 0.0);
         amtSlider[r].setColour(juce::Slider::trackColourId, accent);
@@ -1001,9 +1004,11 @@ ModMatrixEditor::ModMatrixEditor()
         amtSlider[r].setColour(juce::Slider::textBoxTextColourId, juce::Colours::white);
         amtSlider[r].setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
         amtSlider[r].setColour(juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
-        amtSlider[r].setTextBoxStyle(juce::Slider::TextBoxRight, true, 40, 15);
-        amtSlider[r].textFromValueFunction = [](double v) { return (v > 0 ? "+" : "") + juce::String(juce::roundToInt(v * 100.0)) + "%"; };
-        amtSlider[r].onValueChange = [this, r] { amt[r] = (float) amtSlider[r].getValue(); if (onChange) onChange(); };
+        amtSlider[r].setTextBoxStyle(juce::Slider::TextBoxRight, true, 52, 15);
+        amtSlider[r].textFromValueFunction = [](double pos) { const double a = (pos < 0 ? -1.0 : 1.0) * pos * pos;
+            return (a > 0 ? "+" : "") + juce::String(juce::roundToInt(a * 100.0)) + "%"; };
+        amtSlider[r].onValueChange = [this, r] { const double p = amtSlider[r].getValue();
+            amt[r] = (float) ((p < 0 ? -1.0 : 1.0) * p * p); if (onChange) onChange(); };
         addAndMakeVisible(amtSlider[r]);
     }
     lblEnv.setText("Mod Env", juce::dontSendNotification); lblEnv.setFont(juce::Font(10.0f, juce::Font::bold));
@@ -1048,7 +1053,8 @@ void ModMatrixEditor::setValues(const DrumChannel::Slot& sl)
         tgt[r] = juce::jlimit(0, DrumChannel::MT_COUNT - 1, (int) sl.mod[r].tgt);
         amt[r] = juce::jlimit(-1.0f, 1.0f, sl.mod[r].amt);
         srcCombo[r].setSelectedId(src[r] + 1, juce::dontSendNotification);
-        amtSlider[r].setValue(amt[r], juce::dontSendNotification);
+        // invert the square curve so the thumb sits where the stored amount actually is
+        amtSlider[r].setValue((amt[r] < 0 ? -1.0f : 1.0f) * std::sqrt(std::abs(amt[r])), juce::dontSendNotification);
     }
     modEnvA = sl.modEnvA; modEnvD = sl.modEnvD; modLfoRate = sl.modLfoRate; modLfoShape = sl.modLfoShape;
     envA.setValue(modEnvA, juce::dontSendNotification);
@@ -1068,37 +1074,38 @@ void ModMatrixEditor::paint(juce::Graphics& g)
     g.drawText("MOD MATRIX - SLOT " + juce::String(slotIdx + 1), 10, 4, getWidth() - 40, 16,
                juce::Justification::centredLeft, false);
     // column captions
-    g.setColour(juce::Colour(0xff9aa6c0)); g.setFont(juce::Font(9.5f, juce::Font::bold));
-    const int x0 = 10, srcW = 118, tgtW = 150, amtX = x0 + srcW + tgtW + 12;
-    g.drawText("SOURCE", x0, 22, srcW, 12, juce::Justification::centredLeft, false);
-    g.drawText("TARGET", x0 + srcW + 6, 22, tgtW, 12, juce::Justification::centredLeft, false);
-    g.drawText("AMOUNT", amtX, 22, getWidth() - amtX - 8, 12, juce::Justification::centredLeft, false);
+    g.setColour(juce::Colour(0xff9aa6c0)); g.setFont(juce::Font(10.0f, juce::Font::bold));
+    const int x0 = 12, srcW = 150, tgtW = 210, colGap = 8;
+    const int amtX = x0 + srcW + colGap + tgtW + colGap;
+    g.drawText("SOURCE", x0, 24, srcW, 12, juce::Justification::centredLeft, false);
+    g.drawText("TARGET", x0 + srcW + colGap, 24, tgtW, 12, juce::Justification::centredLeft, false);
+    g.drawText("AMOUNT", amtX, 24, getWidth() - amtX - 10, 12, juce::Justification::centredLeft, false);
     // close X
     auto cr = closeRect();
-    g.setColour(juce::Colour(0xff9aa6c0)); g.setFont(juce::Font(13.0f, juce::Font::bold));
+    g.setColour(juce::Colour(0xff9aa6c0)); g.setFont(juce::Font(14.0f, juce::Font::bold));
     g.drawText("x", cr, juce::Justification::centred, false);
 }
 
 void ModMatrixEditor::resized()
 {
-    const int x0 = 10, srcW = 118, tgtW = 150;
-    const int rowY0 = 36, rowH = 22;
-    const int amtX = x0 + srcW + tgtW + 12, amtW = getWidth() - amtX - 8;
+    const int x0 = 12, srcW = 150, tgtW = 210, colGap = 8;
+    const int rowY0 = 40, rowH = 26;
+    const int amtX = x0 + srcW + colGap + tgtW + colGap, amtW = getWidth() - amtX - 10;
     for (int r = 0; r < NR; ++r)
     {
         const int y = rowY0 + r * rowH;
-        srcCombo[r].setBounds(x0, y, srcW, rowH - 3);
-        tgtCombo[r].setBounds(x0 + srcW + 6, y, tgtW, rowH - 3);
-        amtSlider[r].setBounds(amtX, y, amtW, rowH - 3);
+        srcCombo[r].setBounds(x0, y, srcW, rowH - 5);
+        tgtCombo[r].setBounds(x0 + srcW + colGap, y, tgtW, rowH - 5);
+        amtSlider[r].setBounds(amtX, y, amtW, rowH - 5);
     }
-    // Footer: Mod Env [A][D] + Mod LFO [Rate][Shape]
-    const int fy = rowY0 + NR * rowH + 4;
-    lblEnv.setBounds(x0, fy, 54, 16);
-    envA.setBounds(x0 + 54, fy, 88, 16);
-    envD.setBounds(x0 + 54 + 92, fy, 88, 16);
-    lblLfo.setBounds(x0, fy + 20, 54, 16);
-    lfoRate.setBounds(x0 + 54, fy + 20, 96, 16);
-    lfoShapeCombo.setBounds(x0 + 54 + 100, fy + 20, 88, 16);
+    // Footer: Mod Env [A][D] + Mod LFO [Rate][Shape], on two clear rows with room to breathe.
+    const int fy = rowY0 + NR * rowH + 8;
+    lblEnv.setBounds(x0, fy, 60, 18);
+    envA.setBounds(x0 + 62, fy, 150, 18);
+    envD.setBounds(x0 + 62 + 158, fy, 150, 18);
+    lblLfo.setBounds(x0, fy + 24, 60, 18);
+    lfoRate.setBounds(x0 + 62, fy + 24, 150, 18);
+    lfoShapeCombo.setBounds(x0 + 62 + 158, fy + 24, 120, 18);
 }
 
 void ModMatrixEditor::mouseDown(const juce::MouseEvent& e)
@@ -8211,11 +8218,17 @@ void DrumSequencerEditor::setupComponents()
             auto& ch = proc.sequencer.channel(selectedChannel);
             commitUndoNow();
             ch.silenceAllVoices();                 // nothing reads the old buffers mid-copy
-            ch.slots[b] = ch.slots[srcIdx];
+            ch.slots[b] = ch.slots[srcIdx];        // copies the ENGINE + every param
             ch.slotSample[b] = ch.slotSample[srcIdx];
             ch.ensureKsBuffers();
             ch.rebuildAddTables();                 // chains the grain-source rebuild too
+            ch.rebuildGrainTables();
             ch.markDspDirty();
+            // The DATA is copied, but the UI's engine mirror (boxEngine[]) must RE-SYNC or the layout
+            // rebuilds the destination editor with the STALE engine (the "it stays empty/Modal" bug).
+            syncBoxesFromSrcOn();                  // boxEngine[] <- the copied slots[].engine
+            slotEd[b].setEngine(ch.slots[b].engine);
+            slotEd[b].pushValues();
             cacheWaveform(selectedChannel);
             syncPadFromSlots(false);
             layoutContent(); refreshDetailPanel();
@@ -11447,7 +11460,7 @@ void DrumSequencerEditor::layoutContent()
     // hidden again at the top of every layoutContent like the sound picker).
     harmEd.setBounds(cxAmp, colTop, ampEqW + gp + pitchW + gp + fxColW, colH);   // covers amp..FX (user-outlined area)
     lfoCurveEd.setBounds(cxPitch, colTop + 60, pitchW + gp + fxColW, 220);   // LFO SHAPER overlay (near the LFO box)
-    modMatrixEd.setBounds(cxPitch, colTop + 20, pitchW + gp + fxColW, 250);   // MOD MATRIX overlay (near the LFO box)
+    modMatrixEd.setBounds(cxAmp, colTop, ampEqW + gp + pitchW, colH);   // MOD MATRIX overlay: amp+pitch columns (NOT the FX area - user)
 
     hdrDrive.setBounds(0, 0, 0, 0);
     lblSampleSel.setBounds(0, 0, 0, 0);
