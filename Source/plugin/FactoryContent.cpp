@@ -13,6 +13,15 @@ namespace Factory
 static DC::Slot& mkSlot(DC& c, int engine);
 static DC::Slot& mkSlot2(DC& c, int engine, float w0);
 
+// Route an LFO (index 0/1/2 = LFO 1/2/3) to a target in the mod matrix (the LFO Amount is the depth,
+// so the route amount is full). Uses the first free mod slot. Replaces the old built-in LFO destination.
+static void lfoRoute(DC::Slot& s, int lfoIdx, int tgt)
+{
+    for (auto& r : s.mod)
+        if (r.src == DC::MSOff && r.tgt == DC::MTOff)
+        { r.src = (int8_t)(DC::MSLfoFilt + lfoIdx); r.tgt = (int8_t) tgt; r.amt = 1.0f; return; }
+}
+
 // Reset only the *sound* parameters of a channel to a clean, sample-free state.
 // Leaves the channel's identity (name/colour/MIDI note) and its step pattern
 // untouched, so applying a mix swaps the sound without disturbing the groove.
@@ -184,7 +193,7 @@ static void mShaker(DC& c)     // the USER'S patch (shaker2.basamaksound): band-
     s.weight = 0.85f;
     s.noiseType = 0; s.noiseCenter = 6532.0f; s.noiseWidth = 0.19f;
     s.atk = 0.001f; s.dec = 0.16f; s.release = 0.06f;
-    s.lfoRate[2] = 5.61f; s.lfoAmt[2] = 0.78f; s.lfoDest[2] = 2;   // VOL tremolo (the user's design)
+    s.lfoRate[2] = 5.61f; s.lfoAmt[2] = 0.78f; lfoRoute(s, 2, DC::MTVol);   // VOL tremolo (the user's design)
     s.fxReverbSend = 0.12f;
     c.volume = 0.85f;
 }
@@ -681,7 +690,7 @@ static void bNeuroBass(DC& c) {     // modern growl: folded+FM'd saw with a swep
     s.fmDepth = 0.35f; s.fmSpread = 0.2f; s.fmEnvFollow = true;    // ratio 2, riding the env = "talking" top
     s.atk = 0.002f; s.dec = 0.6f;
     s.filterType = DC::LowPass; s.filterCutoff = 900.0f; s.filterReso = 2.8f; s.filterEnvAmt = 0.65f;
-    s.lfoRate[0] = 3.5f; s.lfoAmt[0] = 0.4f; s.lfoDest[0] = 0;   // filter-LFO wobble on top of the env sweep = "talking" growl
+    s.lfoRate[0] = 3.5f; s.lfoAmt[0] = 0.4f; lfoRoute(s, 0, DC::MTFilt1Cut);   // filter-LFO wobble on top of the env sweep = "talking" growl
     s.fxDriveType = DC::Foldback; s.fxDrive = 0.469f;
     auto& b = mkSlot2(c, DC::SrcOsc, 0.60f);
     b.oscShape = b.oscShapeB = DC::WvSine; b.oscFreq = 27.5f;     // untouched low end - growl stays on top
@@ -728,7 +737,7 @@ static void bWobbleBass(DC& c) {    // dubstep wobble: LFO drives the resonant L
     s.fmDepth = 0.2f; s.fmSpread = 0.2f; s.fmEnvFollow = true;      // a little FM dirt on the attack
     s.atk = 0.002f; s.dec = 1.2f;                                    // long body - meant for LONG per-step Lengths
     s.filterType = DC::LowPass; s.filterCutoff = 500.0f; s.filterReso = 3.5f;
-    s.lfoRate[0] = 2.0f; s.lfoAmt[0] = 0.8f; s.lfoDest[0] = 0;   // THE wobble (~1/8 feel at 120)
+    s.lfoRate[0] = 2.0f; s.lfoAmt[0] = 0.8f; lfoRoute(s, 0, DC::MTFilt1Cut);   // THE wobble (~1/8 feel at 120)
     s.fxDriveType = DC::Tube; s.fxDrive = 0.447f;
     auto& b = mkSlot2(c, DC::SrcOsc, 0.62f);
     b.oscShape = b.oscShapeB = DC::WvSine; b.oscFreq = 27.5f;      // steady sub - the wobble lives on top
@@ -741,7 +750,7 @@ static void eSiren(DC& c) {         // classic rave/jungle siren: pitch LFO, +/-
     auto& s = mkSlot(c, DC::SrcOsc);
     s.oscShape = s.oscShapeB = DC::WvSquare; s.oscFreq = 660.0f;
     s.atk = 0.01f; s.dec = 2.5f;
-    s.lfoRate[1] = 0.9f; s.lfoAmt[1] = 1.0f; s.lfoDest[1] = 1;   // slow full-depth pitch swing
+    s.lfoRate[1] = 0.9f; s.lfoAmt[1] = 1.0f; lfoRoute(s, 1, DC::MTPitch);   // slow full-depth pitch swing
     s.filterType = DC::LowPass; s.filterCutoff = 2500.0f; s.filterReso = 1.2f;
     c.reverbSend = 0.15f; c.volume = 0.6f;
 }
@@ -749,7 +758,7 @@ static void eChopper(DC& c) {       // helicopter: brown noise chopped by a fast
     auto& s = mkSlot(c, DC::SrcNoise);
     s.noiseType = 2;                                                 // brown = deep rumble
     s.atk = 0.05f; s.dec = 2.0f;
-    s.lfoRate[2] = 11.0f; s.lfoAmt[2] = 1.0f; s.lfoDest[2] = 2;   // rotor-blade tremolo
+    s.lfoRate[2] = 11.0f; s.lfoAmt[2] = 1.0f; lfoRoute(s, 2, DC::MTVol);   // rotor-blade tremolo
     c.volume = 0.85f;
 }
 
@@ -822,7 +831,7 @@ static void kWurli(DC& c) {         // Wurlitzer EP: barky FM reed + gentle trem
     s.oscShape = s.oscShapeB = DC::WvSine; s.oscFreq = 261.63f;
     s.fmDepth = 0.5f; s.fmPitch = 0.2f; s.fmFeedback = 0.15f; s.fmEnvFollow = true;   // reedy bark
     s.atk = 0.002f; s.dec = 1.1f; s.sustain = 0.4f; s.release = 0.25f;
-    s.lfoRate[2] = 5.5f; s.lfoAmt[2] = 0.35f; s.lfoDest[2] = 2;   // VOL tremolo = the Wurli wobble
+    s.lfoRate[2] = 5.5f; s.lfoAmt[2] = 0.35f; lfoRoute(s, 2, DC::MTVol);   // VOL tremolo = the Wurli wobble
     c.reverbSend = 0.14f; c.volume = 0.8f;
 }
 static void kClav(DC& c) {          // funky clavinet: bright pulse + snappy filter, percussive/plucky
@@ -848,7 +857,7 @@ static void kChoir(DC& c) {         // vocal "aah" pad: formant vowel shape, slo
     s.oscFreq = 261.63f;
     s.oscUnison = 3; s.oscDetune = 0.2f;
     s.atk = 0.25f; s.dec = 1.5f; s.sustain = 0.85f; s.release = 0.8f;
-    s.lfoRate[1] = 5.0f; s.lfoAmt[1] = 0.015f; s.lfoDest[1] = 1;   // subtle pitch vibrato = choir life
+    s.lfoRate[1] = 5.0f; s.lfoAmt[1] = 0.015f; lfoRoute(s, 1, DC::MTPitch);   // subtle pitch vibrato = choir life
     c.reverbSend = 0.32f; c.volume = 0.64f;
 }
 static void kWarmPad(DC& c) {       // dark warm pad: mellow reed, very slow + very long release (vs Soft Pad's bright saws)
@@ -875,7 +884,7 @@ static void kVibes(DC& c) {         // vibraphone: tuned metal bars with the cla
     s.modalMaterial = 1;                                            // Tubular Bell = tuned metallic ring
     s.oscFreq = 261.63f; s.modalDecay = 0.7f; s.modalTone = 0.65f; s.modalStruct = 0.44f;
     s.atk = 0.002f; s.dec = 1.4f; s.sustain = 0.45f; s.release = 0.7f;
-    s.lfoRate[2] = 5.0f; s.lfoAmt[2] = 0.4f; s.lfoDest[2] = 2;   // the vibraphone tremolo (VOL)
+    s.lfoRate[2] = 5.0f; s.lfoAmt[2] = 0.4f; lfoRoute(s, 2, DC::MTVol);   // the vibraphone tremolo (VOL)
     c.reverbSend = 0.28f; c.volume = 0.7f;
 }
 static void kMarimbaKeys(DC& c) {   // warm wooden marimba mallet, soft, dark, gentle hold (Modal)
@@ -955,7 +964,7 @@ static void kMajorChoir(DC& c) {    // vocal "aah" that harmonizes into the MAJO
     s.oscShape = s.oscShapeB = 6; s.oscFreq = 261.63f;             // Vowel A
     s.scaleOn = true; s.scaleType = 0; s.scaleUnison = 3; s.scaleKey = 0;   // Major triads
     s.atk = 0.22f; s.dec = 1.5f; s.sustain = 0.85f; s.release = 0.8f;
-    s.lfoRate[1] = 5.0f; s.lfoAmt[1] = 0.015f; s.lfoDest[1] = 1;   // subtle vibrato = choir life
+    s.lfoRate[1] = 5.0f; s.lfoAmt[1] = 0.015f; lfoRoute(s, 1, DC::MTPitch);   // subtle vibrato = choir life
     auto& b = mkSlot2(c, DC::SrcOsc, 0.6f);
     b.oscShape = b.oscShapeB = 12; b.oscFreq = 261.63f;            // Reed warmth under the vowels
     b.atk = 0.3f; b.dec = 1.6f; b.sustain = 0.8f; b.release = 0.9f;
@@ -1187,7 +1196,7 @@ static void kMotionPad(DC& c) {    // slow filter-breathing pad (the LFO IS the 
     s.oscUnison = 3; s.oscDetune = 0.24f;
     s.atk = 0.3f; s.dec = 2.0f; s.sustain = 0.85f; s.release = 1.0f;
     s.filterType = DC::LowPass; s.filterCutoff = 900.0f; s.filterReso = 1.3f;
-    s.lfoRate[0] = 0.3f; s.lfoAmt[0] = 0.55f; s.lfoDest[0] = 0;   // ~3 s filter breathing
+    s.lfoRate[0] = 0.3f; s.lfoAmt[0] = 0.55f; lfoRoute(s, 0, DC::MTFilt1Cut);   // ~3 s filter breathing
     c.reverbSend = 0.2f; c.volume = 0.66f;
 }
 static void kBrassPad(DC& c) {     // soft brass-section swell (slow vs Synth Brass's stab attack)
@@ -1366,7 +1375,7 @@ static void mOcean(DC& c) {        // ocean swell: brown noise breathing at wave
     clearSound(c);
     DC::Slot& n = c.slots[0]; n.engine = DC::SrcNoise; n.weight = 1.0f;
     n.noiseType = 2; n.noiseCenter = 420.0f; n.noiseWidth = 0.6f;
-    n.lfoRate[2] = 0.16f; n.lfoAmt[2] = 0.9f; n.lfoDest[2] = 2;   // ~6 s near-full wave swell
+    n.lfoRate[2] = 0.16f; n.lfoAmt[2] = 0.9f; lfoRoute(n, 2, DC::MTVol);   // ~6 s near-full wave swell
     n.atk = 0.4f; n.dec = 3.5f;
     c.volume = 0.6f;
 }
@@ -1472,7 +1481,7 @@ static void nHyperSaw(DC& c) {      // huge trance lead: 7-voice saw, a tempo-sy
     s.oscUnison = 7; s.oscDetune = 0.35f; s.uniSpread = 0.7f;
     s.atk = 0.01f; s.dec = 1.0f; s.sustain = 0.8f; s.release = 0.3f;
     s.filterType = DC::LowPass; s.filterCutoff = 2200.0f; s.filterReso = 1.4f;
-    s.lfoAmt[0] = 0.5f; s.lfoSync[0] = 8.0f; s.lfoDest[0] = 0;   // 8 cycles/bar = 1/8-note filter pulse (tempo-synced)
+    s.lfoAmt[0] = 0.5f; s.lfoSync[0] = 8.0f; lfoRoute(s, 0, DC::MTFilt1Cut);   // 8 cycles/bar = 1/8-note filter pulse (tempo-synced)
     s.chorusMix = 0.5f;
     c.delaySend = 0.2f; c.volume = 0.56f;
 }
@@ -1491,7 +1500,7 @@ static void nNotchBass(DC& c) {     // phaser-ish bass: a swept NOTCH + keytrack
     s.atk = 0.004f; s.dec = 0.8f; s.sustain = 0.7f; s.release = 0.2f;
     s.filterType = DC::Notch; s.filterCutoff = 500.0f; s.filterReso = 3.0f;
     s.filterKeyTrack = 0.5f;
-    s.lfoAmt[0] = 0.6f; s.lfoSync[0] = 2.0f; s.lfoDest[0] = 0;   // 1/2-note notch sweep (tempo-synced) = phaser motion
+    s.lfoAmt[0] = 0.6f; s.lfoSync[0] = 2.0f; lfoRoute(s, 0, DC::MTFilt1Cut);   // 1/2-note notch sweep (tempo-synced) = phaser motion
     c.volume = 0.82f;
 }
 static void nAcidHP(DC& c) {        // thin, buzzy acid lead: HIGH-PASS + resonance, cutoff tracks the note
@@ -1517,7 +1526,7 @@ static void nSyncSweep(DC& c) {     // rhythmic band-pass sweep pad: LFO LOCKED 
     s.oscUnison = 3; s.oscDetune = 0.2f;
     s.atk = 0.12f; s.dec = 1.4f; s.sustain = 0.85f; s.release = 0.8f;
     s.filterType = DC::BandPass; s.filterCutoff = 800.0f; s.filterReso = 2.2f;
-    s.lfoAmt[0] = 0.85f; s.lfoSync[0] = -1.0f; s.lfoDest[0] = 0;   // LOCK TO GRID: one sweep per grid cell (step count / piano-roll grid)
+    s.lfoAmt[0] = 0.85f; s.lfoSync[0] = -1.0f; lfoRoute(s, 0, DC::MTFilt1Cut);   // LOCK TO GRID: one sweep per grid cell (step count / piano-roll grid)
     c.reverbSend = 0.35f; c.volume = 0.6f;
 }
 static void nChorusBells(DC& c) {   // shimmering tuned bells: modal body + chorus, long reverb + delay tail
@@ -1533,7 +1542,7 @@ static void nAmbientWash(DC& c) {   // evolving ambient bed: soft saw pad + a fi
     s.atk = 0.4f; s.dec = 2.0f; s.sustain = 0.9f; s.release = 1.4f;
     s.filterType = DC::LowPass; s.filterCutoff = 1000.0f; s.filterReso = 0.7f;
     s.chorusMix = 0.75f;
-    s.lfoAmt[2] = 0.4f; s.lfoSync[2] = 1.0f; s.lfoDest[2] = 2;   // 1 cycle/bar volume swell (tempo-synced)
+    s.lfoAmt[2] = 0.4f; s.lfoSync[2] = 1.0f; lfoRoute(s, 2, DC::MTVol);   // 1 cycle/bar volume swell (tempo-synced)
     auto& b = mkSlot2(c, DC::SrcNoise, 0.22f);  // airy noise bed (texture) under the pad
     b.noiseType = 1;                            // pink
     b.atk = 0.6f; b.dec = 2.0f; b.sustain = 0.8f; b.release = 1.4f;
@@ -1569,7 +1578,7 @@ static void wtFrame(DC::Slot& s, int f, std::initializer_list<std::pair<int,floa
 static void windMotion(DC::Slot& s, float bloomSec, float lfoAmt, float lfoHz)
 {
     s.addSeg[0] = bloomSec; s.addSeg[1] = 0.0f; s.addSeg[2] = 0.0f;   // bloom A>B, park on the body
-    s.lfoAmt[0] = lfoAmt; s.lfoRate[0] = lfoHz; s.lfoFree[0] = true; s.lfoDest[0] = 3;  // LFO 1 -> WAVE scan (breath)
+    s.lfoAmt[0] = lfoAmt; s.lfoRate[0] = lfoHz; s.lfoFree[0] = true; lfoRoute(s, 0, DC::MTWavePos);  // LFO 1 -> WAVE scan (breath)
 }
 static DC::Slot& windBreath(DC& c, float w, float centerHz, float atk, float dec, float sus, float rel)
 {   // the BREATH layer = SLOT 2 (mkSlot would CLEAR the channel - the round-11 wind killer)
@@ -1781,7 +1790,7 @@ static void wTalkingPad(DC& c) {   // vowel frames + a slow synced WAVE LFO scan
     wtFrame(s, 2, {{1,0.5f},{6,0.9f},{7,1.0f},{8,0.6f},{12,0.25f}});        // C: "ee" (high formant)
     wtFrame(s, 3, {{2,0.8f},{4,1.0f},{5,0.7f},{9,0.5f},{11,0.3f}});         // D: nasal "ay"
     s.addPos = 0.5f;                                                        // park mid-strip...
-    s.lfoAmt[0] = 0.65f; s.lfoSync[0] = 0.5f; s.lfoDest[0] = 3;             // LFO 1 -> WAVE sweeps the mouth (2-bar cycle)
+    s.lfoAmt[0] = 0.65f; s.lfoSync[0] = 0.5f; lfoRoute(s, 0, DC::MTWavePos);             // LFO 1 -> WAVE sweeps the mouth (2-bar cycle)
     s.atk = 0.15f; s.dec = 1.5f; s.sustain = 0.85f; s.release = 0.8f;
     s.fxReverbSend = 0.3f; c.volume = 0.6f;
 }
@@ -1801,7 +1810,7 @@ static void wScanBass(DC& c) {     // the WAVE LFO scans sub > nasal > hollow pe
     wtFrame(s, 3, {{1,0.9f},{2,0.6f},{3,0.5f},{4,0.45f},{6,0.3f}});         // D: gritty top
     s.oscFreq = 55.0f;                                                      // A1 bass register
     s.addPos = 0.35f;
-    s.lfoAmt[0] = 0.6f; s.lfoSync[0] = 1.0f; s.lfoDest[0] = 3;               // LFO 1 -> WAVE, one scan per bar, on the groove
+    s.lfoAmt[0] = 0.6f; s.lfoSync[0] = 1.0f; lfoRoute(s, 0, DC::MTWavePos);               // LFO 1 -> WAVE, one scan per bar, on the groove
     s.atk = 0.003f; s.dec = 0.8f; s.sustain = 0.7f; s.release = 0.12f;
     s.fxDriveType = DC::Tube; s.fxDrive = 0.35f; c.volume = 0.72f;
 }
@@ -1811,7 +1820,7 @@ static void wDriftLead(DC& c) {    // parked mid-strip, a SLOW free-run WAVE dri
     wtFrame(s, 2, {{1,1.0f},{2,0.25f},{5,0.5f},{8,0.3f}});                  // C: glassy
     wtFrame(s, 3, {{1,0.9f},{2,0.7f},{4,0.5f},{7,0.35f},{11,0.2f}});        // D: brassy
     s.addPos = 0.5f;
-    s.lfoAmt[0] = 0.18f; s.lfoRate[0] = 0.3f; s.lfoDest[0] = 3;              // LFO 1 -> WAVE, small slow drift (free Hz)
+    s.lfoAmt[0] = 0.18f; s.lfoRate[0] = 0.3f; lfoRoute(s, 0, DC::MTWavePos);              // LFO 1 -> WAVE, small slow drift (free Hz)
     s.atk = 0.01f; s.dec = 0.7f; s.sustain = 0.8f; s.release = 0.18f;
     s.fxDelaySend = 0.2f; c.volume = 0.68f;
 }
@@ -1862,7 +1871,7 @@ static void nProwlBass(DC& c) {  // filter-forward bass (Hungry Bass's cousin, O
     s.drift = 0.15f;
     s.filterType = DC::LowPass; s.filterCutoff = 480.0f; s.filterReso = 2.6f;
     s.filterEnvAmt = 0.45f; s.filterKeyTrack = 0.35f;
-    s.lfoAmt[0] = 0.3f; s.lfoSync[0] = 0.5f; s.lfoFree[0] = true; s.lfoDest[0] = 0;   // half a cycle per bar, free-run
+    s.lfoAmt[0] = 0.3f; s.lfoSync[0] = 0.5f; s.lfoFree[0] = true; lfoRoute(s, 0, DC::MTFilt1Cut);   // half a cycle per bar, free-run
     s.fxDriveType = DC::DriveBassAmp; s.fxDrive = 0.4f;
     c.volume = 0.85f;
 }
@@ -1945,7 +1954,7 @@ static void uEvilLaugh(DC& c)   // "evil laugh": pulsing resonant pink noise + a
     s.noiseType = 1; s.noiseCenter = 102.6f; s.noiseWidth = 0.197f; s.noiseDrive = 0.338f;
     s.atk = 0.001f; s.dec = 1.02f; s.release = 0.06f;
     s.filterType = DC::LowPass; s.filterCutoff = 1186.0f; s.filterReso = 4.73f; s.filterEnvAmt = -1.0f;
-    s.lfoRate[2] = 5.4f; s.lfoAmt[2] = 0.914f; s.lfoDest[2] = 2;   // the ha-ha-ha pulse (VOL LFO)
+    s.lfoRate[2] = 5.4f; s.lfoAmt[2] = 0.914f; lfoRoute(s, 2, DC::MTVol);   // the ha-ha-ha pulse (VOL LFO)
 }
 
 static const struct { const char* name; Builder build; const char* cat; } kMixes[] = {

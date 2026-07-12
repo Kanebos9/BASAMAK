@@ -375,7 +375,7 @@ public:
     // the engine's own knob i (0..7) via slotParamsFor - the dropdown shows its live name.
     enum ModTgt { MTOff = 0, MTFilt1Cut, MTFilt1Res, MTFilt2Cut, MTFilt2Res, MTDrive, MTRevSend,
                   MTDelSend, MTChorus, MTTone, MTPunch, MTComp, MTAtk, MTDec, MTSus, MTRel, MTPitch,
-                  MTWavePos, MTDetune, MTVibrato, MTWidth, MTDrift, MT_GRID_BASE };
+                  MTWavePos, MTDetune, MTVibrato, MTWidth, MTDrift, MTVol, MTWarp, MT_GRID_BASE };
     static constexpr int MOD_TGT_GRID = 8;   // grid knobs MT_GRID_BASE .. MT_GRID_BASE+7
     static constexpr int MT_COUNT = MT_GRID_BASE + MOD_TGT_GRID;
     // (GridKnob + the mod-matrix DSP helpers are declared after the Slot struct, below.)
@@ -580,12 +580,9 @@ public:
         //    2 = volume (tremolo). Any mix can run at once. Edited on the LFO visual (FX box). --
         float lfoRate[4] = { 4.0f, 4.0f, 4.0f, 4.0f };   // dest 3 = WAVE (wavetable position scan)
         float lfoAmt[4]  = { 0.0f, 0.0f, 0.0f, 0.0f };
-        // GENERIC LFOs (v1.3.9): the 3 LFOs are LFO1/2/3, each with an ASSIGNABLE audio-rate
-        // destination (0 Filter / 1 Pitch / 2 Volume / 3 Wave / 4 = OFF). Default = ALL OFF: an LFO does
-        // NOTHING until you point it somewhere (RIGHT-click its tab for an audio-rate destination, or
-        // route it in the matrix). Factory sounds set their own dest; old files (no "lfDs") fall back to
-        // the classic {0,1,2,3} mapping in readSlots. "lfDs0..3".
-        int  lfoDest[4] = { 4, 4, 4, 4 };
+        // LFOs 1/2/3 (index 0/1/2; index 3 = the Mod Env tab, not an LFO) are PURE MATRIX SOURCES now:
+        // an LFO does nothing until you route it in the mod matrix (LFO N -> target). There is no
+        // built-in destination any more (the old "lfoDest" is gone - all routing is the matrix).
         // LFO SHAPE per dest (0 Sine / 1 Triangle / 2 Saw down / 3 Square / 4 Random steps /
         // 5 Saw up / 6 Random glide / 7 CUSTOM = the drawn curve below) and FREE-RUN per dest
         // (false = RETRIG: the wave restarts at every note = the old behaviour; true = FREE:

@@ -32,7 +32,8 @@ static std::vector<float> render(const Cfg& cfg, double secs)
     if (cfg.fDrive > 0.0f || cfg.volShape == -2)   // -2 = "filter on" marker for [3]
     { s.filterType = DrumChannel::LowPass; s.filterCutoff = 700.0f; s.filterReso = 6.0f; s.filterDrive = cfg.fDrive; }
     if (cfg.volShape >= 0)
-    { s.lfoAmt[2] = 0.9f; s.lfoRate[2] = 3.0f; s.lfoShape[2] = cfg.volShape; s.lfoFree[2] = cfg.lfoFree; s.lfoDest[2] = 2; }  // -> Volume (LFOs are OFF by default now)
+    { s.lfoAmt[2] = 0.9f; s.lfoRate[2] = 3.0f; s.lfoShape[2] = cfg.volShape; s.lfoFree[2] = cfg.lfoFree;
+      s.mod[0].src = DrumChannel::MSLfoVol; s.mod[0].tgt = DrumChannel::MTVol; s.mod[0].amt = 1.0f; }  // LFO 3 -> Volume via the matrix
     c.numSteps = 8; c.steps[cfg.step] = true; if (cfg.step2 >= 0) c.steps[cfg.step2] = true;
     for (auto& p : q->patterns) for (auto& c2 : p.channels) c2.prepareToPlay(SR, BS);
     q->startStandalone();

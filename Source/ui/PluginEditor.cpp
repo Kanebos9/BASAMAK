@@ -957,7 +957,15 @@ static const char* kModSrcName[DrumChannel::MS_COUNT] =   // the LFOs are GENERI
 static const char* kModTgtFixedName[DrumChannel::MT_GRID_BASE] =
 { "Off", "Filter 1 Cutoff", "Filter 1 Reso", "Filter 2 Cutoff", "Filter 2 Reso", "Drive",
   "Reverb Send", "Delay Send", "Chorus", "Tone", "Punch", "Comp", "Attack", "Decay", "Sustain",
-  "Release", "Pitch", "Wave/Grain Pos", "Detune", "Vibrato", "Width", "Drift" };
+  "Release", "Pitch", "Wave/Grain Pos", "Detune", "Vibrato", "Width", "Drift", "Volume", "Warp" };
+// Which of the 4 LFOs (index 0..3) feed at least one mod-matrix route (for the LFO "not routed" hint).
+static void lfoRoutedMask(const DrumChannel::Slot& sl, bool routed[4])
+{
+    for (int d = 0; d < 4; ++d) routed[d] = false;
+    for (const auto& r : sl.mod)
+        if (r.tgt != DrumChannel::MTOff && r.src >= DrumChannel::MSLfoFilt && r.src <= DrumChannel::MSLfoWave)
+            routed[r.src - DrumChannel::MSLfoFilt] = true;
+}
 
 //==============================================================================
 // RoutePicker: two-column SOURCE | TARGET chooser for ONE mod route (right-click a matrix fader).
@@ -3403,8 +3411,7 @@ static float lfoCyclesShown(float rate)   // rate (log 0.1..20 Hz) -> how many s
 // (FILT = the EQ diamond's orange, PITCH = the pitch/slide violet, VOL = the level green).
 static const juce::Colour kLfoDestCol[4] = { juce::Colour(0xffff9a3c), juce::Colour(0xffc77dff), juce::Colour(0xff35d07a), juce::Colour(0xff35c0ff) };
 juce::Colour LfoDisplay::destCol(int lfoIdx) const
-{ const int D = (lfoIdx >= 0 && lfoIdx < 4) ? lfoDest_[lfoIdx] : 4;
-  return (D >= 0 && D < 4) ? kLfoDestCol[D] : juce::Colour(0xff6a6a86); }   // Off = neutral grey
+{ return kLfoDestCol[juce::jlimit(0, 3, lfoIdx)]; }   // fixed per-LFO identity hue
 static const char* kLfoShapeName[8] = { "Sine", "Tri", "Saw Dn", "Square", "Rnd Step", "Saw Up", "Rnd Glide", "Custom" };
 // UI mirror of the DSP's lfoShapeVal (DrumChannel.cpp) - keep in sync (the mirror rule): the drawn
 // wave must be exactly what plays, including each Random cycle's held value + the Custom curve.
@@ -3535,24 +3542,10 @@ void LfoDisplay::paint(juce::Graphics& g)
             g.setColour(juce::Colours::white);                g.fillEllipse(px - 3.2f, py - 3.2f, 6.4f, 6.4f);
         }
     }
-    // The selected LFO drives the FILTER but this slot's filter is off = silent no-op: say so
-    // (only when THIS LFO's destination is Filter - the warning elsewhere confused the user).
-    if (! filtOn_ && lfoDest_[dest_] == 0)
-    {
+    if (! routed_[dest_] && amt_[dest_] > 0.001f)
+    {   // the LFO has a level but no matrix route = it does nothing: tell the user where routing lives
         g.setColour(juce::Colour(0xffff7a4a)); g.setFont(juce::Font(9.0f));
-        g.drawText("slot FILTER is off (EQ: F diamond)", a.reduced(3.0f, 1.0f),
-                   juce::Justification::bottomLeft, false);
-    }
-    if (! waveOn_ && lfoDest_[dest_] == 3)
-    {   // WAVE scans the additive wavetable position - meaningless unless the Wave IS Custom
-        g.setColour(juce::Colour(0xffff7a4a)); g.setFont(juce::Font(9.0f));
-        g.drawText("Wave is not Custom - nothing to scan", a.reduced(3.0f, 1.0f),
-                   juce::Justification::bottomLeft, false);
-    }
-    if (lfoDest_[dest_] == 4 && amt_[dest_] > 0.001f)
-    {   // LFO is not routed anywhere (the default): tell the user how to make it do something
-        g.setColour(juce::Colour(0xffff7a4a)); g.setFont(juce::Font(9.0f));
-        g.drawText("not routed - right-click tab, or use the faders below", a.reduced(3.0f, 1.0f),
+        g.drawText("not routed - use the MATRIX faders below", a.reduced(3.0f, 1.0f),
                    juce::Justification::bottomLeft, false);
     }
     // Bottom row: the SYNC button (click = Off -> Sync -> Grid) + the honest speed read-out.
@@ -3613,18 +3606,7 @@ void LfoDisplay::mouseDown(const juce::MouseEvent& e)
 {
     const int d = destAt(e.position);
     if (d >= 0)
-    {   // LEFT-click = select the tab. RIGHT-click an LFO tab = reassign what it drives (Mod Env has none).
-        if (e.mods.isPopupMenu() && d < 3)
-        {
-            juce::PopupMenu m;
-            m.addSectionHeader("LFO " + juce::String(d + 1) + " destination");
-            static const char* full[5] = { "Filter cutoff", "Pitch", "Volume (tremolo)", "Wave / grain position", "Off" };
-            for (int i = 0; i < 5; ++i) m.addItem(i + 1, full[i], true, lfoDest_[d] == i);
-            m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(
-                                localAreaToGlobal(juce::Rectangle<int>((int)(getWidth() * 0.17f + d * (getWidth() * 0.2075f)), 2, 40, 13))),
-                [this, d](int r) { if (r <= 0) return; lfoDest_[d] = r - 1; if (onSetDest) onSetDest(d, lfoDest_[d]); repaint(); });
-            return;
-        }
+    {   // a tab click just SELECTS it (LFO routing lives in the matrix now, not a per-tab destination)
         if (d != dest_) { dest_ = d; repaint(); if (onDestChange) onDestChange(d); } return;
     }
     if (dest_ == 3)
@@ -3755,31 +3737,15 @@ juce::String LfoDisplay::getTooltip()
                    "- It fires once per note. Route it (right-click a matrix fader) to sweep a filter, "
                    "pitch, wave position, anything.";
         if (tab >= 0)
-        {
-            const int D = juce::jlimit(0, 4, lfoDest_[tab]);
-            juce::String s ("LFO " + juce::String(tab + 1) + " - LEFT-click to edit it, RIGHT-click to change what it drives.\n\n");
-            switch (D)
-            {
-                case 0: s << "Now driving: FILTER cutoff (needs a filter ON in FILTER / EQ).";
-                        if (! filtOn_) s << "\nNOTE: this slot's filter is OFF - it does nothing until you enable a diamond.";
-                        break;
-                case 1: s << "Now driving: PITCH (up to +/-1 octave; small = vibrato, big/slow = sirens)."; break;
-                case 2: s << "Now driving: VOLUME (tremolo; full amount dips to silence, half = a pump)."; break;
-                case 3: s << "Now driving: WAVE / grain POSITION (the Custom wavetable's A-D scan - the tone itself).";
-                        if (! waveOn_) s << "\nNOTE: this slot's Wave is not Custom - it does nothing until you set it.";
-                        break;
-                default: s << "Now driving: OFF (this LFO's audio-rate route is disabled). Right-click to assign one, "
-                            "or use it as a SOURCE in the matrix below."; break;
-            }
-            s << "\n\n- Drag its wave below for speed and amount. The 3 LFOs run at once.\n"
-                 "- Any LFO can also feed the MOD MATRIX faders below as a source.";
-            return s;
-        }
+            return "LFO " + juce::String(tab + 1) + " - click to edit its wave, rate and shape.\n\n"
+                   "- An LFO does NOTHING on its own: route it in the MATRIX faders below "
+                   "(right-click a fader, pick LFO " + juce::String(tab + 1) + " as the source and a target).\n"
+                   "- Drag the wave LEFT/RIGHT = speed, UP/DOWN = the LFO's amount (its depth).\n"
+                   "- All 3 LFOs run at once (the 4th tab is the Mod Env).";
     }
     return "The selected LFO's wave - the drawing is exactly what plays.\n\n"
            "- Drag LEFT/RIGHT = speed - UP/DOWN = amount (wave height; 0 = off).\n"
-           "- Double-click = off / restore.\n"
-           "- Dim waves = the OTHER tabs' LFOs that are running (all four play at once).\n"
+           "- Route it in the MATRIX faders below (right-click a fader) to make it affect the sound.\n"
            "- The vertical line + white dot = the LIVE playhead while sound plays.\n\n"
            "Every tab and button here has its own tooltip - hover them.";
 }
@@ -5480,7 +5446,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         for (int sg = 0; sg < DrumChannel::ADD_FRAMES - 1; ++sg) h = mix(h, f(sl.addSeg[sg]));
         h = mix(h, sl.addLoop ? 1 : 0); h = mix(h, f(sl.addPos));
         for (int d2 = 0; d2 < 4; ++d2) { h = mix(h, f(sl.lfoRate[d2])); h = mix(h, f(sl.lfoAmt[d2])); h = mix(h, f(sl.lfoSync[d2])); h = mix(h, sl.lfoSyncRate[d2]);
-                                         h = mix(h, sl.lfoShape[d2]); h = mix(h, sl.lfoFree[d2] ? 1 : 0); h = mix(h, sl.lfoLegato[d2] ? 1 : 0); h = mix(h, sl.lfoDest[d2]);
+                                         h = mix(h, sl.lfoShape[d2]); h = mix(h, sl.lfoFree[d2] ? 1 : 0); h = mix(h, sl.lfoLegato[d2] ? 1 : 0);
                                          if (sl.lfoShape[d2] == 7)   // the drawn LFO cycle IS the sound
                                              for (int k = 0; k < DrumChannel::Slot::LFO_CURVE_N; ++k)
                                                  h = mix(h, f(sl.lfoCurve[d2][k])); }   // per-slot LFOs
@@ -8064,7 +8030,8 @@ void DrumSequencerEditor::setupComponents()
         auto& sl = ch.slots[envTargetSlot()];
         sl.lfoRate[dest] = rate; sl.lfoAmt[dest] = amt;
         ch.markDspDirty();
-        lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve, sl.lfoDest, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)), (sl.oscShape >= DrumChannel::WvCustom || sl.engine == DrumChannel::SrcGrain),
+        bool lfoRt[4]; lfoRoutedMask(sl, lfoRt);
+        lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve, lfoRt, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)), (sl.oscShape >= DrumChannel::WvCustom || sl.engine == DrumChannel::SrcGrain),
                              envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8));
     };
     // Tempo sync is edited IN the visual (Sync button + snapped wave drag) - write it straight back.
@@ -8108,7 +8075,8 @@ void DrumSequencerEditor::setupComponents()
         // Push the LFO wave view IMMEDIATELY: there is NO timer push for it (the old comment
         // claimed one) - the drawn curve only appeared whenever something ELSE refreshed the
         // panel = "takes some time and sometimes never shows" (user report).
-        lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve, sl.lfoDest,
+        bool lfoRt[4]; lfoRoutedMask(sl, lfoRt);
+        lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve, lfoRt,
                              ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch)
                               || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)),
                              (sl.oscShape >= DrumChannel::WvCustom || sl.engine == DrumChannel::SrcGrain),
@@ -8119,12 +8087,6 @@ void DrumSequencerEditor::setupComponents()
         auto& ch = proc.sequencer.channel(selectedChannel);
         ch.slots[envTargetSlot()].lfoFree[juce::jlimit(0, 3, dest)]   = freeRun;
         ch.slots[envTargetSlot()].lfoLegato[juce::jlimit(0, 3, dest)] = legato;
-        ch.markDspDirty();
-    };
-    lfoDisplay.onSetDest = [this](int lfoIdx, int dest) {  // GENERIC LFO: right-click a tab reassigns what it drives
-        if (ignoreKnobCallbacks) return;
-        auto& ch = proc.sequencer.channel(selectedChannel);
-        ch.slots[envTargetSlot()].lfoDest[juce::jlimit(0, 3, lfoIdx)] = juce::jlimit(0, 4, dest);
         ch.markDspDirty();
     };
     lfoDisplay.onDragEnd = [this] { if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel); };
@@ -9149,7 +9111,8 @@ void DrumSequencerEditor::setShapeSlot(int s)
     knobDelay.setValue (sl.fxDelaySend,   juce::dontSendNotification);
     comboDriveType.setSelectedId(sl.fxDriveType + 1, juce::dontSendNotification);
     updateFxFaders(sl);
-    lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve, sl.lfoDest, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)), (sl.oscShape >= DrumChannel::WvCustom || sl.engine == DrumChannel::SrcGrain),
+    bool lfoRt[4]; lfoRoutedMask(sl, lfoRt);
+        lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve, lfoRt, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)), (sl.oscShape >= DrumChannel::WvCustom || sl.engine == DrumChannel::SrcGrain),
                          envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8));
     // The 12-fader matrix + the Mod Env follow the selected slot too (yellow slot 1 / pink slot 2).
     modFaders.slotIdx = envTargetSlot();
@@ -10247,7 +10210,8 @@ void DrumSequencerEditor::refreshDetailPanel()
       knobDelay.setValue (sl.fxDelaySend,   juce::dontSendNotification);
       comboDriveType.setSelectedId(sl.fxDriveType + 1, juce::dontSendNotification);
       updateFxFaders(sl);
-      lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve, sl.lfoDest, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)), (sl.oscShape >= DrumChannel::WvCustom || sl.engine == DrumChannel::SrcGrain),
+      bool lfoRt[4]; lfoRoutedMask(sl, lfoRt);
+        lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve, lfoRt, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)), (sl.oscShape >= DrumChannel::WvCustom || sl.engine == DrumChannel::SrcGrain),
                            envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8));
       modFaders.slotIdx = envTargetSlot();
       modFaders.accent = envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8);

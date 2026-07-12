@@ -5,8 +5,8 @@
 //       identical with it off (proves the source reaches the target).
 //   [3] Mod LFO is REPEATABLE: bar 1 == bar 2 (the free clock is timeline-anchored).
 //   [4] Extreme amounts on every route stay finite.
-//   [5] GENERIC LFO destination: default lfoDest {0,1,2,3} routes LFO0->filter (wobble); reassigning
-//       LFO0 to Off removes it = the no-LFO baseline (the indirection is a no-op at default).
+//   [5] LFO is a pure MATRIX SOURCE: routing LFO1->Filter1 Cutoff wobbles the filter; an LFO with no
+//       route = EXACTLY the no-LFO baseline (LFOs do nothing until routed in the matrix).
 #include "Sequencer.h"
 #include <cstdio>
 #include <cmath>
@@ -96,15 +96,17 @@ int main()
         printf("[4b] StepMod A->Cutoff: lane0 vs lane1 maxdiff=%.4f (expect >0.02) -> %s\n",
                maxdiff(lo, hi), CHK(maxdiff(lo, hi) > 0.02f && finite(hi)) ? "OK" : "FAIL");
     }
-    {   // [5] GENERIC LFO destination: default is OFF (an LFO does nothing until routed). Assigning
-        //     LFO0 -> Filter makes it wobble; leaving it Off gives EXACTLY the no-LFO baseline.
+    {   // [5] LFO is a pure MATRIX SOURCE now: an LFO does nothing until a route sends it somewhere.
+        //     Routing LFO1 -> Filter1 Cutoff makes it wobble; no route = EXACTLY the no-LFO baseline.
         auto lfoBase = [](DrumChannel& c){ voice(c); c.slots[0].hold = 1.0f;
             c.slots[0].lfoAmt[0] = 0.8f; c.slots[0].lfoRate[0] = 6.0f; c.slots[0].lfoSync[0] = 0.0f; };
-        auto onFilt = render([&](DrumChannel& c){ lfoBase(c); c.slots[0].lfoDest[0] = 0; }, 0.9f, 0.6);  // LFO0 -> Filter
-        auto offDef = render(lfoBase, 0.9f, 0.6);                                                        // dest OFF (default)
-        auto noLfo  = render([](DrumChannel& c){ voice(c); c.slots[0].hold = 1.0f; }, 0.9f, 0.6);        // no LFO at all
-        const float wob = maxdiff(onFilt, noLfo), gone = maxdiff(offDef, noLfo);
-        printf("[5] generic LFO: assign->filter wob=%.4f (>0.02), default OFF vs no-LFO=%.6f (==0) -> %s\n",
+        auto onFilt = render([&](DrumChannel& c){ lfoBase(c);
+            c.slots[0].mod[0].src = DrumChannel::MSLfoFilt; c.slots[0].mod[0].tgt = DrumChannel::MTFilt1Cut;
+            c.slots[0].mod[0].amt = 1.0f; }, 0.9f, 0.6);                                                  // LFO1 -> Filter
+        auto noRoute = render(lfoBase, 0.9f, 0.6);                                                        // LFO on, NO route
+        auto noLfo   = render([](DrumChannel& c){ voice(c); c.slots[0].hold = 1.0f; }, 0.9f, 0.6);        // no LFO at all
+        const float wob = maxdiff(onFilt, noLfo), gone = maxdiff(noRoute, noLfo);
+        printf("[5] LFO source: routed->filter wob=%.4f (>0.02), unrouted vs no-LFO=%.6f (==0) -> %s\n",
                wob, gone, CHK(wob > 0.02f && gone == 0.0f && finite(onFilt)) ? "OK" : "FAIL");
     }
     {   // [4] every route maxed = finite

@@ -762,7 +762,6 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
             st.setProperty("lfSh" + juce::String(d2), s.lfoShape[d2], nullptr);  // wave shape (0 sine .. 7 custom)
             st.setProperty("lfFr" + juce::String(d2), s.lfoFree[d2], nullptr);   // free-run (timeline-anchored)
             st.setProperty("lfLg" + juce::String(d2), s.lfoLegato[d2], nullptr); // legato retrig
-            st.setProperty("lfDs" + juce::String(d2), s.lfoDest[d2], nullptr);   // GENERIC LFO: assigned audio-rate destination (0 Flt/1 Pit/2 Vol/3 Wav/4 Off; default d2)
             if (s.lfoShape[d2] == 7)                                              // LFO SHAPER drawn curve
             { juce::String cv;
               for (int k = 0; k < Slot::LFO_CURVE_N; ++k)
@@ -924,29 +923,16 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
             s.lfoShape[d2] = juce::jlimit(0, 7, (int) st.getProperty("lfSh" + juce::String(d2), d.lfoShape[d2]));
             s.lfoFree[d2]  = (bool) st.getProperty("lfFr" + juce::String(d2), d.lfoFree[d2]);
             s.lfoLegato[d2] = (bool) st.getProperty("lfLg" + juce::String(d2), d.lfoLegato[d2]);
-            s.lfoDest[d2]  = juce::jlimit(0, 4, (int) st.getProperty("lfDs" + juce::String(d2), d2));   // no "lfDs" (pre-generic-LFO file) -> classic {0,1,2,3} mapping (was bit-identical then)
             if (st.hasProperty("lfCv" + juce::String(d2)))
             { juce::StringArray a; a.addTokens(st.getProperty("lfCv" + juce::String(d2)).toString(), ",", "");
               for (int k = 0; k < Slot::LFO_CURVE_N; ++k)
                   s.lfoCurve[d2][k] = juce::jlimit(-1.0f, 1.0f, k < a.size() ? a[k].getFloatValue() : 0.0f); }
         }
-        // LFO slot 3 no longer has a UI tab (the 4th tab is the Mod Env now). If an old project used it,
-        // move its config to the first FREE lower slot (dest carried) so it stays editable, not hidden.
-        if (s.lfoAmt[3] > 0.001f)
-            for (int d2 = 0; d2 < 3; ++d2)
-                if (s.lfoAmt[d2] <= 0.001f)
-                {
-                    s.lfoRate[d2] = s.lfoRate[3]; s.lfoAmt[d2] = s.lfoAmt[3]; s.lfoSync[d2] = s.lfoSync[3];
-                    s.lfoSyncRate[d2] = s.lfoSyncRate[3]; s.lfoShape[d2] = s.lfoShape[3];
-                    s.lfoFree[d2] = s.lfoFree[3]; s.lfoLegato[d2] = s.lfoLegato[3];
-                    s.lfoDest[d2] = (s.lfoDest[3] >= 0 && s.lfoDest[3] < 4) ? s.lfoDest[3] : 3;
-                    for (int k = 0; k < Slot::LFO_CURVE_N; ++k) s.lfoCurve[d2][k] = s.lfoCurve[3][k];
-                    s.lfoAmt[3] = 0.0f;   // vacate slot 3
-                    break;
-                }
         s.drift       = juce::jlimit(0.0f, 1.0f, (float) st.getProperty("drf", d.drift));
         s.filterDrive = juce::jlimit(0.0f, 1.0f, (float) st.getProperty("flDrv", d.filterDrive));
-        // MOD MATRIX (old files have no "mmx" -> all routes stay Off = default = unchanged sound).
+        // MOD MATRIX. Old files have no "mmx": their LFOs used the FIXED built-in destination
+        // (LFO1->filter, 2->pitch, 3->vol, 4->wave-pos) which is GONE - re-create it as matrix
+        // routes so the project still modulates. Files WITH "mmx" carry their explicit routes.
         if (st.hasProperty("mmx"))
         {
             juce::StringArray rows; rows.addTokens(st.getProperty("mmx").toString(), ";", "");
@@ -958,6 +944,14 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
                   s.mod[r].tgt = (int8_t) juce::jlimit(0, MT_COUNT - 1, f2[1].getIntValue());
                   s.mod[r].amt = juce::jlimit(-1.0f, 1.0f, f2[2].getFloatValue()); }
             }
+        }
+        else
+        {
+            const int classicTgt[4] = { MTFilt1Cut, MTPitch, MTVol, MTWavePos };
+            int nr = 0;
+            for (int d2 = 0; d2 < 4 && nr < MOD_ROUTES; ++d2)
+                if (s.lfoAmt[d2] > 0.001f)
+                { s.mod[nr].src = (int8_t)(MSLfoFilt + d2); s.mod[nr].tgt = (int8_t) classicTgt[d2]; s.mod[nr].amt = 1.0f; ++nr; }
         }
         s.modEnvA = juce::jlimit(0.001f, 8.0f, (float) st.getProperty("mEA", d.modEnvA));
         s.modEnvD = juce::jlimit(0.01f, 8.0f, (float) st.getProperty("mED", d.modEnvD));
@@ -1810,8 +1804,8 @@ void DrumChannel::computeModSources(int s, const Slot& sl, float* out) const
         out[MSModEnv] = t < A ? t / A : std::exp(-(t - A) * 3.0f / D);
     }
 
-    // The four existing per-slot LFOs, read at the newest voice's block-start phase (retrig) or the
-    // timeline-anchored free phase. Value is the raw shape (-1..1); the route amount is the depth.
+    // The per-slot LFOs, read at the newest voice's block-start phase (retrig) or the timeline-anchored
+    // free phase. Value = the LFO Amount (depth) x shape; the matrix route amount scales it further.
     for (int d = 0; d < 4; ++d)
     {
         float cpb = sl.lfoSync[d];
@@ -1828,7 +1822,7 @@ void DrumChannel::computeModSources(int s, const Slot& sl, float* out) const
         else if (nv != nullptr)
         { ph = nv->sv[juce::jlimit(0, NUM_SLOTS - 1, s)].lfoPhase[d]; cyc = nv->sv[juce::jlimit(0, NUM_SLOTS - 1, s)].lfoCyc[d]; }
         else { ph = 0.0; cyc = 0; }
-        out[MSLfoFilt + d] = lfoShapeVal(sl.lfoShape[d], ph, cyc, sl.lfoCurve[d]);
+        out[MSLfoFilt + d] = sl.lfoAmt[d] * lfoShapeVal(sl.lfoShape[d], ph, cyc, sl.lfoCurve[d]);   // Amount = the LFO's depth
     }
 
     // Mod LFO: matrix-created free-run LFO, timeline-anchored so playback passes match.
@@ -1882,6 +1876,8 @@ void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals) const
             case MTVibrato:  add(tmp.vibrato, 0, 1); break;
             case MTWidth:    add(tmp.uniSpread, 0, 1); break;
             case MTDrift:    add(tmp.drift, 0, 1); break;
+            case MTVol:      add(tmp.weight, 0, 1); break;   // slot level = tremolo (block-rate)
+            case MTWarp:     add(tmp.oscWarp, 0, 1); break;  // wavefold amount
             default:
                 if (r.tgt >= MT_GRID_BASE && r.tgt < MT_COUNT)
                 {
@@ -2005,10 +2001,9 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         const float* lfoCurve[4] = {};      // shape 7: the slot's drawn cycle
         bool   lfoFreeOn[4] = {};           // FREE-RUN: use the timeline-anchored channel phase
         double lfoFreePh[4] = {}, lfoFreeInc[4] = {};   // block-start phase + per-sample increment
-        int    lfoAtDest[4] = { 0, 1, 2, 3 };   // which LFO index drives each audio-rate dest (0 Filt/1 Pit/2 Vol/3 Wave); -1 = none
         float  drift = 0.0f;                // slot DRIFT amount (wander depth per block)
         float  filtDrive = 0.0f;            // filter loop saturation 0..1 (0 = clean = bit-identical)
-        bool   lfoSrcUsed[4] = {};          // MOD MATRIX: this LFO feeds a route as a SOURCE -> keep its phase advancing even at built-in amount 0
+        bool   lfoSrcUsed[4] = {};          // MOD MATRIX: this LFO feeds a route as a SOURCE -> keep its phase advancing
     } sc[NUM_SLOTS];
 
     bool anySlotActive = false;
@@ -2068,10 +2063,6 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 c.lfoFreePh[d2]  = 2.0 * kPi * cyclesNow;
                 c.lfoFreeInc[d2] = 2.0 * kPi * (double) c.lfoRate[d2] / sr;
             } }
-        // GENERIC LFOs: which LFO index drives each audio-rate destination (Filter/Pitch/Vol/Wave).
-        // Default lfoDest {0,1,2,3} -> lfoAtDest {0,1,2,3} = the old fixed mapping = BIT-IDENTICAL.
-        for (int D = 0; D < 4; ++D) c.lfoAtDest[D] = -1;
-        for (int d2 = 3; d2 >= 0; --d2) { const int D = sl.lfoDest[d2]; if (D >= 0 && D < 4) c.lfoAtDest[D] = d2; }
         c.drift     = juce::jlimit(0.0f, 1.0f, sl.drift);
         c.filtDrive = juce::jlimit(0.0f, 1.0f, sl.filterDrive);
         if (s == 0)   // once per block: advance the free-run clock when the transport isn't driving us
@@ -2466,21 +2457,9 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         for (int s = 0; s < NUM_SLOTS; ++s)
         {
             SC& c = sc[s];
-            // The per-slot LFO -> FILTER cutoff (dest 0) modulates BOTH filters (sampled per block from
-            // the NEWEST voice's phase); env-follow uses the PREVIOUS block's per-slot amp level.
+            // LFO -> filter cutoff is a MOD MATRIX route now (block-rate, baked into filtCutoffHz already);
+            // no separate audio-rate LFO path. env-follow still uses the PREVIOUS block's per-slot amp level.
             double lfoMul = 1.0;
-            const int Lf = c.lfoAtDest[0];   // which LFO drives the FILTER (generic dest; default = LFO0)
-            if (Lf >= 0 && c.lfoAmt[Lf] > 0.001f)
-            {
-                const Voice* nv = nullptr;
-                for (auto& v : voices) if (v.active() && (nv == nullptr || v.voiceSamples < nv->voiceSamples)) nv = &v;
-                if (nv != nullptr)
-                {
-                    const double ph0 = c.lfoFreeOn[Lf] ? c.lfoFreePh[Lf] : nv->sv[s].lfoPhase[Lf];
-                    const uint32_t cy0 = c.lfoFreeOn[Lf] ? (uint32_t) juce::jmax(0.0, ph0 / (2.0 * kPi)) : nv->sv[s].lfoCyc[Lf];
-                    lfoMul = std::pow(2.0, (double) lfoShapeVal(c.lfoShape[Lf], ph0, cy0, c.lfoCurve[Lf]) * (double) c.lfoAmt[Lf] * 3.0);
-                }
-            }
             for (int fi = 0; fi < 2; ++fi)
             {
                 auto& f = c.filt[fi];
@@ -2645,15 +2624,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     const float frac = juce::jlimit(0.0f, 1.0f, (float)((double) t / c.voiceLenSamp));
                     pe3Mul *= std::pow(2.0, (double) pitchEnv4(frac, c.pEnvP, c.pEnvT) / 12.0);
                 }
-                // Per-slot PITCH LFO: sine bend, +/-1 octave at full Amount (sirens, dive wobble,
-                // vibrato at small amounts). Phase advances after the engine renders.
-                const int Lp = c.lfoAtDest[1];   // which LFO drives PITCH (default = LFO1)
-                if (Lp >= 0 && c.lfoAmt[Lp] > 0.001f)
-                {
-                    const double ph1 = c.lfoFreeOn[Lp] ? c.lfoFreePh[Lp] + (double) i * c.lfoFreeInc[Lp] : sv.lfoPhase[Lp];
-                    const uint32_t cy1 = c.lfoFreeOn[Lp] ? (uint32_t) juce::jmax(0.0, ph1 / (2.0 * kPi)) : sv.lfoCyc[Lp];
-                    pe3Mul *= std::pow(2.0, (double) lfoShapeVal(c.lfoShape[Lp], ph1, cy1, c.lfoCurve[Lp]) * (double) c.lfoAmt[Lp]);
-                }
+                // LFO -> pitch is a MOD MATRIX route now (block-rate: baked into oscFreq before render).
                 // KEYS: skip slots the keyboard can't play; re-tune the rest from their own base
                 // Freq to the pressed note (keySemis rides pe3Mul, so it reaches every pitched
                 // engine including the Modal strike-tuning and the KS varispeed read).
@@ -2757,13 +2728,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                                     else                  wtp = 1.0f;
                                 }
                                 else wtp = c.wtPos;
-                                const int Lw = c.lfoAtDest[3];   // which LFO drives WAVE (default = LFO3)
-                                if (Lw >= 0 && c.lfoAmt[Lw] > 0.001f)
-                                {
-                                    const double ph3 = c.lfoFreeOn[Lw] ? c.lfoFreePh[Lw] + (double) i * c.lfoFreeInc[Lw] : sv.lfoPhase[Lw];
-                                    const uint32_t cy3 = c.lfoFreeOn[Lw] ? (uint32_t) juce::jmax(0.0, ph3 / (2.0 * kPi)) : sv.lfoCyc[Lw];
-                                    wtp += lfoShapeVal(c.lfoShape[Lw], ph3, cy3, c.lfoCurve[Lw]) * c.lfoAmt[Lw] * 0.5f;
-                                }
+                                // LFO -> wave position is a MOD MATRIX route now (block-rate: baked into addPos).
                                 wtp = juce::jlimit(0.0f, 1.0f, wtp);
                                 sv.wtPosCur = wtp;   // live position read-out (UI Position strip)
                                 wtp *= (float)(ADD_FRAMES - 1);
@@ -2995,14 +2960,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                                                       * std::pow(2.0, (double) (r2 * c.grPitch));   // +-12 st max
                                     gr.len = juce::jmax(64, c.grLenSamp);
                                     gr.age = 0; gr.amp = 1.0f;
-                                    float lfoP = 0.0f;   // WAVE LFO scans grain Position (same meaning
-                                    const int Lg = c.lfoAtDest[3];                 // as the osc wavetable)
-                                    if (Lg >= 0 && c.lfoAmt[Lg] > 0.001f)
-                                    {
-                                        const double ph3 = c.lfoFreeOn[Lg] ? c.lfoFreePh[Lg] + (double) i * c.lfoFreeInc[Lg] : sv.lfoPhase[Lg];
-                                        const uint32_t cy3 = c.lfoFreeOn[Lg] ? (uint32_t) juce::jmax(0.0, ph3 / (2.0 * kPi)) : sv.lfoCyc[Lg];
-                                        lfoP = lfoShapeVal(c.lfoShape[Lg], ph3, cy3, c.lfoCurve[Lg]) * c.lfoAmt[Lg] * 0.5f;
-                                    }
+                                    const float lfoP = 0.0f;   // WAVE->grain-position is a MOD MATRIX route now (baked into grainPos)
                                     if (smp)
                                     {
                                         const double span = (double) (c.grHi - c.grLo);
@@ -3161,13 +3119,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 // Per-slot VOLUME LFO: tremolo on this slot's signal (full Amount dips to silence -
                 // helicopter/chopper at fast rates, pumping at slow). Then advance every ACTIVE
                 // LFO's phase once per sample (the filter LFO's phase is read per block).
-                const int Lv = c.lfoAtDest[2];   // which LFO drives VOLUME (default = LFO2)
-                if (Lv >= 0 && c.lfoAmt[Lv] > 0.001f) {
-                    const double ph2 = c.lfoFreeOn[Lv] ? c.lfoFreePh[Lv] + (double) i * c.lfoFreeInc[Lv] : sv.lfoPhase[Lv];
-                    const uint32_t cy2 = c.lfoFreeOn[Lv] ? (uint32_t) juce::jmax(0.0, ph2 / (2.0 * kPi)) : sv.lfoCyc[Lv];
-                    const float g = 1.0f - c.lfoAmt[Lv] * 0.5f * (1.0f + lfoShapeVal(c.lfoShape[Lv], ph2, cy2, c.lfoCurve[Lv]));
-                    if (stereo) { sL *= g; sR *= g; } else sig *= g;
-                }
+                // LFO -> volume (tremolo) is a MOD MATRIX route now (block-rate: baked into the slot weight).
                 for (int d2 = 0; d2 < 4; ++d2)
                     if (c.lfoAmt[d2] > 0.001f || c.lfoSrcUsed[d2]) {   // advance also when it drives a mod-matrix route
                         sv.lfoPhase[d2] += 2.0 * kPi * (double) c.lfoRate[d2] / sr;
