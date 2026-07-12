@@ -603,7 +603,8 @@ public:
     void rebuildTargets();                                  // (re)fill the 6 target combos with live grid names
     void paint(juce::Graphics& g) override;
     void resized() override;
-    void mouseDown(const juce::MouseEvent& e) override;     // close X
+    void mouseDown(const juce::MouseEvent& e) override;     // close X / grab a Mod Env handle
+    void mouseDrag(const juce::MouseEvent& e) override;     // drag the Mod Env attack/decay
     juce::String getTooltip() override
     { return "MOD MATRIX (this slot): route a SOURCE onto a TARGET by an amount (drag; double-click = 0).\n\n"
              "- Sources: Velocity, Note, Amp Env, the 4 LFOs, per-note Random, plus a Mod Env (A/D) "
@@ -636,6 +637,12 @@ private:
     Closer closer { *this };
     bool closerHooked = false;
     juce::Rectangle<float> closeRect() const { return { (float) getWidth() - 24.0f, 4.0f, 20.0f, 16.0f }; }
+    // Drawable Mod Env: a small envelope graph (drag the PEAK handle = attack time, the END handle =
+    // decay time) instead of the two A/D faders. Times log-mapped (A 0.001..2 s, D 0.01..4 s).
+    int  envDrag = -1;                 // 0 = attack handle, 1 = decay handle, -1 = none
+    juce::Rectangle<float> envRect() const;
+    static float envAFromX(float x, juce::Rectangle<float> r);
+    static float envDFromX(float x, float peakX, juce::Rectangle<float> r);
 };
 
 //==============================================================================

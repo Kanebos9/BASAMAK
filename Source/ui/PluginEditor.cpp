@@ -1011,11 +1011,9 @@ ModMatrixEditor::ModMatrixEditor()
     lblEnv.setColour(juce::Label::textColourId, accent); addAndMakeVisible(lblEnv);
     lblLfo.setText("Mod LFO", juce::dontSendNotification); lblLfo.setFont(juce::Font(10.0f, juce::Font::bold));
     lblLfo.setColour(juce::Label::textColourId, accent); addAndMakeVisible(lblLfo);
-    styleFader(envA, 0.001, 2.0, 0.005, " s");  envA.setSkewFactor(0.4); envA.setTooltip("Mod Env ATTACK: rise time.");
-    styleFader(envD, 0.01, 4.0, 0.30, " s");    envD.setSkewFactor(0.4); envD.setTooltip("Mod Env DECAY: fall time back to 0.");
+    // Mod Env is a DRAWABLE graph now (drag the peak = attack, the end = decay) - see paint/mouseDrag.
+    setTooltip("Drag the Mod Env: the PEAK handle = attack time, the END handle = decay time.");
     styleFader(lfoRate, 0.05, 20.0, 1.0, " Hz"); lfoRate.setSkewFactor(0.3); lfoRate.setTooltip("Mod LFO rate (free-run, timeline-anchored so playback passes match).");
-    envA.onValueChange    = [this] { modEnvA = (float) envA.getValue(); if (onChange) onChange(); repaint(); };
-    envD.onValueChange    = [this] { modEnvD = (float) envD.getValue(); if (onChange) onChange(); repaint(); };
     lfoRate.onValueChange = [this] { modLfoRate = (float) lfoRate.getValue(); if (onChange) onChange(); repaint(); };
     styleCombo(lfoShapeCombo);
     for (int i = 0; i < 7; ++i) lfoShapeCombo.addItem(kModLfoShapeName[i], i + 1);
@@ -1053,8 +1051,6 @@ void ModMatrixEditor::setValues(const DrumChannel::Slot& sl)
         amtSlider[r].setValue((double) std::cbrt((double) amt[r]), juce::dontSendNotification);
     }
     modEnvA = sl.modEnvA; modEnvD = sl.modEnvD; modLfoRate = sl.modLfoRate; modLfoShape = sl.modLfoShape;
-    envA.setValue(modEnvA, juce::dontSendNotification);
-    envD.setValue(modEnvD, juce::dontSendNotification);
     lfoRate.setValue(modLfoRate, juce::dontSendNotification);
     lfoShapeCombo.setSelectedId(modLfoShape + 1, juce::dontSendNotification);
     rebuildTargets();   // fill target items with the current engine's live knob names, then reselect
@@ -1093,13 +1089,30 @@ void ModMatrixEditor::paint(juce::Graphics& g)
         g.setColour(active ? juce::Colours::white : juce::Colour(0xff5a5f74));
         g.drawText(t, getWidth() - MMVALW - 8, y, MMVALW, MMROWH - 5, juce::Justification::centredRight, false);
     }
-    // footer read-outs (drawn), right of each footer fader
-    g.setColour(juce::Colour(0xffcfd6ea)); g.setFont(juce::Font(10.5f, juce::Font::bold));
     const int fy = MMROWY0 + NR * MMROWH + 8;
-    g.drawText(modSecText(modEnvA), MMX0 + 62 + 96 + 2, fy, 48, 18, juce::Justification::centredLeft, false);
-    g.drawText(modSecText(modEnvD), MMX0 + 62 + 96 + 2 + 50 + 96 + 4, fy, 48, 18, juce::Justification::centredLeft, false);
+    // DRAWABLE Mod Env graph (drag the peak = attack, the end = decay)
+    {
+        auto r = envRect();
+        g.setColour(juce::Colour(0xff181828)); g.fillRoundedRectangle(r, 4.0f);
+        g.setColour(accent.withAlpha(0.5f)); g.drawRoundedRectangle(r.reduced(0.5f), 4.0f, 1.0f);
+        const float aF = std::log(juce::jlimit(0.001f, 2.0f, modEnvA) / 0.001f) / std::log(2.0f / 0.001f);
+        const float dF = std::log(juce::jlimit(0.01f, 4.0f, modEnvD) / 0.01f) / std::log(4.0f / 0.01f);
+        const float peakX = r.getX() + 4.0f + aF * (r.getWidth() * 0.4f);
+        const float endX  = juce::jmin(r.getRight() - 4.0f, peakX + dF * (r.getWidth() * 0.55f));
+        const float topY = r.getY() + 5.0f, botY = r.getBottom() - 5.0f;
+        juce::Path env; env.startNewSubPath(r.getX() + 4.0f, botY);
+        env.lineTo(peakX, topY); env.lineTo(endX, botY);
+        g.setColour(accent); g.strokePath(env, juce::PathStrokeType(2.0f));
+        g.setColour(juce::Colours::white);
+        g.fillEllipse(peakX - 3.0f, topY - 3.0f, 6.0f, 6.0f);   // attack handle
+        g.fillEllipse(endX - 3.0f,  botY - 3.0f, 6.0f, 6.0f);   // decay handle
+        g.setColour(juce::Colour(0xff9aa6c0)); g.setFont(juce::Font(9.0f, juce::Font::bold));
+        g.drawText("A " + modSecText(modEnvA) + "  D " + modSecText(modEnvD),
+                   (int) r.getX(), (int) r.getBottom() + 1, (int) r.getWidth(), 11, juce::Justification::centred, false);
+    }
+    g.setColour(juce::Colour(0xffcfd6ea)); g.setFont(juce::Font(10.5f, juce::Font::bold));
     g.drawText(juce::String(modLfoRate, modLfoRate < 10.0f ? 2 : 1) + " Hz",
-               MMX0 + 62 + 96 + 2, fy + 24, 52, 18, juce::Justification::centredLeft, false);
+               MMX0 + 62 + 96 + 2, fy + 40, 52, 18, juce::Justification::centredLeft, false);
     // close X
     auto cr = closeRect();
     g.setColour(juce::Colour(0xff9aa6c0)); g.setFont(juce::Font(14.0f, juce::Font::bold));
@@ -1117,19 +1130,49 @@ void ModMatrixEditor::resized()
         tgtCombo[r].setBounds(MMX0 + MMSRCW + MMGAP, y, MMTGTW, MMROWH - 5);
         amtSlider[r].setBounds(amtX, y, amtW, MMROWH - 5);
     }
-    // Footer: Mod Env [A]+val [D]+val ; Mod LFO [Rate]+val [Shape]
+    // Footer: Mod Env (drawable graph, drawn in paint) on top; Mod LFO [Rate][Shape] below it.
     const int fy = MMROWY0 + NR * MMROWH + 8;
     lblEnv.setBounds(MMX0, fy, 56, 18);
-    envA.setBounds(MMX0 + 62, fy, 96, 18);
-    envD.setBounds(MMX0 + 62 + 96 + 2 + 50, fy, 96, 18);
-    lblLfo.setBounds(MMX0, fy + 24, 56, 18);
-    lfoRate.setBounds(MMX0 + 62, fy + 24, 96, 18);
-    lfoShapeCombo.setBounds(MMX0 + 62 + 96 + 2 + 52, fy + 24, 110, 18);
+    envA.setBounds(0, 0, 0, 0); envD.setBounds(0, 0, 0, 0);   // replaced by the drawable graph
+    lblLfo.setBounds(MMX0, fy + 40, 56, 18);
+    lfoRate.setBounds(MMX0 + 62, fy + 40, 96, 18);
+    lfoShapeCombo.setBounds(MMX0 + 62 + 96 + 2 + 52, fy + 40, 110, 18);
 }
+
+juce::Rectangle<float> ModMatrixEditor::envRect() const
+{ const int fy = MMROWY0 + NR * MMROWH + 8; return { (float) (MMX0 + 62), (float) fy, 280.0f, 26.0f }; }
+float ModMatrixEditor::envAFromX(float x, juce::Rectangle<float> r)
+{ const float f = juce::jlimit(0.0f, 1.0f, (x - (r.getX() + 4.0f)) / (r.getWidth() * 0.4f));
+  return 0.001f * std::pow(2.0f / 0.001f, f); }
+float ModMatrixEditor::envDFromX(float x, float peakX, juce::Rectangle<float> r)
+{ const float f = juce::jlimit(0.0f, 1.0f, (x - peakX) / (r.getWidth() * 0.55f));
+  return 0.01f * std::pow(4.0f / 0.01f, f); }
 
 void ModMatrixEditor::mouseDown(const juce::MouseEvent& e)
 {
-    if (closeRect().contains(e.position)) { setVisible(false); if (onClose) onClose(); }
+    if (closeRect().contains(e.position)) { setVisible(false); if (onClose) onClose(); return; }
+    envDrag = -1;
+    auto r = envRect();
+    if (r.expanded(6.0f).contains(e.position))
+    {   // the attack (peak) handle if the press is near it, else drag the decay (end) handle
+        const float aF = std::log(juce::jlimit(0.001f, 2.0f, modEnvA) / 0.001f) / std::log(2.0f / 0.001f);
+        const float peakX = r.getX() + 4.0f + aF * (r.getWidth() * 0.4f);
+        envDrag = (std::abs(e.position.x - peakX) < 16.0f) ? 0 : 1;
+        mouseDrag(e);
+    }
+}
+void ModMatrixEditor::mouseDrag(const juce::MouseEvent& e)
+{
+    if (envDrag < 0) return;
+    auto r = envRect();
+    if (envDrag == 0) modEnvA = juce::jlimit(0.001f, 2.0f, envAFromX(e.position.x, r));
+    else {
+        const float aF = std::log(juce::jlimit(0.001f, 2.0f, modEnvA) / 0.001f) / std::log(2.0f / 0.001f);
+        const float peakX = r.getX() + 4.0f + aF * (r.getWidth() * 0.4f);
+        modEnvD = juce::jlimit(0.01f, 4.0f, envDFromX(e.position.x, peakX, r));
+    }
+    if (onChange) onChange();
+    repaint();
 }
 
 //==============================================================================
@@ -8226,7 +8269,9 @@ void DrumSequencerEditor::setupComponents()
         const int8_t src = (int8_t) modRoutePanel.src;
         for (auto& r : sl.mod) if (r.src == src) r = DrumChannel::Slot::ModRoute{};   // clear this source's routes
         for (int i = 0; i < ModRoutePanel::NT; ++i) {
-            if (modRoutePanel.tgt[i] == DrumChannel::MTOff || std::abs(modRoutePanel.amt[i]) < 1.0e-4f) continue;
+            // Write the route as soon as a TARGET is picked (even at amount 0) so it persists across a
+            // refresh/TEST; a 0-amount route is inert (modActive stays false = bit-identical).
+            if (modRoutePanel.tgt[i] == DrumChannel::MTOff) continue;
             for (auto& r : sl.mod)
                 if (r.src == DrumChannel::MSOff && r.tgt == DrumChannel::MTOff)
                 { r.src = src; r.tgt = (int8_t) modRoutePanel.tgt[i]; r.amt = modRoutePanel.amt[i]; break; }
