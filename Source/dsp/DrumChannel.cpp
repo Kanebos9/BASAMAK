@@ -1830,6 +1830,7 @@ void DrumChannel::computeModSources(int s, const Slot& sl, float* out) const
         out[MSStepModA] = juce::jlimit(0.0f, 1.0f, stepModA[st]);
         out[MSStepModB] = juce::jlimit(0.0f, 1.0f, stepModB[st]);
     }
+    out[MSModWheel] = juce::jlimit(0.0f, 1.0f, modWheel);   // live MIDI mod wheel (CC1)
 }
 
 // Apply the 6 routes onto a scratch Slot before the config bake. Cutoffs + pitch are MULTIPLICATIVE

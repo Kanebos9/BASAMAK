@@ -953,7 +953,7 @@ void LfoCurveEditor::mouseDrag(const juce::MouseEvent& e)
 //==============================================================================
 static const char* kModSrcName[DrumChannel::MS_COUNT] =
 { "Off", "Velocity", "Note", "Amp Env", "LFO Filter", "LFO Pitch", "LFO Vol", "LFO Wave",
-  "Random", "Mod Env", "Mod LFO", "Step Mod A", "Step Mod B" };
+  "Random", "Mod Env", "Mod LFO", "Step Mod A", "Step Mod B", "Mod Wheel" };
 static const char* kModTgtFixedName[DrumChannel::MT_GRID_BASE] =
 { "Off", "Filter 1 Cutoff", "Filter 1 Reso", "Filter 2 Cutoff", "Filter 2 Reso", "Drive",
   "Reverb Send", "Delay Send", "Chorus", "Tone", "Punch", "Comp", "Attack", "Decay", "Sustain",

@@ -258,6 +258,7 @@ public:
     // Set by the Sequencer per block = the currently-playing step position (integer step + fraction,
     // 0..numSteps); -1 = not playing. The step-mod sources read the lane value at this position.
     float  modStepPos = -1.0f;
+    float  modWheel   = 0.0f;   // live MIDI mod-wheel (CC1) 0..1, forwarded by the Sequencer (shared mod source)
     int    numSteps          = 8;
     int    midiNote          = 36; // default C2, overridden per channel
     int    ccRangeStart      = 1;  // first CC number for this channel
@@ -369,7 +370,7 @@ public:
     static constexpr int MOD_ROUTES = 6;
     // SOURCES (order persisted - APPEND-ONLY). Values sampled once per block from the newest voice.
     enum ModSrc { MSOff = 0, MSVel, MSNote, MSAmpEnv, MSLfoFilt, MSLfoPitch, MSLfoVol, MSLfoWave,
-                  MSRandom, MSModEnv, MSModLfo, MSStepModA, MSStepModB, MS_COUNT };
+                  MSRandom, MSModEnv, MSModLfo, MSStepModA, MSStepModB, MSModWheel, MS_COUNT };
     // TARGETS (order persisted - APPEND-ONLY). 0..MT_GRID_BASE-1 = fixed targets; MT_GRID_BASE+i =
     // the engine's own knob i (0..7) via slotParamsFor - the dropdown shows its live name.
     enum ModTgt { MTOff = 0, MTFilt1Cut, MTFilt1Res, MTFilt2Cut, MTFilt2Res, MTDrive, MTRevSend,

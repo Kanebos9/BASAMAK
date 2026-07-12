@@ -167,6 +167,8 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             lastCcNum.store(msg.getControllerNumber(), std::memory_order_relaxed);
             lastCcVal.store(msg.getControllerValue(),  std::memory_order_relaxed);
             lastCcChan.store(msg.getChannel(),         std::memory_order_relaxed);
+            if (msg.getControllerNumber() == 1)   // MOD WHEEL (CC1) = a live modulation source
+                sequencer.modWheel = (float) msg.getControllerValue() / 127.0f;
         }
 
         // MIDI learn
