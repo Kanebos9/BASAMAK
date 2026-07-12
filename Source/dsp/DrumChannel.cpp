@@ -930,6 +930,20 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
               for (int k = 0; k < Slot::LFO_CURVE_N; ++k)
                   s.lfoCurve[d2][k] = juce::jlimit(-1.0f, 1.0f, k < a.size() ? a[k].getFloatValue() : 0.0f); }
         }
+        // LFO slot 3 no longer has a UI tab (the 4th tab is the Mod Env now). If an old project used it,
+        // move its config to the first FREE lower slot (dest carried) so it stays editable, not hidden.
+        if (s.lfoAmt[3] > 0.001f)
+            for (int d2 = 0; d2 < 3; ++d2)
+                if (s.lfoAmt[d2] <= 0.001f)
+                {
+                    s.lfoRate[d2] = s.lfoRate[3]; s.lfoAmt[d2] = s.lfoAmt[3]; s.lfoSync[d2] = s.lfoSync[3];
+                    s.lfoSyncRate[d2] = s.lfoSyncRate[3]; s.lfoShape[d2] = s.lfoShape[3];
+                    s.lfoFree[d2] = s.lfoFree[3]; s.lfoLegato[d2] = s.lfoLegato[3];
+                    s.lfoDest[d2] = (s.lfoDest[3] >= 0 && s.lfoDest[3] < 4) ? s.lfoDest[3] : 3;
+                    for (int k = 0; k < Slot::LFO_CURVE_N; ++k) s.lfoCurve[d2][k] = s.lfoCurve[3][k];
+                    s.lfoAmt[3] = 0.0f;   // vacate slot 3
+                    break;
+                }
         s.drift       = juce::jlimit(0.0f, 1.0f, (float) st.getProperty("drf", d.drift));
         s.filterDrive = juce::jlimit(0.0f, 1.0f, (float) st.getProperty("flDrv", d.filterDrive));
         // MOD MATRIX (old files have no "mmx" -> all routes stay Off = default = unchanged sound).

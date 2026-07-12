@@ -1569,7 +1569,7 @@ static void wtFrame(DC::Slot& s, int f, std::initializer_list<std::pair<int,floa
 static void windMotion(DC::Slot& s, float bloomSec, float lfoAmt, float lfoHz)
 {
     s.addSeg[0] = bloomSec; s.addSeg[1] = 0.0f; s.addSeg[2] = 0.0f;   // bloom A>B, park on the body
-    s.lfoAmt[3] = lfoAmt; s.lfoRate[3] = lfoHz; s.lfoFree[3] = true;  // breath = slow wave scan
+    s.lfoAmt[0] = lfoAmt; s.lfoRate[0] = lfoHz; s.lfoFree[0] = true; s.lfoDest[0] = 3;  // LFO 1 -> WAVE scan (breath)
 }
 static DC::Slot& windBreath(DC& c, float w, float centerHz, float atk, float dec, float sus, float rel)
 {   // the BREATH layer = SLOT 2 (mkSlot would CLEAR the channel - the round-11 wind killer)
@@ -1781,7 +1781,7 @@ static void wTalkingPad(DC& c) {   // vowel frames + a slow synced WAVE LFO scan
     wtFrame(s, 2, {{1,0.5f},{6,0.9f},{7,1.0f},{8,0.6f},{12,0.25f}});        // C: "ee" (high formant)
     wtFrame(s, 3, {{2,0.8f},{4,1.0f},{5,0.7f},{9,0.5f},{11,0.3f}});         // D: nasal "ay"
     s.addPos = 0.5f;                                                        // park mid-strip...
-    s.lfoAmt[3] = 0.65f; s.lfoSync[3] = 0.5f;                               // ...LFO sweeps the mouth (2-bar cycle)
+    s.lfoAmt[0] = 0.65f; s.lfoSync[0] = 0.5f; s.lfoDest[0] = 3;             // LFO 1 -> WAVE sweeps the mouth (2-bar cycle)
     s.atk = 0.15f; s.dec = 1.5f; s.sustain = 0.85f; s.release = 0.8f;
     s.fxReverbSend = 0.3f; c.volume = 0.6f;
 }
@@ -1801,7 +1801,7 @@ static void wScanBass(DC& c) {     // the WAVE LFO scans sub > nasal > hollow pe
     wtFrame(s, 3, {{1,0.9f},{2,0.6f},{3,0.5f},{4,0.45f},{6,0.3f}});         // D: gritty top
     s.oscFreq = 55.0f;                                                      // A1 bass register
     s.addPos = 0.35f;
-    s.lfoAmt[3] = 0.6f; s.lfoSync[3] = 1.0f;                                // one scan per bar, on the groove
+    s.lfoAmt[0] = 0.6f; s.lfoSync[0] = 1.0f; s.lfoDest[0] = 3;               // LFO 1 -> WAVE, one scan per bar, on the groove
     s.atk = 0.003f; s.dec = 0.8f; s.sustain = 0.7f; s.release = 0.12f;
     s.fxDriveType = DC::Tube; s.fxDrive = 0.35f; c.volume = 0.72f;
 }
@@ -1811,7 +1811,7 @@ static void wDriftLead(DC& c) {    // parked mid-strip, a SLOW free-run WAVE dri
     wtFrame(s, 2, {{1,1.0f},{2,0.25f},{5,0.5f},{8,0.3f}});                  // C: glassy
     wtFrame(s, 3, {{1,0.9f},{2,0.7f},{4,0.5f},{7,0.35f},{11,0.2f}});        // D: brassy
     s.addPos = 0.5f;
-    s.lfoAmt[3] = 0.18f; s.lfoRate[3] = 0.3f;                               // small slow drift (free Hz)
+    s.lfoAmt[0] = 0.18f; s.lfoRate[0] = 0.3f; s.lfoDest[0] = 3;              // LFO 1 -> WAVE, small slow drift (free Hz)
     s.atk = 0.01f; s.dec = 0.7f; s.sustain = 0.8f; s.release = 0.18f;
     s.fxDelaySend = 0.2f; c.volume = 0.68f;
 }

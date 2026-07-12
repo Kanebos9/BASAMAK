@@ -367,7 +367,7 @@ public:
     // onto a TARGET by a bipolar amount. Applied BLOCK-RATE (config bake is per block) - the four
     // audio-rate LFO paths still exist unchanged; the matrix extends REACH, not rate. All amounts 0
     // = bit-identical (the render path is byte-for-byte unchanged when no route is active).
-    static constexpr int MOD_ROUTES = 6;
+    static constexpr int MOD_ROUTES = 12;   // 12 inline route faders (6 rows x 2 cols) per slot
     // SOURCES (order persisted - APPEND-ONLY). Values sampled once per block from the newest voice.
     enum ModSrc { MSOff = 0, MSVel, MSNote, MSAmpEnv, MSLfoFilt, MSLfoPitch, MSLfoVol, MSLfoWave,
                   MSRandom, MSModEnv, MSModLfo, MSStepModA, MSStepModB, MSModWheel, MS_COUNT };

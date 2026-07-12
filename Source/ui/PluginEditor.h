@@ -572,112 +572,88 @@ private:
 };
 
 //==============================================================================
-// MOD MATRIX overlay (per slot): 6 routes of Source -> Target x bipolar Amount, plus the two
-// matrix-created sources (Mod Env A/D + a free Mod LFO rate/shape). A content-child overlay (never
-// an OS window) opened from the LFO visual's "Matrix" button; closed by its X or a click outside.
-// The editor pushes the slot in via setValues() and reads the public fields back in onChange (the
-// HarmonicEditor pattern). Modulation is BLOCK-RATE (config bake) - disclosed in the tooltip.
-class ModMatrixEditor : public juce::Component, public juce::SettableTooltipClient
+// RoutePicker: the two-column SOURCE | TARGET chooser for ONE mod route. Opened by RIGHT-CLICKING a
+// fader in the MODULATION matrix. A content-child overlay (never an OS popup): left column = every
+// source, right column = every target (incl. this engine's own knobs). Click a row in each column;
+// it live-applies. Closes on an outside click. (The SoundPickerPanel two-column-list pattern.)
+class RoutePicker : public juce::Component
 {
 public:
-    static constexpr int NR = DrumChannel::MOD_ROUTES;   // 6 routes
-    juce::Colour accent { 0xffb96bff };
-    int  slotIdx = 0;
-    // Public route state (widgets update these + fire onChange; the editor reads them back).
-    int   src[NR] = {}, tgt[NR] = {};
-    float amt[NR] = {};
-    float modEnvA = 0.005f, modEnvD = 0.30f, modLfoRate = 1.0f;
-    int   modLfoShape = 0;
-    std::function<void()> onChange;                        // read the fields back into the slot
+    std::function<void(int src, int tgt)> onPicked;         // chosen source enum + target enum (live-apply)
     std::function<void()> onClose;
-    std::function<juce::String(int gridIdx)> gridKnobName; // live engine-knob name (empty = choice/none = skipped)
-    juce::Component* clickIgnore = nullptr;                // the LFO visual (its Matrix click re-opens)
-    ModMatrixEditor();
-    ~ModMatrixEditor() override { juce::Desktop::getInstance().removeGlobalMouseListener(&closer); }
-    void visibilityChanged() override
-    {
-        if (isVisible() && ! closerHooked)      { juce::Desktop::getInstance().addGlobalMouseListener(&closer); closerHooked = true; rebuildTargets(); }
-        else if (! isVisible() && closerHooked) { juce::Desktop::getInstance().removeGlobalMouseListener(&closer); closerHooked = false; }
-    }
-    void setValues(const DrumChannel::Slot& sl);           // slot -> widgets (no callbacks)
-    void rebuildTargets();                                  // (re)fill the 6 target combos with live grid names
-    void paint(juce::Graphics& g) override;
+    std::function<juce::String(int gridIdx)> gridKnobName;  // live engine-knob names for grid targets
+    juce::Colour accent { 0xffe8bf4d };
+    RoutePicker();
+    ~RoutePicker() override { juce::Desktop::getInstance().removeGlobalMouseListener(&closer); }
+    void openFor(int curSrc, int curTgt);                   // (re)fill both lists, select current, become visible
+    void visibilityChanged() override;
     void resized() override;
-    void mouseDown(const juce::MouseEvent& e) override;     // close X / grab a Mod Env handle
-    void mouseDrag(const juce::MouseEvent& e) override;     // drag the Mod Env attack/decay
-    juce::String getTooltip() override
-    { return "MOD MATRIX (this slot): route a SOURCE onto a TARGET by an amount (drag; double-click = 0).\n\n"
-             "- Sources: Velocity, Note, Amp Env, the 4 LFOs, per-note Random, plus a Mod Env (A/D) "
-             "and a free Mod LFO (below).\n"
-             "- Targets: filters, drive, sends, chorus, tone/punch/comp, the amp envelope, pitch, "
-             "wave/grain position, detune/vibrato/width/drift, and this engine's own knobs.\n"
-             "- Modulation is applied per BLOCK (it can sound stepped on very fast sources); the four "
-             "audio-rate LFOs still run smoothly on their own destinations."; }
+    void paint(juce::Graphics& g) override;
 private:
-    juce::ComboBox srcCombo[NR], tgtCombo[NR];
-    juce::Slider   amtSlider[NR];
-    juce::Slider   envA, envD, lfoRate;                    // Mod Env attack/decay + Mod LFO rate
-    juce::ComboBox lfoShapeCombo;                          // Mod LFO shape
-    juce::Label    lblEnv, lblLfo;
-    void styleCombo(juce::ComboBox& c);
-    void styleFader(juce::Slider& s, double lo, double hi, double def, const juce::String& suf);
-    struct Closer : juce::MouseListener
+    struct Col : public juce::ListBoxModel
     {
-        ModMatrixEditor& ed; explicit Closer(ModMatrixEditor& e) : ed(e) {}
+        RoutePicker& owner; bool isSrc;
+        Col(RoutePicker& o, bool s) : owner(o), isSrc(s) {}
+        std::vector<std::pair<int, juce::String>> rows;     // (enum id, label)
+        int getNumRows() override { return (int) rows.size(); }
+        void paintListBoxItem(int row, juce::Graphics& g, int w, int h, bool sel) override;
+        void listBoxItemClicked(int row, const juce::MouseEvent&) override;
+    };
+    Col srcModel { *this, true }, tgtModel { *this, false };
+    juce::ListBox srcList, tgtList;
+    juce::Label lblSrc, lblTgt;
+    int curSrc = 0, curTgt = 0;
+    void selectCurrentRows();
+    struct Closer : public juce::MouseListener
+    {
+        RoutePicker& p; explicit Closer(RoutePicker& r) : p(r) {}
         void mouseDown(const juce::MouseEvent& e) override
-        {
-            if (! ed.isVisible()) return;
-            if (juce::Component::getCurrentlyModalComponent() != nullptr) return;   // a combo popup is up - don't close
-            const auto p = e.getScreenPosition();
-            if (ed.getScreenBounds().contains(p)) return;
-            if (ed.clickIgnore != nullptr && ed.clickIgnore->getScreenBounds().contains(p)) return;
-            ed.setVisible(false); if (ed.onClose) ed.onClose();
-        }
+        { if (! p.isVisible()) return;
+          const auto sp = e.getScreenPosition();
+          if (p.getScreenBounds().contains(sp)) return;
+          p.setVisible(false); if (p.onClose) p.onClose(); }
     };
     Closer closer { *this };
-    bool closerHooked = false;
-    juce::Rectangle<float> closeRect() const { return { (float) getWidth() - 24.0f, 4.0f, 20.0f, 16.0f }; }
-    // Drawable Mod Env: a small envelope graph (drag the PEAK handle = attack time, the END handle =
-    // decay time) instead of the two A/D faders. Times log-mapped (A 0.001..2 s, D 0.01..4 s).
-    int  envDrag = -1;                 // 0 = attack handle, 1 = decay handle, -1 = none
-    juce::Rectangle<float> envRect() const;
-    static float envAFromX(float x, juce::Rectangle<float> r);
-    static float envDFromX(float x, float peakX, juce::Rectangle<float> r);
+    bool hooked = false;
+    friend struct Col;
 };
 
 //==============================================================================
-// ModRoutePanel: the INLINE per-source routing that lives in the MODULATION box (no popup). Pick a
-// SOURCE at the top, then wire up to 4 [Target][Amount] rows for it - no Source column, so the
-// target names get the full width (no truncation in the narrow column). Edits the slot's flat
-// mod[] route pool (routes whose src == the selected source). The wide MATRIX overlay still shows
-// every route at once. Value-only faders (drawn %, cubic curve) - the same as ModMatrixEditor.
-class ModRoutePanel : public juce::Component, public juce::SettableTooltipClient
+// ModFaderMatrix: the MODULATION box's 12 route faders (6 rows x 2 columns). Each fader = one MOD
+// route: RIGHT-CLICK opens the two-column source|target picker; DRAG / click inside sets the bipolar
+// amount (centre = 0, left negative, right positive; double-click = 0). The fader shows
+// "Source -> Target" (a drawn arrow between them) and fills from the centre by the amount. Yellow
+// for sound-slot 1, pink for slot 2. Reads/writes the current slot's mod[12]. Everything is inline
+// now (this replaces both the old ROUTE panel and the MATRIX overlay).
+class ModFaderMatrix : public juce::Component, public juce::SettableTooltipClient
 {
 public:
-    static constexpr int NT = 4;                     // targets shown per source
-    juce::Colour accent { 0xffb96bff };
+    static constexpr int NR = DrumChannel::MOD_ROUTES;      // 12
+    juce::Colour accent { 0xffe8bf4d };
     int  slotIdx = 0;
-    int  src = 1;                                    // selected source (default Velocity)
-    int  tgt[NT] = {}; float amt[NT] = {};           // its up-to-4 target rows
-    std::function<void()> onChange;                  // write the rows back into the slot's mod[]
-    std::function<void()> onOpenMatrix;              // "Matrix" -> the wide full-view overlay
-    std::function<juce::String(int gridIdx)> gridKnobName;   // live engine-knob names (empty = skip)
-    ModRoutePanel();
-    void setValues(const DrumChannel::Slot& sl);     // pick src's routes into tgt/amt + refresh widgets
-    void rebuildTargets();                           // fill the 4 target combos with live grid names
+    int   src[NR] = {}, tgt[NR] = {};
+    float amt[NR] = {};
+    std::function<void()> onChange;                 // write src/tgt/amt back into the slot
+    std::function<void(int route)> onPickRoute;     // right-click a fader -> open the picker for it
+    std::function<juce::String(int gridIdx)> gridKnobName;
+    void setValues(const DrumChannel::Slot& sl);
     void paint(juce::Graphics& g) override;
-    void resized() override;
-    void mouseDown(const juce::MouseEvent& e) override;   // the "Matrix" button hit
+    void mouseDown(const juce::MouseEvent& e) override;
+    void mouseDrag(const juce::MouseEvent& e) override;
+    void mouseDoubleClick(const juce::MouseEvent& e) override;
     juce::String getTooltip() override
-    { return "Route this MOD source to targets, right here.\n\n"
-             "- Pick a SOURCE at the top, then send it to up to 4 targets with an amount each.\n"
-             "- Drag an amount (double-click = 0); it's fine near zero.\n"
-             "- MATRIX (bottom) opens the full table of every route on both slots."; }
+    { return "12 modulation routes (this slot).\n\n"
+             "- RIGHT-CLICK a fader: choose its SOURCE (left column) and TARGET (right column).\n"
+             "- DRAG / click inside a fader: the amount - centre is 0, left negative, right positive "
+             "(double-click = 0).\n"
+             "- Yellow = slot 1, pink = slot 2. Modulation is applied per block."; }
+    juce::String routeSrcName(int r) const;
+    juce::String routeTgtName(int r) const;
 private:
-    juce::ComboBox srcCombo, tgtCombo[NT];
-    juce::Slider   amtSlider[NT];
-    void styleCombo(juce::ComboBox& c);
-    juce::Rectangle<float> matrixBtnRect() const { return { 6.0f, (float) getHeight() - 20.0f, (float) getWidth() - 12.0f, 16.0f }; }
+    juce::Rectangle<float> faderRect(int i) const;
+    int  faderAt(juce::Point<float> p) const;
+    void setAmtFromX(int r, float x);
+    int  dragRoute = -1;
 };
 
 //==============================================================================
@@ -866,9 +842,10 @@ public:
         filtOn_ = filterOn; waveOn_ = waveOn; accent_ = accent; if (ch) repaint();
     }
     std::function<void(int dest)> onOpenCurveEditor;   // Custom: a plain CLICK on the wave opens the draw window
-    std::function<void()> onOpenMatrix;                // "Matrix" button: open the per-slot MOD MATRIX overlay
     std::function<void(int dest, int shape)> onShapeChange;   // Shape button cycled
     std::function<void(int dest, bool freeRun, bool legato)> onTrigChange; // Retrig/Free/Legato cycled
+    std::function<void(float atk, float dec)> onModEnvChange;  // TAB 4 = Mod Env: attack/decay dragged
+    void setModEnv(float a, float d) { if (a != modEnvA_ || d != modEnvD_) { modEnvA_ = a; modEnvD_ = d; if (dest_ == 3) repaint(); } }
     void setFreeClockSec(double s) { if (std::abs(s - freeSec_) > 1.0e-4) { freeSec_ = s;
         if (free_[dest_] && amt_[dest_] > 0.001f) repaint(); } }   // dot keeps moving between notes
     // Live tempo/grid info so the drawn wave + read-out show the TRUE synced speed (never the ignored
@@ -885,7 +862,8 @@ public:
     void mouseDown(const juce::MouseEvent&) override;
     void mouseDrag(const juce::MouseEvent&) override;
     void mouseUp(const juce::MouseEvent& e) override
-    { const bool wasDrag = dragging_; dragging_ = false;
+    { if (dest_ == 3) { if (envDrag_ >= 0 && onDragEnd) onDragEnd(); envDrag_ = -1; return; }   // Mod Env handle released
+      const bool wasDrag = dragging_; dragging_ = false;
       if (wasDrag && ! dnMoved_ && shape_[dest_] == 7 && waveArea().contains(e.position))
       { if (onOpenCurveEditor) onOpenCurveEditor(dest_); return; }   // plain click in Custom = open the draw window
       if (wasDrag && dnMoved_ && onDragEnd) onDragEnd(); }
@@ -921,14 +899,25 @@ private:
     juce::Rectangle<float> shapeBtnRect() const { return { 4.0f,   (float) getHeight() - 31.0f, 56.0f, 13.0f }; }
     juce::Rectangle<float> freeBtnRect() const  { return { 64.0f,  (float) getHeight() - 31.0f, 52.0f, 13.0f }; }
     juce::Rectangle<float> syncBtnRect() const  { return { 120.0f, (float) getHeight() - 31.0f, 60.0f, 13.0f }; }
-    juce::Rectangle<float> matrixBtnRect() const { return { (float) getWidth() - 56.0f, (float) getHeight() - 15.0f, 50.0f, 12.0f }; }  // MOD MATRIX (on the read-out line, right)
     juce::Rectangle<float> waveArea() const { return getLocalBounds().toFloat().reduced(2.0f).withTrimmedTop(17.0f).withTrimmedBottom(32.0f); }
-    int destAt(juce::Point<float> p) const  // which of the 4 dest tabs (top strip); -1 = none
+    int destAt(juce::Point<float> p) const  // which of the 4 tabs (top strip: LFO 1/2/3 + Mod Env); -1 = none
     {
         const float w = (float) getWidth();
-        if (p.y > 16.0f || p.x < w * 0.17f) return -1;   // below the strip / over the "LFO" title
+        if (p.y > 16.0f || p.x < w * 0.17f) return -1;   // below the strip / over the title
         return juce::jlimit(0, 3, (int) ((p.x - w * 0.17f) / (w * 0.2075f)));
     }
+    // TAB 4 = Mod Env: an envelope graph inside waveArea() (drag the PEAK = attack, the END = decay;
+    // times log-mapped A 0.001..2 s / D 0.01..4 s). Same math as the retired matrix overlay.
+    float modEnvA_ = 0.005f, modEnvD_ = 0.30f;
+    int   envDrag_ = -1;                // 0 = attack handle, 1 = decay handle, -1 = none
+    juce::Rectangle<float> envRect() const { return waveArea().reduced(6.0f, 4.0f); }
+    static float envAFromX(float x, juce::Rectangle<float> r)
+    { const float f = juce::jlimit(0.0f, 0.5f, (x - r.getX()) / r.getWidth());
+      return 0.001f * std::pow(2.0f / 0.001f, f / 0.5f); }
+    static float envDFromX(float x, float peakX, juce::Rectangle<float> r)
+    { const float f = juce::jlimit(0.0f, 1.0f, (x - peakX) / juce::jmax(1.0f, r.getRight() - peakX));
+      return 0.01f * std::pow(4.0f / 0.01f, f); }
+    void paintModEnv(juce::Graphics& g);
 };
 
 //==============================================================================
@@ -2353,11 +2342,12 @@ private:
     HdrClick revModeClick;
     void refreshReverbModeHeader();
     void openLfoCurveEditor(int dest);   // LFO SHAPER overlay
-    void openModMatrix();                // MOD MATRIX overlay (per selected slot)
+    void openRoutePicker(int route);     // two-column source|target picker for one matrix fader
     HarmonicEditor harmEd;    // ADDITIVE draw-harmonics overlay (content child)
     LfoCurveEditor lfoCurveEd;             // LFO SHAPER overlay (draw the Custom LFO cycle)
-    ModMatrixEditor modMatrixEd;           // MOD MATRIX overlay (full flat table of every route)
-    ModRoutePanel   modRoutePanel;         // INLINE per-source routing in the MODULATION box
+    ModFaderMatrix  modFaders;             // 12 route faders (6x2) inline in the MODULATION box
+    RoutePicker     routePicker;           // its right-click source|target chooser (overlay)
+    int            routePickRoute = -1;    // which fader the picker is currently editing
     int            lfoCurveEdDest = 0;     // which LFO tab the overlay edits
     int            harmEdSlot = 0;
 
