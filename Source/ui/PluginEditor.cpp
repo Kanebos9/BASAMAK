@@ -11202,22 +11202,23 @@ void DrumSequencerEditor::layoutContent()
             patternBar.setCurrentRange((double) firstPatternCol, (double) shown, juce::dontSendNotification);
         }
     }
-    patModeBtn.setBounds(664, PAT_Y + 8, 210, 26);   // widened into the old dead gap (longer chain text fits)
+    patModeBtn.setBounds(664, PAT_Y + 8, 160, 26);   // shortened to make room for the wider edit-mode buttons (user)
     // Channel-count (8/16) + pattern-count (16/32) toggles, right next to the loop dropdown (Follow moved to the top bar).
 
-    sliderSwing.setBounds(884, PAT_Y + 3, 92, 20);    // shifted left to make room for the Mod A/B buttons
-    lblSwing.setBounds   (884, PAT_Y + 24, 92, 12);   // ...live caption under it, e.g. Swing 66%
+    sliderSwing.setBounds(836, PAT_Y + 3, 92, 20);    // shifted left (Loop dropdown shortened) so the edit buttons fit
+    lblSwing.setBounds   (836, PAT_Y + 24, 92, 12);   // ...live caption under it, e.g. Swing 66%
     // Step edit-mode radio buttons (+ the two STEP MOD lanes), then Influence, then Clear (flush right).
-    lblEditMode.setBounds (980,  PAT_Y + 8, 28, 24);   // "Edit:" (minimumHorizontalScale squeezes it)
-    btnModeVel.setBounds  (1010, PAT_Y + 8, 32, 24);   // (Slide has no button - it lives in Pitch mode's bottom band)
-    btnModeLen.setBounds  (1044, PAT_Y + 8, 34, 24);
-    btnModePitch.setBounds(1080, PAT_Y + 8, 40, 24);
-    btnModeProb.setBounds (1122, PAT_Y + 8, 34, 24);
-    btnModeRoll.setBounds (1158, PAT_Y + 8, 32, 24);
-    btnModePan.setBounds  (1192, PAT_Y + 8, 30, 24);
-    btnModeNudge.setBounds(1224, PAT_Y + 8, 44, 24);
-    btnModeModA.setBounds (1270, PAT_Y + 8, 44, 24);   // STEP MOD lanes (drawable modulation sources)
-    btnModeModB.setBounds (1316, PAT_Y + 8, 44, 24);
+    // Widths sized so the full word fits (no "G..." / "L..." truncation - user).
+    lblEditMode.setBounds (942,  PAT_Y + 8, 28, 24);   // "Edit:"
+    btnModeVel.setBounds  (974,  PAT_Y + 8, 32, 24);   // (Slide has no button - it lives in Pitch mode's bottom band)
+    btnModeLen.setBounds  (1010, PAT_Y + 8, 40, 24);
+    btnModePitch.setBounds(1054, PAT_Y + 8, 42, 24);
+    btnModeProb.setBounds (1100, PAT_Y + 8, 40, 24);
+    btnModeRoll.setBounds (1144, PAT_Y + 8, 36, 24);
+    btnModePan.setBounds  (1184, PAT_Y + 8, 34, 24);
+    btnModeNudge.setBounds(1222, PAT_Y + 8, 46, 24);
+    btnModeModA.setBounds (1272, PAT_Y + 8, 48, 24);   // STEP MOD lanes (drawable modulation sources)
+    btnModeModB.setBounds (1324, PAT_Y + 8, 48, 24);
     btnInfluenceTop.setBounds(1384, PAT_Y + 8, 44, 24);// purple-outlined; left of Clear
     btnClearPat.setBounds (1434, PAT_Y + 8, 70, 24);   // Clear - flush near the right edge
 
