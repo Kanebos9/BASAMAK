@@ -1130,6 +1130,13 @@ private:
         float    envModOfs[4] {};                          // mod-matrix env offsets (Atk/Dec/Sus/Rel), LATCHED at the hit
         bool     envModLatched = false;                    // env(t, params) is stateless - per-block env changes JUMP the level (crackle)
         float    lastEnv = 0.0f;                           // [2026-07-13 19:57] previous sample's amp env = the per-sample Amp Env mod SOURCE
+        // [2026-07-13 20:20] ADAA (antiderivative anti-aliasing) previous-input states, one per
+        // shaper stream; 1e9 = unprimed (first sample after the hit evaluates directly).
+        float    adaaU[2]  { 1.0e9f, 1.0e9f };             // classic drive insert (L/R; Exciter stores x)
+        float    adaaB1[2] { 1.0e9f, 1.0e9f };             // Bass Amp stage 1
+        float    adaaB2[2] { 1.0e9f, 1.0e9f };             // Bass Amp stage 2
+        float    warpU[3]  { 1.0e9f, 1.0e9f, 1.0e9f };     // oscillator WARP fold (sum / L / R)
+        float    warpW[3]  {};                             // ...and its previous w (midpoint-parameter ADAA)
         float    fmtPosSm = -1.0f;                         // block-rate FORMANT position glide (Q-7 BP coeffs must not step)
         float    wSm = -1.0f;                              // per-sample smoothed slot weight (de-zippers block-rate VOLUME modulation)
         double   filtGkt[2] = { -1.0, -1.0 };              // per-voice KEYTRACK target per filter (tan coeff; -1 = off)

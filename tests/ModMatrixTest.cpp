@@ -361,6 +361,33 @@ int main()
                dDrv, bDrv, dSub, bSub, dWrp, bWrp,
                CHK(dDrv < bDrv * 1.3f + 0.005f && dSub < bSub * 1.3f + 0.005f && dWrp < bWrp * 1.3f + 0.005f) ? "OK" : "FAIL");
     }
+    {   // [17] ADAA anti-aliasing: a 5 kHz sine through FULL SoftClip drive. tanh's 19th harmonic
+        //      (95 kHz) folds to 1 kHz at the 2x engine rate - the NAIVE shaper (applied in-test to
+        //      a clean render) leaks it loudly; the engine's ADAA path must cut that alias hard
+        //      while keeping the wanted 15 kHz 3rd harmonic.
+        auto tone = [](DrumChannel& c){
+            for (auto& sl : c.slots) sl = Slot();
+            auto& s = c.slots[0];
+            s.engine = DrumChannel::SrcOsc; s.weight = 1.0f;
+            s.oscShape = s.oscShapeB = DrumChannel::WvSine; s.oscFreq = 5000.0f;
+            s.atk = 0.003f; s.hold = 0.5f; s.dec = 0.2f; };
+        auto clean = render(tone, 0.9f, 0.5);
+        auto adaa  = render([tone](DrumChannel& c){ tone(c); c.slots[0].fxDrive = 1.0f; c.slots[0].fxDriveType = DrumChannel::SoftClip; }, 0.9f, 0.5);
+        std::vector<float> naive(clean.size());
+        for (size_t i2 = 0; i2 < clean.size(); ++i2)
+            naive[i2] = std::tanh(clean[i2] * 25.0f) * 0.25f;   // the exact pre-ADAA math at HOST rate
+        auto goe = [&](const std::vector<float>& x, double f) {
+            const double w = 2.0 * 3.14159265358979 * f / SR, cw = 2.0 * std::cos(w);
+            double s0 = 0, s1 = 0, s2 = 0;
+            for (size_t i2 = (size_t)(SR * 0.08); i2 < x.size() && i2 < (size_t)(SR * 0.45); ++i2)
+            { s0 = (double) x[i2] + cw * s1 - s2; s2 = s1; s1 = s0; }
+            return std::sqrt(std::abs(s1 * s1 + s2 * s2 - cw * s1 * s2)); };
+        const double aliasN = goe(naive, 1000.0), aliasA = goe(adaa, 1000.0);
+        const double harmA  = goe(adaa, 15000.0);
+        printf("[17] ADAA: 1kHz alias naive=%.1f adaa=%.1f (expect adaa < naive*0.6), 15k harmonic=%.1f (>alias) -> %s\n",
+               aliasN, aliasA, harmA,
+               CHK(aliasA < aliasN * 0.6 && harmA > aliasA && finite(adaa)) ? "OK" : "FAIL");
+    }
     printf(fails == 0 ? ">>> ModMatrixTest PASS\n" : ">>> ModMatrixTest FAIL (%d)\n", fails);
     return fails;
 }

@@ -1493,6 +1493,8 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         sv.wSm = -1.0f;   // weight smoother snaps to the (possibly modulated) weight on the first sample
         sv.envModLatched = false;   // env-time mod targets re-latch at THIS hit
         sv.lastEnv = 0.0f; sv.fmtPosSm = -1.0f;    // per-sample Amp Env source + formant glide re-snap at THIS hit
+        sv.adaaU[0] = sv.adaaU[1] = sv.adaaB1[0] = sv.adaaB1[1] = sv.adaaB2[0] = sv.adaaB2[1]
+            = sv.warpU[0] = sv.warpU[1] = sv.warpU[2] = 1.0e9f;   // ADAA states re-prime at THIS hit
         for (int lr = 0; lr < 2; ++lr) {   // drive smoothing/DC + formant + punch state start clean each hit
             sv.drvLp[lr] = sv.drvDcX[lr] = sv.drvDcY[lr] = 0.0f;
             sv.pFast[lr] = sv.pSlow[lr] = 0.0f;
@@ -1963,6 +1965,126 @@ void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals, SlotVoice* lat
     tmp.dec     = juce::jlimit(0.0f, 6.0f, tmp.dec     + latch->envModOfs[1] * 2.0f);
     tmp.sustain = juce::jlimit(0.0f, 1.0f, tmp.sustain + latch->envModOfs[2] * 1.0f);
     tmp.release = juce::jlimit(0.0f, 4.0f, tmp.release + latch->envModOfs[3] * 2.0f);
+}
+
+// ================================================================================================
+// ADAA - ANTIDERIVATIVE ANTI-ALIASING [2026-07-13 20:20]
+// First-order ADAA on every memoryless waveshaper (the drive types + the oscillator WARP fold):
+//   y = (F(u) - F(u_prev)) / (u - u_prev),  F = the shaper's closed-form antiderivative,
+// which integrates out the alias energy a naked nonlinearity sprays past Nyquist. This is the
+// modern (2026) replacement for brute-force 4x-8x oversampling of shaper stages: one float of
+// state per stream, no extra latency, no resampling filters. Falls back to f(midpoint) when the
+// input step is tiny. BITCRUSH is deliberately excluded - aliasing IS its sound. The LEGACY
+// channel-level drive stage (old projects) keeps the plain driveSample() path.
+// ================================================================================================
+static constexpr float kAdaaUnprimed = 1.0e9f;
+static inline float lnCoshF(float x)
+{ const float ax = std::abs(x); return ax > 12.0f ? ax - 0.6931472f : std::log(std::cosh(ax)); }
+// ADAA'd tanh core (shared by SoftClip / Tube / the Bass Amp stages).
+static inline float adaaTanh(float u, float& u1)
+{
+    if (u1 >= kAdaaUnprimed * 0.5f) { u1 = u; return std::tanh(u); }
+    const float d = u - u1;
+    const float y = std::abs(d) > 1.0e-4f ? (lnCoshF(u) - lnCoshF(u1)) / d : std::tanh(0.5f * (u + u1));
+    u1 = u; return y;
+}
+// Ideal periodic triangle fold (period 4, unity slope) + its primitive - the Foldback shaper.
+// (The old loop capped at 4 reflections; the periodic form IS the proper wavefolder - at extreme
+// drive the tone is slightly more correct than before, disclosed.)
+static inline float triFold(float v)
+{ float m = std::fmod(v - 1.0f, 4.0f); if (m < 0.0f) m += 4.0f; return std::abs(m - 2.0f) - 1.0f; }
+static inline float triFoldI(float v)   // primitive of the zero-mean triangle = itself periodic
+{ float m = std::fmod(v - 1.0f, 4.0f); if (m < 0.0f) m += 4.0f;
+  return m <= 2.0f ? m - 0.5f * m * m : 0.5f * m * m - 3.0f * m + 4.0f; }
+// The FUZZ transfer (0.6*t + 0.8*|t| - 0.24, t = tanh(1.5u), clamped at +1 above u0) + primitive.
+static inline float fuzzF(float u)
+{ const float t = std::tanh(1.5f * u);
+  return juce::jlimit(-1.0f, 1.0f, t * 0.6f + (std::abs(t) - 0.3f) * 0.8f); }
+static inline float fuzzFI(float u)
+{
+    constexpr float u0 = 0.93445f, F0 = 0.49200f;   // clamp knee (f(u0) = 1) + primitive there
+    if (u > u0) return F0 + (u - u0);
+    const float lc = lnCoshF(1.5f * u);   // (1/k)*lnCosh(ku) terms with k = 1.5 folded into the factors
+    return lc * (0.4f + 0.533333f * (u >= 0.0f ? 1.0f : -1.0f)) - 0.24f * u;
+}
+// The oscillator WARP fold: f = (1-w)x + w*sin(qx), q = (1+4w)*pi/2; F = (1-w)x^2/2 - (w/q)cos(qx).
+// F depends on w EXPLICITLY (unlike the drive shapers, where the amount only scales the input), so
+// with per-sample-modulated w both endpoints MUST use one midpoint w - mixing epochs puts a
+// parameter error over a tiny denominator (measured: a 0.84 spike on a swept warp; test [16]).
+static inline float warpFoldAdaa(float x, float w, float& x1, float& w1)
+{
+    if (x1 >= kAdaaUnprimed * 0.5f)
+    { x1 = x; w1 = w; const float q0 = (1.0f + w * 4.0f) * 1.5707963f;
+      return x + w * (std::sin(x * q0) - x); }
+    const float wm = 0.5f * (w + w1);                       // ONE parameter epoch for both endpoints
+    const float q  = (1.0f + wm * 4.0f) * 1.5707963f;
+    const float d  = x - x1; float y;
+    if (std::abs(d) > 1.0e-4f)
+    { auto F = [&](float v) { return 0.5f * (1.0f - wm) * v * v - (wm / q) * std::cos(v * q); };
+      y = (F(x) - F(x1)) / d; }
+    else y = 0.5f * (x + x1) + wm * (std::sin(0.5f * (x + x1) * q) - 0.5f * (x + x1));
+    x1 = x; w1 = w; return y;
+}
+// ADAA drive router: same gain taper / makeup / voicings as driveSample, aliasing integrated out.
+static float driveAdaa(float x, int driveType, float driveAmount, float& u1)
+{
+    using DC = DrumChannel;
+    if (driveType == DC::DriveExciter)
+    {   // ADAA on the synthesized-harmonics part only (the dry passes untouched, as designed).
+        auto h = [](float v) { const float t = std::tanh(v * 1.4f); return 1.15f * t * t + 0.75f * t * t * t; };
+        if (u1 >= kAdaaUnprimed * 0.5f) { u1 = x; return x + driveAmount * h(x); }
+        const float d = x - u1; float hv;
+        if (std::abs(d) > 1.0e-4f)
+        { auto H = [](float v) { const float k = 1.4f, t = std::tanh(k * v);
+                                 return 1.15f * (v - t / k) + (0.75f / k) * (lnCoshF(k * v) + 0.5f * (1.0f - t * t)); };
+          hv = (H(x) - H(u1)) / d; }
+        else hv = h(0.5f * (x + u1));
+        u1 = x; return x + driveAmount * hv;
+    }
+    const float a  = juce::jlimit(0.0f, 1.0f, driveAmount);
+    const float g  = 1.0f + a * a * 24.0f;
+    const float u  = x * g;
+    const float mk = 1.0f / (1.0f + (g - 1.0f) * 0.125f);
+    float y;
+    switch (driveType)
+    {
+        case DC::SoftClip: y = adaaTanh(u, u1); break;
+        case DC::Tube:
+        {   constexpr float b = 0.35f, tb = 0.33638f;   // tanh(0.35)
+            if (u1 >= kAdaaUnprimed * 0.5f) { u1 = u; y = 1.2f * (std::tanh(u + b) - tb); break; }
+            const float d = u - u1;
+            y = std::abs(d) > 1.0e-4f
+                ? 1.2f * ((lnCoshF(u + b) - lnCoshF(u1 + b)) / d - tb)
+                : 1.2f * (std::tanh(0.5f * (u + u1) + b) - tb);
+            u1 = u; break;
+        }
+        case DC::HardClip:
+        {
+            auto F = [](float v) { const float av = std::abs(v); return av <= 1.0f ? 0.5f * v * v : av - 0.5f; };
+            if (u1 >= kAdaaUnprimed * 0.5f) { u1 = u; y = juce::jlimit(-1.0f, 1.0f, u); break; }
+            const float d = u - u1;
+            y = std::abs(d) > 1.0e-4f ? (F(u) - F(u1)) / d
+                                      : juce::jlimit(-1.0f, 1.0f, 0.5f * (u + u1));
+            u1 = u; break;
+        }
+        case DC::Foldback:
+        {
+            if (u1 >= kAdaaUnprimed * 0.5f) { u1 = u; y = triFold(0.6f * u); break; }
+            const float d = u - u1;
+            y = std::abs(d) > 1.0e-4f ? (triFoldI(0.6f * u) - triFoldI(0.6f * u1)) / (0.6f * d)
+                                      : triFold(0.6f * 0.5f * (u + u1));
+            u1 = u; break;
+        }
+        case DC::Fuzz:
+        {
+            if (u1 >= kAdaaUnprimed * 0.5f) { u1 = u; y = fuzzF(u); break; }
+            const float d = u - u1;
+            y = std::abs(d) > 1.0e-4f ? (fuzzFI(u) - fuzzFI(u1)) / d : fuzzF(0.5f * (u + u1));
+            u1 = u; break;
+        }
+        default: u1 = u; y = u; break;   // (Bitcrush is routed to driveSample by the caller)
+    }
+    return y * mk;
 }
 
 // [2026-07-13 19:57] BLOCK snapshot of the HOT (audio-rate) targets, applied onto the DISPLAY copy
@@ -3113,11 +3235,16 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         }
                         float oo = wsum * c.uniGain;
                         float ooL = sprd ? wL * c.uniGain : 0.0f, ooR = sprd ? wR * c.uniGain : 0.0f;
-                        auto fold1 = [&](float x) { const float fd = std::sin(x * (1.0f + mWarp * 4.0f) * 1.5707963f);
-                                                    return x + mWarp * (fd - x); };
                         if (mWarp > 0.001f) {                       // WARP = one-way wavefold (adds harmonics/grit)
-                            oo = fold1(oo);
-                            if (sprd) { ooL = fold1(ooL); ooR = fold1(ooR); }
+                            // [2026-07-13 20:20] ADAA'd fold (the naked sin() fold aliased on bright waves).
+                            oo = warpFoldAdaa(oo, mWarp, sv.warpU[0], sv.warpW[0]);
+                            if (sprd) { ooL = warpFoldAdaa(ooL, mWarp, sv.warpU[1], sv.warpW[1]); ooR = warpFoldAdaa(ooR, mWarp, sv.warpU[2], sv.warpW[2]); }
+                        } else {
+                            // keep the ADAA state FRESH while bypassed: a modulated warp sweeping
+                            // through zero would otherwise re-enter with a stale x1 = the quotient
+                            // averages the fold over half an LFO period = a one-sample dropout.
+                            sv.warpU[0] = oo; sv.warpW[0] = mWarp;
+                            if (sprd) { sv.warpU[1] = ooL; sv.warpW[1] = mWarp; sv.warpU[2] = ooR; sv.warpW[2] = mWarp; }
                         }
                         if (c.fmSub > 0.001f) {                         // sub-oscillator an octave down (stays CENTRED)
                             const float sub = (float) std::sin(sv.fmSubPhase) * c.fmSub;
@@ -3579,8 +3706,9 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         sv.ampPre[lr] += drvAmpBassK * (y - sv.ampPre[lr]);
                         const float lo = sv.ampPre[lr];                           // the low split
                         float v = (y - lo) * (1.0f + 0.6f * aA);
-                        v = std::tanh(v * g1 + 0.12f) - std::tanh(0.12f);         // stage 1 (asym = amp evens)
-                        v = std::tanh(v * 1.5f) * 1.15f;                          // stage 2 (glue)
+                        // [2026-07-13 20:20] both amp stages are ADAA'd (aliasing integrated out).
+                        v = adaaTanh(v * g1 + 0.12f, sv.adaaB1[lr]) - 0.11943f;   // stage 1 (asym = amp evens; tanh(0.12))
+                        v = adaaTanh(v * 1.5f, sv.adaaB2[lr]) * 1.15f;            // stage 2 (glue)
                         sv.ampLp1[lr] += drvAmpCab2K * (v - sv.ampLp1[lr]);       // 2-pole cabinet
                         sv.ampLp2[lr] += drvAmpCab2K * (sv.ampLp1[lr] - sv.ampLp2[lr]);
                         v = sv.ampLp2[lr] * mk + lo;                              // clean lows rejoin
@@ -3595,8 +3723,14 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     // retired slot 7 (the killed Guitar/Lead amps): stray saves play as Tube
                     const int dTy = c.fxDriveType == DriveAmpRetired ? (int) Tube : c.fxDriveType;
                     const float dryL = sL, dryR = sR, dryM = sig;   // for the matrix-sweep dry-blend below
-                    if (stereo) { sL = driveSample(sL, dTy, mDrv); sR = driveSample(sR, dTy, mDrv); }
-                    else          sig = driveSample(sig, dTy, mDrv);
+                    // [2026-07-13 20:20] ADAA path for every shaper except Bitcrush (aliasing = its sound).
+                    if (dTy == (int) Bitcrush) {
+                        if (stereo) { sL = driveSample(sL, dTy, mDrv); sR = driveSample(sR, dTy, mDrv); }
+                        else          sig = driveSample(sig, dTy, mDrv);
+                    } else {
+                        if (stereo) { sL = driveAdaa(sL, dTy, mDrv, sv.adaaU[0]); sR = driveAdaa(sR, dTy, mDrv, sv.adaaU[1]); }
+                        else          sig = driveAdaa(sig, dTy, mDrv, sv.adaaU[0]);
+                    }
                     // Musicality pass (v6): HARSH shapers get a gentle ~8 kHz 1-pole after the clip
                     // (naked waveshaping = fizzy top - every synth drive has a post-filter), and FUZZ
                     // gets a DC blocker (its rectified blend adds a constant offset = headroom loss).
