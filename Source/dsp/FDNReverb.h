@@ -23,11 +23,19 @@ public:
         }
         shBuf.assign((size_t) juce::jmax(1024, (int) (4096.0 * sr / 48000.0)), 0.0f);   // shimmer ring
         shW = 0; shPh = 0.0;
+        // [2026-07-13 21:05] INPUT DIFFUSION (Dattorro-style): 2 series allpasses per side smear the
+        // input before it enters the tank = instant echo density instead of a fluttery early field.
+        static const int apP[4] = { 142, 379, 107, 277 };   // L: 0,1  R: 2,3 (mutually prime-ish)
+        for (int i = 0; i < 4; ++i)
+        { apLen[i] = juce::jmax(8, (int) (apP[i] * sr / 48000.0));
+          apBuf[i].assign((size_t) apLen[i], 0.0f); apW[i] = 0; }
+        for (int i = 0; i < N; ++i) loCut[i] = 0.0f;
     }
 
     void reset()
     {
-        for (int i = 0; i < N; ++i) { std::fill(buf[i].begin(), buf[i].end(), 0.0f); lp[i] = 0.0f; }
+        for (int i = 0; i < N; ++i) { std::fill(buf[i].begin(), buf[i].end(), 0.0f); lp[i] = 0.0f; loCut[i] = 0.0f; }
+        for (auto& b : apBuf) std::fill(b.begin(), b.end(), 0.0f);
         std::fill(shBuf.begin(), shBuf.end(), 0.0f);
     }
 
@@ -61,10 +69,24 @@ public:
         if (buf[0].empty()) { for (int s = 0; s < n; ++s) { outL[s] = 0.0f; outR[s] = 0.0f; } return; }  // not prepared
 
         bool bad = false;   // any non-finite this block -> reset the whole network at the end (self-heal)
+        // loop LOW-CUT tracker (~55 Hz): stops sub energy accumulating in the tail = tighter, less
+        // muddy long decays (the frequency-dependent-decay idea, minimal form). [2026-07-13 21:05]
+        const float loK = 1.0f - std::exp(-twoPi * 55.0f / (float) sr);
         for (int s = 0; s < n; ++s)
         {
-            const float inMix = 0.5f * (inL[s] + inR[s]);
-            const float in = std::isfinite(inMix) ? inMix : 0.0f;   // never feed a NaN into the network
+            // [2026-07-13 21:05] TRUE STEREO INPUT: L/R are DIFFUSED separately (2 allpasses each)
+            // and feed alternate lines - the old path collapsed the input to mono first.
+            float xin[2] = { std::isfinite(inL[s]) ? inL[s] : 0.0f,
+                             std::isfinite(inR[s]) ? inR[s] : 0.0f };
+            for (int side = 0; side < 2; ++side)
+                for (int a = side * 2; a < side * 2 + 2; ++a)
+                {   const float z = apBuf[a][(size_t) apW[a]];
+                    const float y = z - 0.68f * xin[side];                     // allpass: unity magnitude
+                    const float wv = xin[side] + 0.68f * y;
+                    apBuf[a][(size_t) apW[a]] = std::isfinite(wv) ? juce::jlimit(-8.0f, 8.0f, wv) : 0.0f;
+                    apW[a] = (apW[a] + 1) % apLen[a];
+                    xin[side] = y;
+                }
             float dout[N];
             for (int i = 0; i < N; ++i)
             {
@@ -107,12 +129,17 @@ public:
                 lp[i] += dampC * (fb - lp[i]);
                 if (! std::isfinite(lp[i])) { lp[i] = 0.0f; bad = true; }   // guard the damping state
                 fb = lp[i];
+                loCut[i] += loK * (fb - loCut[i]);                          // loop LOW-CUT (~55 Hz HP)
+                if (! std::isfinite(loCut[i])) { loCut[i] = 0.0f; bad = true; }
+                fb -= loCut[i];
                 const int sz = (int) buf[i].size();
                 // HARD SAFETY: bound the stored state + kill any NaN/Inf so the network can NEVER run away.
-                // Room mode: SPARSE input (only half the lines are fed) = boxy, fluttery early field -
-                // a real character change, not just "small hall" (Size already does small).
-                const float inG = (mode == 0 && (i & 1)) ? 0.0f : 0.5f;
-                const float v = in * sgn[i] * inG + fb;
+                // Room mode: SPARSE input (only half the lines are fed, with the MID) = boxy, fluttery
+                // early field - a real character change, not just "small hall" (Size does small).
+                float inFeed = (i & 1) ? xin[1] : xin[0];                   // stereo: L = even, R = odd lines
+                float inG = 0.5f;
+                if (mode == 0) { if (i & 1) inG = 0.0f; inFeed = 0.5f * (xin[0] + xin[1]); }
+                const float v = inFeed * sgn[i] * inG + fb;
                 buf[i][(size_t) widx[i]] = std::isfinite(v) ? juce::jlimit(-8.0f, 8.0f, v) : 0.0f;
                 widx[i] = (widx[i] + 1) % sz;
             }
@@ -135,6 +162,9 @@ private:
     int   base[N] = {};
     float lp[N]   = {};
     float lfo[N]  = {};
+    std::vector<float> apBuf[4];   // [2026-07-13 21:05] input diffusion allpasses (2 per side)
+    int   apW[4] = {}, apLen[4] = { 8, 8, 8, 8 };
+    float loCut[N] = {};           // loop low-cut trackers (~55 Hz)
     std::vector<float> shBuf;   // SHIMMER: mono feedback ring for the octave-up pitch shifter
     int    shW  = 0;
     double shPh = 0.0;
