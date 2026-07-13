@@ -599,6 +599,78 @@ private:
 };
 
 //==============================================================================
+// RemapEditor [2026-07-14 00:03]: the per-route REMAP curve overlay (Vital-style "modulation
+// remap"). X = the source's incoming value, Y = what actually reaches the target; the drawn shape
+// replaces the pass-through diagonal FOR THIS ROUTE ONLY. One mechanism for every route.
+//==============================================================================
+class RemapEditor : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    static constexpr int N = 64;
+    float curve[N] = {}; bool on = false;
+    bool bipolarSrc = false;                     // bipolar source: X spans -1..+1 (centre = at rest)
+    juce::Colour accent { 0xffe8bf4d };
+    juce::String title;
+    std::function<void(const float*, bool)> onChange;
+    std::function<void()> onClose;
+    juce::Component* clickIgnore = nullptr;
+    ~RemapEditor() override { juce::Desktop::getInstance().removeGlobalMouseListener(&closer); }
+    void openFor(const juce::String& t, const float* cv, bool isOn, bool bipolar, juce::Colour ac)
+    {
+        title = t; on = isOn; bipolarSrc = bipolar; accent = ac;
+        if (isOn) for (int k = 0; k < N; ++k) curve[k] = cv[k];
+        else      for (int k = 0; k < N; ++k) curve[k] = (float) k / (float)(N - 1);   // identity
+        setVisible(true); toFront(false); repaint();
+    }
+    void visibilityChanged() override
+    {
+        if (isVisible() && ! closerHooked)      { juce::Desktop::getInstance().addGlobalMouseListener(&closer); closerHooked = true; }
+        else if (! isVisible() && closerHooked) { juce::Desktop::getInstance().removeGlobalMouseListener(&closer); closerHooked = false; }
+    }
+    void paint(juce::Graphics& g) override;
+    void mouseDown(const juce::MouseEvent& e) override;
+    void mouseDrag(const juce::MouseEvent& e) override;
+    void mouseUp(const juce::MouseEvent&) override { lastI = -1; }
+    juce::String getTooltip() override
+    {
+        const auto p = getMouseXYRelative().toFloat();
+        if (presetRect(0).contains(p)) return "LINEAR: turn the remap OFF - the source passes through unchanged.";
+        if (presetRect(1).contains(p)) return "SOFT: the effect arrives LATE - light source values do almost nothing (tame a hair-trigger aftertouch, make velocity gentler).";
+        if (presetRect(2).contains(p)) return "HARD: the effect arrives EARLY - even light source values push the target far.";
+        if (presetRect(3).contains(p)) return "S-CURVE: a smooth switch - quiet low zone, fast transition through the middle, settled top.";
+        return juce::String("Draw this route's TRANSFER CURVE (left-drag).\n\n")
+             + (bipolarSrc ? "- X = the source's full -1..+1 sweep (CENTRE = the source at rest).\n"
+                           : "- X = the source's value from 0 (left) to full (right).\n")
+             + "- Y = what actually reaches the target (bottom = nothing, top = full).\n"
+             + "- The thin diagonal = pass-through; drawing anything switches the remap ON.\n"
+             + "- Click outside to close.";
+    }
+private:
+    struct Closer : juce::MouseListener
+    {
+        RemapEditor& ed; explicit Closer(RemapEditor& e) : ed(e) {}
+        void mouseDown(const juce::MouseEvent& e) override
+        {
+            if (! ed.isVisible()) return;
+            const auto p = e.getScreenPosition();
+            if (ed.getScreenBounds().contains(p)) return;
+            if (ed.clickIgnore != nullptr && ed.clickIgnore->getScreenBounds().contains(p)) return;
+            ed.setVisible(false); if (ed.onClose) ed.onClose();
+        }
+    };
+    Closer closer { *this };
+    bool closerHooked = false;
+    int  lastI = -1;
+    juce::Rectangle<float> closeRect()  const { return { (float) getWidth() - 24.0f, 4.0f, 20.0f, 16.0f }; }
+    juce::Rectangle<float> presetRect(int i) const
+    { return { 10.0f + (float) i * 62.0f, 22.0f, 58.0f, 16.0f }; }
+    juce::Rectangle<float> strip() const { return getLocalBounds().toFloat().reduced(10.0f).withTrimmedTop(44.0f).withTrimmedBottom(10.0f); }
+    void applyPreset(int i);
+    void drawAt(juce::Point<float> pos, bool connect);
+    friend class DrumSequencerEditor;
+};
+
+//==============================================================================
 // RoutePicker: the two-column SOURCE | TARGET chooser for ONE mod route. Opened by RIGHT-CLICKING a
 // fader in the MODULATION matrix. A content-child overlay (never an OS popup): left column = every
 // source, right column = every target (incl. this engine's own knobs). Click a row in each column;
@@ -609,6 +681,8 @@ class RoutePicker : public juce::Component,
 public:
     std::function<void(int src, int tgt)> onPicked;         // chosen source enum + target enum (live-apply)
     std::function<void(float amt)> onAmt;                   // route AMOUNT edited on the picker's own fader
+    std::function<void()> onRemap;                          // [2026-07-14] open the REMAP curve editor for this route
+    bool remapOn = false;                                   // drawn curve active (shown on the remap row)
     std::function<void()> onAmtDragEnd;                     // amount fader released (auto-audition)
     std::function<void()> onClose;
     std::function<juce::String(int gridIdx)> gridKnobName;  // live engine-knob names for grid targets
@@ -646,6 +720,9 @@ private:
     juce::Rectangle<float> amtRect() const  // the horizontal AMOUNT fader (bottom, FULL width - user 2026-07-13)
     { const float pad = 6.0f, h = 26.0f;
       return { pad, (float) getHeight() - h - pad, (float) getWidth() - pad * 2.0f, h }; }
+    juce::Rectangle<float> remapRect() const   // [2026-07-14] the REMAP row (above the amount fader)
+    { const float pad = 6.0f;
+      return { pad, (float) getHeight() - 26.0f - pad - 24.0f, (float) getWidth() - pad * 2.0f, 20.0f }; }
     void setAmtFromX(float x);
     void selectCurrentRows();
     struct Closer : public juce::MouseListener
@@ -677,6 +754,7 @@ public:
     int  slotIdx = 0;
     int   src[NR] = {}, tgt[NR] = {};
     float amt[NR] = {};
+    bool  cvOn[NR] = {};   // [2026-07-14] this route has a REMAP curve (small glyph on the fader)
     std::function<void()> onChange;                 // write src/tgt/amt back into the slot
     std::function<void()> onDragEnd;                // released (auto-audition)
     std::function<void(int route)> onPickRoute;     // right-click a fader -> open the picker for it
@@ -689,8 +767,9 @@ public:
     void mouseDoubleClick(const juce::MouseEvent& e) override;
     juce::String getTooltip() override
     { return "12 modulation routes (this slot).\n\n"
-             "- RIGHT-CLICK a fader: choose its SOURCE (left column) and TARGET (right column), and set "
-             "the amount on the long fader there.\n"
+             "- RIGHT-CLICK a fader: choose its SOURCE (left column) and TARGET (right column), set the "
+             "amount on the long fader, and DRAW a per-route REMAP curve on the row above it (a tiny "
+             "blue curve mark on a fader = remapped).\n"
              "- DRAG / click inside a fader: the amount - centre is 0, left negative, right positive "
              "(double-click = 0).\n"
              "- Yellow = slot 1, pink = slot 2. Per-voice on chords.\n"
@@ -1476,6 +1555,25 @@ public:
     // unity notch at 100%), so the channel level finally has a visible control.
     // Drag = set - double-click = 100% - right-click = MIDI learn (addressed + selected).
     static constexpr float VOL_MAX = 1.25f;
+    // [2026-07-14 00:50] MIXER dB TAPER (user: "max volume for a huge range" - the old handle was
+    // LINEAR IN AMPLITUDE, so its whole top half spanned ~6 dB). Now the travel is linear in dB:
+    // 0 = off, 0..75% = -54..0 dB, 75% (the unity notch) ..100% = 0..+1.9 dB (gain 1.25). Every
+    // consumer maps through these two functions (drag, paint, fill cap, CC).
+    static float posToGain(float p)
+    {
+        p = juce::jlimit(0.0f, 1.0f, p);
+        if (p <= 0.0001f) return 0.0f;
+        const float dB = p <= 0.75f ? -54.0f + (p / 0.75f) * 54.0f
+                                    : (p - 0.75f) / 0.25f * 1.9382f;
+        return juce::jlimit(0.0f, VOL_MAX, std::pow(10.0f, dB / 20.0f));
+    }
+    static float gainToPos(float g)
+    {
+        if (g <= 0.0021f) return g <= 0.0001f ? 0.0f : 0.0021f;   // ~-54 dB floor
+        const float dB = 20.0f * std::log10(juce::jlimit(0.0021f, VOL_MAX, g));
+        return dB <= 0.0f ? (dB + 54.0f) / 54.0f * 0.75f
+                          : 0.75f + dB / 1.9382f * 0.25f;
+    }
     std::function<void(float)> onVolume;    // user dragged the handle (value 0..VOL_MAX)
     std::function<void()>      onVolLearn;  // right-click (the editor shows the learn menu)
     void setVol(float v)
@@ -1491,7 +1589,7 @@ public:
 private:
     float vol = 1.0f;       // pushed from the channel each tick (setVol)
     void apply(const juce::MouseEvent& e)
-    { setVol(e.position.x / juce::jmax(1.0f, (float) getWidth()) * VOL_MAX);
+    { setVol(posToGain(e.position.x / juce::jmax(1.0f, (float) getWidth())));   // dB taper [2026-07-14]
       if (onVolume) onVolume(vol); }
 };
 
@@ -1559,7 +1657,8 @@ public:
     void setDriftLive(const float* cents, int n);
     // LIVE MODULATION: a cyan ring at each dot's modulated position (detune/vib/width/drift; -1 = no
     // active route) - so a param targeted in the matrix visibly moves, like the FX-knob mod rings.
-    void setModLive(float det, float vib, float width, float drift);
+    void setModLive(float det, float vib, float width, float drift, float uniCnt = -1000.0f);
+    float modUniCnt = -1000.0f;   // [2026-07-14] live modulated unison COUNT (ring at the uni handle; -1000 = no route)
     void setSupport(bool uniSupported, bool vibSupported, juce::String naReason);
     void setMaxUni(int m) { const int c = juce::jlimit(1, kMaxUni, m); if (c == maxUni) return; maxUni = c; if (uni > maxUni) uni = maxUni; if (uniChord > maxUni) uniChord = maxUni; if (uniScale > maxUni) uniScale = maxUni; repaint(); }  // per-engine unison cap
     std::function<void(int unison, float detune, float vibrato, bool centre, int detuneMode, int chordMode, bool scaleOn, int scaleType, int scaleKey, float uniSpread, float drift)> onChange;
@@ -1636,6 +1735,11 @@ public:
     int  active() const { return activeFilt; }   // which of the 2 filters the keytrack fader edits (last touched)
     void setModCutoff(int fi, float hz) { fi = juce::jlimit(0, 1, fi);   // live modulation ring: the modulated cutoff
         if (std::abs(hz - modCutoff[fi]) > (hz > 0 ? hz * 0.01f : 0.5f)) { modCutoff[fi] = hz; repaint(); } }
+    // [2026-07-14 00:30] live MODULATED reso + env-amount (user: "live visual pls"). -1000 = no route.
+    void setModReso(int fi, float q) { fi = juce::jlimit(0, 1, fi);
+        if (std::abs(q - modReso[fi]) > 0.01f) { modReso[fi] = q; repaint(); } }
+    void setModEnvAmt(int fi, float v) { fi = juce::jlimit(0, 1, fi);
+        if (std::abs(v - modEnvA[fi]) > 0.005f) { modEnvA[fi] = v; repaint(); } }
     static juce::Colour filtColour(int fi) { return fi == 0 ? juce::Colour(0xffff7a4a) : juce::Colour(0xff35c0ff); }  // F1 orange / F2 cyan
     void pushSpectrum(const float* mags, int n);
     void decayTick();                            // call on a timer to fade slowly
@@ -1657,6 +1761,8 @@ private:
     float fCutoff[2] = { 1000.0f, 1000.0f }, fReso[2] = { 0.707f, 0.707f }, fEnvAmt[2] = { 0.0f, 0.0f };
     float fGain[2] = { 6.0f, 6.0f };   // BELL only: bipolar boost/cut dB (the diamond's Y = this, on the dB axis)
     float modCutoff[2] = { -1.0f, -1.0f };        // live modulated cutoff Hz per filter (-1 = not modulated)
+    float modReso[2]   = { -1000.0f, -1000.0f };  // live modulated resonance (route-gated)
+    float modEnvA[2]   = { -1000.0f, -1000.0f };  // live modulated env amount (route-gated)
     int   activeFilt = 0;                         // which filter the diamond drag / keytrack edits (last touched)
     bool  showFilter = true;
     // Handle ids: diamond of filter fi = 100+fi ; envelope end handle = 102+fi.
@@ -2598,6 +2704,7 @@ private:
     LfoCurveEditor lfoCurveEd;             // LFO SHAPER overlay (draw the Custom LFO cycle)
     ModFaderMatrix  modFaders;             // 12 route faders (6x2) inline in the MODULATION box
     RoutePicker     routePicker;           // its right-click source|target chooser (overlay)
+    RemapEditor     remapEd;               // [2026-07-14] the per-route REMAP curve overlay (opened from the picker)
     int            routePickRoute = -1;    // which fader the picker is currently editing
     int            lfoCurveEdDest = 0;     // which LFO tab the overlay edits
     int            harmEdSlot = 0;

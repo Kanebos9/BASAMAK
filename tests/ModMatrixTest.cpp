@@ -419,6 +419,30 @@ int main()
         printf("[18] MPE pressure: ch3 press diff=%.4f (>0.02), wrong-ch diff=%.4f (==0) -> %s\n",
                dHit, dMiss, CHK(dHit > 0.02f && dMiss == 0.0f && finite(hit)) ? "OK" : "FAIL");
     }
+    {   // [19] PER-ROUTE REMAP: a GATE curve (0 below half, 1 above) on Velocity -> Cutoff. A soft
+        //      hit (vel 0.4) through the gate must be BIT-IDENTICAL to no route at all (the curve
+        //      outputs exactly 0); a hard hit (vel 0.95) must still modulate. Locks the remap math
+        //      through both the block AND per-sample paths.
+        auto mkR = [](bool route, bool gate) { return [route, gate](DrumChannel& c){
+            for (auto& sl : c.slots) sl = Slot();
+            auto& s = c.slots[0];
+            s.engine = DrumChannel::SrcOsc; s.weight = 1.0f;
+            s.oscShape = s.oscShapeB = DrumChannel::WvSaw; s.oscFreq = 110.0f;
+            s.atk = 0.003f; s.hold = 0.3f; s.dec = 0.3f;
+            s.filterType = DrumChannel::LowPass; s.filterCutoff = 300.0f; s.filterReso = 2.0f;
+            if (route) {
+                s.mod[0].src = DrumChannel::MSVel; s.mod[0].tgt = DrumChannel::MTFilt1Cut; s.mod[0].amt = 1.0f;
+                if (gate) { s.mod[0].curveOn = 1;
+                            for (int k = 0; k < Slot::MOD_CURVE_N; ++k) s.mod[0].curve[k] = k < Slot::MOD_CURVE_N / 2 ? 0 : 255; }
+            } }; };
+        auto softNo  = render(mkR(false, false), 0.4f, 0.5);
+        auto softGt  = render(mkR(true,  true ), 0.4f, 0.5);
+        auto hardNo  = render(mkR(false, false), 0.95f, 0.5);
+        auto hardGt  = render(mkR(true,  true ), 0.95f, 0.5);
+        const float dSoft = maxdiff(softNo, softGt), dHard = maxdiff(hardNo, hardGt);
+        printf("[19] remap gate: soft-vel diff=%.6f (==0, curve outputs 0), hard-vel diff=%.4f (>0.02) -> %s\n",
+               dSoft, dHard, CHK(dSoft == 0.0f && dHard > 0.02f && finite(softGt) && finite(hardGt)) ? "OK" : "FAIL");
+    }
     printf(fails == 0 ? ">>> ModMatrixTest PASS\n" : ">>> ModMatrixTest FAIL (%d)\n", fails);
     return fails;
 }

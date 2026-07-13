@@ -196,13 +196,14 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                 sequencer.modWheel = (float) msg.getControllerValue() / 127.0f;
         }
         else if (msg.isChannelPressure() || msg.isAftertouch())
-        {   // [2026-07-13 23:20] show AFTERTOUCH on the MIDI monitor ("AT vN chN") - the user's
-            // "my keyboard's aftertouch didn't work" is diagnosable at a glance: no AT here = the
-            // keyboard isn't sending it (or the wrong port/setting); AT here = check the route.
-            lastCcNum.store(200, std::memory_order_relaxed);
-            lastCcVal.store(msg.isChannelPressure() ? msg.getChannelPressureValue() : msg.getAfterTouchValue(),
+        {   // [2026-07-13 23:20] show AFTERTOUCH on the MIDI monitor ("AT vN chN") - diagnosable at a
+            // glance. [2026-07-14] SEPARATE atomics + a timestamp: the display EXPIRES ~1.5 s after
+            // the last AT message instead of latching forever (user: "it stays showing AT"), and it
+            // no longer clobbers the last-CC latch.
+            lastAtVal.store(msg.isChannelPressure() ? msg.getChannelPressureValue() : msg.getAfterTouchValue(),
                             std::memory_order_relaxed);
-            lastCcChan.store(msg.getChannel(), std::memory_order_relaxed);
+            lastAtChan.store(msg.getChannel(), std::memory_order_relaxed);
+            lastAtMs.store(juce::Time::getMillisecondCounter(), std::memory_order_relaxed);
         }
 
         // MIDI learn
@@ -1392,7 +1393,7 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
         // NO-HIDDEN-PARAMS RULE: the old routes to UI-less legacy fields (pan, pitch, channel
         // filter/drive/sends, layer atk/hld/dec, eq bells) are REMOVED - a CC must never move
         // something the user can't see. Channel VOLUME kept: its UI = the strip meter's handle.
-        if      (param == "volume")  dch.volume     = norm * 1.25f;   // matches the meter handle's range
+        if      (param == "volume")  dch.volume     = LevelMeter::posToGain(norm);   // dB taper, matches the handle [2026-07-14]
         else if (param == "mute")    dch.mute       = on;
         else if (param == "solo")    dch.solo       = on;
         else if (param == "overlap") dch.allowOverlap = on;

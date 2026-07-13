@@ -787,7 +787,12 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         // MOD MATRIX: routes packed "src:tgt:amt;..." + the two matrix-created source params.
         { juce::String mm;
           for (int r = 0; r < MOD_ROUTES; ++r)
-              mm << (int) s.mod[r].src << ":" << (int) s.mod[r].tgt << ":" << juce::String(s.mod[r].amt, 4) << ";";
+          {
+              mm << (int) s.mod[r].src << ":" << (int) s.mod[r].tgt << ":" << juce::String(s.mod[r].amt, 4);
+              if (s.mod[r].curveOn)   // [2026-07-14 00:03] REMAP curve = a 4th field (128 hex chars); absent = pass-through
+              { mm << ":"; for (int k = 0; k < Slot::MOD_CURVE_N; ++k) mm << juce::String::toHexString(s.mod[r].curve[k]).paddedLeft('0', 2); }
+              mm << ";";
+          }
           st.setProperty("mmx", mm, nullptr); }
         st.setProperty("mEA", s.modEnvA, nullptr); st.setProperty("mED", s.modEnvD, nullptr);
         st.setProperty("mEH", s.modEnvH, nullptr); st.setProperty("mES", s.modEnvS, nullptr); st.setProperty("mER", s.modEnvR, nullptr);
@@ -973,7 +978,11 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
                 if (f2.size() >= 3)
                 { s.mod[r].src = (int8_t) juce::jlimit(0, MS_COUNT - 1, f2[0].getIntValue());
                   s.mod[r].tgt = (int8_t) juce::jlimit(0, MT_COUNT - 1, f2[1].getIntValue());
-                  s.mod[r].amt = juce::jlimit(-1.0f, 1.0f, f2[2].getFloatValue()); }
+                  s.mod[r].amt = juce::jlimit(-1.0f, 1.0f, f2[2].getFloatValue());
+                  if (f2.size() >= 4 && f2[3].length() == Slot::MOD_CURVE_N * 2)   // REMAP curve (hex)
+                  { s.mod[r].curveOn = 1;
+                    for (int k = 0; k < Slot::MOD_CURVE_N; ++k)
+                        s.mod[r].curve[k] = (uint8_t) f2[3].substring(k * 2, k * 2 + 2).getHexValue32(); } }
             }
         }
         else
@@ -1923,7 +1932,7 @@ void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals, SlotVoice* lat
     for (auto& r : tmp.mod)
     {
         if (r.tgt == MTOff || r.src == MSOff || std::abs(r.amt) < 1.0e-4f) continue;
-        const float m = r.amt * srcVals[juce::jlimit(0, MS_COUNT - 1, (int) r.src)];   // depth * source
+        const float m = r.amt * modRouteShape(r, srcVals[juce::jlimit(0, MS_COUNT - 1, (int) r.src)]);   // depth * (remapped) source
         auto add = [&](float& f, float mn, float mx) { f = juce::jlimit(mn, mx, f + m * (mx - mn)); };
         switch (r.tgt)
         {
@@ -1946,6 +1955,11 @@ void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals, SlotVoice* lat
             case MTVol: case MTWarp: break;   // HOT (per-sample AM / wavefold)
             case MTChFxAChr: case MTChFxBChr: case MTChFxCAmt: case MTChFxCChr: break;   // CHANNEL FX C + Characters: accumulated separately (channelMod)
             case MTRing: case MTRingHz: case MTSlotPan: break;   // HOT (per-sample)
+            // [2026-07-14 00:30] filter ENV AMOUNTS + UNISON COUNT: block-rate (they feed the bake,
+            // per voice) - env-follow is itself block-rate, and a voice COUNT is inherently stepped.
+            case MTFilt1Env: add(tmp.filterEnvAmt,  -1, 1); break;
+            case MTFilt2Env: add(tmp.filterEnvAmt2, -1, 1); break;
+            case MTUniCount: tmp.oscUnison = juce::jlimit(1, 16, tmp.oscUnison + juce::roundToInt(m * 15.0f)); break;
             default:
                 if (r.tgt >= MT_GRID_BASE && r.tgt < MT_GRID_END)   // engine GRID knobs only (Sub/Formant sit above)
                 {
@@ -1971,7 +1985,7 @@ void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals, SlotVoice* lat
         for (auto& r : tmp.mod)
         {
             if (r.src == MSOff || std::abs(r.amt) < 1.0e-4f) continue;
-            const float m = r.amt * srcVals[juce::jlimit(0, MS_COUNT - 1, (int) r.src)];
+            const float m = r.amt * modRouteShape(r, srcVals[juce::jlimit(0, MS_COUNT - 1, (int) r.src)]);
             switch (r.tgt) { case MTAtk: latch->envModOfs[0] += m; break; case MTDec: latch->envModOfs[1] += m; break;
                              case MTSus: latch->envModOfs[2] += m; break; case MTRel: latch->envModOfs[3] += m; break;
                              default: break; }
@@ -1993,7 +2007,7 @@ void DrumChannel::applyHotBlock(Slot& tmp, const float* srcVals) const
     for (auto& r : tmp.mod)
     {
         if (r.tgt == MTOff || r.src == MSOff || std::abs(r.amt) < 1.0e-4f) continue;
-        const float m = r.amt * srcVals[juce::jlimit(0, MS_COUNT - 1, (int) r.src)];
+        const float m = r.amt * modRouteShape(r, srcVals[juce::jlimit(0, MS_COUNT - 1, (int) r.src)]);
         auto add = [&](float& f, float mn, float mx) { f = juce::jlimit(mn, mx, f + m * (mx - mn)); };
         switch (r.tgt)
         {
@@ -2143,6 +2157,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         //          10 Warp 11 WavePos 12 FmIdx(grid fmDepth).
         // =========================================================================================
         int8_t arSrc[MOD_ROUTES] = {}; int8_t arTgt[MOD_ROUTES] = {}; float arAmt[MOD_ROUTES] = {}; int arN = 0;
+        const uint8_t* arCv[MOD_ROUTES] = {};   // [2026-07-14 00:03] per-route REMAP curve (null = pass-through); points into slots[] (stable), never the bake copy
+        uint8_t arBi[MOD_ROUTES] = {};          // source is bipolar -> curve X maps -1..+1
         uint16_t arMask = 0;                                  // bit per ModSrc that needs a per-sample value
         float  mEA = 0.005f, mEH = 0, mED = 0.3f, mES = 0, mER = 0;   // Mod Env params (per-sample source eval)
         bool   arDrvOn = false;                               // a route targets DRIVE -> the dry-blend ease-in engages
@@ -2220,12 +2236,18 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     return 12;   // grid "FM Amount" = the one grid param consumed per sample (fmIndex)
                 return -1;
             };
+            int ri = -1;
             for (auto& r : sl.mod)
             {
+                ++ri;
                 if (r.src == MSOff || r.tgt == MTOff || std::abs(r.amt) < 1.0e-4f) continue;
                 const int h = hotIdx(r.tgt); if (h < 0) continue;
                 if (c.arN < MOD_ROUTES)
-                { c.arTgt[c.arN] = (int8_t) h; c.arSrc[c.arN] = r.src; c.arAmt[c.arN] = r.amt; ++c.arN; }
+                { c.arTgt[c.arN] = (int8_t) h; c.arSrc[c.arN] = r.src; c.arAmt[c.arN] = r.amt;
+                  // REMAP pointer must reference the PERSISTENT slot (the bake copy dies with the block)
+                  c.arCv[c.arN] = (r.curveOn && ri >= 0 && ri < MOD_ROUTES) ? slots[s].mod[ri].curve : nullptr;
+                  c.arBi[c.arN] = (uint8_t)(modSrcBipolar(r.src) ? 1 : 0);
+                  ++c.arN; }
                 if (h == 6) c.arDrvOn = true;   // drive routed -> ease the shaper in near zero
                 c.arMask |= (uint16_t)(1u << juce::jmin(15, (int) r.src));
                 if (r.src >= MSLfoFilt && r.src <= MSLfoWave) c.lfoSrcUsed[r.src - MSLfoFilt] = true;
@@ -2611,7 +2633,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             for (auto& r : modTmp.mod)
             {
                 if (r.src == MSOff || std::abs(r.amt) < 1.0e-4f) continue;
-                const float m = r.amt * srcVals[juce::jlimit(0, MS_COUNT - 1, (int) r.src)];
+                const float m = r.amt * modRouteShape(r, srcVals[juce::jlimit(0, MS_COUNT - 1, (int) r.src)]);
                 switch (r.tgt) { case MTChFxAAmt: chFxMod[0] += m; break; case MTChFxAChr: chFxMod[1] += m; break;
                                  case MTChFxBAmt: chFxMod[2] += m; break; case MTChFxBChr: chFxMod[3] += m; break;
                                  case MTRevSend:  chFxMod[4] += m; break; case MTDelSend:  chFxMod[5] += m; break;
@@ -2642,6 +2664,12 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             slotModLiveFx[s][24] = uniTgt(MTDrift)   ? modTmp.drift     : -1000.0f;
             slotModLiveFx[s][25] = uniTgt(MTRingHz)  ? modTmp.fxRingHz  : -1000.0f;   // [2026-07-13 22:45]
             slotModLiveFx[s][26] = uniTgt(MTSlotPan) ? modTmp.pan       : -1000.0f;
+            // [2026-07-14 00:30] live FILTER visuals: modulated RESO + ENV AMOUNT (user: "live visual pls")
+            slotModLiveFx[s][27] = uniTgt(MTFilt1Res) ? modTmp.filterReso     : -1000.0f;
+            slotModLiveFx[s][28] = uniTgt(MTFilt2Res) ? modTmp.filterReso2    : -1000.0f;
+            slotModLiveFx[s][29] = uniTgt(MTFilt1Env) ? modTmp.filterEnvAmt   : -1000.0f;
+            slotModLiveFx[s][30] = uniTgt(MTFilt2Env) ? modTmp.filterEnvAmt2  : -1000.0f;
+            slotModLiveFx[s][31] = uniTgt(MTUniCount) ? (float) modTmp.oscUnison : -1000.0f;
             // Keep any LFO used as a matrix SOURCE advancing even if its own Amount is 0.
             for (auto& r : modTmp.mod)
                 if (r.tgt != MTOff && std::abs(r.amt) > 1.0e-4f
@@ -2987,7 +3015,13 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         cache[sid] = val; got |= (1u << sid); return val;
                     };
                     for (int r2 = 0; r2 < c.arN; ++r2)
-                        sums[c.arTgt[r2]] += c.arAmt[r2] * S(c.arSrc[r2]);
+                    {
+                        float sval = S(c.arSrc[r2]);
+                        if (c.arCv[r2] != nullptr)   // [2026-07-14 00:03] per-route REMAP (drawn transfer curve)
+                            sval = c.arBi[r2] ? modCurveLut(c.arCv[r2], sval * 0.5f + 0.5f) * 2.0f - 1.0f
+                                              : modCurveLut(c.arCv[r2], sval);
+                        sums[c.arTgt[r2]] += c.arAmt[r2] * sval;
+                    }
                     if (sums[0] != 0.0f) arPitchMul = std::exp2((double) juce::jlimit(-4.0f, 4.0f, sums[0]));   // +-1 oct per full route
                     if (sums[1] != 0.0f) arVolG     = juce::jlimit(0.0f, 2.0f, 1.0f + sums[1]);                 // AM gain
                     if (sums[2] != 0.0f) arGmMul[0] = std::exp2((double) juce::jlimit(-8.0f, 8.0f, 4.0f * sums[2]));   // +-4 oct cutoff

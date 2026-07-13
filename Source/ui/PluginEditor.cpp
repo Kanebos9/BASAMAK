@@ -985,7 +985,9 @@ static const char* kModTgtFixedName[DrumChannel::MT_GRID_BASE] =
 static juce::String kModTgtHiName(int t)   // fixed targets ABOVE the grid range
 { return t == DrumChannel::MTSub ? "Sub" : t == DrumChannel::MTFormant ? "Formant"
        : t == DrumChannel::MTChFxCAmt ? "FX C Amount (Channel)" : t == DrumChannel::MTChFxCChr ? "FX C Character (Channel)"
-       : t == DrumChannel::MTRingHz ? "Ring Hz" : t == DrumChannel::MTSlotPan ? "Slot Pan" : juce::String(); }
+       : t == DrumChannel::MTRingHz ? "Ring Hz" : t == DrumChannel::MTSlotPan ? "Slot Pan"
+       : t == DrumChannel::MTFilt1Env ? "Filter 1 Env Amount" : t == DrumChannel::MTFilt2Env ? "Filter 2 Env Amount"
+       : t == DrumChannel::MTUniCount ? "Unison Count" : juce::String(); }
 // ================================================================================================
 // MOD SOURCE / TARGET TOOLTIPS [2026-07-13 22:50] (user: "we need tips like that as tooltips") -
 // shown per ROW while hovering the RoutePicker lists. The env-target tips carry the crucial
@@ -1051,6 +1053,9 @@ static juce::String modTgtTip(int t, int engine)
         case DC::MTRing:     return "Ring modulator amount (dry -> ring-modulated). AUDIO-RATE.";
         case DC::MTRingHz:   return "The ring modulator's CARRIER frequency, +-3 octaves. AUDIO-RATE: sweeping it = sci-fi sideband sweeps; audio-rate sources = chaos (the good kind).";
         case DC::MTSlotPan:  return "This layer's pan. Note -> Pan = keyboard spread, Random -> Pan = per-hit scatter, Velocity -> Pan = accent lean. (Whole-channel MOTION = Channel FX Auto-Pan.)";
+        case DC::MTFilt1Env: return "Filter 1's ENVELOPE AMOUNT (the dashed sweep arrow). Velocity -> Env Amount = harder hits sweep further (the 303 accent, squared). Live-shown on the filter display.";
+        case DC::MTFilt2Env: return "Filter 2's ENVELOPE AMOUNT (the dashed sweep arrow).";
+        case DC::MTUniCount: return "Unison VOICE COUNT (1..16, engine-capped). Inherently STEPPED - best from per-hit sources (Velocity / Random / Step Mod: harder hit = fatter stack). A continuous LFO here audibly steps.";
         case DC::MTChFxAAmt: return "Channel FX slot A's Amount fader (block-rate, smoothed).";
         case DC::MTChFxBAmt: return "Channel FX slot B's Amount fader (block-rate, smoothed).";
         case DC::MTChFxCAmt: return "Channel FX slot C's Amount fader (block-rate, smoothed).";
@@ -1077,6 +1082,88 @@ static void lfoRoutedMask(const DrumChannel::Slot& sl, bool routed[4])
     for (const auto& r : sl.mod)
         if (r.tgt != DrumChannel::MTOff && r.src >= DrumChannel::MSLfoFilt && r.src <= DrumChannel::MSLfoWave)
             routed[r.src - DrumChannel::MSLfoFilt] = true;
+}
+
+//==============================================================================
+// RemapEditor [2026-07-14 00:03] - the per-route REMAP curve overlay implementation.
+//==============================================================================
+void RemapEditor::applyPreset(int i)
+{
+    if (i == 0) { on = false; for (int k = 0; k < N; ++k) curve[k] = (float) k / (float)(N - 1); }
+    else
+    {
+        on = true;
+        for (int k = 0; k < N; ++k)
+        {
+            const float x = (float) k / (float)(N - 1);
+            curve[k] = i == 1 ? x * x * x                                    // SOFT: late response
+                     : i == 2 ? 1.0f - (1.0f - x) * (1.0f - x) * (1.0f - x)  // HARD: early response
+                              : x * x * (3.0f - 2.0f * x);                   // S-CURVE: smoothstep
+        }
+    }
+    if (onChange) onChange(curve, on);
+    repaint();
+}
+void RemapEditor::drawAt(juce::Point<float> pos, bool connect)
+{
+    const auto r = strip();
+    const int   i = juce::jlimit(0, N - 1, (int) std::floor((pos.x - r.getX()) / r.getWidth() * (float) N));
+    const float v = juce::jlimit(0.0f, 1.0f, 1.0f - (pos.y - r.getY()) / r.getHeight());
+    if (! on) on = true;   // drawing anything switches the remap ON
+    if (connect && lastI >= 0 && lastI != i)
+    {   const int lo = juce::jmin(lastI, i), hi = juce::jmax(lastI, i);
+        const float v0 = curve[lastI];
+        for (int k = lo; k <= hi; ++k)
+            curve[k] = juce::jmap((float)(k - lo) / juce::jmax(1.0f, (float)(hi - lo)), lastI < i ? v0 : v, lastI < i ? v : v0);
+    }
+    else curve[i] = v;
+    lastI = i;
+    if (onChange) onChange(curve, on);
+    repaint();
+}
+void RemapEditor::mouseDown(const juce::MouseEvent& e)
+{
+    if (closeRect().contains(e.position)) { setVisible(false); if (onClose) onClose(); return; }
+    for (int i = 0; i < 4; ++i) if (presetRect(i).contains(e.position)) { applyPreset(i); return; }
+    if (strip().contains(e.position)) drawAt(e.position, false);
+}
+void RemapEditor::mouseDrag(const juce::MouseEvent& e)
+{
+    if (strip().contains(e.position) || lastI >= 0) drawAt(strip().getConstrainedPoint(e.position), true);
+}
+void RemapEditor::paint(juce::Graphics& g)
+{
+    g.fillAll(juce::Colour(0xf0141426));
+    g.setColour(juce::Colour(0xff777fa8)); g.drawRect(getLocalBounds(), 1);
+    g.setColour(juce::Colours::white); g.setFont(juce::Font(12.5f, juce::Font::bold));
+    g.drawText(title, 10, 4, getWidth() - 40, 16, juce::Justification::centredLeft, false);
+    g.setColour(juce::Colour(0xffaebada)); g.setFont(juce::Font(12.0f, juce::Font::bold));
+    g.drawText("X", closeRect(), juce::Justification::centred, false);
+    static const char* pn[4] = { "Linear", "Soft", "Hard", "S-Curve" };
+    for (int i = 0; i < 4; ++i)
+    {   const auto pr = presetRect(i);
+        const bool lit = (i == 0 && ! on);
+        g.setColour(lit ? accent.withAlpha(0.30f) : juce::Colour(0xff20203a)); g.fillRoundedRectangle(pr, 3.0f);
+        g.setColour(i == 0 ? juce::Colour(0xff9fd1ff) : juce::Colours::white);
+        g.setFont(juce::Font(10.5f, lit ? juce::Font::bold : juce::Font::plain));
+        g.drawText(pn[i], pr, juce::Justification::centred, false);
+    }
+    const auto r = strip();
+    g.setColour(juce::Colour(0xff181830)); g.fillRoundedRectangle(r, 4.0f);
+    g.setColour(juce::Colour(0x22ffffff));
+    g.drawLine(r.getX(), r.getBottom(), r.getRight(), r.getY(), 1.0f);            // pass-through diagonal
+    if (bipolarSrc) g.drawVerticalLine((int) r.getCentreX(), r.getY(), r.getBottom());   // source-at-rest marker
+    juce::Path pth;
+    for (int k = 0; k < N; ++k)
+    {   const float x = r.getX() + r.getWidth() * (float) k / (float)(N - 1);
+        const float y = r.getBottom() - r.getHeight() * juce::jlimit(0.0f, 1.0f, curve[k]);
+        if (k == 0) pth.startNewSubPath(x, y); else pth.lineTo(x, y);
+    }
+    g.setColour(on ? accent : accent.withAlpha(0.35f));
+    g.strokePath(pth, juce::PathStrokeType(on ? 2.0f : 1.4f));
+    if (! on)
+    { g.setColour(juce::Colour(0xff8890b0)); g.setFont(juce::Font(11.0f));
+      g.drawText("pass-through - draw to remap", r, juce::Justification::centred, false); }
 }
 
 //==============================================================================
@@ -1147,6 +1234,9 @@ void RoutePicker::openFor(int cs, int ct, float amt)
     tgtModel.rows.push_back({ DrumChannel::MTChFxCChr, "FX C Character (Channel)" });
     tgtModel.rows.push_back({ DrumChannel::MTRingHz,  "Ring Hz" });    // [2026-07-13 22:45] user request
     tgtModel.rows.push_back({ DrumChannel::MTSlotPan, "Slot Pan" });
+    tgtModel.rows.push_back({ DrumChannel::MTFilt1Env, "Filter 1 Env Amount" });   // [2026-07-14 00:30]
+    tgtModel.rows.push_back({ DrumChannel::MTFilt2Env, "Filter 2 Env Amount" });
+    tgtModel.rows.push_back({ DrumChannel::MTUniCount, "Unison Count" });
     // ALPHABETICAL, "Off" pinned first (user) - one flat A..Z list per column, so the three
     // FX A/B/C pairs cluster together instead of FX C hiding under the engine-knob rows.
     auto alphabetize = [](std::vector<std::pair<int, juce::String>>& rows) {
@@ -1160,8 +1250,16 @@ void RoutePicker::openFor(int cs, int ct, float amt)
     setVisible(true); toFront(true);
 }
 juce::String RoutePicker::getTooltip()
-{   // rows serve their own tips via Col::getTooltipForRow; the picker itself only tips the fader
-    if (amtRect().contains(getMouseXYRelative().toFloat()))
+{   // rows serve their own tips via Col::getTooltipForRow; the picker itself tips the fader + remap row
+    const auto p = getMouseXYRelative().toFloat();
+    if (remapRect().contains(p))
+        return "REMAP: draw a transfer curve for THIS route (Vital-style).\n\n"
+               "- X = the source's value (bipolar sources like LFOs/Note span -1..+1, centre = at rest); "
+               "Y = what actually reaches the target.\n"
+               "- Presets inside: Linear = off (pass-through), Soft = late response (tame aftertouch), "
+               "Hard = early, S-Curve = smooth switch.\n"
+               "- Each route remembers its own curve - the same source can act differently per target.";
+    if (amtRect().contains(p))
         return "Route AMOUNT: centre = 0, right = positive, left = negative (cubic response - fine control near zero). Double-click = 0.";
     return {};
 }
@@ -1184,7 +1282,7 @@ void RoutePicker::resized()
     auto hdr = b.removeFromTop(15);
     lblSrc.setBounds(hdr.removeFromLeft(hdr.getWidth() / 2));
     lblTgt.setBounds(hdr);
-    b.removeFromBottom(26 + 6);   // reserve the bottom strip for the AMOUNT fader (under the source column)
+    b.removeFromBottom(26 + 6 + 24);   // reserve the AMOUNT fader + the REMAP row above it [2026-07-14]
     auto left = b.removeFromLeft(b.getWidth() / 2).reduced(2, 0);
     srcList.setBounds(left);
     tgtList.setBounds(b.reduced(2, 0));
@@ -1202,7 +1300,11 @@ void RoutePicker::setAmtFromX(float x)
     if (std::abs(p) < 0.02f) p = 0.0f;             // snap the finger to dead-centre = exactly 0
     curAmt = modAmtFromPos(p); if (onAmt) onAmt(curAmt); repaint();
 }
-void RoutePicker::mouseDown(const juce::MouseEvent& e) { amtDrag = amtRect().contains(e.position); if (amtDrag) setAmtFromX(e.position.x); }
+void RoutePicker::mouseDown(const juce::MouseEvent& e)
+{
+    if (remapRect().contains(e.position)) { if (onRemap) onRemap(); return; }   // [2026-07-14] open the curve editor
+    amtDrag = amtRect().contains(e.position); if (amtDrag) setAmtFromX(e.position.x);
+}
 void RoutePicker::mouseDrag(const juce::MouseEvent& e) { if (amtDrag) setAmtFromX(e.position.x); }
 void RoutePicker::mouseUp(const juce::MouseEvent&) { if (amtDrag && onAmtDragEnd) onAmtDragEnd(); amtDrag = false; }
 void RoutePicker::paint(juce::Graphics& g)
@@ -1221,6 +1323,19 @@ void RoutePicker::paint(juce::Graphics& g)
     const float pct = curAmt * 100.0f;   // sub-10% shows one decimal so the fine sub-1% range is readable
     const juce::String pctS = std::abs(pct) < 9.95f ? juce::String(pct, 1) : juce::String(juce::roundToInt(pct));
     g.drawText("AMOUNT  " + juce::String(curAmt >= 0 ? "+" : "") + pctS + "%", fr, juce::Justification::centred, false);
+    // REMAP row [2026-07-14]: click = draw this route's transfer curve (Vital-style).
+    const auto rr = remapRect();
+    g.setColour(remapOn ? accent.withAlpha(0.22f) : juce::Colour(0xff181828)); g.fillRoundedRectangle(rr, 4.0f);
+    g.setColour(remapOn ? accent : juce::Colour(0xff777fa8)); g.drawRoundedRectangle(rr.reduced(0.5f), 4.0f, 1.0f);
+    { juce::Path curveGlyph;   // a small S-mark so the row reads as "curve", never unicode
+      const float gx = rr.getX() + 8.0f, gy = rr.getCentreY();
+      curveGlyph.startNewSubPath(gx, gy + 4.0f);
+      curveGlyph.cubicTo(gx + 5.0f, gy + 4.0f, gx + 5.0f, gy - 4.0f, gx + 10.0f, gy - 4.0f);
+      g.strokePath(curveGlyph, juce::PathStrokeType(1.4f)); }
+    g.setFont(juce::Font(11.0f, remapOn ? juce::Font::bold : juce::Font::plain));
+    g.setColour(remapOn ? juce::Colours::white : juce::Colour(0xffaebada));
+    g.drawText(remapOn ? "Remap curve: ON - click to edit" : "Remap curve: off - click to draw",
+               rr.withTrimmedLeft(22.0f), juce::Justification::centredLeft, false);
 }
 
 //==============================================================================
@@ -1260,7 +1375,8 @@ void ModFaderMatrix::setValues(const DrumChannel::Slot& sl)
     for (int r = 0; r < NR; ++r)
     { src[r] = juce::jlimit(0, DrumChannel::MS_COUNT - 1, (int) sl.mod[r].src);
       tgt[r] = juce::jlimit(0, DrumChannel::MT_COUNT - 1, (int) sl.mod[r].tgt);
-      amt[r] = juce::jlimit(-1.0f, 1.0f, sl.mod[r].amt); }
+      amt[r] = juce::jlimit(-1.0f, 1.0f, sl.mod[r].amt);
+      cvOn[r] = sl.mod[r].curveOn != 0; }
     repaint();
 }
 void ModFaderMatrix::paint(juce::Graphics& g)
@@ -1296,6 +1412,13 @@ void ModFaderMatrix::paint(juce::Graphics& g)
             const float ax = fr.getCentreX(), ay = fr.getCentreY();
             juce::Path ar; ar.addTriangle(ax - 3.0f, ay - 3.0f, ax + 3.0f, ay, ax - 3.0f, ay + 3.0f);
             g.setColour(accent); g.fillPath(ar);
+            if (cvOn[i])
+            {   // [2026-07-14] REMAP glyph: a tiny S-curve mark bottom-right = this route is remapped
+                juce::Path cg; const float gx = fr.getRight() - 12.0f, gy = fr.getBottom() - 5.0f;
+                cg.startNewSubPath(gx, gy);
+                cg.cubicTo(gx + 3.0f, gy, gx + 3.0f, gy - 5.0f, gx + 6.0f, gy - 5.0f);
+                g.setColour(juce::Colour(0xff35c0ff)); g.strokePath(cg, juce::PathStrokeType(1.3f));
+            }
         }
         else
         {
@@ -2744,7 +2867,7 @@ void LevelMeter::paint(juce::Graphics& g)
         const auto bar = onVolume ? r.reduced (1.0f).withTop (r.getBottom() - 5.0f) : r;
         // The VOLUME HANDLE is the level bar's CEILING on the strips (user design): the fill can
         // never pass the handle - pull the handle down and the whole bar squeezes with it.
-        const float capW = onVolume ? r.getWidth() * (vol / VOL_MAX) : r.getWidth();
+        const float capW = onVolume ? r.getWidth() * gainToPos(vol) : r.getWidth();   // dB-taper position [2026-07-14]
         // green->amber->red gradient laid over the capped span, clipped to the filled portion.
         juce::ColourGradient grad (green, bar.getX(), 0.0f, red, bar.getX() + juce::jmax (8.0f, capW), 0.0f, false);
         grad.addColour (0.78, amber);
@@ -2759,10 +2882,10 @@ void LevelMeter::paint(juce::Graphics& g)
         if (onVolume)   // strips only (the logo master meter has no volume handle)
         {
             // UNITY (100%) marker: a clearly visible white tick (user: the old one was too faint).
-            const float ux = r.getX() + r.getWidth() * (1.0f / VOL_MAX);
+            const float ux = r.getX() + r.getWidth() * 0.75f;   // unity notch = the 0 dB point of the taper
             g.setColour (juce::Colours::white.withAlpha (0.55f));
             g.fillRect (juce::Rectangle<float> (ux - 1.0f, bar.getY() - 2.0f, 2.0f, bar.getHeight() + 3.0f));
-            const float vx = r.getX() + r.getWidth() * (vol / VOL_MAX);
+            const float vx = r.getX() + r.getWidth() * gainToPos(vol);
             g.setColour (juce::Colour (0xff35c0ff));
             g.fillRoundedRectangle (vx - 2.2f, r.getY(), 4.4f, r.getHeight(), 1.6f);   // full-height, wide = grabbable
         }
@@ -3010,12 +3133,13 @@ void VoiceModDisplay::setDriftLive(const float* cents, int n)
     for (int i = 0; i < n; ++i) driftLive[i] = cents[i];
     if (driftAmt > 0.001f) repaint();   // only worth repainting when drift is audible
 }
-void VoiceModDisplay::setModLive(float det, float vib, float width, float drift)
+void VoiceModDisplay::setModLive(float det, float vib, float width, float drift, float uniCnt)
 {
     const float v[4] = { det, vib, width, drift };
     bool ch = false;
     for (int i = 0; i < 4; ++i) { const float a = (v[i] < 0.0f ? -1.0f : v[i]);
                                   if (std::abs(a - modLive[i]) > 0.002f) { modLive[i] = a; ch = true; } }
+    if (std::abs(uniCnt - modUniCnt) > 0.01f) { modUniCnt = uniCnt; ch = true; }   // [2026-07-14] Unison Count target
     if (ch) repaint();
 }
 void VoiceModDisplay::setSupport(bool uniSupported, bool vibSupported, juce::String naReason)
@@ -3270,6 +3394,14 @@ void VoiceModDisplay::paint(juce::Graphics& g)
             g.setColour(juce::Colour(0xff35c0ff).withAlpha(0.9f));
             g.drawEllipse(mx[i] - 5.5f, my - 5.5f, 11.0f, 11.0f, 1.6f);
         }
+        // [2026-07-14 00:30] Unison COUNT target: ring at the count handle's modulated position.
+        if (uniOn && modUniCnt > -900.0f)
+        {
+            const float cy = q.bottom - (juce::jlimit(1.0f, (float) maxUni, modUniCnt) - 1.0f)
+                                        / (float) juce::jmax(1, maxUni - 1) * (q.bottom - q.uniTop);
+            g.setColour(juce::Colour(0xff35c0ff).withAlpha(0.9f));
+            g.drawEllipse(q.uX - 5.5f, cy - 5.5f, 11.0f, 11.0f, 1.6f);
+        }
     }
     }
 
@@ -3486,6 +3618,24 @@ void FrequencyDisplay::paint(juce::Graphics& g)
                     g.setColour(fcol.brighter(0.5f).withAlpha(0.9f));
                     g.drawVerticalLine((int) mx, top, bottom);
                     g.fillEllipse(mx - 2.5f, top + 1.0f, 5.0f, 5.0f);
+                }
+                // [2026-07-14 00:30] live MODULATED RESO: a hollow ring at the modulated (cutoff, reso)
+                // spot - the diamond stays at your base setting (the mod-ring convention).
+                if (fOn && modReso[fi] > -900.0f)
+                {
+                    const float mx2 = xForFreq(a, juce::jlimit(20.0f, 20000.0f, modCutoff[fi] > 0.0f ? modCutoff[fi] : fCutoff[fi]));
+                    const float my2 = a.getBottom() - resoToNorm(modReso[fi]) * a.getHeight() * 0.85f - a.getHeight() * 0.06f;
+                    g.setColour(fcol.brighter(0.6f));
+                    g.drawEllipse(mx2 - 4.5f, my2 - 4.5f, 9.0f, 9.0f, 1.6f);
+                }
+                // live MODULATED ENV AMOUNT: a bright dot where the modulated sweep would END.
+                if (fOn && modEnvA[fi] > -900.0f)
+                {
+                    const float endHz = juce::jlimit(20.0f, 20000.0f,
+                        fCutoff[fi] * std::pow(2.0f, juce::jlimit(-1.0f, 1.0f, modEnvA[fi]) * 5.0f));
+                    const auto mp2 = filtPos(a, fi);
+                    g.setColour(fcol.brighter(0.7f).withAlpha(0.95f));
+                    g.fillEllipse(xForFreq(a, endHz) - 3.0f, mp2.y - 3.0f, 6.0f, 6.0f);
                 }
             }
             if (fOn && std::abs(fEnvAmt[fi]) > 0.02f)   // envelope sweep arrow
@@ -5732,7 +5882,9 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
                                                  h = mix(h, f(sl.lfoCurve[d2][k])); }   // per-slot LFOs
         h = mix(h, f(sl.drift)); h = mix(h, f(sl.filterDrive));   // DRIFT (alive) + filter loop drive
         for (int r = 0; r < DrumChannel::MOD_ROUTES; ++r)   // MOD MATRIX routes + created sources
-        { h = mix(h, sl.mod[r].src); h = mix(h, sl.mod[r].tgt); h = mix(h, f(sl.mod[r].amt)); }
+        { h = mix(h, sl.mod[r].src); h = mix(h, sl.mod[r].tgt); h = mix(h, f(sl.mod[r].amt));
+          h = mix(h, sl.mod[r].curveOn);   // [2026-07-14] REMAP curve rides the sound hash
+          if (sl.mod[r].curveOn) for (int k = 0; k < DrumChannel::Slot::MOD_CURVE_N; k += 4) h = mix(h, sl.mod[r].curve[k]); }
         h = mix(h, f(sl.modEnvA)); h = mix(h, f(sl.modEnvD)); h = mix(h, f(sl.modEnvH)); h = mix(h, f(sl.modEnvS)); h = mix(h, f(sl.modEnvR)); h = mix(h, f(sl.modLfoRate)); h = mix(h, sl.modLfoShape);
     }
     h = mix(h, c.layerOscShape); h = mix(h, f(c.layerSineFreq)); h = mix(h, f(c.layerSinePEnvAmt)); h = mix(h, f(c.layerSinePEnvTime)); h = mix(h, f(c.layerSinePOffset));
@@ -6725,7 +6877,7 @@ void DrumSequencerEditor::applySelCC(int t, float v, bool& slotDirty, bool& keys
         case P::SelPatPrev: selectPattern((currentPattern() + Sequencer::NUM_PATTERNS - 1) % Sequencer::NUM_PATTERNS); return;
         case P::SelFollow:  btnFollow.triggerClick(); return;
         case P::SelTest:    proc.requestTestTrigger(selectedChannel); return;
-        case P::SelChVol:   ch.volume = v * LevelMeter::VOL_MAX; return;   // handle follows next tick
+        case P::SelChVol:   ch.volume = LevelMeter::posToGain(v); return;   // dB taper; handle follows next tick
         case P::SelSwing:   sliderSwing.setValue(sliderSwing.getMinimum()
                               + v * (sliderSwing.getMaximum() - sliderSwing.getMinimum()),
                               juce::sendNotificationSync); return;
@@ -7847,7 +7999,7 @@ void DrumSequencerEditor::setupComponents()
         };
         stripMeter[i].setTooltip("Channel meter + VOLUME: the cyan handle is this channel's volume, and it is "
                                  "also the level bar's CEILING - the bar fills up to the handle, never past it.\n\n"
-                                 "- Drag left/right to set it; the white tick = 100% (right of it = boost, up to 125%).\n"
+                                 "- Drag left/right to set it - MIXER-STYLE dB travel (most of the fader = -54..0 dB, so quiet settings are actually reachable); the white tick at 3/4 = 100%/0 dB, right of it = boost up to +2 dB (125%).\n"
                                  "- Double-click = back to 100%.\n"
                                  "- Right-click = MIDI-learn (this exact channel, or the SELECTED channel).");
         content.addAndMakeVisible(stripMeter[i]);
@@ -8644,6 +8796,33 @@ void DrumSequencerEditor::setupComponents()
         return (gridIdx < params.size()) ? params[gridIdx].label : juce::String();
     };
     routePicker.onClose = [this] { routePicker.setVisible(false); };
+    // REMAP [2026-07-14]: the picker's remap row opens the curve overlay for the CURRENT route.
+    content.addChildComponent(remapEd);
+    routePicker.onRemap = [this] {
+        juce::MessageManager::callAsync([this] {   // let the opening click finish (Closer precedent)
+            const int r = juce::jlimit(0, DrumChannel::MOD_ROUTES - 1, routePickRoute);
+            auto& sl = proc.sequencer.channel(selectedChannel).slots[envTargetSlot()];
+            float cv[RemapEditor::N];
+            for (int k = 0; k < RemapEditor::N; ++k) cv[k] = (float) sl.mod[r].curve[k] / 255.0f;
+            auto b = routePicker.getBounds();
+            remapEd.setBounds(b.getX(), juce::jmax(0, b.getCentreY() - 130), juce::jmin(440, b.getWidth()), 260);
+            remapEd.openFor("REMAP  " + modFaders.routeSrcName(r) + "  >  " + modFaders.routeTgtName(r),
+                            cv, sl.mod[r].curveOn != 0, DrumChannel::modSrcBipolar(sl.mod[r].src),
+                            envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8));
+        });
+    };
+    remapEd.onChange = [this](const float* cv, bool on) {
+        if (ignoreKnobCallbacks) return;
+        auto& ch = proc.sequencer.channel(selectedChannel);
+        auto& rt = ch.slots[envTargetSlot()].mod[juce::jlimit(0, DrumChannel::MOD_ROUTES - 1, routePickRoute)];
+        rt.curveOn = on ? 1 : 0;
+        for (int k = 0; k < RemapEditor::N; ++k)
+            rt.curve[k] = (uint8_t) juce::jlimit(0, 255, juce::roundToInt(cv[k] * 255.0f));
+        ch.markDspDirty();
+        routePicker.remapOn = on; routePicker.repaint();
+        modFaders.setValues(ch.slots[envTargetSlot()]);   // curve glyph follows
+    };
+    remapEd.onClose = [this] { if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel); };
     routePicker.onPicked = [this](int src, int tgt) {
         if (routePickRoute < 0 || routePickRoute >= DrumChannel::MOD_ROUTES) return;
         auto& ch = proc.sequencer.channel(selectedChannel);
@@ -10686,6 +10865,7 @@ void DrumSequencerEditor::openRoutePicker(int route)
     const int si = envTargetSlot();
     routePicker.accent = (si == 0) ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8);
     routePicker.engine = proc.sequencer.channel(selectedChannel).slots[si].engine;   // gates Warp/WavePos targets
+    routePicker.remapOn = proc.sequencer.channel(selectedChannel).slots[si].mod[juce::jlimit(0, DrumChannel::MOD_ROUTES - 1, route)].curveOn != 0;
     routePicker.openFor(modFaders.src[route], modFaders.tgt[route], modFaders.amt[route]);   // bounds set in layoutContent
     routePicker.toFront(false);
 }
@@ -11262,9 +11442,10 @@ void DrumSequencerEditor::timerCallback()
         if (mc != lastMidiInSeen) { lastMidiInSeen = mc; midiFlash = 8; }
         int cn = proc.lastCcNum.load(std::memory_order_relaxed);
         juce::String t = "MIDI: ";
-        if (cn == 200)   // [2026-07-13 23:20] aftertouch marker - proves AT is REACHING the plugin
-            t << "AT v" << proc.lastCcVal.load(std::memory_order_relaxed)
-              << " ch" << proc.lastCcChan.load(std::memory_order_relaxed);
+        const juce::uint32 atMs = proc.lastAtMs.load(std::memory_order_relaxed);
+        if (atMs != 0 && juce::Time::getMillisecondCounter() - atMs < 1500)   // fresh AFTERTOUCH wins; expires ~1.5 s
+            t << "AT v" << proc.lastAtVal.load(std::memory_order_relaxed)
+              << " ch" << proc.lastAtChan.load(std::memory_order_relaxed);
         else if (cn >= 0)
             t << "cc" << cn << " v" << proc.lastCcVal.load(std::memory_order_relaxed)
               << " ch" << proc.lastCcChan.load(std::memory_order_relaxed);
@@ -11368,6 +11549,8 @@ void DrumSequencerEditor::timerCallback()
         fxDriveFader.setModRing(drv < -900.0f ? -1.0f : juce::jlimit(0.0f, 1.0f, drv));
         freqDisplay.setModCutoff(0, liveFx(ms, 7) < -900.0f ? -1.0f : liveFx(ms, 7));   // filter 1/2 cutoff (Hz)
         freqDisplay.setModCutoff(1, liveFx(ms, 8) < -900.0f ? -1.0f : liveFx(ms, 8));
+        freqDisplay.setModReso  (0, liveFx(ms, 27)); freqDisplay.setModReso  (1, liveFx(ms, 28));   // [2026-07-14] live reso + env-amount
+        freqDisplay.setModEnvAmt(0, liveFx(ms, 29)); freqDisplay.setModEnvAmt(1, liveFx(ms, 30));
         // GRID knobs (the engine's own params - FM Amount, Ratio, ...): ring both slot boxes from [9..16].
         // Osc slots also ring the Warp fader + push the modulated FM/Warp into the WAVE PREVIEW so the
         // drawing itself moves with the modulation (user: "changing the sound wave too").
@@ -11380,7 +11563,7 @@ void DrumSequencerEditor::timerCallback()
         }
         // UNISON visual: rings on detune/vib/width/drift when a route targets them (-1000 -> no ring).
         auto uf = [&](int i) { const float r = liveFx(ms, i); return r < -900.0f ? -1.0f : r; };
-        voiceMod.setModLive(uf(21), uf(22), uf(23), uf(24));
+        voiceMod.setModLive(uf(21), uf(22), uf(23), uf(24), liveFx(ms, 31));   // + Unison Count ring
     }
     {   // DRIFT visual honesty: push the last hit's REAL rolled detunes into the unison view
         auto& dc = proc.sequencer.channel(selectedChannel);
@@ -11483,6 +11666,7 @@ void DrumSequencerEditor::zoomToGroup(juce::Rectangle<int> designRect)
     harmEd.setVisible(false);
     lfoCurveEd.setVisible(false);
     routePicker.setVisible(false);
+    remapEd.setVisible(false);
     fxTypeList.close();   // anchored under a combo that just moved (close() frees the combo latch)
 
     // Lift every control whose centre is inside the group box into the panel,
@@ -11783,6 +11967,7 @@ void DrumSequencerEditor::layoutContent()
     harmEd.setVisible(false);   // same rule for the DRAW HARMONICS overlay
     lfoCurveEd.setVisible(false);   // and the LFO SHAPER overlay
     routePicker.setVisible(false);  // and the route source|target picker
+    remapEd.setVisible(false);      // and its REMAP curve overlay
     fxTypeList.close();             // and the per-item-tooltip type dropdown
     const int W = DESIGN_W;
     const int gridLeft = STRIP_W + 4;

@@ -392,10 +392,11 @@ public:
                   MTDelSend, MTChFxAAmt, MTTone, MTPunch, MTChFxBAmt, MTAtk, MTDec, MTSus, MTRel, MTPitch,
                   MTWavePos, MTDetune, MTVibrato, MTWidth, MTDrift, MTVol, MTWarp, MTChFxAChr, MTChFxBChr, MTRing, MT_GRID_BASE,
                   MTSub = MT_GRID_BASE + 8, MTFormant, MTChFxCAmt, MTChFxCChr,   // slot C Amount/Character (Channel)
-                  MTRingHz, MTSlotPan };   // [2026-07-13 22:45] ring carrier (octaves) + slot pan (user request)
+                  MTRingHz, MTSlotPan,     // [2026-07-13 22:45] ring carrier (octaves) + slot pan (user request)
+                  MTFilt1Env, MTFilt2Env, MTUniCount };   // [2026-07-14 00:30] filter env amounts + unison voice count
     static constexpr int MOD_TGT_GRID = 8;   // grid knobs MT_GRID_BASE .. MT_GRID_BASE+7
     static constexpr int MT_GRID_END = MT_GRID_BASE + MOD_TGT_GRID;   // grid range check: >= BASE && < END
-    static constexpr int MT_COUNT = MTSlotPan + 1;
+    static constexpr int MT_COUNT = MTUniCount + 1;
     // (GridKnob + the mod-matrix DSP helpers are declared after the Slot struct, below.)
     // DRIFT visual honesty: the newest voice's REAL rolled detunes (cents) for the editor's unison
     // view - the drawn lines move with what actually played. Returns voice count (0 = none active).
@@ -668,7 +669,13 @@ public:
         // (Chorus moved to CHANNEL FX - see DrumChannel::chChorus.)
         // === MOD MATRIX (begin) - 6 routes + two matrix-created sources (Mod Env / Mod LFO).
         //     amt 0 (default) on every route = bit-identical (the render path is unchanged). ===
-        struct ModRoute { int8_t src = 0; int8_t tgt = 0; float amt = 0.0f; };   // amt bipolar -1..1
+        // [2026-07-14 00:03] REMAP: each route can carry its own drawn TRANSFER CURVE (Vital-style)
+        // applied to the SOURCE value before the amount - one mechanism for every route; curveOn 0
+        // = pass-through = bit-identical. uint8 points (1/255 resolution is plenty for a control
+        // curve; keeps the always-on footprint at 64 B/route instead of 256).
+        static constexpr int MOD_CURVE_N = 64;
+        struct ModRoute { int8_t src = 0; int8_t tgt = 0; float amt = 0.0f;
+                          uint8_t curveOn = 0; uint8_t curve[MOD_CURVE_N] = {}; };
         ModRoute mod[MOD_ROUTES];
         float modEnvA = 0.005f, modEnvD = 0.30f;   // Mod Env: attack / decay seconds
         float modEnvH = 0.0f, modEnvS = 0.0f, modEnvR = 0.10f;   // hold sec / sustain level 0..1 / release sec (full A-H-D-S-R, gated like the amp env)
@@ -689,6 +696,23 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     // Sample the mod sources for slot s (into out[MS_COUNT]) then apply the routes onto a scratch Slot
     // before the config bake. nvIn = the voice to sample (nullptr = newest active = block-rate base).
     void computeModSources(int s, const Slot& sl, float* out, const Voice* nvIn = nullptr) const;
+    // [2026-07-14 00:03] REMAP helpers. Bipolar sources (Note, LFOs, Mod LFO) map their full
+    // -1..+1 sweep across the drawing's X axis and the output re-expands; unipolar read X directly.
+    static bool modSrcBipolar(int s)
+    { return s == MSNote || (s >= MSLfoFilt && s <= MSLfoWave) || s == MSModLfo; }
+    static float modCurveLut(const uint8_t* cv, float x)   // 64-point lerp lookup, x in 0..1
+    {
+        const float fp = juce::jlimit(0.0f, 1.0f, x) * (float)(Slot::MOD_CURVE_N - 1);
+        const int   i0 = (int) fp, i1 = juce::jmin(Slot::MOD_CURVE_N - 1, i0 + 1);
+        const float fr = fp - (float) i0;
+        return ((float) cv[i0] + fr * ((float) cv[i1] - (float) cv[i0])) * (1.0f / 255.0f);
+    }
+    static float modRouteShape(const Slot::ModRoute& r, float src)   // the ONE remap application
+    {
+        if (! r.curveOn) return src;
+        if (modSrcBipolar(r.src)) return modCurveLut(r.curve, src * 0.5f + 0.5f) * 2.0f - 1.0f;
+        return modCurveLut(r.curve, src);
+    }
     void applyModMatrix(Slot& tmp, const float* srcVals, SlotVoice* latch = nullptr) const;   // latch = per-note env-target snapshot
     void applyHotBlock(Slot& tmp, const float* srcVals) const;   // [2026-07-13 19:57] block snapshot of the per-sample targets (UI rings / sc copy only)
     // Effective BASE frequency for a pitched slot. In PIANO ROLL every pitched engine plays a
@@ -707,7 +731,7 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     // target this block (0-6 = Rev/Del/Chorus/Tone/Punch/Comp/Drive; 7-8 = Filter1/Filter2 cutoff Hz).
     // -1000 = matrix inactive (no ring). Written on the audio thread, read by the editor timer (torn-read
     // tolerant, like the other UI reads).
-    static constexpr int MOD_LIVE_N = 27;   // 0-8 FX/filters, 9-16 grid, 17 oscWarp, 18-20 Flanger/Phaser/Ring, 21-24 detune/vib/width/drift, 25 RingHz, 26 SlotPan
+    static constexpr int MOD_LIVE_N = 32;   // 0-8 FX/filters, 9-16 grid, 17 oscWarp, 18-20 Flanger/Phaser/Ring, 21-24 detune/vib/width/drift, 25 RingHz, 26 SlotPan, 27/28 Reso1/2, 29/30 EnvAmt1/2, 31 UniCount
     float slotModLiveFx[NUM_SLOTS][MOD_LIVE_N] = {
         { -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000 },
         { -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000 } };
