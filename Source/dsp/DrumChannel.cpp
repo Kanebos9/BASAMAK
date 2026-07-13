@@ -1945,7 +1945,7 @@ void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals, SlotVoice* lat
             case MTDrift:    add(tmp.drift, 0, 1); break;
             case MTVol: case MTWarp: break;   // HOT (per-sample AM / wavefold)
             case MTChFxAChr: case MTChFxBChr: case MTChFxCAmt: case MTChFxCChr: break;   // CHANNEL FX C + Characters: accumulated separately (channelMod)
-            case MTRing:     break;   // HOT (per-sample)
+            case MTRing: case MTRingHz: case MTSlotPan: break;   // HOT (per-sample)
             default:
                 if (r.tgt >= MT_GRID_BASE && r.tgt < MT_GRID_END)   // engine GRID knobs only (Sub/Formant sit above)
                 {
@@ -2007,6 +2007,8 @@ void DrumChannel::applyHotBlock(Slot& tmp, const float* srcVals) const
             case MTPunch:    add(tmp.fxPunch, -1, 1); break;
             case MTWarp:     add(tmp.oscWarp, 0, 1); break;
             case MTWavePos:  tmp.addPos = juce::jlimit(0.0f, 1.0f, tmp.addPos + m); break;
+            case MTRingHz:   tmp.fxRingHz = juce::jlimit(25.0f, 4000.0f, tmp.fxRingHz * std::pow(2.0f, m * 3.0f)); break;
+            case MTSlotPan:  add(tmp.pan, -1, 1); break;
             default:
                 if (r.tgt >= MT_GRID_BASE && r.tgt < MT_GRID_END)
                 {
@@ -2124,6 +2126,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         float wtInv0 = 0.0f, wtInv1 = 0.0f, wtInv2 = 0.0f;
         float  subAmt = 0.0f; double subHz = 0.0;     // SUB: half the slot's base pitch (0 = unpitched engine = inert)
         float  panL = 1.0f, panR = 1.0f;              // static SLOT PAN gains (equal-power, unity at centre)
+        float  panBase = 0.0f;                        // the raw pan value (-1..1) for per-sample matrix recompute
         float  fmtMix = 0.0f; Biquad fmtBq[2];        // FORMANT: two vowel band-passes + wet mix
         float  punch = 0.0f;   // PUNCH transient shaper (-1 soften .. +1 punch)
         float  ring = 0.0f;   // RING amount (per-voice mod); Chorus/Flanger/Phaser/Comp are CHANNEL FX now (not per-slot)
@@ -2209,6 +2212,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     case MTFilt1Res: return 4; case MTFilt2Res: return 5;
                     case MTDrive: return 6;    case MTRing: return 7;    case MTSub: return 8;
                     case MTPunch: return 9;    case MTWarp: return 10;   case MTWavePos: return 11;
+                    case MTRingHz: return 13;  case MTSlotPan: return 14;   // [2026-07-13 22:45]
                     default: break;
                 }
                 if (tgt >= MT_GRID_BASE && tgt < MT_GRID_END
@@ -2560,7 +2564,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         c.subHz  = 0.0;
         {   // SLOT PAN: equal-power with UNITY at centre (sqrt(1 -/+ p)) - pan 0 = bit-identical.
             const float pp = juce::jlimit(-1.0f, 1.0f, sl.pan);
-            c.panL = std::sqrt(1.0f - pp); c.panR = std::sqrt(1.0f + pp);
+            c.panL = std::sqrt(1.0f - pp); c.panR = std::sqrt(1.0f + pp); c.panBase = pp;
         }
         if (c.subAmt > 0.0f)
             switch (sl.engine) {
@@ -2636,6 +2640,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             slotModLiveFx[s][22] = uniTgt(MTVibrato) ? modTmp.vibrato   : -1000.0f;
             slotModLiveFx[s][23] = uniTgt(MTWidth)   ? modTmp.uniSpread : -1000.0f;
             slotModLiveFx[s][24] = uniTgt(MTDrift)   ? modTmp.drift     : -1000.0f;
+            slotModLiveFx[s][25] = uniTgt(MTRingHz)  ? modTmp.fxRingHz  : -1000.0f;   // [2026-07-13 22:45]
+            slotModLiveFx[s][26] = uniTgt(MTSlotPan) ? modTmp.pan       : -1000.0f;
             // Keep any LFO used as a matrix SOURCE advancing even if its own Amount is 0.
             for (auto& r : modTmp.mod)
                 if (r.tgt != MTOff && std::abs(r.amt) > 1.0e-4f
@@ -2940,11 +2946,12 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 // =====================================================================================
                 float mDrv = c.fxDrive, mRing = c.ring, mSub = c.subAmt, mPunch = c.punch,
                       mWarp = c.oscWarp, mFm = c.fmIndex, mWt = c.wtPosOfs;
+                double mRingHzMul = 1.0; float mPanL = c.panL, mPanR = c.panR;
                 double arPitchMul = 1.0; float arVolG = 1.0f;
                 double arGmMul[2] = { 1.0, 1.0 }; double arKTgt[2] = { -1.0, -1.0 };
                 if (c.arN > 0)
                 {
-                    float sums[13] = {};
+                    float sums[15] = {};
                     float cache[16]; uint16_t got = 0;
                     auto S = [&](int sid) -> float {
                         sid = juce::jlimit(0, 15, sid);
@@ -2998,6 +3005,11 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     mWarp  = juce::jlimit(0.0f, 1.0f, mWarp  + sums[10]);
                     mWt    = mWt + sums[11];                                       // clamped where consumed
                     mFm    = juce::jlimit(0.0f, 24.0f, mFm + sums[12] * 12.0f);    // fmDepth 0..1 -> index x12
+                    if (sums[13] != 0.0f) mRingHzMul = std::exp2((double) juce::jlimit(-6.0f, 6.0f, sums[13] * 3.0f));   // ring carrier +-3 oct
+                    if (sums[14] != 0.0f) {   // SLOT PAN: equal-power recomputed per sample (Note/Random/Velocity -> per-hit placement)
+                        const float pp2 = juce::jlimit(-1.0f, 1.0f, c.panBase + sums[14] * 2.0f);
+                        mPanL = std::sqrt(1.0f - pp2); mPanR = std::sqrt(1.0f + pp2);
+                    }
                 }
                 float sig = 0.0f, sL = 0.0f, sR = 0.0f, env = 0.0f;
                 bool  stereo = false;
@@ -3693,8 +3705,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 // pitch - classic tuned ring mod, consistent across the keyboard).
                 if (mRing > 0.0f) {
                     const double rInc = c.ringTrack
-                        ? 2.0 * kPi * juce::jlimit(1.0, sr * 0.45, c.ringBase * pitchPreLfo) / sr
-                        : 2.0 * kPi * c.ringHz / sr;
+                        ? 2.0 * kPi * juce::jlimit(1.0, sr * 0.45, c.ringBase * pitchPreLfo * mRingHzMul) / sr
+                        : 2.0 * kPi * juce::jlimit(1.0, sr * 0.45, c.ringHz * mRingHzMul) / sr;
                     sv.ringPh += rInc; if (sv.ringPh > 2.0 * kPi) sv.ringPh -= 2.0 * kPi;
                     const float m = (float) std::sin(sv.ringPh), rg = mRing;
                     if (stereo) { sL = sL * (1.0f - rg) + sL * m * rg; sR = sR * (1.0f - rg) + sR * m * rg; }
@@ -3715,8 +3727,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 // (MTVol / blend moves) never steps audibly. Constant weight = snap-once = bit-identical.
                 if (sv.wSm < 0.0f) sv.wSm = c.weight; else sv.wSm += wSmK * (c.weight - sv.wSm);
                 const float wEff = sv.wSm * sv.velScale * sv.driftGain;   // driftGain = per-note breath (1 = off)
-                const float cL = (stereo ? sL : sig) * wEff * c.panL;   // SLOT PAN places the layer
-                const float cR = (stereo ? sR : sig) * wEff * c.panR;
+                const float cL = (stereo ? sL : sig) * wEff * mPanL;   // SLOT PAN places the layer (matrix = per-sample)
+                const float cR = (stereo ? sR : sig) * wEff * mPanR;
                 mixL += cL; mixR += cR;   // all slots sum to the mix; CHANNEL FX process the sum after the loop
                 // === PER-SLOT EQ (begin) - capture THIS slot's mono output for its spectrum ===
                 if (s == tapSlot && i < analysisBufLen) {

@@ -1,6 +1,7 @@
 # BASAMAK CODE MAP — a guide for new developers
 
-*Written 2026-07-13 22:20 (the v1.4.0 audio-rate release). Line numbers drift, so this map gives
+*Written 2026-07-13 22:20 (the v1.4.0 audio-rate release; supersedes the old ARCHITECTURE.md,
+deleted the same day). Line numbers drift, so this map gives
 you SEARCH STRINGS instead — copy the quoted text into your editor's project-wide search.*
 
 ## What this plugin is

@@ -603,7 +603,8 @@ private:
 // fader in the MODULATION matrix. A content-child overlay (never an OS popup): left column = every
 // source, right column = every target (incl. this engine's own knobs). Click a row in each column;
 // it live-applies. Closes on an outside click. (The SoundPickerPanel two-column-list pattern.)
-class RoutePicker : public juce::Component
+class RoutePicker : public juce::Component,
+                    public juce::SettableTooltipClient   // [2026-07-13 22:50] per-ITEM tips (hover a row)
 {
 public:
     std::function<void(int src, int tgt)> onPicked;         // chosen source enum + target enum (live-apply)
@@ -620,6 +621,7 @@ public:
     void resized() override;
     void paint(juce::Graphics& g) override;
     void mouseDown(const juce::MouseEvent& e) override;     // the bottom AMOUNT fader
+    juce::String getTooltip() override;                     // per-row SOURCE/TARGET tips (rowAt hover, the TipList idiom)
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
 private:
@@ -638,9 +640,9 @@ private:
     juce::Label lblSrc, lblTgt;
     int curSrc = 0, curTgt = 0;
     float curAmt = 0.0f;                    // the route's amount (edited on the bottom fader)
-    juce::Rectangle<float> amtRect() const  // the horizontal AMOUNT fader (bottom, under the SOURCE column)
+    juce::Rectangle<float> amtRect() const  // the horizontal AMOUNT fader (bottom, FULL width - user 2026-07-13)
     { const float pad = 6.0f, h = 26.0f;
-      return { pad, (float) getHeight() - h - pad, getWidth() * 0.5f - pad * 1.5f, h }; }
+      return { pad, (float) getHeight() - h - pad, (float) getWidth() - pad * 2.0f, h }; }
     void setAmtFromX(float x);
     void selectCurrentRows();
     struct Closer : public juce::MouseListener
@@ -2760,7 +2762,17 @@ private:
     IconButtonLNF iconBtnLNF;             // play / stop / undo / redo glyphs
     std::vector<LearnableKnob*> allKnobs;  // for clean LNF teardown
     TipLNF tipLNF;                                    // 14px/440px structured-tooltip look (cleared in teardown)
-    juce::TooltipWindow tooltipWindow { this, 1000 }; // shows tooltips after ~1s hover
+    // [2026-07-13 22:40] Tooltips-off = return NO tip. The old trick (appear-delay = 0x3FFFFFFF)
+    // OVERFLOWED JUCE's uint32 uptime arithmetic on Macs awake > ~37 days - the compare wrapped and
+    // tips showed INSTANTLY = "the toggle does nothing" (user bug). Gating the tip text is exact.
+    struct GateableTooltipWindow : juce::TooltipWindow
+    {
+        using juce::TooltipWindow::TooltipWindow;
+        const bool* gate = nullptr;
+        juce::String getTipFor(juce::Component& c) override
+        { return (gate != nullptr && ! *gate) ? juce::String() : juce::TooltipWindow::getTipFor(c); }
+    };
+    GateableTooltipWindow tooltipWindow { this, 700 };
 
     //-- Visuals
     FrequencyDisplay freqDisplay;

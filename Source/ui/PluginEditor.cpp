@@ -984,7 +984,83 @@ static const char* kModTgtFixedName[DrumChannel::MT_GRID_BASE] =
   "FX A Character (Channel)", "FX B Character (Channel)", "Ring" };
 static juce::String kModTgtHiName(int t)   // fixed targets ABOVE the grid range
 { return t == DrumChannel::MTSub ? "Sub" : t == DrumChannel::MTFormant ? "Formant"
-       : t == DrumChannel::MTChFxCAmt ? "FX C Amount (Channel)" : t == DrumChannel::MTChFxCChr ? "FX C Character (Channel)" : juce::String(); }
+       : t == DrumChannel::MTChFxCAmt ? "FX C Amount (Channel)" : t == DrumChannel::MTChFxCChr ? "FX C Character (Channel)"
+       : t == DrumChannel::MTRingHz ? "Ring Hz" : t == DrumChannel::MTSlotPan ? "Slot Pan" : juce::String(); }
+// ================================================================================================
+// MOD SOURCE / TARGET TOOLTIPS [2026-07-13 22:50] (user: "we need tips like that as tooltips") -
+// shown per ROW while hovering the RoutePicker lists. The env-target tips carry the crucial
+// latch guidance; the zero-at-the-hit sources say so explicitly.
+// ================================================================================================
+static juce::String modSrcTip(int s)
+{
+    using DC = DrumChannel;
+    switch (s)
+    {
+        case DC::MSOff:      return "No source - the route is off.";
+        case DC::MSVel:      return "How hard the hit was (step velocity / key velocity). Constant for the whole note - great for envelope targets (Velocity -> Decay = the classic accent).";
+        case DC::MSNote:     return "The played pitch vs middle C (+-24 st = +-100%). Constant per note - keytracking (Note -> Cutoff) or keyboard spread (Note -> Slot Pan).";
+        case DC::MSAmpEnv:   return "This slot's own amp envelope, live. NOTE: it reads 0 at the very start of a hit, so it does nothing on envelope-time targets.";
+        case DC::MSLfoFilt: case DC::MSLfoPitch: case DC::MSLfoVol: case DC::MSLfoWave:
+            return juce::String("LFO ") + juce::String(s - DC::MSLfoFilt + 1) + " (draw/set it on the MOD visual; its Amount = depth). "
+                   "AUDIO-RATE on pitch/volume/cutoff etc. - crank the speed for FM/AM timbres. "
+                   "For ENVELOPE targets use FREE-RUN or the Random shape: a retriggered sine restarts at 0 every hit = latches nothing.";
+        case DC::MSRandom:   return "A fresh random value per hit (0..1). The humanizer source: Random -> Decay on hats, Random -> Slot Pan for hit scatter.";
+        case DC::MSModEnv:   return "The drawable A-H-D-S-R on the MOD visual's 4th tab. Reads 0 at the hit itself, so use it for movement DURING the note (filter sweeps), not for envelope-time targets.";
+        case DC::MSStepModA: return "The drawable per-step lane (Mod A edit mode on the step grid). Each step holds its drawn value - parameter-locks, Elektron style.";
+        case DC::MSStepModB: return "The second drawable per-step lane (Mod B edit mode).";
+        case DC::MSModWheel: return "Your MIDI mod wheel (CC1; learnable to any CC via the MIDI dropdown). Holds its last position.";
+        case DC::MSPressure: return "Aftertouch - press INTO a held key. Per note on MPE controllers, whole-channel on normal keyboards. Reads 0 at the hit, so aim it at movement targets.";
+        case DC::MSSlide:    return "MPE Slide (CC74) - the vertical finger position on MPE controllers. Per note.";
+        default:             return {};
+    }
+}
+static juce::String modTgtTip(int t, int engine)
+{
+    using DC = DrumChannel;
+    const juce::String envNote = "ENVELOPE-TIME target: the source is sampled ONCE at the hit. "
+        "Use Velocity / Random / Note / Step Mod / Mod Wheel / a FREE-RUN LFO - a retriggered LFO or "
+        "an envelope source reads 0 at the hit and will do NOTHING.";
+    switch (t)
+    {
+        case DC::MTOff:      return "No target - the route is off.";
+        case DC::MTFilt1Cut: return "Filter 1 cutoff, +-4 octaves. AUDIO-RATE: fast LFOs = real filter-FM.";
+        case DC::MTFilt2Cut: return "Filter 2 cutoff, +-4 octaves. AUDIO-RATE.";
+        case DC::MTFilt1Res: return "Filter 1 resonance (on a Bell filter: its boost/Q).";
+        case DC::MTFilt2Res: return "Filter 2 resonance (on a Bell filter: its boost/Q).";
+        case DC::MTDrive:    return "Drive amount (the slot's distortion). AUDIO-RATE; eases to dry near zero.";
+        case DC::MTRevSend:  return "This channel's reverb send (block-rate, smoothed).";
+        case DC::MTDelSend:  return "This channel's delay send (block-rate, smoothed).";
+        case DC::MTPunch:    return "Transient shaper: + snaps the attack, - softens it. Per hit.";
+        case DC::MTSub:      return "The octave-down sub sine's level. AUDIO-RATE.";
+        case DC::MTFormant:  return "Vowel position (A-E-I-O-U). Sweep it and the slot talks. Glided per block.";
+        case DC::MTAtk:      return "Attack time. " + envNote;
+        case DC::MTDec:      return "Decay time. Velocity -> Decay = the drum-machine accent. " + envNote;
+        case DC::MTSus:      return "Sustain level (audible only on held keys / gated notes). " + envNote;
+        case DC::MTRel:      return "Release time (audible at note END on held/gated notes). " + envNote;
+        case DC::MTPitch:    return "Pitch, +-1 octave per full route. AUDIO-RATE: audio-speed LFOs fuse into real FM sidebands; KEY-synced LFOs keep the FM colour constant across the keyboard.";
+        case DC::MTWavePos:  return "The Custom wave's frame position (A..D). AUDIO-RATE wavetable scanning." + juce::String(engine == DC::SrcOsc ? "" : " (Oscillator slots only.)");
+        case DC::MTDetune:   return "Unison detune spread (block-rate).";
+        case DC::MTVibrato:  return "Vibrato depth (block-rate).";
+        case DC::MTWidth:    return "Unison stereo width (block-rate).";
+        case DC::MTDrift:    return "Drift amount - the per-hit analog looseness (block-rate).";
+        case DC::MTVol:      return "This slot's level. AUDIO-RATE: slow = tremolo, audio-speed = AM / ring-mod sidebands.";
+        case DC::MTWarp:     return "The oscillator's wavefold amount. AUDIO-RATE, anti-aliased.";
+        case DC::MTRing:     return "Ring modulator amount (dry -> ring-modulated). AUDIO-RATE.";
+        case DC::MTRingHz:   return "The ring modulator's CARRIER frequency, +-3 octaves. AUDIO-RATE: sweeping it = sci-fi sideband sweeps; audio-rate sources = chaos (the good kind).";
+        case DC::MTSlotPan:  return "This layer's pan. Note -> Pan = keyboard spread, Random -> Pan = per-hit scatter, Velocity -> Pan = accent lean. (Whole-channel MOTION = Channel FX Auto-Pan.)";
+        case DC::MTChFxAAmt: return "Channel FX slot A's Amount fader (block-rate, smoothed).";
+        case DC::MTChFxBAmt: return "Channel FX slot B's Amount fader (block-rate, smoothed).";
+        case DC::MTChFxCAmt: return "Channel FX slot C's Amount fader (block-rate, smoothed).";
+        case DC::MTChFxAChr: return "Channel FX slot A's Character fader (block-rate, smoothed).";
+        case DC::MTChFxBChr: return "Channel FX slot B's Character fader (block-rate, smoothed).";
+        case DC::MTChFxCChr: return "Channel FX slot C's Character fader (block-rate, smoothed).";
+        default:
+            if (t >= DC::MT_GRID_BASE && t < DC::MT_GRID_END)
+                return "One of this engine's own knobs (follows the engine, like the on-screen knob). Block-rate - except FM Amount, which is audio-rate.";
+            return {};
+    }
+}
+
 // Engine display name (matches the slot engine dropdown) for the mod-target parentheses "(Oscillator)" etc.
 static juce::String engineDisplayName(int engine)
 {
@@ -1066,6 +1142,8 @@ void RoutePicker::openFor(int cs, int ct, float amt)
     tgtModel.rows.push_back({ DrumChannel::MTFormant, "Formant" });
     tgtModel.rows.push_back({ DrumChannel::MTChFxCAmt, "FX C Amount (Channel)" });
     tgtModel.rows.push_back({ DrumChannel::MTChFxCChr, "FX C Character (Channel)" });
+    tgtModel.rows.push_back({ DrumChannel::MTRingHz,  "Ring Hz" });    // [2026-07-13 22:45] user request
+    tgtModel.rows.push_back({ DrumChannel::MTSlotPan, "Slot Pan" });
     // ALPHABETICAL, "Off" pinned first (user) - one flat A..Z list per column, so the three
     // FX A/B/C pairs cluster together instead of FX C hiding under the engine-knob rows.
     auto alphabetize = [](std::vector<std::pair<int, juce::String>>& rows) {
@@ -1078,6 +1156,24 @@ void RoutePicker::openFor(int cs, int ct, float amt)
     selectCurrentRows();
     setVisible(true); toFront(true);
 }
+juce::String RoutePicker::getTooltip()
+{
+    const auto p = getMouseXYRelative();
+    for (auto* side : { &srcList, &tgtList })
+    {
+        if (! side->getBounds().contains(p)) continue;
+        const auto lp = p - side->getPosition();
+        const int row = side->getRowContainingPosition(lp.x, lp.y);
+        auto& rows = (side == &srcList) ? srcModel.rows : tgtModel.rows;
+        if (row < 0 || row >= (int) rows.size()) return {};
+        return (side == &srcList) ? modSrcTip(rows[(size_t) row].first)
+                                  : modTgtTip(rows[(size_t) row].first, engine);
+    }
+    if (amtRect().contains(p.toFloat()))
+        return "Route AMOUNT: centre = 0, right = positive, left = negative (cubic response - fine control near zero). Double-click = 0.";
+    return {};
+}
+
 void RoutePicker::selectCurrentRows()
 {
     for (int r = 0; r < (int) srcModel.rows.size(); ++r) if (srcModel.rows[(size_t) r].first == curSrc) { srcList.selectRow(r); break; }
@@ -5533,6 +5629,11 @@ void DrumSequencerEditor::openSoundPicker(int ch)
 void DrumSequencerEditor::applySoundPickId(int ch, int id)
 {
     auto& c = proc.sequencer.channel(ch);
+    // [2026-07-13 22:40] CHANNEL VOLUME = the USER'S mixer handle: factory builders bake their own
+    // loudness (c.volume) for kit balance, which made the strip handle JUMP on every pick (user:
+    // "why is it deciding itself"). Sound picks now PRESERVE the channel volume; presets (whole
+    // kits) still set it - kit balance is a preset-level decision.
+    const float keepVol = c.volume;
     if (id == ID_REFRESH_BANK)      // re-scan so sounds saved on disk appear in every channel's dropdown
     {
         rescanSoundMixes();
@@ -5564,6 +5665,7 @@ void DrumSequencerEditor::applySoundPickId(int ch, int id)
         updateStripMixLabel(ch);
     }
     // A visible picker for this channel follows the pick (MIDI knob browsing highlights live).
+    c.volume = keepVol;   // the user's mixer level survives every pick (incl. Initialize)
     if (soundPicker != nullptr && soundPicker->isVisible())
     {
         auto& pp = static_cast<SoundPickerPanel&>(*soundPicker);
@@ -10833,8 +10935,7 @@ void DrumSequencerEditor::refreshFollowButton()
 
 void DrumSequencerEditor::applyTooltipsSetting()
 {
-    // OFF = push the appear-delay so far out it never shows (effectively disables every hover tooltip).
-    tooltipWindow.setMillisecondsBeforeTipAppears(tooltipsOn ? 700 : 0x3FFFFFFF);
+    tooltipWindow.gate = &tooltipsOn;   // OFF = getTipFor returns nothing (the delay trick overflowed - see the header note)
     btnTooltips.setColour(juce::TextButton::buttonColourId,  tooltipsOn ? juce::Colour(0xff35c0ff) : juce::Colour(0xff20203a));
     btnTooltips.setColour(juce::TextButton::textColourOffId, tooltipsOn ? juce::Colours::black : juce::Colours::lightgrey);
     btnTooltips.setButtonText(tooltipsOn ? "Tooltips" : "Tooltips: Off");
@@ -11247,7 +11348,8 @@ void DrumSequencerEditor::timerCallback()
         auto liveFx = [&mc](int s, int i) -> float
         { return mc.slots[s].modActive() ? mc.slotModLiveFx[s][i] : -1000.0f; };
         struct RK { LearnableKnob* k; int idx; };
-        const RK rk[4] = { { &knobSub, 3 }, { &knobPunch, 4 }, { &knobFormant, 5 }, { &knobRing, 20 } };
+        const RK rk[6] = { { &knobSub, 3 }, { &knobPunch, 4 }, { &knobFormant, 5 }, { &knobRing, 20 },
+                           { &knobRingHz, 25 }, { &knobSlotPan, 26 } };
         for (auto& r : rk)
         { const float raw = liveFx(ms, r.idx); r.k->setModRing(raw < -900.0f ? -1.0f : (float) r.k->valueToProportionOfLength(raw)); }
         // CHANNEL FX faders: rung from the channel-level live values (both slots' routes feed them).

@@ -391,10 +391,11 @@ public:
     enum ModTgt { MTOff = 0, MTFilt1Cut, MTFilt1Res, MTFilt2Cut, MTFilt2Res, MTDrive, MTRevSend,
                   MTDelSend, MTChFxAAmt, MTTone, MTPunch, MTChFxBAmt, MTAtk, MTDec, MTSus, MTRel, MTPitch,
                   MTWavePos, MTDetune, MTVibrato, MTWidth, MTDrift, MTVol, MTWarp, MTChFxAChr, MTChFxBChr, MTRing, MT_GRID_BASE,
-                  MTSub = MT_GRID_BASE + 8, MTFormant, MTChFxCAmt, MTChFxCChr };   // slot C Amount/Character (Channel)
+                  MTSub = MT_GRID_BASE + 8, MTFormant, MTChFxCAmt, MTChFxCChr,   // slot C Amount/Character (Channel)
+                  MTRingHz, MTSlotPan };   // [2026-07-13 22:45] ring carrier (octaves) + slot pan (user request)
     static constexpr int MOD_TGT_GRID = 8;   // grid knobs MT_GRID_BASE .. MT_GRID_BASE+7
     static constexpr int MT_GRID_END = MT_GRID_BASE + MOD_TGT_GRID;   // grid range check: >= BASE && < END
-    static constexpr int MT_COUNT = MTChFxCChr + 1;
+    static constexpr int MT_COUNT = MTSlotPan + 1;
     // (GridKnob + the mod-matrix DSP helpers are declared after the Slot struct, below.)
     // DRIFT visual honesty: the newest voice's REAL rolled detunes (cents) for the editor's unison
     // view - the drawn lines move with what actually played. Returns voice count (0 = none active).
@@ -706,7 +707,7 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     // target this block (0-6 = Rev/Del/Chorus/Tone/Punch/Comp/Drive; 7-8 = Filter1/Filter2 cutoff Hz).
     // -1000 = matrix inactive (no ring). Written on the audio thread, read by the editor timer (torn-read
     // tolerant, like the other UI reads).
-    static constexpr int MOD_LIVE_N = 25;   // 0-8 FX/filters, 9-16 grid, 17 oscWarp, 18-20 Flanger/Phaser/Ring, 21-24 detune/vib/width/drift
+    static constexpr int MOD_LIVE_N = 27;   // 0-8 FX/filters, 9-16 grid, 17 oscWarp, 18-20 Flanger/Phaser/Ring, 21-24 detune/vib/width/drift, 25 RingHz, 26 SlotPan
     float slotModLiveFx[NUM_SLOTS][MOD_LIVE_N] = {
         { -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000 },
         { -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000 } };
