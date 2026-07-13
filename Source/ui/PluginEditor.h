@@ -1617,11 +1617,11 @@ public:
     // Point the display at a channel's EQ bands (drawn + dragged in place) + the channel's
     // resonant FILTER (drawn/edited here too when showFilt - i.e. on the "All"/channel target).
     // TWO independent per-slot filters (series). type = DrumChannel::FilterType.
-    void setFilters(int t0, float c0, float r0, float e0,
-                    int t1, float c1, float r1, float e1, double sr);
+    void setFilters(int t0, float c0, float r0, float e0, float g0,
+                    int t1, float c1, float r1, float e1, float g1, double sr);
     std::function<void()> onEdit;                // after a drag/wheel/toggle -> updateDSP + hash
     std::function<void()> onDragEnd;             // released after editing (for auto-audition)
-    std::function<void(int filterIdx, int type, float cutoff, float reso, float envAmt)> onFilterEdit;
+    std::function<void(int filterIdx, int type, float cutoff, float reso, float envAmt, float gainDb)> onFilterEdit;
     std::function<void(float)> onFilterDriveEdit;   // FILTER DRIVE drag-box (one amount, drives BOTH filters)
     void setFilterDrive(float v) { v = juce::jlimit(0.0f, 1.0f, v); if (std::abs(v - fDrive) > 1.0e-4f) { fDrive = v; repaint(); } }
     int  active() const { return activeFilt; }   // which of the 2 filters the keytrack fader edits (last touched)
@@ -1646,6 +1646,7 @@ private:
     juce::Rectangle<float> driveRect() const { return { (float) getWidth() - 98.0f, 2.0f, 94.0f, 14.0f }; }
     int   fType[2] = { 0, 0 };   // NOLINT
     float fCutoff[2] = { 1000.0f, 1000.0f }, fReso[2] = { 0.707f, 0.707f }, fEnvAmt[2] = { 0.0f, 0.0f };
+    float fGain[2] = { 6.0f, 6.0f };   // BELL only: bipolar boost/cut dB (the diamond's Y = this, on the dB axis)
     float modCutoff[2] = { -1.0f, -1.0f };        // live modulated cutoff Hz per filter (-1 = not modulated)
     int   activeFilt = 0;                         // which filter the diamond drag / keytrack edits (last touched)
     bool  showFilter = true;
@@ -1656,7 +1657,10 @@ private:
     float normToReso(float n) const { return 0.3f * std::pow(12.0f / 0.3f, juce::jlimit(0.0f, 1.0f, n)); }
     float filtEnvEndHz(int fi) const { return juce::jlimit(20.0f, 20000.0f, fCutoff[fi] * std::pow(2.0f, fEnvAmt[fi] * 5.0f)); }
     juce::Point<float> filtPos(juce::Rectangle<float> a, int fi) const
-    { return { xForFreq(a, fCutoff[fi]), a.getBottom() - resoToNorm(fReso[fi]) * a.getHeight() * 0.85f - a.getHeight() * 0.06f }; }
+    {   // BELL: the diamond sits AT its gain on the dB axis (an honest EQ handle); others: Y = resonance.
+        if (fType[fi] == DrumChannel::Bell)
+            return { xForFreq(a, fCutoff[fi]), yForDb(a, juce::jlimit(-kMaxDb, kMaxDb, fGain[fi])) };
+        return { xForFreq(a, fCutoff[fi]), a.getBottom() - resoToNorm(fReso[fi]) * a.getHeight() * 0.85f - a.getHeight() * 0.06f }; }
     juce::Point<float> filtEnvPos(juce::Rectangle<float> a, int fi) const
     {
         auto m = filtPos(a, fi);

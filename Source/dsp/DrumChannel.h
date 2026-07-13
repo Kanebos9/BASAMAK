@@ -655,6 +655,7 @@ public:
         float filterDrive = 0.0f;
         int   filterType2   = FilterOff;
         float filterCutoff2 = 2500.0f, filterReso2 = 0.707f, filterEnvAmt2 = 0.0f;
+        float filterGain = 6.0f, filterGain2 = 6.0f;   // BELL only: bipolar boost/cut dB (+-15; Y drag); reso = the bell's Q (wheel)
         // === PER-SLOT FILTER (end) ===
         // (Chorus moved to CHANNEL FX - see DrumChannel::chChorus.)
         // === MOD MATRIX (begin) - 6 routes + two matrix-created sources (Mod Env / Mod LFO).

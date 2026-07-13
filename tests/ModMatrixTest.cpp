@@ -257,6 +257,17 @@ int main()
         printf("[12] KEY-tracked FM: 300Hz note 2f=%.0f (car %.0f), 450Hz note 2f=%.0f (car %.0f) (2f > car*0.05 both) -> %s\n",
                sbA, carA, sbB, carB, CHK(sbA > carA * 0.05 && sbB > carB * 0.05 && finite(a) && finite(b)) ? "OK" : "FAIL");
     }
+    {   // [13] BIPOLAR BELL: +9 dB boost vs -9 dB cut at the same frequency must differ audibly and
+        //      both must differ from flat (gain 0 with the filter ON ~ flat response).
+        auto mkB = [&](float gainDb) {
+            return render([gainDb](DrumChannel& c){ voice(c);
+                c.slots[0].filterType2 = DrumChannel::Bell; c.slots[0].filterCutoff2 = 400.0f;
+                c.slots[0].filterGain2 = gainDb; c.slots[0].filterReso2 = 1.0f; }, 0.9f, 0.5); };
+        auto up = mkB(9.0f); auto dn = mkB(-9.0f); auto fl = mkB(0.0f);
+        const float ud = maxdiff(up, dn), uf = maxdiff(up, fl), df = maxdiff(dn, fl);
+        printf("[13] bipolar Bell: boost-vs-cut=%.3f boost-vs-flat=%.3f cut-vs-flat=%.3f (all >0.01) -> %s\n",
+               ud, uf, df, CHK(ud > 0.01f && uf > 0.01f && df > 0.01f && finite(up) && finite(dn)) ? "OK" : "FAIL");
+    }
     printf(fails == 0 ? ">>> ModMatrixTest PASS\n" : ">>> ModMatrixTest FAIL (%d)\n", fails);
     return fails;
 }

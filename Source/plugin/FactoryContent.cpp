@@ -1584,6 +1584,105 @@ static void nSubPluck(DC& c) {     // bright resonant pluck with a BIG clean oct
     s.fxSub = 0.85f;                                      // the sub bypasses the filter = always clean
     c.volume = 0.78f;
 }
+// ---- AUDIO-RATE MODULATION showcases (v1.3.9): LFO -> Pitch/Volume run PER SAMPLE now, and the
+//      KEY sync mode locks the LFO rate to the played pitch x a ratio = real, playable FM/AM. ----
+static void nFmGrowl(DC& c) {      // THE audio-rate demo: KEY-tracked LFO -> Pitch = an FM growl bass
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 110.0f;
+    s.atk = 0.004f; s.dec = 0.7f; s.sustain = 0.8f; s.release = 0.12f;
+    s.filterType = DC::LowPass; s.filterCutoff = 1400.0f; s.filterReso = 1.6f; s.filterEnvAmt = 0.35f;
+    s.lfoSync[0] = -2.0f; s.lfoRate[0] = 1.0f; s.lfoAmt[0] = 0.5f;   // KEY mode, ratio x1
+    modRoute(s, DC::MSLfoFilt, DC::MTPitch, 0.5f);                   // audio-rate FM (per sample)
+    s.fxSub = 0.5f;
+    chFx(c, DC::ChFxComp, 0.4f); c.volume = 0.78f;
+}
+static void nWolfLead(DC& c) {     // aggressive FM lead: KEY ratio x2 -> Pitch + drive = snarling harmonics
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
+    s.oscUnison = 2; s.oscDetune = 0.08f;
+    s.atk = 0.006f; s.dec = 0.8f; s.sustain = 0.75f; s.release = 0.2f;
+    s.lfoSync[0] = -2.0f; s.lfoRate[0] = 2.0f; s.lfoAmt[0] = 0.4f;   // KEY, ratio x2 = bright FM bite
+    modRoute(s, DC::MSLfoFilt, DC::MTPitch, 0.4f);
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.3f;
+    c.delaySend = 0.15f; c.volume = 0.6f;
+}
+static void nMetalEP(DC& c) {      // DX-style metallic e-piano: KEY ratio x3.5 (inharmonic) -> Pitch on a sine
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSine; s.oscFreq = 261.63f;
+    s.atk = 0.003f; s.dec = 1.4f; s.sustain = 0.3f; s.release = 0.5f;
+    s.lfoSync[0] = -2.0f; s.lfoRate[0] = 3.5f; s.lfoAmt[0] = 0.35f;  // inharmonic ratio = the metal
+    modRoute(s, DC::MSLfoFilt, DC::MTPitch, 0.35f);
+    chFx(c, DC::ChFxComp, 0.3f); c.reverbSend = 0.15f; c.volume = 0.66f;
+}
+static void nFmBellTone(DC& c) {   // classic FM bell: KEY ratio x3 -> Pitch, struck and ringing
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSine; s.oscFreq = 523.25f;   // C5
+    s.atk = 0.002f; s.dec = 1.8f; s.sustain = 0.0f; s.release = 0.6f;
+    s.lfoSync[0] = -2.0f; s.lfoRate[0] = 3.0f; s.lfoAmt[0] = 0.45f;
+    modRoute(s, DC::MSLfoFilt, DC::MTPitch, 0.45f);
+    c.reverbSend = 0.3f; c.volume = 0.7f;
+}
+static void nAmShimmer(DC& c) {    // octave AM shimmer pad: KEY ratio x2 -> VOLUME (per-sample AM = new partials)
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
+    s.oscUnison = 4; s.oscDetune = 0.18f; s.uniSpread = 0.5f;
+    s.atk = 0.4f; s.dec = 1.8f; s.sustain = 0.85f; s.release = 1.1f;
+    s.filterType = DC::LowPass; s.filterCutoff = 2600.0f; s.filterReso = 0.7f;
+    s.lfoSync[0] = -2.0f; s.lfoRate[0] = 2.0f; s.lfoAmt[0] = 0.5f;   // KEY x2 -> AM at the octave
+    modRoute(s, DC::MSLfoFilt, DC::MTVol, 0.6f);                     // audio-rate AM (per sample)
+    chFx(c, DC::ChFxChorus, 0.35f);
+    c.reverbSend = 0.32f; c.volume = 0.56f;
+}
+static void nRobotDrone(DC& c) {   // robotic vocal drone: deep audio-rate AM + a parked vowel
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 130.81f;   // C3
+    s.atk = 0.15f; s.dec = 1.2f; s.sustain = 0.9f; s.release = 0.5f;
+    s.fxFormant = 0.3f;                                          // vowel body
+    s.lfoSync[0] = -2.0f; s.lfoRate[0] = 1.0f; s.lfoAmt[0] = 0.8f;
+    modRoute(s, DC::MSLfoFilt, DC::MTVol, 0.9f);                 // near-full AM = robot buzz
+    chFx(c, DC::ChFxComp, 0.35f); c.volume = 0.68f;
+}
+static void nFmClang(DC& c) {      // metallic clang hit: FIXED 780 Hz LFO -> Pitch on a short sine strike
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSine; s.oscFreq = 320.0f;
+    s.atk = 0.001f; s.dec = 0.35f; s.sustain = 0.0f; s.release = 0.08f;
+    s.lfoRate[0] = 780.0f; s.lfoAmt[0] = 0.5f;                   // fixed audio-rate = inharmonic clang
+    modRoute(s, DC::MSLfoFilt, DC::MTPitch, 0.55f);
+    s.fxPunch = 0.4f; c.reverbSend = 0.18f; c.volume = 0.8f;
+}
+static void nRingChime(DC& c) {    // TUNED ring mod: Ring at full with the carrier TRACKING the note
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSine; s.oscFreq = 523.25f;
+    s.atk = 0.002f; s.dec = 1.4f; s.sustain = 0.0f; s.release = 0.5f;
+    s.fxRing = 0.65f; s.fxRingHz = 25.0f;                        // hard left = TRACK the note (tuned ring)
+    c.reverbSend = 0.28f; c.volume = 0.72f;
+}
+static void nJetRiser(DC& c) {     // CHARACTER showcase: a noise riser through a SCREAMING flanger (char 0.92)
+    auto& s = mkSlot(c, DC::SrcNoise);
+    s.noiseType = 0; s.atk = 1.2f; s.hold = 0.8f; s.dec = 0.8f; s.sustain = 0.0f;
+    s.filterType = DC::BandPass; s.filterCutoff = 900.0f; s.filterReso = 1.2f; s.filterEnvAmt = 0.8f;
+    chFx(c, DC::ChFxFlanger, 0.8f, 0.92f);                       // character up = fast deep jet
+    c.reverbSend = 0.2f; c.volume = 0.7f;
+}
+static void nScoopedBass(DC& c) {  // BIPOLAR BELL showcase: mids CUT -9 dB = the scooped metal bass
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 65.41f;    // C2
+    s.atk = 0.004f; s.dec = 0.7f; s.sustain = 0.75f; s.release = 0.15f;
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.35f;
+    s.filterType2 = DC::Bell; s.filterCutoff2 = 750.0f; s.filterGain2 = -9.0f; s.filterReso2 = 1.0f;   // the SCOOP (bell CUT)
+    s.fxSub = 0.4f;
+    chFx(c, DC::ChFxComp, 0.4f); c.volume = 0.8f;
+}
+static void nSidebandPad(DC& c) {  // hazy inharmonic pad: a FIXED 150 Hz LFO -> Pitch at low depth = sideband fog
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvTri; s.oscFreq = 261.63f;
+    s.oscUnison = 3; s.oscDetune = 0.12f; s.uniSpread = 0.4f;
+    s.atk = 0.5f; s.dec = 2.0f; s.sustain = 0.85f; s.release = 1.2f;
+    s.lfoRate[0] = 150.0f; s.lfoAmt[0] = 0.18f;                  // fixed audio rate = a fog that shifts per note
+    modRoute(s, DC::MSLfoFilt, DC::MTPitch, 0.25f);
+    chFx(c, DC::ChFxChorus, 0.3f);
+    c.reverbSend = 0.35f; c.volume = 0.55f;
+}
 static void nNotchBass(DC& c) {     // phaser-ish bass: a swept NOTCH + keytrack, tempo-synced 1/2-note notch motion
     auto& s = mkSlot(c, DC::SrcOsc);
     s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 65.41f;         // C2
@@ -1684,7 +1783,7 @@ static void aClarinet(DC& c) {     // woody odd pipe: hollow start blooming into
     wtFrame(s, 3, {{1,0.9f},{2,0.08f},{3,0.85f},{5,0.65f},{7,0.35f},{9,0.45f},{11,0.2f}});
     s.atk = 0.07f; s.dec = 0.5f; s.sustain = 0.85f; s.release = 0.22f;
     s.filterType = DC::LowPass; s.filterCutoff = 2400.0f; s.filterReso = 0.8f; ktRoute(s, 0.5f);
-    s.filterType2 = DC::Bell; s.filterCutoff2 = 250.0f; s.filterReso2 = 2.0f;   // warm low-mid lift (was Tone -0.25)
+    s.filterType2 = DC::Bell; s.filterCutoff2 = 250.0f; s.filterGain2 = 2.0f; s.filterReso2 = 1.1f;   // warm low-mid lift (was Tone -0.25)
     s.drift = 0.2f; s.vibrato = 0.10f;
     windMotion(s, 0.09f, 0.14f, 0.6f);
     s.addLoop = true;                     // user: loop the glide (the tone breathes out AND back)
@@ -1698,7 +1797,7 @@ static void aFlute(DC& c) {        // soft pure start blooming into a singing bo
     wtFrame(s, 3, {{1,1.0f},{2,0.5f},{3,0.16f},{4,0.07f}});
     s.atk = 0.09f; s.dec = 0.6f; s.sustain = 0.9f; s.release = 0.25f;
     s.drift = 0.3f; s.vibrato = 0.16f;
-    s.filterType = DC::Bell; s.filterCutoff = 3200.0f; s.filterReso = 1.5f;   // airy lift (was Tone 0.1)
+    s.filterType = DC::Bell; s.filterCutoff = 3200.0f; s.filterGain = 1.5f; s.filterReso = 1.1f;   // airy lift (was Tone 0.1)
     windMotion(s, 0.11f, 0.16f, 0.7f);
     s.addLoop = true;                     // user: loop the glide (the tone breathes out AND back)
     windBreath(c, 0.18f, 3400.0f, 0.07f, 0.6f, 0.75f, 0.28f);
@@ -1757,7 +1856,7 @@ static void aDulcimer(DC& c) {     // full 1/h series with every 4th harmonic RE
     for (int f = 1; f < DC::ADD_FRAMES; ++f)         // uniform strip (static sound, like mkAdd)
         for (int k = 0; k < DC::ADD_HARM; ++k) s.addH[f][k] = s.addH[0][k];
     s.atk = 0.002f; s.dec = 0.8f; s.sustain = 0.0f; s.release = 0.4f;
-    s.filterType = DC::Bell; s.filterCutoff = 3500.0f; s.filterReso = 2.0f;   // hammered sparkle (was Tone 0.2)
+    s.filterType = DC::Bell; s.filterCutoff = 3500.0f; s.filterGain = 2.0f; s.filterReso = 1.1f;   // hammered sparkle (was Tone 0.2)
     c.delaySend = 0.1f; c.volume = 0.75f;
 }
 static void aOctaveSub(DC& c) {    // sine + half-strength octave = a sub that reads on small speakers
@@ -1783,7 +1882,7 @@ static void xSquashClap(DC& c) {   // compressor slammed on a clap = long sizzli
     auto& s = mkSlot(c, DC::SrcNoise);
     s.noiseType = 0; s.atk = 0.002f; s.hold = 0.02f; s.dec = 0.35f; s.sustain = 0.0f;
     s.filterType = DC::BandPass; s.filterCutoff = 1400.0f; s.filterReso = 1.4f;
-    s.filterType2 = DC::Bell; s.filterCutoff2 = 4000.0f; s.filterReso2 = 2.5f;   // sizzle lift (was Tone 0.3)
+    s.filterType2 = DC::Bell; s.filterCutoff2 = 4000.0f; s.filterGain2 = 2.5f; s.filterReso2 = 1.1f;   // sizzle lift (was Tone 0.3)
     chFx(c, DC::ChFxComp, 0.8f); c.volume = 0.8f;
 }
 static void xFeltPiano(DC& c) {    // softened attack + dark tilt = the felt-piano intimacy
@@ -1793,7 +1892,7 @@ static void xFeltPiano(DC& c) {    // softened attack + dark tilt = the felt-pia
     s.atk = 0.004f; s.dec = 1.6f; s.sustain = 0.25f; s.release = 0.4f;
     s.fxPunch = -0.6f; chFx(c, DC::ChFxComp, 0.2f);
     s.filterType  = DC::LowPass; s.filterCutoff  = 4500.0f; s.filterReso  = 0.7f;   // highs down +
-    s.filterType2 = DC::Bell;    s.filterCutoff2 = 220.0f;  s.filterReso2 = 3.5f;   // lows up = the felt tilt (was Tone -0.5)
+    s.filterType2 = DC::Bell;    s.filterCutoff2 = 220.0f;  s.filterGain2 = 3.5f; s.filterReso2 = 1.1f;   // lows up = the felt tilt (was Tone -0.5)
     c.reverbSend = 0.15f; c.volume = 0.78f;
 }
 static void xTightSnare(DC& c) {   // punch + comp = a dry, in-your-face snare crack
@@ -1813,7 +1912,7 @@ static void xGlueBass(DC& c) {     // heavy one-knob comp holding a saw+sub toge
     s.atk = 0.004f; s.dec = 0.6f; s.sustain = 0.75f; s.release = 0.12f;
     s.filterType = DC::LowPass; s.filterCutoff = 800.0f; s.filterReso = 1.0f; ktRoute(s, 0.5f);
     chFx(c, DC::ChFxComp, 0.7f);
-    s.filterType2 = DC::Bell; s.filterCutoff2 = 120.0f; s.filterReso2 = 2.0f;   // low warmth (was Tone -0.2)
+    s.filterType2 = DC::Bell; s.filterCutoff2 = 120.0f; s.filterGain2 = 2.0f; s.filterReso2 = 1.1f;   // low warmth (was Tone -0.2)
     auto& b = mkSlot2(c, DC::SrcOsc, 0.6f);
     b.oscShape = b.oscShapeB = DC::WvSine; b.oscFreq = 55.0f;
     b.atk = 0.004f; b.dec = 0.6f; b.sustain = 0.8f; b.release = 0.12f;
@@ -1823,7 +1922,7 @@ static void xCrispHat(DC& c) {     // bright tilt + snap on purple noise = prist
     auto& s = mkSlot(c, DC::SrcNoise);
     s.noiseType = 3; s.atk = 0.001f; s.dec = 0.06f; s.sustain = 0.0f;
     s.filterType = DC::HighPass; s.filterCutoff = 5000.0f; s.filterReso = 0.8f;
-    s.filterType2 = DC::Bell; s.filterCutoff2 = 8000.0f; s.filterReso2 = 4.5f;   // pristine top lift (was Tone 0.6)
+    s.filterType2 = DC::Bell; s.filterCutoff2 = 8000.0f; s.filterGain2 = 4.5f; s.filterReso2 = 1.1f;   // pristine top lift (was Tone 0.6)
     s.fxPunch = 0.4f; c.volume = 0.72f;
 }
 
@@ -2134,6 +2233,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     // ---- Electro Perc ----
     { "Zap", mZap, "Electro Perc" },
     { "Particle Perc", grParticlePerc, "Electro Perc" },   // GRANULAR
+    { "FM Clang", nFmClang, "Electro Perc" },        // AUDIO-RATE: fixed 780 Hz -> Pitch = metal clang
     { "Filter Zap", eFilterZap, "Electro Perc" },
     { "Blip", mBlip, "Electro Perc" },
     { "Laser Zap", mLaserZap, "Electro Perc" },
@@ -2165,6 +2265,8 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Amp Bass", gAmpBass, "Bass" },            // KS bass through the BASS AMP split rig
     { "Hungry Bass", uHungryBass, "Bass" },          // USER IMPORT (my growl)
     { "Talking Bass", nTalkingBass, "Bass" },        // FORMANT + SUB showcase (LFO -> Formant = it talks)
+    { "FM Growl", nFmGrowl, "Bass" },                // AUDIO-RATE showcase: KEY LFO -> Pitch = playable FM growl
+    { "Scooped Bass", nScoopedBass, "Bass" },        // BIPOLAR BELL showcase: mids CUT -9 dB
     { "Sub Pluck", nSubPluck, "Bass" },              // SUB showcase: clean octave-down under a bright pluck
     { "Granite Bass", grGraniteBass, "Bass" },   // GRANULAR
     { "Prowl Bass", nProwlBass, "Bass" },        // free-run filter LFO showcase
@@ -2189,6 +2291,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Clavinet", kClav, "Keys" },
     { "Chorus EP", nChorusEP, "Keys" },
     { "Phase Keys", nPhaseKeys, "Keys" },            // CHANNEL FX showcase: LFO -> Phaser (Channel)
+    { "Metal EP", nMetalEP, "Keys" },                // AUDIO-RATE: inharmonic KEY x3.5 = DX metal
     { "Felt Piano", xFeltPiano, "Keys" },
     { "Morph Keys", sMorphKeys, "Keys" },
     { "Cascade Keys", wCascadeKeys, "Keys" },
@@ -2205,6 +2308,8 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Chorus Pad", nChorusPad, "Pads & Choirs" },
     { "Jet Pad", nJetPad, "Pads & Choirs" },          // CHANNEL FX showcase: LFO -> Flanger (Channel)
     { "Vowel Pad", nVowelPad, "Pads & Choirs" },      // FORMANT showcase: slow LFO -> vowel morph
+    { "AM Shimmer", nAmShimmer, "Pads & Choirs" },    // AUDIO-RATE AM at the octave (KEY x2 -> Volume)
+    { "Sideband Pad", nSidebandPad, "Pads & Choirs" },// AUDIO-RATE: fixed 150 Hz -> Pitch = inharmonic fog
     { "Vox Pad", nVoxBP, "Pads & Choirs" },
     { "Sync Sweep", nSyncSweep, "Pads & Choirs" },
     { "Comb Pad", aCombPad, "Pads & Choirs" },
@@ -2227,6 +2332,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Saw Lead", kSawLead, "Leads" },
     { "Hyper Saw", nHyperSaw, "Leads" },
     { "Swirl Lead", nSwirlLead, "Leads" },           // CHANNEL FX showcase: Velocity -> Phaser (Channel)
+    { "Wolf Lead", nWolfLead, "Leads" },             // AUDIO-RATE: KEY x2 FM bite
     { "Acid HP", nAcidHP, "Leads" },
     { "Quint Lead", aQuintLead, "Leads" },
     { "Bloom Lead", sBloomLead, "Leads" },
@@ -2257,6 +2363,8 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Vibes", kVibes, "Bells & Mallets" },
     { "Marimba Keys", kMarimbaKeys, "Bells & Mallets" },
     { "Steel Drum", moSteelDrum, "Bells & Mallets" },
+    { "FM Bell", nFmBellTone, "Bells & Mallets" },   // AUDIO-RATE: KEY x3 = classic FM bell
+    { "Ring Chime", nRingChime, "Bells & Mallets" }, // RING carrier TRACKS the note = tuned ring mod
     { "Mod Tubular Bell", moTubular, "Bells & Mallets" },
     { "Mod Glass", moGlass, "Bells & Mallets" },
     { "Mod Kalimba", moKalimba, "Bells & Mallets" },
@@ -2283,6 +2391,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Noise Sweep", mNoiseSweep, "Risers & Falls" },
     { "Grain Riser", grGrainRiser, "Risers & Falls" },   // GRANULAR
     { "Uplifter", mUplifter, "Risers & Falls" },
+    { "Jet Riser", nJetRiser, "Risers & Falls" },    // CHANNEL FX CHARACTER: flanger char 0.92 = screaming jet
     { "Tape Stop", mTapeStop, "Risers & Falls" },
     { "Dive", mDive, "Risers & Falls" },
     { "Sub Rise", mSubRise, "Risers & Falls" },
@@ -2302,6 +2411,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Chopper", eChopper, "Noise & Texture" },
     { "Rain", mRain, "Noise & Texture" },
     { "Evil Laugh", uEvilLaugh, "Noise & Texture" },   // USER IMPORT (evil laugh)
+    { "Robot Drone", nRobotDrone, "Noise & Texture" },// AUDIO-RATE AM (near-full) + vowel = robot buzz
     { "Ocean", mOcean, "Noise & Texture" },
     { "Ambient Wash", nAmbientWash, "Noise & Texture" },
     { "Evolver", sEvolver, "Noise & Texture" },

@@ -733,6 +733,7 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("flT", s.filterType, nullptr); st.setProperty("flC", s.filterCutoff, nullptr);
         st.setProperty("flR", s.filterReso, nullptr); st.setProperty("flE", s.filterEnvAmt, nullptr);
         st.setProperty("flT2", s.filterType2, nullptr); st.setProperty("flC2", s.filterCutoff2, nullptr);   // FILTER 2 (series)
+        st.setProperty("flG", s.filterGain, nullptr); st.setProperty("flG2", s.filterGain2, nullptr);   // BELL gain (bipolar dB)
         st.setProperty("flR2", s.filterReso2, nullptr); st.setProperty("flE2", s.filterEnvAmt2, nullptr);
         // === PER-SLOT FILTER (end) ===
         // (chM/fxCp/fxFl/fxPh retired - Chorus/Comp/Flanger/Phaser are CHANNEL FX now, saved on the channel.)
@@ -875,6 +876,12 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         const float legacyKt1 = (float) st.getProperty("flK", 0.0f);    // retired keytrack -> migrated to a Note->cutoff route below
         s.filterType2   = (int)  st.getProperty("flT2", d.filterType2);   s.filterCutoff2 = (float)st.getProperty("flC2", d.filterCutoff2);
         s.filterReso2   = (float)st.getProperty("flR2", d.filterReso2);   s.filterEnvAmt2 = (float)st.getProperty("flE2", d.filterEnvAmt2);
+        s.filterGain  = (float)st.getProperty("flG",  d.filterGain);
+        s.filterGain2 = (float)st.getProperty("flG2", d.filterGain2);
+        // MIGRATION (dev-only window): the first Bell stored its BOOST in the reso field with a fixed
+        // Q 1.1 - lift it into the gain field so those saves keep their sound.
+        if (s.filterType  == Bell && ! st.hasProperty("flG"))  { s.filterGain  = juce::jlimit(-15.0f, 15.0f, s.filterReso);  s.filterReso  = 1.1f; }
+        if (s.filterType2 == Bell && ! st.hasProperty("flG2")) { s.filterGain2 = juce::jlimit(-15.0f, 15.0f, s.filterReso2); s.filterReso2 = 1.1f; }
         const float legacyKt2 = (float) st.getProperty("flK2", 0.0f);
         // === PER-SLOT FILTER (end) ===
         s.fxPunch = (float)st.getProperty("fxPn", d.fxPunch);
@@ -2385,10 +2392,12 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 c.filt[fi].cutoffHz = juce::jlimit(20.0, sr * 0.49, cutoff);   // stash (Hz) so per-voice KEYTRACK re-tans from it
                 c.filt[fi].G = std::tan(kPi * c.filt[fi].cutoffHz / sr);       // ZDF prewarped cutoff target
                 if (c.filt[fi].mode == 4)
-                {   // BELL: the reso field stores the BOOST in dB (Y drag). Cytomic SVF bell:
-                    // A = 10^(dB/40), K = 1/(Q*A), out = in + K*(A^2-1)*v1. Fixed musical Q = 1.1.
-                    const double A = std::pow(10.0, (double) c.filt[fi].reso / 40.0);
-                    c.filt[fi].K      = 1.0 / (1.1 * A);
+                {   // BELL (bipolar): filterGain = boost/cut dB (Y drag, +-15), reso = the bell's Q
+                    // (wheel). Cytomic SVF bell: A = 10^(dB/40), K = 1/(Q*A), out = in + K*(A^2-1)*v1.
+                    const double gDb = juce::jlimit(-15.0, 15.0, (double)(fi == 0 ? sl.filterGain : sl.filterGain2));
+                    const double A  = std::pow(10.0, gDb / 40.0);
+                    const double Q  = juce::jlimit(0.3, 12.0, (double) c.filt[fi].reso);
+                    c.filt[fi].K      = 1.0 / (Q * A);
                     c.filt[fi].bellM1 = c.filt[fi].K * (A * A - 1.0);
                 }
                 else

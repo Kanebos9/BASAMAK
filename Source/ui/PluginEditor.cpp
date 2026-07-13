@@ -3231,11 +3231,11 @@ void VoiceModDisplay::mouseDoubleClick(const juce::MouseEvent&)
 //==============================================================================
 // FrequencyDisplay
 //==============================================================================
-void FrequencyDisplay::setFilters(int t0, float c0, float r0, float e0,
-                                  int t1, float c1, float r1, float e1, double sr)
+void FrequencyDisplay::setFilters(int t0, float c0, float r0, float e0, float g0,
+                                  int t1, float c1, float r1, float e1, float g1, double sr)
 {
-    fType[0] = t0; fCutoff[0] = c0; fReso[0] = r0; fEnvAmt[0] = e0;
-    fType[1] = t1; fCutoff[1] = c1; fReso[1] = r1; fEnvAmt[1] = e1;
+    fType[0] = t0; fCutoff[0] = c0; fReso[0] = r0; fEnvAmt[0] = e0; fGain[0] = g0;
+    fType[1] = t1; fCutoff[1] = c1; fReso[1] = r1; fEnvAmt[1] = e1; fGain[1] = g1;
     sampleRate = sr; showFilter = true;
     repaint();
 }
@@ -3345,7 +3345,7 @@ void FrequencyDisplay::paint(juce::Graphics& g)
                     case DrumChannel::HighPass: bq.highpass(sampleRate, fc, q); break;
                     case DrumChannel::BandPass: bq.bandpass(sampleRate, fc, q); break;
                     case DrumChannel::Notch:    bq.notch   (sampleRate, fc, q); break;
-                    case DrumChannel::Bell:     bq.peaking (sampleRate, fc, 1.1, q); break;   // Y = BOOST dB (fixed Q 1.1, like the DSP)
+                    case DrumChannel::Bell:     bq.peaking (sampleRate, fc, q, juce::jlimit(-15.0f, 15.0f, fGain[fi])); break;   // bipolar gain + Q (wheel)
                     default:                    bq.lowpass (sampleRate, fc, q); break;
                 }
                 juce::Path resp; bool started = false;
@@ -3418,7 +3418,7 @@ void FrequencyDisplay::mouseDown(const juce::MouseEvent& e)
         if (nt == DrumChannel::Formant)   nt = DrumChannel::Bell;        // skip Formant (legacy)
         else if (nt > DrumChannel::Bell)  nt = DrumChannel::FilterOff;
         fType[fi] = nt;
-        if (onFilterEdit) onFilterEdit(fi, fType[fi], fCutoff[fi], fReso[fi], fEnvAmt[fi]);
+        if (onFilterEdit) onFilterEdit(fi, fType[fi], fCutoff[fi], fReso[fi], fEnvAmt[fi], fGain[fi]);
         if (onEdit) onEdit(); if (onDragEnd) onDragEnd();
         repaint(); return;
     }
@@ -3444,15 +3444,23 @@ void FrequencyDisplay::mouseDrag(const juce::MouseEvent& e)
         float amt = std::log2(juce::jmax(1.0e-3f, endHz / juce::jmax(20.0f, fCutoff[fi]))) / 5.0f;
         if (std::abs(amt) < 0.04f) amt = 0.0f;
         fEnvAmt[fi] = juce::jlimit(-1.0f, 1.0f, amt);
-        if (onFilterEdit) onFilterEdit(fi, fType[fi], fCutoff[fi], fReso[fi], fEnvAmt[fi]);
+        if (onFilterEdit) onFilterEdit(fi, fType[fi], fCutoff[fi], fReso[fi], fEnvAmt[fi], fGain[fi]);
         repaint(); return;
     }
-    // diamond: X = cutoff, Y = resonance (Bell: Y = boost dB). Dragging an OFF filter turns it on (LowPass).
+    // diamond: X = cutoff; Y = resonance - except BELL, where Y = bipolar GAIN on the dB axis
+    // (boost above the centre line, CUT below; wheel = the bell's Q). Dragging an OFF filter turns it on.
     if ((fType[fi] < DrumChannel::LowPass || fType[fi] > DrumChannel::Notch) && fType[fi] != DrumChannel::Bell)
         fType[fi] = DrumChannel::LowPass;
     fCutoff[fi] = juce::jlimit(20.0f, 20000.0f, freqForX(a, e.position.x));
-    fReso[fi]   = normToReso((a.getBottom() - a.getHeight() * 0.06f - e.position.y) / (a.getHeight() * 0.85f));
-    if (onFilterEdit) onFilterEdit(fi, fType[fi], fCutoff[fi], fReso[fi], fEnvAmt[fi]);
+    if (fType[fi] == DrumChannel::Bell)
+    {
+        float g = juce::jlimit(-15.0f, 15.0f, dbForY(a, e.position.y));
+        if (std::abs(g) < 0.6f) g = 0.0f;   // snap-to-flat near the centre line
+        fGain[fi] = g;
+    }
+    else
+        fReso[fi] = normToReso((a.getBottom() - a.getHeight() * 0.06f - e.position.y) / (a.getHeight() * 0.85f));
+    if (onFilterEdit) onFilterEdit(fi, fType[fi], fCutoff[fi], fReso[fi], fEnvAmt[fi], fGain[fi]);
     repaint();
 }
 
@@ -3461,11 +3469,11 @@ void FrequencyDisplay::mouseDoubleClick(const juce::MouseEvent& e)
     const int b = nearestBand(e.position);
     if (b < 0) return;
     const int fi = b % 2;
-    if (b == kFiltEnv(fi)) { fEnvAmt[fi] = 0.0f; if (onFilterEdit) onFilterEdit(fi, fType[fi], fCutoff[fi], fReso[fi], fEnvAmt[fi]); repaint(); return; }
+    if (b == kFiltEnv(fi)) { fEnvAmt[fi] = 0.0f; if (onFilterEdit) onFilterEdit(fi, fType[fi], fCutoff[fi], fReso[fi], fEnvAmt[fi], fGain[fi]); repaint(); return; }
     activeFilt = fi;   // toggle that filter on/off
     const bool wasOn = (fType[fi] >= DrumChannel::LowPass && fType[fi] <= DrumChannel::Notch) || fType[fi] == DrumChannel::Bell;
     fType[fi] = wasOn ? DrumChannel::FilterOff : DrumChannel::LowPass;
-    if (onFilterEdit) onFilterEdit(fi, fType[fi], fCutoff[fi], fReso[fi], fEnvAmt[fi]);
+    if (onFilterEdit) onFilterEdit(fi, fType[fi], fCutoff[fi], fReso[fi], fEnvAmt[fi], fGain[fi]);
     repaint();
 }
 
@@ -3473,8 +3481,8 @@ void FrequencyDisplay::mouseWheelMove(const juce::MouseEvent& e, const juce::Mou
 {   // wheel over a diamond = its resonance
     const int b = nearestBand(e.position); if (b < 0) return;
     const int fi = b % 2;
-    fReso[fi] = juce::jlimit(0.3f, 12.0f, fReso[fi] * (wd.deltaY > 0 ? 1.12f : 1.0f / 1.12f));
-    if (onFilterEdit) onFilterEdit(fi, fType[fi], fCutoff[fi], fReso[fi], fEnvAmt[fi]);
+    fReso[fi] = juce::jlimit(0.3f, 12.0f, fReso[fi] * (wd.deltaY > 0 ? 1.12f : 1.0f / 1.12f));   // Bell: this is the bell's Q
+    if (onFilterEdit) onFilterEdit(fi, fType[fi], fCutoff[fi], fReso[fi], fEnvAmt[fi], fGain[fi]);
     repaint();
 }
 
@@ -3496,9 +3504,10 @@ juce::String FrequencyDisplay::getTooltip()
     if (b == kFilt(0) || b == kFilt(1))
     { const int fi = b % 2;
       if (fType[fi] == DrumChannel::Bell)
-          return juce::String("Filter ") + juce::String(fi + 1) + " (Bell): a BOOSTING peak - the one filter type that ADDS energy. "
-                 "DRAG the diamond = frequency (" + juce::String(juce::roundToInt(fCutoff[fi])) + " Hz) + boost (+"
-                 + juce::String(fReso[fi], 1) + " dB, fixed musical Q). RIGHT-CLICK = change type, DOUBLE-CLICK = on/off.";
+          return juce::String("Filter ") + juce::String(fi + 1) + " (Bell): a BIPOLAR peak - boost OR cut a band (a real EQ bell). "
+                 "DRAG = frequency (" + juce::String(juce::roundToInt(fCutoff[fi])) + " Hz) + gain ("
+                 + juce::String(fGain[fi] >= 0 ? "+" : "") + juce::String(fGain[fi], 1) + " dB - the diamond sits AT its gain; "
+                 "centre line = flat). WHEEL = Q (" + juce::String(fReso[fi], 2) + "). RIGHT-CLICK = type, DOUBLE-CLICK = on/off.";
       return juce::String("Filter ") + juce::String(fi + 1) + " (" + tn[juce::jlimit(0, 6, fType[fi])] + "): DRAG the diamond = cutoff ("
            + juce::String(juce::roundToInt(fCutoff[fi])) + " Hz) + reso (Q " + juce::String(fReso[fi], 2) + "). RIGHT-CLICK = change type, DOUBLE-CLICK = on/off, wheel = reso."; }
     return "TWO resonant filters in series (F1 orange, F2 cyan). Each is a DIAMOND: drag = cutoff/reso, double-click "
@@ -5575,6 +5584,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         for (int e = 0; e < DrumChannel::NUM_EQ_BANDS; ++e) { const auto& eb = sl.eqBand[e]; h = mix(h, eb.on ? 1 : 0); h = mix(h, f(eb.freq)); h = mix(h, f(eb.gainDb)); h = mix(h, f(eb.q)); }
         h = mix(h, sl.filterType); h = mix(h, f(sl.filterCutoff)); h = mix(h, f(sl.filterReso)); h = mix(h, f(sl.filterEnvAmt));   // per-slot filter 1
         h = mix(h, sl.filterType2); h = mix(h, f(sl.filterCutoff2)); h = mix(h, f(sl.filterReso2)); h = mix(h, f(sl.filterEnvAmt2));   // filter 2
+        h = mix(h, f(sl.filterGain)); h = mix(h, f(sl.filterGain2));   // BELL bipolar gains
         h = mix(h, f(sl.fxPunch)); h = mix(h, f(sl.fxRing)); h = mix(h, f(sl.fxRingHz));   // Punch/Ring/RingHz (per slot)
         h = mix(h, f(sl.fxSub)); h = mix(h, f(sl.fxFormant));                      // Sub/Formant (per slot)
         for (int fr = 0; fr < DrumChannel::ADD_FRAMES; ++fr)
@@ -7980,11 +7990,11 @@ void DrumSequencerEditor::setupComponents()
     freqDisplay.onDragEnd = [this] { if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel); };
     // The resonant FILTER is PER SLOT with TWO in series (filterIdx 0/1). eqEditTarget = 1 or 2 picks
     // the slot; the display edits that slot's filter 1 or 2 (never the other slot's engine).
-    freqDisplay.onFilterEdit = [this](int filterIdx, int type, float cut, float reso, float env) {
+    freqDisplay.onFilterEdit = [this](int filterIdx, int type, float cut, float reso, float env, float gainDb) {
         auto& ch = proc.sequencer.channel(selectedChannel);
         auto& sl = ch.slots[juce::jlimit(0, DrumChannel::NUM_SLOTS - 1, eqEditTarget - 1)];
-        if (filterIdx == 0) { sl.filterType = type;  sl.filterCutoff = cut;  sl.filterReso = reso;  sl.filterEnvAmt = env; }
-        else                { sl.filterType2 = type; sl.filterCutoff2 = cut; sl.filterReso2 = reso; sl.filterEnvAmt2 = env; }
+        if (filterIdx == 0) { sl.filterType = type;  sl.filterCutoff = cut;  sl.filterReso = reso;  sl.filterEnvAmt = env;  sl.filterGain = gainDb; }
+        else                { sl.filterType2 = type; sl.filterCutoff2 = cut; sl.filterReso2 = reso; sl.filterEnvAmt2 = env; sl.filterGain2 = gainDb; }
         ch.markDspDirty();
         // The LFO's "filter is off" warning must update the INSTANT a filter is toggled here (a full
         // refreshDetailPanel doesn't run on a filter edit). Recompute from the LFO's own slot.
@@ -10773,8 +10783,8 @@ void DrumSequencerEditor::refreshEqTarget()
     auto& ch = proc.sequencer.channel(selectedChannel);
     const int si = juce::jlimit(0, DrumChannel::NUM_SLOTS - 1, eqEditTarget - 1);
     auto& fsl = ch.slots[si];
-    freqDisplay.setFilters(fsl.filterType,  fsl.filterCutoff,  fsl.filterReso,  fsl.filterEnvAmt,
-                           fsl.filterType2, fsl.filterCutoff2, fsl.filterReso2, fsl.filterEnvAmt2, proc.spectrumRate());
+    freqDisplay.setFilters(fsl.filterType,  fsl.filterCutoff,  fsl.filterReso,  fsl.filterEnvAmt,  fsl.filterGain,
+                           fsl.filterType2, fsl.filterCutoff2, fsl.filterReso2, fsl.filterEnvAmt2, fsl.filterGain2, proc.spectrumRate());
     freqDisplay.setFilterDrive(fsl.filterDrive);
     proc.analysisSlot.store(si);   // spectrum follows the selected slot
     slotSelEq.sel = si; slotSelEq.repaint();
