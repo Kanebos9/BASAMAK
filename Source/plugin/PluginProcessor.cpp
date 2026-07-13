@@ -1891,7 +1891,7 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
     ch.strumAmt    = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("strum",    0.0f));   // STRUM
     for (int f = 0; f < 2; ++f)   // CHANNEL FX slots (readSlots migrates a pre-slot-system file after this)
     { const juce::String k(f);
-      ch.chFxType[f] = juce::jlimit(0, 4, (int) child.getProperty("cfxT" + k, 0));
+      ch.chFxType[f] = juce::jlimit(0, 7, (int) child.getProperty("cfxT" + k, 0));
       ch.chFxAmt[f]  = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("cfxA" + k, 0.0f));
       ch.chFxChar[f] = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("cfxC" + k, 0.5f)); }
     {   // MIGRATION: last week's 4-fixed-effect files ("chFxCho"...) -> the strongest two FX slots

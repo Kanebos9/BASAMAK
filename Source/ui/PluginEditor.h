@@ -1956,6 +1956,29 @@ struct IconButtonLNF : juce::LookAndFeel_V4
 };
 
 // A TextButton that draws a clean down-triangle on the right (so it reads as a dropdown, like a ComboBox).
+// Compact ComboBox skin for NARROW combos (the CHANNEL FX type pickers): a SMALL 7px chevron instead
+// of the stock wide arrow button, and the text SQUEEZES to fit (never "..." - user hates the dots).
+struct TinyComboLNF : juce::LookAndFeel_V4
+{
+    void drawComboBox(juce::Graphics& g, int width, int height, bool, int, int, int, int, juce::ComboBox& box) override
+    {
+        auto r = juce::Rectangle<float>(0.0f, 0.0f, (float) width, (float) height).reduced(0.5f);
+        g.setColour(juce::Colour(0xff26264a)); g.fillRoundedRectangle(r, 3.0f);
+        g.setColour(box.hasKeyboardFocus(false) ? juce::Colour(0xff9fd1ff) : juce::Colour(0xff4a4a6e));
+        g.drawRoundedRectangle(r, 3.0f, 1.0f);
+        const float cx = (float) width - 7.0f, cy = (float) height * 0.5f;   // tiny chevron, right edge
+        juce::Path a; a.addTriangle(cx - 3.0f, cy - 1.5f, cx + 3.0f, cy - 1.5f, cx, cy + 2.5f);
+        g.setColour(juce::Colour(0xffaebada)); g.fillPath(a);
+    }
+    void positionComboBoxText(juce::ComboBox& box, juce::Label& l) override
+    {
+        l.setBounds(4, 1, box.getWidth() - 15, box.getHeight() - 2);   // text gets everything but the chevron
+        l.setFont(juce::Font(11.0f, juce::Font::bold));
+        l.setMinimumHorizontalScale(0.6f);                             // squeeze, never "..."
+        l.setJustificationType(juce::Justification::centredLeft);
+    }
+};
+
 struct DropButtonLNF : juce::LookAndFeel_V4
 {
     void drawButtonBackground(juce::Graphics& g, juce::Button& b, const juce::Colour& bg,
@@ -2431,6 +2454,7 @@ private:
     // CHANNEL FX = TWO selectable effect slots (type combo + Amount + Character faders) + the channel
     // Reverb/Delay SEND faders (right-click a send fader = pick its bus A/B + MIDI-learn).
     juce::ComboBox comboChFx[2];
+    TinyComboLNF   tinyComboLNF;   // compact skin for the two type combos (cleared in teardown!)
     SlotDragFader  chFxAmtF[2], chFxChrF[2];
     SlotDragFader  sendRevF, sendDelF;
     juce::Label   lblSub, lblFormant, lblPunch, lblRing, lblRingHz;

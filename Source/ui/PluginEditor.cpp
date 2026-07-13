@@ -4929,12 +4929,14 @@ public:
                   const juce::String& rememberedQuery)
     {
         files = userFiles; root = userRoot; curId = currentId;
-        // The channel's last search survives open/close until the user clears it (user request).
+        // The channel's last search survives open/close until the user clears it (user request),
+        // and it re-opens SELECTED: typing replaces it, one Delete clears it (user request round-2).
         ed.setText(rememberedQuery, juce::dontSendNotification);
         rebuild();
         setVisible(true);
         toFront(false);
         ed.grabKeyboardFocus();
+        ed.selectAll();                            // remembered query = pre-selected (type-over/one-key delete)
         scrollToCur();                             // open ON the channel's current sound
     }
     void close() { setVisible(false); giveAwayKeyboardFocus(); if (onClosed) onClosed(); }
@@ -5213,6 +5215,7 @@ DrumSequencerEditor::~DrumSequencerEditor()
     stopTimer();
     comboSampleSel.setLookAndFeel(nullptr);
     for (auto& c : slotCombo) c.setLookAndFeel(nullptr);
+    for (auto& c : comboChFx) c.setLookAndFeel(nullptr);   // TinyComboLNF
     for (auto* k : allKnobs) k->setLookAndFeel(nullptr);
     blendFader.setLookAndFeel(nullptr);   // had a custom two-tone LNF
     patModeBtn.setLookAndFeel(nullptr);
@@ -5884,7 +5887,7 @@ void DrumSequencerEditor::readChannelMix(const juce::ValueTree& t, DrumChannel& 
     ch.strumAmt = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("strum", 0.0f));   // per-sound strum (0 for old files)
     for (int fx = 0; fx < 2; ++fx)   // CHANNEL FX slots (readSlots migrates pre-slot-system files after this)
     { const juce::String k(fx);
-      ch.chFxType[fx] = juce::jlimit(0, 4, (int) t.getProperty("cfxT" + k, 0));
+      ch.chFxType[fx] = juce::jlimit(0, 7, (int) t.getProperty("cfxT" + k, 0));
       ch.chFxAmt[fx]  = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("cfxA" + k, 0.0f));
       ch.chFxChar[fx] = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("cfxC" + k, 0.5f)); }
     {   // MIGRATION: last week's 4-fixed-effect mix files -> the strongest two FX slots
@@ -8245,19 +8248,24 @@ void DrumSequencerEditor::setupComponents()
         {
             auto& cb = comboChFx[i];
             content.addAndMakeVisible(cb);
-            cb.addItem("FX " + juce::String(i == 0 ? "A" : "B") + ": Off", 1);
+            cb.setLookAndFeel(&tinyComboLNF);   // compact skin: tiny chevron + squeezed text (no "...")
+            cb.addItem("Off", 1);   // SHORT names: the 66px combo must read without "..." (user)
             cb.addItem("Chorus", 2); cb.addItem("Flanger", 3); cb.addItem("Phaser", 4); cb.addItem("Comp", 5);
+            cb.addItem("Tape", 6); cb.addItem("Auto-Pan", 7); cb.addItem("Widener", 8);
             cb.setSelectedId(1, juce::dontSendNotification);
             cb.setTooltip(juce::String("CHANNEL FX slot ") + (i == 0 ? "A" : "B") + ": pick an effect for the WHOLE instrument "
                           "(both sound slots combined; A runs before B).\n\n"
-                          "- Chorus = stereo widener | Flanger = jet sweep | Phaser = swirl | Comp = glue.\n"
-                          "- AMOUNT = how much; CHARACTER = the effect's second dimension (chorus/flanger/phaser = "
-                          "sweep speed + intensity, comp = attack speed). 50% = the classic voicing.\n"
+                          "- Chorus = widener | Flanger = jet | Phaser = swirl | Comp = glue | Tape = wow/flutter "
+                          "wobble (~3 ms latency while on) | Auto-Pan = stereo movement | Widener = M/S width "
+                          "(needs stereo content - unison Width or Chorus first).\n"
+                          "- AMOUNT = how much. CHARACTER = the 2nd dimension: sweep/wobble/pan SPEED "
+                          "(chorus/flanger/phaser/tape/auto-pan), attack (comp), bass-mono crossover (widener). "
+                          "50% = the classic voicing.\n"
                           "- Both faders are matrix targets: \"FX " + juce::String(i == 0 ? "A" : "B") + " Amount/Character (Channel)\".");
             cb.onChange = [this, i] {
                 if (ignoreKnobCallbacks) return;
                 auto& ch = proc.sequencer.channel(selectedChannel);
-                ch.chFxType[i] = juce::jlimit(0, 4, comboChFx[i].getSelectedId() - 1);
+                ch.chFxType[i] = juce::jlimit(0, 7, comboChFx[i].getSelectedId() - 1);
                 if (ch.chFxType[i] != DrumChannel::ChFxOff && ch.chFxAmt[i] <= 0.001f)
                     ch.chFxAmt[i] = 0.5f;   // picking an effect with amount 0 would be silent - start audible (disclosed)
                 ch.markDspDirty(); refreshDetailPanel();
@@ -10466,7 +10474,7 @@ void DrumSequencerEditor::updateFxFaders(const DrumChannel::Slot& sl)
     // CHANNEL FX + sends read the CHANNEL (both slots combined) - they never follow the slot selector.
     { const auto& ch = proc.sequencer.channel(selectedChannel);
       for (int i = 0; i < 2; ++i)
-      { comboChFx[i].setSelectedId(juce::jlimit(0, 4, ch.chFxType[i]) + 1, juce::dontSendNotification);
+      { comboChFx[i].setSelectedId(juce::jlimit(0, 7, ch.chFxType[i]) + 1, juce::dontSendNotification);
         chFxAmtF[i].setValue01(ch.chFxAmt[i]);
         chFxChrF[i].setValue01(ch.chFxChar[i]);
         const bool on = ch.chFxType[i] != DrumChannel::ChFxOff;

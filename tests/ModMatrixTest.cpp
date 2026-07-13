@@ -161,12 +161,22 @@ int main()
         auto phs = mk(DrumChannel::ChFxPhaser,  1.0f, 0.5f);
         auto cmp = mk(DrumChannel::ChFxComp,    1.0f, 0.5f);
         auto flgC = mk(DrumChannel::ChFxFlanger, 1.0f, 0.95f);   // character = faster/deeper sweep
+        auto tap = mk(DrumChannel::ChFxTape,    1.0f, 0.5f);
+        auto apn = mk(DrumChannel::ChFxAutoPan, 1.0f, 0.5f);
+        auto wid = render([](DrumChannel& c){ voice(c);           // widener needs STEREO content -> unison width
+            c.slots[0].oscUnison = 3; c.slots[0].uniSpread = 0.6f;
+            c.chFxType[0] = DrumChannel::ChFxWiden; c.chFxAmt[0] = 1.0f; c.chFxChar[0] = 0.5f; }, 0.9f, 0.6);
+        auto widOff = render([](DrumChannel& c){ voice(c);
+            c.slots[0].oscUnison = 3; c.slots[0].uniSpread = 0.6f; }, 0.9f, 0.6);
         const float cd = maxdiff(dry, cho), fd = maxdiff(dry, flg), pd = maxdiff(dry, phs), md = maxdiff(dry, cmp);
         const float chd = maxdiff(flg, flgC);
+        const float td = maxdiff(dry, tap), ad = maxdiff(dry, apn), wd2 = maxdiff(widOff, wid);
         const bool ok = cd > 0.001f && fd > 0.001f && pd > 0.001f && md > 0.001f && chd > 0.001f
-                     && finite(cho) && finite(flg) && finite(phs) && finite(cmp) && finite(flgC);
-        printf("[7] CHANNEL FX slots: chorus=%.3f flanger=%.3f phaser=%.3f comp=%.3f character=%.3f (all >0.001) -> %s\n",
-               cd, fd, pd, md, chd, CHK(ok) ? "OK" : "FAIL");
+                     && td > 0.001f && ad > 0.001f && wd2 > 0.001f
+                     && finite(cho) && finite(flg) && finite(phs) && finite(cmp) && finite(flgC)
+                     && finite(tap) && finite(apn) && finite(wid);
+        printf("[7] CHANNEL FX slots: chorus=%.3f flanger=%.3f phaser=%.3f comp=%.3f character=%.3f tape=%.3f autopan=%.3f widen=%.3f (all >0.001) -> %s\n",
+               cd, fd, pd, md, chd, td, ad, wd2, CHK(ok) ? "OK" : "FAIL");
     }
     {   // [8] CHANNEL FX are MODULATABLE from a slot's matrix (FX A Amount (Channel)): an LFO routed
         //     to it must change the render vs the same sound with the route removed.

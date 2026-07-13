@@ -877,7 +877,9 @@ private: struct Voice; public:   // forward decl (defined privately below) so th
     // dimension: chorus = rate/depth, flanger/phaser = sweep speed + feedback, comp = attack).
     // Character 0.5 = the old fixed constants EXACTLY (migration-safe). Part of the SOUND
     // (channelSoundHash + mix files). Amount 0 / type Off = bypass = bit-identical.
-    enum ChFxType { ChFxOff = 0, ChFxChorus, ChFxFlanger, ChFxPhaser, ChFxComp };
+    // Tape = wow/flutter pitch wobble + gentle HF softening (adds ~3 ms constant latency while on);
+    // AutoPan = equal-power stereo movement; Widen = M/S width with a bass-mono crossover (Character).
+    enum ChFxType { ChFxOff = 0, ChFxChorus, ChFxFlanger, ChFxPhaser, ChFxComp, ChFxTape, ChFxAutoPan, ChFxWiden };
     int   chFxType[2] = { 0, 0 };
     float chFxAmt [2] = { 0.0f, 0.0f };
     float chFxChar[2] = { 0.5f, 0.5f };

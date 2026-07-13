@@ -3594,6 +3594,74 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     }
                     chFxPhs[fx] = ph; chFxFbL[fx] = juce::jlimit(-4.0f, 4.0f, fbL); chFxFbR[fx] = juce::jlimit(-4.0f, 4.0f, fbR); sm = amt;
                 } break;
+                case ChFxTape:
+                {   // TAPE wow/flutter: the whole channel passes through a slowly-warped delay line =
+                    // pitch wobble (wow + a faster flutter) + gentle HF softening. CHARACTER = wobble
+                    // speed. NOTE: adds a small constant delay (~3 ms) while engaged (disclosed).
+                    const int flen = juce::jmax(64, (int) (0.008 * sr));
+                    if ((int) chFxDL[fx].size() != flen) { chFxDL[fx].assign((size_t) flen, 0.0f); chFxDR[fx].assign((size_t) flen, 0.0f); chFxW[fx] = 0; chFxPhs[fx] = 0.0; }
+                    int w = chFxW[fx]; double ph = chFxPhs[fx];
+                    const double rate = 0.8 * std::pow(4.0, 2.0 * (double) ch1 - 1.0);   // 0.2..3.2 Hz wow
+                    const double dPh  = 2.0 * kPi * rate / sr;
+                    const float  baseS = (float) (0.003 * sr);
+                    const float  hfK   = 1.0f - std::exp(-2.0f * (float) kPi * 6000.0f / (float) sr);
+                    float amt = sm;
+                    auto rd = [&](const std::vector<float>& buf, float delay) -> float {
+                        float rp = (float) w - delay; while (rp < 0.0f) rp += (float) flen;
+                        const int i0 = (int) rp; const float fr = rp - (float) i0;
+                        const int i1 = (i0 + 1 < flen) ? i0 + 1 : 0;
+                        return buf[(size_t) i0] + (buf[(size_t) i1] - buf[(size_t) i0]) * fr; };
+                    for (int i = 0; i < numSamples; ++i)
+                    {
+                        amt += smK * (aTgt[fx] - amt);
+                        const float d = baseS + amt * ((float)(0.0016 * sr) * (float) std::sin(ph)
+                                                     + (float)(0.00025 * sr) * (float) std::sin(ph * 6.7));
+                        chFxDL[fx][(size_t) w] = outL[i]; chFxDR[fx][(size_t) w] = outR[i];
+                        float xl = rd(chFxDL[fx], d), xr = rd(chFxDR[fx], d);
+                        chFxPzL[fx][0] += hfK * (xl - chFxPzL[fx][0]);        // tape HF softening (mixed by amount)
+                        chFxPzR[fx][0] += hfK * (xr - chFxPzR[fx][0]);
+                        outL[i] = xl + (chFxPzL[fx][0] - xl) * amt * 0.35f;
+                        outR[i] = xr + (chFxPzR[fx][0] - xr) * amt * 0.35f;
+                        if (++w >= flen) w = 0;
+                        ph += dPh; if (ph > 2.0 * kPi) ph -= 2.0 * kPi;
+                    }
+                    chFxW[fx] = w; chFxPhs[fx] = ph; sm = amt;
+                } break;
+                case ChFxAutoPan:
+                {   // AUTO-PAN: equal-power stereo movement (gL = sqrt(1-p), gR = sqrt(1+p), p = amt*sin).
+                    // CHARACTER = speed. Unity at amount 0; nothing else in the plugin MOVES the field.
+                    double ph = chFxPhs[fx];
+                    const double dPh = 2.0 * kPi * (1.4 * std::pow(4.0, 2.0 * (double) ch1 - 1.0)) / sr;   // 0.35..5.6 Hz
+                    float amt = sm;
+                    for (int i = 0; i < numSamples; ++i)
+                    {
+                        amt += smK * (aTgt[fx] - amt);
+                        const float pn = juce::jlimit(-1.0f, 1.0f, amt * (float) std::sin(ph));
+                        outL[i] *= std::sqrt(1.0f - pn);
+                        outR[i] *= std::sqrt(1.0f + pn);
+                        ph += dPh; if (ph > 2.0 * kPi) ph -= 2.0 * kPi;
+                    }
+                    chFxPhs[fx] = ph; sm = amt;
+                } break;
+                case ChFxWiden:
+                {   // WIDENER: mid/side - the side ABOVE the bass-mono crossover (CHARACTER, 60..600 Hz)
+                    // is boosted up to ~2.6x; side lows stay put = wide top, solid mono low end.
+                    // Needs STEREO content (unison Width / Chorus / stereo samples) - honest no-op on mono.
+                    const double fc2 = 60.0 * std::pow(10.0, (double) ch1);   // 60..600 Hz crossover
+                    const float k2 = 1.0f - std::exp(-2.0f * (float) kPi * (float) fc2 / (float) sr);
+                    float amt = sm;
+                    for (int i = 0; i < numSamples; ++i)
+                    {
+                        amt += smK * (aTgt[fx] - amt);
+                        const float mid = 0.5f * (outL[i] + outR[i]);
+                        float side = 0.5f * (outL[i] - outR[i]);
+                        chFxPzL[fx][0] += k2 * (side - chFxPzL[fx][0]);       // side LOWS (kept at unity)
+                        const float sLo = chFxPzL[fx][0], sHi = side - sLo;
+                        side = sLo + sHi * (1.0f + amt * 1.6f);
+                        outL[i] = mid + side; outR[i] = mid - side;
+                    }
+                    sm = amt;
+                } break;
                 case ChFxChorus:
                 default:
                 {   // 3-voice stereo ensemble; CHARACTER = rate + depth (0.5 = old 0.36 Hz / 3.5 ms)
