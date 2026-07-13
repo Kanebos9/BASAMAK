@@ -195,6 +195,15 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             if (msg.getControllerNumber() == 1)   // MOD WHEEL (CC1) = a live modulation source
                 sequencer.modWheel = (float) msg.getControllerValue() / 127.0f;
         }
+        else if (msg.isChannelPressure() || msg.isAftertouch())
+        {   // [2026-07-13 23:20] show AFTERTOUCH on the MIDI monitor ("AT vN chN") - the user's
+            // "my keyboard's aftertouch didn't work" is diagnosable at a glance: no AT here = the
+            // keyboard isn't sending it (or the wrong port/setting); AT here = check the route.
+            lastCcNum.store(200, std::memory_order_relaxed);
+            lastCcVal.store(msg.isChannelPressure() ? msg.getChannelPressureValue() : msg.getAfterTouchValue(),
+                            std::memory_order_relaxed);
+            lastCcChan.store(msg.getChannel(), std::memory_order_relaxed);
+        }
 
         // MIDI learn
         if (midiLearn.processMidiMessage(msg))
@@ -1315,6 +1324,7 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
             { "ui_sel_slotWarp", SelSlotWarp } };
         for (auto& k : kSelKnobs) if (pid == k.first) { pushSelCC(k.second, norm); return; }
         if (pid == "ui_sel_modWheel") { sequencer.modWheel = norm; return; }   // learn ANY CC to the Mod Wheel source (not just CC1)
+        if (pid == "ui_sel_slide")    { expressionSweep(1, msg.getChannel(), norm); return; }   // [2026-07-13 23:20] learn ANY CC to the Slide source (not just CC74)
         static const std::pair<const char*, int> kSelBtns[] = {
             { "ui_sel_rec", SelRec }, { "ui_sel_mute", SelMute }, { "ui_sel_solo", SelSolo },
             { "ui_sel_overlap", SelOverlap }, { "ui_sel_slotSel", SelSlotSel },

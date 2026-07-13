@@ -634,6 +634,9 @@ private:
         int getNumRows() override { return (int) rows.size(); }
         void paintListBoxItem(int row, juce::Graphics& g, int w, int h, bool sel) override;
         void listBoxItemClicked(int row, const juce::MouseEvent&) override;
+        // [2026-07-13 23:20] THE per-row tooltip hook. JUCE list rows are their own components, so a
+        // getTooltip() on the parent picker is never consulted - the MODEL must serve row tips.
+        juce::String getTooltipForRow(int row) override;
     };
     Col srcModel { *this, true }, tgtModel { *this, false };
     juce::ListBox srcList, tgtList;
@@ -697,8 +700,8 @@ public:
              "- Attack / Decay / Sustain / Release are sampled ONCE PER HIT (a fast source scatters "
              "the hits, it never wobbles a running envelope; use the Volume target for continuous "
              "level movement). Engine knobs / detune / width / formant move at block rate, smoothed.\n"
-             "- Sources include MOD WHEEL (CC1, learnable via the MIDI dropdown), PRESSURE "
-             "(aftertouch - per note on MPE controllers) and SLIDE (MPE CC74)."; }
+             "- Sources include MOD WHEEL (CC1), AFTERTOUCH (per note on MPE controllers) and SLIDE "
+             "(MPE CC74 by default; both wheel + slide are learnable to ANY CC via the MIDI dropdown)."; }
     juce::String routeSrcName(int r) const;
     juce::String routeTgtName(int r) const;
 private:

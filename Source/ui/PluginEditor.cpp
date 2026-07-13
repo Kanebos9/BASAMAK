@@ -973,7 +973,7 @@ void LfoCurveEditor::mouseDrag(const juce::MouseEvent& e)
 static const char* kModSrcName[DrumChannel::MS_COUNT] =   // the LFOs are GENERIC now (index, not destination)
 { "Off", "Velocity", "Note", "Amp Env", "LFO 1", "LFO 2", "LFO 3", "LFO 4",
   "Random", "Mod Env", "Mod LFO", "Step Mod A", "Step Mod B", "Mod Wheel",
-  "Pressure", "Slide (CC74)" };   // [2026-07-13 21:20] MPE/aftertouch sources
+  "Aftertouch", "Slide" };   // [2026-07-13 21:20] MPE/expression sources (renamed 23:20 - user)
 // "(Channel)" = a CHANNEL FX target: it acts on the whole instrument (both slots combined), not this slot.
 // "Tone (retired)" = the removed Tone knob's reserved index - never offered, old routes inert.
 // Sub/Formant sit ABOVE the grid block (MTSub/MTFormant) so their names come from kModTgtHiName.
@@ -1009,8 +1009,11 @@ static juce::String modSrcTip(int s)
         case DC::MSStepModA: return "The drawable per-step lane (Mod A edit mode on the step grid). Each step holds its drawn value - parameter-locks, Elektron style.";
         case DC::MSStepModB: return "The second drawable per-step lane (Mod B edit mode).";
         case DC::MSModWheel: return "Your MIDI mod wheel (CC1; learnable to any CC via the MIDI dropdown). Holds its last position.";
-        case DC::MSPressure: return "Aftertouch - press INTO a held key. Per note on MPE controllers, whole-channel on normal keyboards. Reads 0 at the hit, so aim it at movement targets.";
-        case DC::MSSlide:    return "MPE Slide (CC74) - the vertical finger position on MPE controllers. Per note.";
+        case DC::MSPressure: return "AFTERTOUCH: press INTO a held key. Per note on MPE controllers, whole-channel on normal keyboards. "
+                                     "Reads 0 at the hit, so aim it at movement targets (Cutoff / Volume / Vibrato / Formant). "
+                                     "Not moving? Your keyboard must SEND aftertouch (and have it enabled) - the top-bar MIDI monitor shows \"AT\" when it arrives.";
+        case DC::MSSlide:    return "SLIDE: the MPE timbre dimension (vertical finger position; CC74 by default). Per note on MPE controllers. "
+                                     "Wire ANY other CC to it via the MIDI dropdown -> \"MIDI-learn: selection controls...\" -> Slide.";
         default:             return {};
     }
 }
@@ -1157,21 +1160,17 @@ void RoutePicker::openFor(int cs, int ct, float amt)
     setVisible(true); toFront(true);
 }
 juce::String RoutePicker::getTooltip()
-{
-    const auto p = getMouseXYRelative();
-    for (auto* side : { &srcList, &tgtList })
-    {
-        if (! side->getBounds().contains(p)) continue;
-        const auto lp = p - side->getPosition();
-        const int row = side->getRowContainingPosition(lp.x, lp.y);
-        auto& rows = (side == &srcList) ? srcModel.rows : tgtModel.rows;
-        if (row < 0 || row >= (int) rows.size()) return {};
-        return (side == &srcList) ? modSrcTip(rows[(size_t) row].first)
-                                  : modTgtTip(rows[(size_t) row].first, engine);
-    }
-    if (amtRect().contains(p.toFloat()))
+{   // rows serve their own tips via Col::getTooltipForRow; the picker itself only tips the fader
+    if (amtRect().contains(getMouseXYRelative().toFloat()))
         return "Route AMOUNT: centre = 0, right = positive, left = negative (cubic response - fine control near zero). Double-click = 0.";
     return {};
+}
+
+juce::String RoutePicker::Col::getTooltipForRow(int row)
+{
+    if (row < 0 || row >= (int) rows.size()) return {};
+    return isSrc ? modSrcTip(rows[(size_t) row].first)
+                 : modTgtTip(rows[(size_t) row].first, owner.engine);
 }
 
 void RoutePicker::selectCurrentRows()
@@ -6387,16 +6386,19 @@ void DrumSequencerEditor::handleMidiMenuChange()
         m.addItem(9, "Undo (pad)..."   + tag("ui_sel_undo"));
         m.addItem(10, "Redo (pad)..."  + tag("ui_sel_redo"));
         m.addItem(12, "Mod Wheel (knob/CC)..." + tag("ui_sel_modWheel"));   // the MOD WHEEL modulation source (also CC1 by default)
+        m.addItem(13, "Slide (knob/CC)..."     + tag("ui_sel_slide"));      // the SLIDE source (MPE CC74 by default)
         m.addSeparator(); m.addItem(11, "Clear these assignments");
         m.showMenuAsync(juce::PopupMenu::Options{}.withTargetComponent(&comboMidi).withMinimumWidth(260),
             [L](int r) {
-                static const char* pids[11] = { "ui_sel_chNext", "ui_sel_chPrev",
+                static const char* pids[12] = { "ui_sel_chNext", "ui_sel_chPrev",
                                                 "ui_sel_patNext", "ui_sel_patPrev",
                                                 "ui_sel_slotSel", "ui_sel_test",
                                                 "ui_sel_bpm", "ui_sel_swing",
-                                                "ui_sel_undo", "ui_sel_redo", "ui_sel_modWheel" };
+                                                "ui_sel_undo", "ui_sel_redo", "ui_sel_modWheel",
+                                                "ui_sel_slide" };
                 if (r >= 1 && r <= 10) L->startLearning(pids[r - 1]);
                 else if (r == 12) L->startLearning(pids[10]);
+                else if (r == 13) L->startLearning(pids[11]);
                 else if (r == 11) for (auto* p : pids) L->clearParam(p);
             });
     }
@@ -11260,7 +11262,10 @@ void DrumSequencerEditor::timerCallback()
         if (mc != lastMidiInSeen) { lastMidiInSeen = mc; midiFlash = 8; }
         int cn = proc.lastCcNum.load(std::memory_order_relaxed);
         juce::String t = "MIDI: ";
-        if (cn >= 0)
+        if (cn == 200)   // [2026-07-13 23:20] aftertouch marker - proves AT is REACHING the plugin
+            t << "AT v" << proc.lastCcVal.load(std::memory_order_relaxed)
+              << " ch" << proc.lastCcChan.load(std::memory_order_relaxed);
+        else if (cn >= 0)
             t << "cc" << cn << " v" << proc.lastCcVal.load(std::memory_order_relaxed)
               << " ch" << proc.lastCcChan.load(std::memory_order_relaxed);
         else
