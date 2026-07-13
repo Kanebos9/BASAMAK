@@ -1491,6 +1491,8 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         for (int fi = 0; fi < 2; ++fi) {   // both SVFs start clean each hit (no retrigger click); snap the smoothed cutoff
             sv.filtIc1[fi][0] = sv.filtIc1[fi][1] = sv.filtIc2[fi][0] = sv.filtIc2[fi][1] = 0.0; sv.filtGm[fi] = -1.0; sv.filtKm[fi] = -1.0; }
         sv.wSm = -1.0f;   // weight smoother snaps to the (possibly modulated) weight on the first sample
+        sv.envModLatched = false;   // env-time mod targets re-latch at THIS hit
+        sv.modSmOn = false; sv.fmtPosSm = -1.0f;   // de-zipper bank + formant glide re-snap at THIS hit
         for (int lr = 0; lr < 2; ++lr) {   // drive smoothing/DC + formant + punch state start clean each hit
             sv.drvLp[lr] = sv.drvDcX[lr] = sv.drvDcY[lr] = 0.0f;
             sv.pFast[lr] = sv.pSlow[lr] = 0.0f;
@@ -1898,7 +1900,7 @@ void DrumChannel::computeModSources(int s, const Slot& sl, float* out, const Voi
 
 // Apply the 6 routes onto a scratch Slot before the config bake. Cutoffs + pitch are MULTIPLICATIVE
 // (octaves); everything else is ADDITIVE over the target's native range, then clamped.
-void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals) const
+void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals, SlotVoice* latch) const
 {
     for (auto& r : tmp.mod)
     {
@@ -1918,10 +1920,7 @@ void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals) const
             case MTPunch:    add(tmp.fxPunch, -1, 1); break;
             case MTSub:      add(tmp.fxSub, 0, 1); break;
             case MTFormant:  add(tmp.fxFormant, 0, 1); break;   // sweep = the slot TALKS
-            case MTAtk:      tmp.atk = juce::jlimit(0.0f, 6.0f, tmp.atk + m * 1.0f); break;
-            case MTDec:      tmp.dec = juce::jlimit(0.0f, 6.0f, tmp.dec + m * 2.0f); break;
-            case MTSus:      add(tmp.sustain, 0, 1); break;
-            case MTRel:      tmp.release = juce::jlimit(0.0f, 4.0f, tmp.release + m * 2.0f); break;
+            case MTAtk: case MTDec: case MTSus: case MTRel: break;   // env-TIME targets: LATCHED per note below, never live per block
             case MTPitch:    { if (r.src >= MSLfoFilt && r.src <= MSLfoWave) break;   // LFO -> Pitch = AUDIO-RATE (per-sample in the render)
                                float* bp = (tmp.engine == SrcPhys) ? &tmp.physFreq : &tmp.oscFreq;
                                *bp = juce::jlimit(1.0f, 20000.0f, *bp * std::pow(2.0f, m)); } break;   // +-1 octave
@@ -1944,6 +1943,30 @@ void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals) const
                 break;
         }
     }
+    // ENVELOPE-TIME targets (Attack/Decay/Sustain/Release) are LATCHED ONCE PER NOTE: our envelopes
+    // are stateless env(t, params), so re-baking them per block while a note runs makes the level
+    // JUMP at every block edge = crackle on any fast source (user bug, 2026-07-13). Latch-at-the-hit
+    // = clean per-hit variation (the Serum/Elektron semantic: a fast LFO scatters the hits, it does
+    // not wobble a running envelope - use the Volume target for continuous level movement).
+    // latch == nullptr = the block bake: env stays base (the render reads the per-voice config).
+    if (latch == nullptr) return;
+    if (! latch->envModLatched)
+    {
+        latch->envModLatched = true;
+        for (int k = 0; k < 4; ++k) latch->envModOfs[k] = 0.0f;
+        for (auto& r : tmp.mod)
+        {
+            if (r.src == MSOff || std::abs(r.amt) < 1.0e-4f) continue;
+            const float m = r.amt * srcVals[juce::jlimit(0, MS_COUNT - 1, (int) r.src)];
+            switch (r.tgt) { case MTAtk: latch->envModOfs[0] += m; break; case MTDec: latch->envModOfs[1] += m; break;
+                             case MTSus: latch->envModOfs[2] += m; break; case MTRel: latch->envModOfs[3] += m; break;
+                             default: break; }
+        }
+    }
+    tmp.atk     = juce::jlimit(0.0f, 6.0f, tmp.atk     + latch->envModOfs[0] * 1.0f);
+    tmp.dec     = juce::jlimit(0.0f, 6.0f, tmp.dec     + latch->envModOfs[1] * 2.0f);
+    tmp.sustain = juce::jlimit(0.0f, 1.0f, tmp.sustain + latch->envModOfs[2] * 1.0f);
+    tmp.release = juce::jlimit(0.0f, 4.0f, tmp.release + latch->envModOfs[3] * 2.0f);
 }
 
 void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, int numSamples, bool anySolo,
@@ -2050,6 +2073,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         float wtInv0 = 0.0f, wtInv1 = 0.0f, wtInv2 = 0.0f;
         float  subAmt = 0.0f; double subHz = 0.0;     // SUB: half the slot's base pitch (0 = unpitched engine = inert)
         float  panL = 1.0f, panR = 1.0f;              // static SLOT PAN gains (equal-power, unity at centre)
+        bool   modLive = false;                       // this config came from a live per-voice matrix bake (engages the de-zipper bank)
         float  fmtMix = 0.0f; Biquad fmtBq[2];        // FORMANT: two vowel band-passes + wet mix
         float  punch = 0.0f;   // PUNCH transient shaper (-1 soften .. +1 punch)
         float  ring = 0.0f;   // RING amount (per-voice mod); Chorus/Flanger/Phaser/Comp are CHANNEL FX now (not per-slot)
@@ -2636,11 +2660,20 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             Slot vm = slots[s];
             float sv2[MS_COUNT] = {};
             computeModSources(s, vm, sv2, &v);   // sample THIS voice
-            applyModMatrix(vm, sv2);
+            applyModMatrix(vm, sv2, &v.sv[s]);   // env-time targets latch at the hit (crackle fix)
+            // FORMANT position GLIDES at block rate (~12 ms): its two Q-7 band-pass coefficients are
+            // baked per block, and stepping their centre frequencies on a driven signal warbles =
+            // the same crackle class. Smoothing the position also smooths the derived wet mix.
+            {   SlotVoice& fsv = v.sv[s];
+                if (fsv.fmtPosSm < 0.0f) fsv.fmtPosSm = vm.fxFormant;
+                else fsv.fmtPosSm += juce::jlimit(0.0f, 1.0f, (float) numSamples / (0.012f * (float) sr))
+                                     * (vm.fxFormant - fsv.fmtPosSm);
+                vm.fxFormant = fsv.fmtPosSm; }
             const float wpo = (vm.engine == SrcGrain ? vm.grainPos - slots[s].grainPos : vm.addPos - slots[s].addPos);
             if (vm.engine == SrcGrain) vm.grainPos = slots[s].grainPos; else vm.addPos = slots[s].addPos;
             bakeSlot(s, vm, vsc[s]);
             vsc[s].wtPosOfs = wpo;
+            vsc[s].modLive  = true;   // engage the per-sample de-zipper bank for this voice's render
             for (int d = 0; d < 4; ++d) vsc[s].lfoSrcUsed[d] = sc[s].lfoSrcUsed[d];   // route-based -> keep phases advancing
             cs[s] = &vsc[s];
         }
@@ -2693,6 +2726,17 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 veEnd = juce::jmax(veEnd, v.keyOff + (long)(3.2f * relMax * (float) sr) + 8);
             }
         }
+        // LATCHED env-mod offsets can LENGTHEN this voice (a route adding attack/decay/release) -
+        // extend the end estimate or the modulated tail is hard-cut at the base length (a click).
+        if (veEnd < std::numeric_limits<long>::max() / 4)
+            for (int s = 0; s < NUM_SLOTS; ++s)
+                if (v.sv[s].envModLatched)
+                {
+                    const float* o = v.sv[s].envModOfs;
+                    const float ext = juce::jmax(0.0f, o[0]) + 3.2f * juce::jmax(0.0f, o[1] * 2.0f)
+                                    + 3.2f * juce::jmax(0.0f, o[3] * 2.0f);
+                    if (ext > 0.0f) veEnd += (long)(ext * (float) sr);
+                }
         // SAMPLE plays to its TRUE end: a varispeed sample (Keep pitch off) pitched DOWN reads SLOWER than
         // its natural-speed length, and a one-shot sample shouldn't be cut by a key release either. Keep the
         // voice alive long enough for the head to reach the region end (Keep pitch on = natural length).
@@ -2769,6 +2813,28 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 // its envelope + phases start from zero at the delayed onset. startDelay 0 = bit-identical.
                 if (tv < sv.startDelay) continue;
                 const long t = tv - sv.startDelay;
+                // DE-ZIPPER BANK (matrix-modulated SIGNAL-PATH amounts, ~3 ms one-pole, snap-init at
+                // the hit): a block-rate step in a level/waveshape amount - drive, ring, sub, punch,
+                // warp, FM index, wave position - is audible as crackle on sustained material (the
+                // same class as the env-time latch). modLive false = the raw block values = the
+                // exact old path; a constant modulated value converges to itself = bit-identical.
+                float mDrv = c.fxDrive, mRing = c.ring, mSub = c.subAmt, mPunch = c.punch,
+                      mWarp = c.oscWarp, mFm = c.fmIndex, mWt = c.wtPosOfs;
+                if (c.modLive)
+                {
+                    if (! sv.modSmOn) { sv.modSm[0] = mDrv; sv.modSm[1] = mRing; sv.modSm[2] = mSub;
+                                        sv.modSm[3] = mPunch; sv.modSm[4] = mWarp; sv.modSm[5] = mFm;
+                                        sv.modSm[6] = mWt; sv.modSmOn = true; }
+                    else { sv.modSm[0] += wSmK * (mDrv   - sv.modSm[0]);
+                           sv.modSm[1] += wSmK * (mRing  - sv.modSm[1]);
+                           sv.modSm[2] += wSmK * (mSub   - sv.modSm[2]);
+                           sv.modSm[3] += wSmK * (mPunch - sv.modSm[3]);
+                           sv.modSm[4] += wSmK * (mWarp  - sv.modSm[4]);
+                           sv.modSm[5] += wSmK * (mFm    - sv.modSm[5]);
+                           sv.modSm[6] += wSmK * (mWt    - sv.modSm[6]); }
+                    mDrv = sv.modSm[0]; mRing = sv.modSm[1]; mSub = sv.modSm[2]; mPunch = sv.modSm[3];
+                    mWarp = sv.modSm[4]; mFm = sv.modSm[5]; mWt = sv.modSm[6];
+                }
                 float sig = 0.0f, sL = 0.0f, sR = 0.0f, env = 0.0f;
                 bool  stereo = false;
 
@@ -2827,7 +2893,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         // modulation => identical to pure (band-limited) analog. Modulator tracks the
                         // carrier freq * ratio so it stays in tune under vibrato / pitch env.
                         float fmAdd = 0.0f;
-                        if (c.fmIndex > 0.0001f) {
+                        if (mFm > 0.0001f) {
                             const float modOut = (float) std::sin(sv.fmMod + c.fmFeedback * 6.0f * sv.fmFbState);
                             sv.fmFbState = 0.5f * (sv.fmFbState + modOut);
                             // ANTI-ALIAS: FM sidebands ignore Nyquist - roll the index off as the
@@ -2836,11 +2902,11 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             const float fmAtt = (float) juce::jlimit(0.35, 1.0, 1800.0 / juce::jmax(1800.0, freq * fmRootMul));
                             // Env-follow: the FM index rides the amp envelope (classic FM drum -
                             // bright modulated attack that mellows to the plain carrier as it decays).
-                            fmAdd = (c.fmEnvF ? c.fmIndex * env : c.fmIndex) * fmAtt * modOut;
+                            fmAdd = (c.fmEnvF ? mFm * env : mFm) * fmAtt * modOut;
                             sv.fmMod += 2.0 * kPi * freq * fmRootMul * (double) c.fmRatio / sr;
                             if (sv.fmMod > 2.0 * kPi) sv.fmMod -= 2.0 * kPi;
                         }
-                        const bool fmActive = c.fmIndex > 0.0001f;
+                        const bool fmActive = mFm > 0.0001f;
                         float wsum = 0.0f, wL = 0.0f, wR = 0.0f;
                         const bool sprd = c.uniSpread > 0.001f && c.uniVoices > 1;   // STEREO WIDTH active
                         const int totalV = c.uniVoices + (c.uniCenter ? 1 : 0);   // +1 dry/centre voice
@@ -2900,7 +2966,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                                 else wtp = c.wtPos;
                                 // matrix WAVE-position modulation is a per-block offset added HERE (works on
                                 // top of the glide clock too, not just the static position).
-                                wtp = juce::jlimit(0.0f, 1.0f, wtp + c.wtPosOfs);
+                                wtp = juce::jlimit(0.0f, 1.0f, wtp + mWt);
                                 sv.wtPosCur = wtp;   // live position read-out (UI Position strip)
                                 wtp *= (float)(ADD_FRAMES - 1);
                                 const int   f0 = juce::jmin((int) wtp, ADD_FRAMES - 2);
@@ -2922,9 +2988,9 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         }
                         float oo = wsum * c.uniGain;
                         float ooL = sprd ? wL * c.uniGain : 0.0f, ooR = sprd ? wR * c.uniGain : 0.0f;
-                        auto fold1 = [&](float x) { const float fd = std::sin(x * (1.0f + c.oscWarp * 4.0f) * 1.5707963f);
-                                                    return x + c.oscWarp * (fd - x); };
-                        if (c.oscWarp > 0.001f) {                       // WARP = one-way wavefold (adds harmonics/grit)
+                        auto fold1 = [&](float x) { const float fd = std::sin(x * (1.0f + mWarp * 4.0f) * 1.5707963f);
+                                                    return x + mWarp * (fd - x); };
+                        if (mWarp > 0.001f) {                       // WARP = one-way wavefold (adds harmonics/grit)
                             oo = fold1(oo);
                             if (sprd) { ooL = fold1(ooL); ooR = fold1(ooR); }
                         }
@@ -2985,7 +3051,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         // Carrier waveform morphs Wave A -> Wave B over the note (static when equal).
                         float cpos = (float) c.oscShape;
                         if (c.oscShapeB != c.oscShape) cpos += ((float) c.oscShapeB - (float) c.oscShape) * (1.0f - decayCurve(t, juce::jmax(0.02f, c.dec)));
-                        float fm = morphWave(sv.fmCarrier + c.fmIndex * modOut, cpos);
+                        float fm = morphWave(sv.fmCarrier + mFm * modOut, cpos);
                         if (c.fmSub > 0.001f) {
                             fm = fm * (1.0f - 0.4f * c.fmSub) + (float) std::sin(sv.fmSubPhase) * c.fmSub;
                             sv.fmSubPhase += 2.0 * kPi * c.fmCarrierF * 0.5 * fmPMul * noteMul * pe3Mul / sr;
@@ -3131,7 +3197,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                                                       * std::pow(2.0, (double) (r2 * c.grPitch));   // +-12 st max
                                     gr.len = juce::jmax(64, c.grLenSamp);
                                     gr.age = 0; gr.amp = 1.0f;
-                                    const float lfoP = c.wtPosOfs;   // matrix WAVE->grain-position modulation (per-block offset)
+                                    const float lfoP = mWt;          // matrix WAVE->grain-position modulation (de-zippered)
                                     if (smp)
                                     {
                                         const double span = (double) (c.grHi - c.grLo);
@@ -3375,12 +3441,17 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 // === PER-SLOT EQ (end) ===
 
                 // Per-slot DRIVE (insert): shape THIS slot's signal with its own drive type/amount.
-                if (c.fxDrive > 0.0001f && c.fxDriveType == DriveBassAmp) {
+                // MATRIX-swept drive DRY-BLENDS over the first ~2% (the formant ease-in precedent):
+                // the shapers are NOT identity at amount -> 0 (tanh(x) != x), so the on/off branch
+                // gate used to STEP ~1 dB whenever a route swept the amount through zero = crackle.
+                // Static sounds never blend (dg = 1 unless modLive) = bit-identical.
+                const float dDg = c.modLive ? juce::jmin(1.0f, mDrv * 50.0f) : 1.0f;
+                if (mDrv > 0.0001f && c.fxDriveType == DriveBassAmp) {
                     // BASS AMP (the survivor of the amp family - Guitar/Lead were killed by the
                     // user): the SPLIT RIG. Lows below ~180 Hz pass CLEAN and rejoin at the
                     // output; only the mids/highs are driven (2 soft stages + a 3.8 kHz 2-pole
                     // cab + DC block) = fat, never farty. Fixed voicing; the fader = the gain.
-                    const float aA = c.fxDrive, a2 = aA * aA;
+                    const float aA = mDrv, a2 = aA * aA;
                     const float g1 = 1.0f + a2 * 22.0f;
                     const float mk = 1.0f / (1.0f + (g1 - 1.0f) / 7.0f);
                     auto amp = [&](float y, int lr) -> float {
@@ -3396,14 +3467,15 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         sv.drvDcX[lr] = v; sv.drvDcY[lr] = dc;
                         return dc;
                     };
-                    if (stereo) { sL = amp(sL, 0); sR = amp(sR, 1); }
-                    else          sig = amp(sig, 0);
+                    if (stereo) { const float iL = sL, iR = sR; sL = iL + dDg * (amp(iL, 0) - iL); sR = iR + dDg * (amp(iR, 1) - iR); }
+                    else        { const float iM = sig;             sig = iM + dDg * (amp(iM, 0) - iM); }
                 }
-                else if (c.fxDrive > 0.0001f && c.fxDriveType != DriveOff) {
+                else if (mDrv > 0.0001f && c.fxDriveType != DriveOff) {
                     // retired slot 7 (the killed Guitar/Lead amps): stray saves play as Tube
                     const int dTy = c.fxDriveType == DriveAmpRetired ? (int) Tube : c.fxDriveType;
-                    if (stereo) { sL = driveSample(sL, dTy, c.fxDrive); sR = driveSample(sR, dTy, c.fxDrive); }
-                    else          sig = driveSample(sig, dTy, c.fxDrive);
+                    const float dryL = sL, dryR = sR, dryM = sig;   // for the matrix-sweep dry-blend below
+                    if (stereo) { sL = driveSample(sL, dTy, mDrv); sR = driveSample(sR, dTy, mDrv); }
+                    else          sig = driveSample(sig, dTy, mDrv);
                     // Musicality pass (v6): HARSH shapers get a gentle ~8 kHz 1-pole after the clip
                     // (naked waveshaping = fizzy top - every synth drive has a post-filter), and FUZZ
                     // gets a DC blocker (its rectified blend adds a constant offset = headroom loss).
@@ -3422,6 +3494,10 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         if (stereo) { sL = post(sL, 0); sR = post(sR, 1); }
                         else          sig = post(sig, 0);
                     }
+                    if (dDg < 1.0f) {   // matrix sweeping through zero: fade the whole driven result in
+                        if (stereo) { sL = dryL + dDg * (sL - dryL); sR = dryR + dDg * (sR - dryR); }
+                        else          sig = dryM + dDg * (sig - dryM);
+                    }
                 }
 
                 // FORMANT (per slot): two vowel band-passes (F1 + F2, interpolated A->E->I->O->U)
@@ -3436,34 +3512,34 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 }
                 // PUNCH (transient shaper, per slot/per hit): fast-vs-slow envelope difference finds the
                 // attack; positive boosts it (snap), negative softens it (felt/pillowy). Bounded gains.
-                if (c.punch != 0.0f) {
+                if (mPunch != 0.0f) {
                     const float m = stereo ? 0.5f * (std::abs(sL) + std::abs(sR)) : std::abs(sig);
                     sv.pFast[0] += punchKf * (m - sv.pFast[0]);
                     sv.pSlow[0] += punchKs * (m - sv.pSlow[0]);
                     const float tr = juce::jlimit(0.0f, 2.0f, (sv.pFast[0] - sv.pSlow[0]) / (sv.pSlow[0] + 1.0e-4f));
-                    const float pg = c.punch > 0.0f ? 1.0f + c.punch * tr * 1.2f
-                                                    : 1.0f / (1.0f + (-c.punch) * tr * 1.2f);
+                    const float pg = mPunch > 0.0f ? 1.0f + mPunch * tr * 1.2f
+                                                    : 1.0f / (1.0f + (-mPunch) * tr * 1.2f);
                     if (stereo) { sL *= pg; sR *= pg; } else sig *= pg;
                 }
                 // RING (per slot): ring modulation. Carrier = the Ring Hz knob (default 200 = the old
                 // fixed constant) OR, at the knob's hard left, TRACKS the note (carrier = this voice's
                 // pitch - classic tuned ring mod, consistent across the keyboard).
-                if (c.ring > 0.0f) {
+                if (mRing > 0.0f) {
                     const double rInc = c.ringTrack
                         ? 2.0 * kPi * juce::jlimit(1.0, sr * 0.45, c.ringBase * pitchPreLfo) / sr
                         : 2.0 * kPi * c.ringHz / sr;
                     sv.ringPh += rInc; if (sv.ringPh > 2.0 * kPi) sv.ringPh -= 2.0 * kPi;
-                    const float m = (float) std::sin(sv.ringPh), rg = c.ring;
+                    const float m = (float) std::sin(sv.ringPh), rg = mRing;
                     if (stereo) { sL = sL * (1.0f - rg) + sL * m * rg; sR = sR * (1.0f - rg) + sR * m * rg; }
                     else          sig = sig * (1.0f - rg) + sig * m * rg;
                 }
                 // SUB (per slot, LAST in the chain so it stays clean - it bypasses the slot filter/EQ/
                 // drive): a sine ONE OCTAVE below the slot's pitch, following note/step/glide (noteMul)
                 // + the pitch envelope (pe3Mul) + the slot's own amp env. Unpitched engines = inert.
-                if (c.subAmt > 0.0f && c.subHz > 0.0) {
+                if (mSub > 0.0f && c.subHz > 0.0) {
                     sv.subPh += 2.0 * kPi * c.subHz * (double) noteMul * pe3Mul / sr;
                     if (sv.subPh > 2.0 * kPi) sv.subPh -= 2.0 * kPi;
-                    const float sub = (float) std::sin(sv.subPh) * env * c.subAmt * 0.9f;
+                    const float sub = (float) std::sin(sv.subPh) * env * mSub * 0.9f;
                     if (stereo) { sL += sub * 0.7071f; sR += sub * 0.7071f; } else sig += sub;
                 }
                 vEnv = juce::jmax(vEnv, env);

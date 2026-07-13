@@ -680,11 +680,11 @@ public:
     // ordering (the mirror rule, like uiLfoShapeVal <-> lfoShapeVal): UI reads NAMES there, DSP applies here.
     struct GridKnob { float Slot::* field = nullptr; float mn = 0.0f, mx = 1.0f; };
     static GridKnob modGridKnob(int engine, int idx);
-private: struct Voice; public:   // forward decl (defined privately below) so the per-voice mod sampler can name it
+private: struct Voice; struct SlotVoice; public:   // forward decls (defined privately below) so the per-voice mod sampler + env latch can name them
     // Sample the mod sources for slot s (into out[MS_COUNT]) then apply the routes onto a scratch Slot
     // before the config bake. nvIn = the voice to sample (nullptr = newest active = block-rate base).
     void computeModSources(int s, const Slot& sl, float* out, const Voice* nvIn = nullptr) const;
-    void applyModMatrix(Slot& tmp, const float* srcVals) const;
+    void applyModMatrix(Slot& tmp, const float* srcVals, SlotVoice* latch = nullptr) const;   // latch = per-note env-target snapshot
     // Effective BASE frequency for a pitched slot. In PIANO ROLL every pitched engine plays a
     // C4-ABSOLUTE base (+ the Tune fader), independent of the Freq knob - so the roll is knob-free
     // (the knob is never forced/faded/parked; it stays the STEP-mode base). Slot 2 keeps its
@@ -1123,6 +1123,10 @@ private:
         double   filtIc1[2][2] = {}, filtIc2[2][2] = {};   // TPT/ZDF SVF integrators [filter 0/1][stereo side]
         double   filtGm[2]  = { -1.0, -1.0 };              // per-sample smoothed cutoff coeff per filter (-1 = snap)
         double   filtKm[2]  = { -1.0, -1.0 };              // per-sample smoothed damping K (de-zippers block-rate RESO modulation)
+        float    envModOfs[4] {};                          // mod-matrix env offsets (Atk/Dec/Sus/Rel), LATCHED at the hit
+        bool     envModLatched = false;                    // env(t, params) is stateless - per-block env changes JUMP the level (crackle)
+        float    modSm[7] {};  bool modSmOn = false;       // de-zipper bank: drive/ring/sub/punch/warp/FM-idx/wave-pos (matrix-live only)
+        float    fmtPosSm = -1.0f;                         // block-rate FORMANT position glide (Q-7 BP coeffs must not step)
         float    wSm = -1.0f;                              // per-sample smoothed slot weight (de-zippers block-rate VOLUME modulation)
         double   filtGkt[2] = { -1.0, -1.0 };              // per-voice KEYTRACK target per filter (tan coeff; -1 = off)
         // === PER-SLOT FILTER (end) ===

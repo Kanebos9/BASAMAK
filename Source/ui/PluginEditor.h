@@ -690,7 +690,11 @@ public:
              "(double-click = 0).\n"
              "- Yellow = slot 1, pink = slot 2. Per-voice on chords.\n"
              "- LFO -> Pitch and LFO -> Volume run at AUDIO RATE (per sample): crank the LFO speed = "
-             "real FM / ring-mod timbres. Other routes are block-rate (smoothed).\n"
+             "real FM / ring-mod timbres. Other level/shape amounts are de-zippered (~3 ms); "
+             "Pitch from non-LFO sources moves in small frequency steps (staircase glide, no crackle).\n"
+             "- Attack / Decay / Sustain / Release are sampled ONCE PER HIT (a fast source scatters "
+             "the hits, it never wobbles a running envelope - that would crackle; use the Volume "
+             "target for continuous level movement).\n"
              "- MOD WHEEL is a source (CC1 by default). Learn it to any CC via the MIDI dropdown -> "
              "\"MIDI-learn: selection controls...\" -> Mod Wheel."; }
     juce::String routeSrcName(int r) const;

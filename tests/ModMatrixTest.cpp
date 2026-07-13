@@ -304,6 +304,63 @@ int main()
         printf("[14] FreqShift SSB: 500Hz=%.0f (target), 400Hz=%.0f (dry residue), 300Hz=%.0f (image; expect target > 4x image) -> %s\n",
                at500, at400, at300, CHK(at500 > 4.0 * juce::jmax(1.0, at300) && finite(sh)) ? "OK" : "FAIL");
     }
+    {   // [15] ENV-TIME targets are LATCHED PER NOTE (crackle fix): a fast LFO -> Attack must NOT
+        //      step the running envelope (max sample delta stays waveform-sized - pre-fix the level
+        //      jumped at every block edge), and a FREE slow LFO -> Attack gives each HIT its own
+        //      attack (the per-hit-variation semantic the latch buys).
+        auto fast = render([](DrumChannel& c){
+            for (auto& sl : c.slots) sl = Slot();
+            auto& s = c.slots[0];
+            s.engine = DrumChannel::SrcOsc; s.weight = 1.0f;
+            s.oscShape = s.oscShapeB = DrumChannel::WvSine; s.oscFreq = 110.0f;
+            s.atk = 0.15f; s.hold = 0.3f; s.dec = 0.5f;
+            s.lfoRate[0] = 200.0f; s.lfoAmt[0] = 1.0f;
+            s.mod[0].src = DrumChannel::MSLfoFilt; s.mod[0].tgt = DrumChannel::MTAtk; s.mod[0].amt = 1.0f; }, 0.9f, 0.8);
+        float md = 0; for (size_t i = 1; i < fast.size(); ++i) md = std::max(md, std::abs(fast[i] - fast[i - 1]));
+        auto two = render([](DrumChannel& c){
+            for (auto& sl : c.slots) sl = Slot();
+            auto& s = c.slots[0];
+            s.engine = DrumChannel::SrcOsc; s.weight = 1.0f;
+            s.oscShape = s.oscShapeB = DrumChannel::WvSine; s.oscFreq = 110.0f;
+            s.atk = 0.30f; s.hold = 0.1f; s.dec = 0.4f;
+            s.lfoRate[0] = 0.7f; s.lfoAmt[0] = 1.0f; s.lfoFree[0] = true;
+            s.mod[0].src = DrumChannel::MSLfoFilt; s.mod[0].tgt = DrumChannel::MTAtk; s.mod[0].amt = 0.8f;
+            c.steps[4] = true; c.stepVel[4] = 0.9f; }, 0.9f, 1.4);
+        auto win = [&](double t0){ double e = 0; int n = 0;
+            for (size_t i = (size_t)(t0 * SR); i < (size_t)((t0 + 0.06) * SR) && i < two.size(); ++i)
+            { e += (double) two[i] * two[i]; ++n; }
+            return std::sqrt(e / std::max(1, n)); };
+        const double e1 = win(0.0), e2 = win(1.0);
+        printf("[15] env-latch: fast-LFO->Attack max delta=%.4f (<0.02), per-hit attack rms %.4f vs %.4f (differ >1.7x) -> %s\n",
+               md, e1, e2, CHK(md < 0.02f && (e2 > e1 * 1.7 || e1 > e2 * 1.7) && finite(fast) && finite(two)) ? "OK" : "FAIL");
+    }
+    {   // [16] DE-ZIPPER BANK: fast-LFO block-rate modulation of the signal-path amounts (Drive /
+        //      Sub / Warp probed) must not STEP the output. The honest bound = each probe's own
+        //      STATIC render at the extreme amount the sweep reaches (a hard-driven / folded sine
+        //      has legitimately steep edges) - modulated max-delta may not exceed static x1.3.
+        auto base = [](DrumChannel& c){
+            for (auto& sl : c.slots) sl = Slot();
+            auto& s = c.slots[0];
+            s.engine = DrumChannel::SrcOsc; s.weight = 1.0f;
+            s.oscShape = s.oscShapeB = DrumChannel::WvSine; s.oscFreq = 110.0f;
+            s.atk = 0.005f; s.hold = 0.6f; s.dec = 0.3f; };
+        auto mkMod = [base](int tgt, float baseDrv) { return [base, tgt, baseDrv](DrumChannel& c){
+            base(c); auto& s = c.slots[0];
+            s.fxDrive = baseDrv; s.fxDriveType = DrumChannel::Tube;
+            s.lfoRate[0] = 90.0f; s.lfoAmt[0] = 1.0f;
+            s.mod[0].src = DrumChannel::MSLfoFilt; s.mod[0].tgt = (int8_t) tgt; s.mod[0].amt = 0.8f; }; };
+        auto delta = [](const std::vector<float>& x){ float m = 0;
+            for (size_t i = 1; i < x.size(); ++i) m = std::max(m, std::abs(x[i] - x[i - 1])); return m; };
+        const float dDrv = delta(render(mkMod(DrumChannel::MTDrive, 0.3f), 0.9f, 0.7));
+        const float dSub = delta(render(mkMod(DrumChannel::MTSub,   0.0f), 0.9f, 0.7));
+        const float dWrp = delta(render(mkMod(DrumChannel::MTWarp,  0.0f), 0.9f, 0.7));
+        const float bDrv = delta(render([base](DrumChannel& c){ base(c); c.slots[0].fxDrive = 1.0f; c.slots[0].fxDriveType = DrumChannel::Tube; }, 0.9f, 0.7));
+        const float bSub = delta(render([base](DrumChannel& c){ base(c); c.slots[0].fxSub = 0.8f; }, 0.9f, 0.7));
+        const float bWrp = delta(render([base](DrumChannel& c){ base(c); c.slots[0].oscWarp = 0.8f; }, 0.9f, 0.7));
+        printf("[16] de-zipper: mod-vs-static max deltas drive %.4f/%.4f sub %.4f/%.4f warp %.4f/%.4f (mod < static*1.3+0.005) -> %s\n",
+               dDrv, bDrv, dSub, bSub, dWrp, bWrp,
+               CHK(dDrv < bDrv * 1.3f + 0.005f && dSub < bSub * 1.3f + 0.005f && dWrp < bWrp * 1.3f + 0.005f) ? "OK" : "FAIL");
+    }
     printf(fails == 0 ? ">>> ModMatrixTest PASS\n" : ">>> ModMatrixTest FAIL (%d)\n", fails);
     return fails;
 }
