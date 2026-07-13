@@ -1048,6 +1048,14 @@ void RoutePicker::openFor(int cs, int ct, float amt)
     tgtModel.rows.push_back({ DrumChannel::MTFormant, "Formant" });
     tgtModel.rows.push_back({ DrumChannel::MTChFxCAmt, "FX C Amount (Channel)" });
     tgtModel.rows.push_back({ DrumChannel::MTChFxCChr, "FX C Character (Channel)" });
+    // ALPHABETICAL, "Off" pinned first (user) - one flat A..Z list per column, so the three
+    // FX A/B/C pairs cluster together instead of FX C hiding under the engine-knob rows.
+    auto alphabetize = [](std::vector<std::pair<int, juce::String>>& rows) {
+        std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) {
+            if (a.first == 0) return true; if (b.first == 0) return false;   // Off stays on top
+            return a.second.compareIgnoreCase(b.second) < 0; });
+    };
+    alphabetize(srcModel.rows); alphabetize(tgtModel.rows);
     srcList.updateContent(); tgtList.updateContent();
     selectCurrentRows();
     setVisible(true); toFront(true);
@@ -3768,12 +3776,18 @@ void LfoDisplay::mouseDown(const juce::MouseEvent& e)
     {   // cycle the selected LFO's sync mode: Off -> Sync (bar) -> Grid -> KEY -> Off.
         // KEY = the rate FOLLOWS THE PLAYED PITCH x a ratio (the audio-rate FM mode: the timbre stays
         // consistent across the keyboard). While in Key, dragging the wave sets the RATIO.
-        float& s = sync_[dest_];
-        if (s == 0.0f)       s = kLfoSyncCPB[lfoSyncNearestIdx(rate_[dest_] * barSec_)];   // keep ~the same speed
-        else if (s > 0.0f)   s = -1.0f;    // grid
-        else if (s > -1.5f)  { s = -2.0f; if (onChange) onChange(dest_, 1.0f, amt_[dest_]); }   // key: start at ratio x1
-        else                 s = 0.0f;     // back to free Hz
-        if (onSyncChange) onSyncChange(dest_, s);
+        // NO reference here + the MODE commits BEFORE the Key ratio's onChange: onChange's handler
+        // re-reads the slot into setValues, and with the old order that clobbered a sync_ REFERENCE
+        // back to the slot's stale Grid value = "stuck at Sync: Grid" (user bug).
+        const float cur = sync_[dest_];
+        float ns;
+        if (cur == 0.0f)       ns = kLfoSyncCPB[lfoSyncNearestIdx(rate_[dest_] * barSec_)];   // keep ~the same speed
+        else if (cur > 0.0f)   ns = -1.0f;    // grid
+        else if (cur > -1.5f)  ns = -2.0f;    // key
+        else                   ns = 0.0f;     // back to free Hz
+        sync_[dest_] = ns;
+        if (onSyncChange) onSyncChange(dest_, ns);
+        if (ns <= -1.5f && onChange) onChange(dest_, 1.0f, amt_[dest_]);   // key: start at ratio x1 (slot sync already written)
         if (onDragEnd) onDragEnd();
         repaint(); return;
     }
@@ -7926,8 +7940,8 @@ void DrumSequencerEditor::setupComponents()
         + "- Shimmer: every echo pass is pitched UP an octave - a glowing halo for pads and ambient.\n\n"
         + "One mode for the whole preset (all sends share one reverb engine); each sound picks how much "
         + "goes in with its Rev Send knob.");
-    refreshReverbModeHeader();
     setupGroupHeader(hdrDelayG,    "Delay");
+    refreshReverbModeHeader();   // AFTER the group-header setup (it sets the real "DELAY A/B" text)
     setupGroupHeader(hdrMasterOut, "MASTER");   // now a sub-header inside the SOUND BLEND box (Pattern Output group removed)
 
     // Compact value formatters (shown always under each knob)
@@ -8283,13 +8297,13 @@ void DrumSequencerEditor::setupComponents()
                 { 2,  "Chorus",    "3-voice stereo thickener / widener - the classic detuned shimmer.\n\nCharacter = sweep speed + depth." },
                 { 3,  "Flanger",   "Swept comb filter - the metallic \"jet\" whoosh.\n\nCharacter = sweep speed + feedback bite." },
                 { 4,  "Phaser",    "6-stage all-pass swirl - softer and hollower than the flanger.\n\nCharacter = sweep speed + resonance." },
-                { 5,  "Comp",      "Glue compressor across the whole instrument (both slots together).\n\nCharacter = attack: left = fast / smashy, right = slow / punchy." },
+                { 5,  "Comp",      "Glue compressor across the whole instrument (both slots together).\n\nCharacter = attack: below 50% = faster / smashier, above = slower / punchier." },
                 { 6,  "Tape",      "Tape wobble: wow + flutter pitch drift + softened highs. Adds ~3 ms latency while on.\n\nCharacter = wobble speed." },
                 { 7,  "Auto-Pan",  "Moves the WHOLE instrument left-right. It drives itself (internal LFO) - no matrix routing needed.\n\nCharacter = pan speed." },
-                { 8,  "Widener",   "Mid/Side width boost with a bass-mono floor - needs STEREO content first (Chorus, unison Width, slot pans).\n\nCharacter = the bass-mono crossover (right = more of the low end stays centred)." },
+                { 8,  "Widener",   "Mid/Side width boost with a bass-mono floor - needs STEREO content first (Chorus, unison Width, slot pans).\n\nCharacter = the bass-mono crossover (higher % = more of the low end stays centred)." },
                 { 9,  "OTT",       "3-band up + down compression - the modern \"dense and bright\" sheen. High amounts get aggressive.\n\nCharacter = compression speed." },
-                { 10, "FreqShift", "Single-sideband frequency shifter - moves every harmonic by the SAME Hz, so the sound turns inharmonic.\n\nCharacter = the shift: centre = 0, right = up, left = down. Tiny = barber-pole detune, big = alien metal." },
-                { 11, "Rotary",    "Leslie speaker: horn doppler + tremolo + rotor pan.\n\nCharacter = rotor speed (left = slow chorale, right = fast tremolo)." } };
+                { 10, "FreqShift", "Single-sideband frequency shifter - moves every harmonic by the SAME Hz, so the sound turns inharmonic.\n\nCharacter = the shift: 50% = zero, above 50% = shift UP, below 50% = shift DOWN. Near 50% = barber-pole detune, extremes = alien metal." },
+                { 11, "Rotary",    "Leslie speaker: horn doppler + tremolo + rotor pan.\n\nCharacter = rotor speed (low % = slow chorale, high % = fast tremolo)." } };
         };
         for (int i = 0; i < 3; ++i)
         {
@@ -11876,7 +11890,7 @@ void DrumSequencerEditor::layoutContent()
           vf(4, lblRevRoom, 0, fy); vf(5, lblRevDecay, 1, fy); vf(6, lblRevWet, 2, fy);
           vf(7, lblRevPre, 3, fy); vf(8, lblRevWidth, 4, fy); }
         // Row 3: DELAY - Time / F.back / Wet + Sync / Ping toggles (cols 4-5, stacked)
-        { hdrDelayG.setVisible(true); hdrDelayG.setText("DELAY", juce::dontSendNotification);
+        { hdrDelayG.setVisible(true);   // text ("DELAY A/B") comes from refreshReverbModeHeader - never overwrite it here
           hdrDelayG.setBounds(sx + 6, colTop + 230, masterW - 12, hdrH);
           const int fy = colTop + 248;
           vf(9, lblDelTime, 0, fy); vf(10, lblDelFB, 1, fy); vf(11, lblDelWet, 2, fy);
