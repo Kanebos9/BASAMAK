@@ -443,6 +443,20 @@ int main()
         printf("[19] remap gate: soft-vel diff=%.6f (==0, curve outputs 0), hard-vel diff=%.4f (>0.02) -> %s\n",
                dSoft, dHard, CHK(dSoft == 0.0f && dHard > 0.02f && finite(softGt) && finite(hardGt)) ? "OK" : "FAIL");
     }
+    {   // [20] UNISON-16 CANCELLATION (user find): 16 voices at detune 0 used to phase-cancel to
+        //      SILENCE (full-circle even spread sums to zero). The half-cycle spread must keep the
+        //      stack at a healthy fraction of a single voice's level.
+        auto uniN = [](int n) { return [n](DrumChannel& c){
+            for (auto& sl : c.slots) sl = Slot();
+            auto& s = c.slots[0];
+            s.engine = DrumChannel::SrcOsc; s.weight = 1.0f;
+            s.oscShape = s.oscShapeB = DrumChannel::WvSaw; s.oscFreq = 110.0f;
+            s.atk = 0.003f; s.hold = 0.4f; s.dec = 0.3f;
+            s.oscUnison = n; s.oscDetune = 0.0f; }; };
+        const double r1 = rms(render(uniN(1), 0.9f, 0.5)), r16 = rms(render(uniN(16), 0.9f, 0.5));
+        printf("[20] unison-16 detune-0: rms %.4f vs single %.4f (expect >0.3x, was ~0 = silent) -> %s\n",
+               r16, r1, CHK(r16 > r1 * 0.3) ? "OK" : "FAIL");
+    }
     printf(fails == 0 ? ">>> ModMatrixTest PASS\n" : ">>> ModMatrixTest FAIL (%d)\n", fails);
     return fails;
 }

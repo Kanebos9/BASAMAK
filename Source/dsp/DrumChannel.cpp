@@ -1535,7 +1535,14 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         for (auto& row : sv.modalY1) for (auto& v2 : row) v2 = 0.0f;   // clean resonator state every hit
         for (auto& row : sv.modalY2) for (auto& v2 : row) v2 = 0.0f;
         sv.noiseState = 0x1234567u + (uint32_t)(vi * NUM_SLOTS + s) * 2654435761u; // distinct per voice+slot
-        for (int u = 0; u <= UNI_MAX; ++u) sv.uniPhase[u] = (2.0 * kPi) * (double) u / (double) UNI_MAX;
+        // [2026-07-14 02:15] HALF-CYCLE phase spread (was a FULL cycle): 16 voices evenly spread
+        // around the whole circle sum to EXACTLY ZERO at equal frequency - unison 16 with detune 0
+        // was completely silent (user find; the old 7-voice cap only covered a partial arc, which
+        // is why it never fully cancelled before UNI_MAX went 7 -> 16). A half-cycle spread keeps
+        // the deterministic decorrelation but its phasor sum is >= ~0.64N for EVERY count, so
+        // detune-0 unison now sounds like one louder saw (the correct behaviour). Existing detuned
+        // unison sounds keep their character; only the beat pattern's starting phase shifts.
+        for (int u = 0; u <= UNI_MAX; ++u) sv.uniPhase[u] = kPi * (double) u / (double) UNI_MAX;
 
         // DRIFT: roll this note's dice (TRUE random - every note breathes differently, like analog
         // hardware; drift 0 = no rolls = bit-identical deterministic hits, the drum default).
