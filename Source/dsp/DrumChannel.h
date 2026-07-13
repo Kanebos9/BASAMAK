@@ -675,6 +675,7 @@ public:
         // curve; keeps the always-on footprint at 64 B/route instead of 256).
         static constexpr int MOD_CURVE_N = 64;
         struct ModRoute { int8_t src = 0; int8_t tgt = 0; float amt = 0.0f;
+                          float lagMs = 0.0f;   // [2026-07-14 01:33] per-route LAG: the source GLIDES toward its value over this time (0 = instant). Voice states reset at the hit = the "delayed aftertouch" swell.
                           uint8_t curveOn = 0; uint8_t curve[MOD_CURVE_N] = {}; };
         ModRoute mod[MOD_ROUTES];
         float modEnvA = 0.005f, modEnvD = 0.30f;   // Mod Env: attack / decay seconds
@@ -713,8 +714,22 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
         if (modSrcBipolar(r.src)) return modCurveLut(r.curve, src * 0.5f + 0.5f) * 2.0f - 1.0f;
         return modCurveLut(r.curve, src);
     }
-    void applyModMatrix(Slot& tmp, const float* srcVals, SlotVoice* latch = nullptr) const;   // latch = per-note env-target snapshot
-    void applyHotBlock(Slot& tmp, const float* srcVals) const;   // [2026-07-13 19:57] block snapshot of the per-sample targets (UI rings / sc copy only)
+    void applyModMatrix(Slot& tmp, const float* srcVals, SlotVoice* latch = nullptr, const float* laggedRoute = nullptr) const;   // latch = per-note env-target snapshot; laggedRoute = per-route pre-lagged source values
+    void applyHotBlock(Slot& tmp, const float* srcVals, const float* laggedRoute = nullptr) const;   // [2026-07-13 19:57] block snapshot of the per-sample targets (UI rings / sc copy only)
+    // [2026-07-14 01:33] LAG: pre-compute each route's (possibly lagged) source value ONCE per block.
+    // states[] tracks the raw value while lag is off (engaging lag later never jumps from stale data).
+    void lagRouteSources(const Slot& sl, const float* srcVals, float* states, float dtSec, float* out) const
+    {
+        for (int i = 0; i < MOD_ROUTES; ++i)
+        {
+            const auto& r = sl.mod[i];
+            const float raw = srcVals[juce::jlimit(0, MS_COUNT - 1, (int) r.src)];
+            if (r.lagMs > 0.01f)
+            { const float k = 1.0f - std::exp(-dtSec / (r.lagMs * 0.001f));
+              states[i] += k * (raw - states[i]); out[i] = states[i]; }
+            else { states[i] = raw; out[i] = raw; }
+        }
+    }
     // Effective BASE frequency for a pitched slot. In PIANO ROLL every pitched engine plays a
     // C4-ABSOLUTE base (+ the Tune fader), independent of the Freq knob - so the roll is knob-free
     // (the knob is never forced/faded/parked; it stays the STEP-mode base). Slot 2 keeps its
@@ -751,6 +766,7 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     float  chFxHil[3][64] = {};                      // FREQ SHIFTER Hilbert allpass states (2 paths x 4 biquads x 4 x stereo)
     // chFxMod = per-block matrix offsets [0 A-Amt, 1 A-Chr, 2 B-Amt, 3 B-Chr, 4 RevSend, 5 DelSend, 6 C-Amt, 7 C-Chr]
     float  chFxMod[8] = {};
+    float  modLagBlk[NUM_SLOTS][MOD_ROUTES] = {};   // [2026-07-14 01:33] block-path LAG states (voice states live on SlotVoice)
     float  chFxSm[3] = { -1.0f, -1.0f, -1.0f };      // per-SAMPLE smoothed slot amounts (-1 = snap on first use)
     bool   chFxRun[3] = {};                          // engage tracking: off->on clears that slot's state (no stale burst)
     float  chSendHpZ[2] = {};                        // reverb-send high-pass state (~150 Hz; subs stay out of the verb)
@@ -1170,6 +1186,8 @@ private:
         float    envModOfs[4] {};                          // mod-matrix env offsets (Atk/Dec/Sus/Rel), LATCHED at the hit
         bool     envModLatched = false;                    // env(t, params) is stateless - per-block env changes JUMP the level (crackle)
         float    lastEnv = 0.0f;                           // [2026-07-13 19:57] previous sample's amp env = the per-sample Amp Env mod SOURCE
+        float    modLagV[MOD_ROUTES] = {};                 // [2026-07-14 01:33] per-route LAG states: block-bake path...
+        float    arLag[MOD_ROUTES]   = {};                 // ...and the per-sample hot path (both reset to 0 at the hit = swell-in)
         // [2026-07-13 20:20] ADAA (antiderivative anti-aliasing) previous-input states, one per
         // shaper stream; 1e9 = unprimed (first sample after the hit evaluates directly).
         float    adaaU[2]  { 1.0e9f, 1.0e9f };             // classic drive insert (L/R; Exciter stores x)

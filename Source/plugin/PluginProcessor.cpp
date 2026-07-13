@@ -100,6 +100,7 @@ void DrumSequencerProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
 {
     currentSampleRate = sampleRate;
     currentBlockSize  = samplesPerBlock;
+    loadMeasurer.reset(sampleRate, samplesPerBlock);   // [2026-07-14 01:50] CPU readout
 
     // The synth engine runs at kEngineOS x the host rate (anti-aliasing); channels are prepared
     // at that higher rate + block size. The processor down-samples back to the host rate below.
@@ -170,6 +171,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                                            juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
+    juce::AudioProcessLoadMeasurer::ScopedTimer cpuTimer(loadMeasurer, audio.getNumSamples());   // [2026-07-14 01:50]
     audio.clear();
     processHeartbeat.fetch_add(1, std::memory_order_relaxed);   // editor watches this to detect a frozen host
 

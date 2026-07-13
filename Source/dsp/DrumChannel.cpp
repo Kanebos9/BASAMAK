@@ -788,8 +788,9 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         { juce::String mm;
           for (int r = 0; r < MOD_ROUTES; ++r)
           {
-              mm << (int) s.mod[r].src << ":" << (int) s.mod[r].tgt << ":" << juce::String(s.mod[r].amt, 4);
-              if (s.mod[r].curveOn)   // [2026-07-14 00:03] REMAP curve = a 4th field (128 hex chars); absent = pass-through
+              mm << (int) s.mod[r].src << ":" << (int) s.mod[r].tgt << ":" << juce::String(s.mod[r].amt, 4)
+                 << ":" << juce::String(s.mod[r].lagMs, 1);   // [2026-07-14 01:33] LAG ms (4th field)
+              if (s.mod[r].curveOn)   // MOD AMOUNT MAP curve = the 5th field (128 hex chars); absent = pass-through
               { mm << ":"; for (int k = 0; k < Slot::MOD_CURVE_N; ++k) mm << juce::String::toHexString(s.mod[r].curve[k]).paddedLeft('0', 2); }
               mm << ";";
           }
@@ -979,10 +980,16 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
                 { s.mod[r].src = (int8_t) juce::jlimit(0, MS_COUNT - 1, f2[0].getIntValue());
                   s.mod[r].tgt = (int8_t) juce::jlimit(0, MT_COUNT - 1, f2[1].getIntValue());
                   s.mod[r].amt = juce::jlimit(-1.0f, 1.0f, f2[2].getFloatValue());
-                  if (f2.size() >= 4 && f2[3].length() == Slot::MOD_CURVE_N * 2)   // REMAP curve (hex)
+                  // 4th field: LAG ms (numeric) - or the few-hours-old dev format where it was the hex curve.
+                  int cvField = -1;
+                  if (f2.size() >= 4)
+                  { if (f2[3].length() == Slot::MOD_CURVE_N * 2) cvField = 3;
+                    else { s.mod[r].lagMs = juce::jlimit(0.0f, 2000.0f, f2[3].getFloatValue());
+                           if (f2.size() >= 5 && f2[4].length() == Slot::MOD_CURVE_N * 2) cvField = 4; } }
+                  if (cvField > 0)
                   { s.mod[r].curveOn = 1;
                     for (int k = 0; k < Slot::MOD_CURVE_N; ++k)
-                        s.mod[r].curve[k] = (uint8_t) f2[3].substring(k * 2, k * 2 + 2).getHexValue32(); } }
+                        s.mod[r].curve[k] = (uint8_t) f2[cvField].substring(k * 2, k * 2 + 2).getHexValue32(); } }
             }
         }
         else
@@ -1515,6 +1522,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         sv.wSm = -1.0f;   // weight smoother snaps to the (possibly modulated) weight on the first sample
         sv.envModLatched = false;   // env-time mod targets re-latch at THIS hit
         sv.lastEnv = 0.0f; sv.fmtPosSm = -1.0f;    // per-sample Amp Env source + formant glide re-snap at THIS hit
+        for (int r2 = 0; r2 < MOD_ROUTES; ++r2) { sv.modLagV[r2] = 0.0f; sv.arLag[r2] = 0.0f; }   // LAG swells from 0 at the hit
         sv.adaaU[0] = sv.adaaU[1] = sv.adaaB1[0] = sv.adaaB1[1] = sv.adaaB2[0] = sv.adaaB2[1]
             = sv.warpU[0] = sv.warpU[1] = sv.warpU[2] = 1.0e9f;   // ADAA states re-prime at THIS hit
         for (int lr = 0; lr < 2; ++lr) {   // drive smoothing/DC + formant + punch state start clean each hit
@@ -1927,12 +1935,14 @@ void DrumChannel::computeModSources(int s, const Slot& sl, float* out, const Voi
 
 // Apply the 6 routes onto a scratch Slot before the config bake. Cutoffs + pitch are MULTIPLICATIVE
 // (octaves); everything else is ADDITIVE over the target's native range, then clamped.
-void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals, SlotVoice* latch) const
+void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals, SlotVoice* latch, const float* laggedRoute) const
 {
-    for (auto& r : tmp.mod)
+    for (int ri2 = 0; ri2 < MOD_ROUTES; ++ri2)
     {
+        const auto& r = tmp.mod[ri2];
         if (r.tgt == MTOff || r.src == MSOff || std::abs(r.amt) < 1.0e-4f) continue;
-        const float m = r.amt * modRouteShape(r, srcVals[juce::jlimit(0, MS_COUNT - 1, (int) r.src)]);   // depth * (remapped) source
+        const float srcV = laggedRoute != nullptr ? laggedRoute[ri2] : srcVals[juce::jlimit(0, MS_COUNT - 1, (int) r.src)];
+        const float m = r.amt * modRouteShape(r, srcV);   // depth * (lagged + remapped) source
         auto add = [&](float& f, float mn, float mx) { f = juce::jlimit(mn, mx, f + m * (mx - mn)); };
         switch (r.tgt)
         {
@@ -1982,10 +1992,12 @@ void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals, SlotVoice* lat
     {
         latch->envModLatched = true;
         for (int k = 0; k < 4; ++k) latch->envModOfs[k] = 0.0f;
-        for (auto& r : tmp.mod)
+        for (int ri2 = 0; ri2 < MOD_ROUTES; ++ri2)
         {
+            const auto& r = tmp.mod[ri2];
             if (r.src == MSOff || std::abs(r.amt) < 1.0e-4f) continue;
-            const float m = r.amt * modRouteShape(r, srcVals[juce::jlimit(0, MS_COUNT - 1, (int) r.src)]);
+            const float srcV = laggedRoute != nullptr ? laggedRoute[ri2] : srcVals[juce::jlimit(0, MS_COUNT - 1, (int) r.src)];
+            const float m = r.amt * modRouteShape(r, srcV);
             switch (r.tgt) { case MTAtk: latch->envModOfs[0] += m; break; case MTDec: latch->envModOfs[1] += m; break;
                              case MTSus: latch->envModOfs[2] += m; break; case MTRel: latch->envModOfs[3] += m; break;
                              default: break; }
@@ -2002,12 +2014,14 @@ void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals, SlotVoice* lat
 // [2026-07-13 19:57] BLOCK snapshot of the HOT (audio-rate) targets, applied onto the DISPLAY copy
 // only (the sc[] bake + the UI mod rings). The real render applies these per sample; without this the
 // rings would freeze at the base values. Pitch/Vol have no rings and are skipped (as before).
-void DrumChannel::applyHotBlock(Slot& tmp, const float* srcVals) const
+void DrumChannel::applyHotBlock(Slot& tmp, const float* srcVals, const float* laggedRoute) const
 {
-    for (auto& r : tmp.mod)
+    for (int ri2 = 0; ri2 < MOD_ROUTES; ++ri2)
     {
+        const auto& r = tmp.mod[ri2];
         if (r.tgt == MTOff || r.src == MSOff || std::abs(r.amt) < 1.0e-4f) continue;
-        const float m = r.amt * modRouteShape(r, srcVals[juce::jlimit(0, MS_COUNT - 1, (int) r.src)]);
+        const float srcV = laggedRoute != nullptr ? laggedRoute[ri2] : srcVals[juce::jlimit(0, MS_COUNT - 1, (int) r.src)];
+        const float m = r.amt * modRouteShape(r, srcV);
         auto add = [&](float& f, float mn, float mx) { f = juce::jlimit(mn, mx, f + m * (mx - mn)); };
         switch (r.tgt)
         {
@@ -2159,6 +2173,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         int8_t arSrc[MOD_ROUTES] = {}; int8_t arTgt[MOD_ROUTES] = {}; float arAmt[MOD_ROUTES] = {}; int arN = 0;
         const uint8_t* arCv[MOD_ROUTES] = {};   // [2026-07-14 00:03] per-route REMAP curve (null = pass-through); points into slots[] (stable), never the bake copy
         uint8_t arBi[MOD_ROUTES] = {};          // source is bipolar -> curve X maps -1..+1
+        float   arLagK[MOD_ROUTES] = {};        // [2026-07-14 01:33] per-sample LAG coefficient (0 = instant)
         uint16_t arMask = 0;                                  // bit per ModSrc that needs a per-sample value
         float  mEA = 0.005f, mEH = 0, mED = 0.3f, mES = 0, mER = 0;   // Mod Env params (per-sample source eval)
         bool   arDrvOn = false;                               // a route targets DRIVE -> the dry-blend ease-in engages
@@ -2247,6 +2262,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                   // REMAP pointer must reference the PERSISTENT slot (the bake copy dies with the block)
                   c.arCv[c.arN] = (r.curveOn && ri >= 0 && ri < MOD_ROUTES) ? slots[s].mod[ri].curve : nullptr;
                   c.arBi[c.arN] = (uint8_t)(modSrcBipolar(r.src) ? 1 : 0);
+                  c.arLagK[c.arN] = r.lagMs > 0.01f ? (float)(1.0 - std::exp(-1.0 / (sr * (double) r.lagMs * 0.001))) : 0.0f;
                   ++c.arN; }
                 if (h == 6) c.arDrvOn = true;   // drive routed -> ease the shaper in near zero
                 c.arMask |= (uint16_t)(1u << juce::jmin(15, (int) r.src));
@@ -2626,14 +2642,17 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             modTmp = slots[s];
             float srcVals[MS_COUNT] = {};
             computeModSources(s, modTmp, srcVals);
-            applyModMatrix(modTmp, srcVals);
-            applyHotBlock(modTmp, srcVals);   // display/sc-only: rings + analysis see the block value
+            float lagged[MOD_ROUTES];   // [2026-07-14 01:33] per-route LAG applied ONCE per block
+            lagRouteSources(modTmp, srcVals, modLagBlk[s], (float) numSamples / (float) sr, lagged);
+            applyModMatrix(modTmp, srcVals, nullptr, lagged);
+            applyHotBlock(modTmp, srcVals, lagged);   // display/sc-only: rings + analysis see the block value
             slp = &modTmp;
             // CHANNEL FX targets can't live on the slot copy - accumulate their offsets here (both slots add).
-            for (auto& r : modTmp.mod)
+            for (int ri3 = 0; ri3 < MOD_ROUTES; ++ri3)
             {
+                const auto& r = modTmp.mod[ri3];
                 if (r.src == MSOff || std::abs(r.amt) < 1.0e-4f) continue;
-                const float m = r.amt * modRouteShape(r, srcVals[juce::jlimit(0, MS_COUNT - 1, (int) r.src)]);
+                const float m = r.amt * modRouteShape(r, lagged[ri3]);
                 switch (r.tgt) { case MTChFxAAmt: chFxMod[0] += m; break; case MTChFxAChr: chFxMod[1] += m; break;
                                  case MTChFxBAmt: chFxMod[2] += m; break; case MTChFxBChr: chFxMod[3] += m; break;
                                  case MTRevSend:  chFxMod[4] += m; break; case MTDelSend:  chFxMod[5] += m; break;
@@ -2801,7 +2820,9 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             Slot vm = slots[s];
             float sv2[MS_COUNT] = {};
             computeModSources(s, vm, sv2, &v);   // sample THIS voice
-            applyModMatrix(vm, sv2, &v.sv[s]);   // env-time targets latch at the hit (crackle fix)
+            float lagV[MOD_ROUTES];              // [2026-07-14 01:33] per-VOICE lag (states reset at the hit = swell-in)
+            lagRouteSources(vm, sv2, v.sv[s].modLagV, (float) numSamples / (float) sr, lagV);
+            applyModMatrix(vm, sv2, &v.sv[s], lagV);   // env-time targets latch at the hit (crackle fix)
             // FORMANT position GLIDES at block rate (~12 ms): its two Q-7 band-pass coefficients are
             // baked per block, and stepping their centre frequencies on a driven signal warbles =
             // the same crackle class. Smoothing the position also smooths the derived wet mix.
@@ -3017,6 +3038,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     for (int r2 = 0; r2 < c.arN; ++r2)
                     {
                         float sval = S(c.arSrc[r2]);
+                        if (c.arLagK[r2] > 0.0f)   // [2026-07-14 01:33] per-route LAG (per-sample slew, reset at the hit)
+                        { sv.arLag[r2] += c.arLagK[r2] * (sval - sv.arLag[r2]); sval = sv.arLag[r2]; }
                         if (c.arCv[r2] != nullptr)   // [2026-07-14 00:03] per-route REMAP (drawn transfer curve)
                             sval = c.arBi[r2] ? modCurveLut(c.arCv[r2], sval * 0.5f + 0.5f) * 2.0f - 1.0f
                                               : modCurveLut(c.arCv[r2], sval);

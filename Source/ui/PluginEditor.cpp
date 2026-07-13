@@ -4,6 +4,72 @@
 #include <cstring>
 
 // ================================================================================================
+// SYSTEM STATS [2026-07-14 01:50] - whole-machine CPU % (delta-sampled between UI polls) and this
+// PROCESS's resident memory. Message-thread only (the editor timer polls ~2x/sec). In a DAW the
+// process = the whole host, so the RAM figure is "BASAMAK + your DAW" - the tooltip says so.
+// ================================================================================================
+#if JUCE_MAC
+ #include <mach/mach.h>
+static float systemCpuPercent()
+{
+    static uint64_t lastUsed = 0, lastTotal = 0;
+    host_cpu_load_info_data_t info; mach_msg_type_number_t cnt = HOST_CPU_LOAD_INFO_COUNT;
+    if (host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO, (host_info_t) &info, &cnt) != KERN_SUCCESS) return -1.0f;
+    uint64_t used = (uint64_t) info.cpu_ticks[CPU_STATE_USER] + info.cpu_ticks[CPU_STATE_SYSTEM] + info.cpu_ticks[CPU_STATE_NICE];
+    uint64_t total = used + info.cpu_ticks[CPU_STATE_IDLE];
+    const uint64_t dU = used - lastUsed, dT = total - lastTotal;
+    lastUsed = used; lastTotal = total;
+    return dT > 0 ? 100.0f * (float) dU / (float) dT : -1.0f;
+}
+static float processRamMB()
+{
+    mach_task_basic_info info; mach_msg_type_number_t cnt = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t) &info, &cnt) != KERN_SUCCESS) return -1.0f;
+    return (float)(info.resident_size / (1024.0 * 1024.0));
+}
+#elif JUCE_WINDOWS
+ #include <psapi.h>
+ #pragma comment(lib, "psapi.lib")
+static float systemCpuPercent()
+{
+    static ULONGLONG lastIdle = 0, lastTotal = 0;
+    FILETIME idleF, kernF, userF;
+    if (! GetSystemTimes(&idleF, &kernF, &userF)) return -1.0f;
+    auto q = [](const FILETIME& f) { return ((ULONGLONG) f.dwHighDateTime << 32) | f.dwLowDateTime; };
+    const ULONGLONG idle = q(idleF), total = q(kernF) + q(userF);   // kernel time INCLUDES idle
+    const ULONGLONG dI = idle - lastIdle, dT = total - lastTotal;
+    lastIdle = idle; lastTotal = total;
+    return dT > 0 ? 100.0f * (float)(dT - dI) / (float) dT : -1.0f;
+}
+static float processRamMB()
+{
+    PROCESS_MEMORY_COUNTERS pmc;
+    if (! GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) return -1.0f;
+    return (float)(pmc.WorkingSetSize / (1024.0 * 1024.0));
+}
+#else   // Linux
+static float systemCpuPercent()
+{
+    static long long lastIdle = 0, lastTotal = 0;
+    juce::File f("/proc/stat");
+    auto line = f.loadFileAsString().upToFirstOccurrenceOf("\n", false, false);
+    juce::StringArray tok; tok.addTokens(line, " ", "");
+    if (tok.size() < 5 || tok[0] != "cpu") return -1.0f;
+    long long total = 0, idle = tok[4].getLargeIntValue();
+    for (int i = 1; i < tok.size(); ++i) total += tok[i].getLargeIntValue();
+    const long long dI = idle - lastIdle, dT = total - lastTotal;
+    lastIdle = idle; lastTotal = total;
+    return dT > 0 ? 100.0f * (float)(dT - dI) / (float) dT : -1.0f;
+}
+static float processRamMB()
+{
+    juce::StringArray tok; tok.addTokens(juce::File("/proc/self/statm").loadFileAsString(), " ", "");
+    if (tok.size() < 2) return -1.0f;
+    return (float)(tok[1].getLargeIntValue() * 4096ll / (1024.0 * 1024.0));   // resident pages (4 KB assumed)
+}
+#endif
+
+// ================================================================================================
 // FILE MAP [added 2026-07-13 22:20 - navigation aid; SEARCH for the quoted strings]. This file is
 // the whole editor: component classes first, then the DrumSequencerEditor implementation.
 //   1. Component classes (top ~half): "ADSRDisplay", "PitchEnvDisplay", "VoiceModDisplay",
@@ -1096,9 +1162,18 @@ void RemapEditor::applyPreset(int i)
         for (int k = 0; k < N; ++k)
         {
             const float x = (float) k / (float)(N - 1);
-            curve[k] = i == 1 ? x * x * x                                    // SOFT: late response
-                     : i == 2 ? 1.0f - (1.0f - x) * (1.0f - x) * (1.0f - x)  // HARD: early response
-                              : x * x * (3.0f - 2.0f * x);                   // S-CURVE: smoothstep
+            switch (i)
+            {
+                case 1: curve[k] = x * x * x; break;                                    // SOFT: late response
+                case 2: curve[k] = 1.0f - (1.0f - x) * (1.0f - x) * (1.0f - x); break;  // HARD: early response
+                case 3: curve[k] = x * x * (3.0f - 2.0f * x); break;                    // S-CURVE: smoothstep
+                // [2026-07-14 01:20] the second row (user: "more ready made drawings"):
+                case 4: curve[k] = x < 0.5f ? 0.0f : (x - 0.5f) * 2.0f; break;          // THRESHOLD: dead until half, then rise
+                case 5: curve[k] = 1.0f - x; break;                                     // INVERT: high source = low output
+                case 6: curve[k] = std::floor(x * 5.0f) / 4.0f; break;                  // STEPS: quantise into 5 stairs
+                default: { const float b = 1.0f - std::abs(2.0f * x - 1.0f);            // BUMP: zero ends, full middle
+                           curve[k] = b * b * (3.0f - 2.0f * b); } break;
+            }
         }
     }
     if (onChange) onChange(curve, on);
@@ -1124,7 +1199,7 @@ void RemapEditor::drawAt(juce::Point<float> pos, bool connect)
 void RemapEditor::mouseDown(const juce::MouseEvent& e)
 {
     if (closeRect().contains(e.position)) { setVisible(false); if (onClose) onClose(); return; }
-    for (int i = 0; i < 4; ++i) if (presetRect(i).contains(e.position)) { applyPreset(i); return; }
+    for (int i = 0; i < 8; ++i) if (presetRect(i).contains(e.position)) { applyPreset(i); return; }
     if (strip().contains(e.position)) drawAt(e.position, false);
 }
 void RemapEditor::mouseDrag(const juce::MouseEvent& e)
@@ -1139,17 +1214,51 @@ void RemapEditor::paint(juce::Graphics& g)
     g.drawText(title, 10, 4, getWidth() - 40, 16, juce::Justification::centredLeft, false);
     g.setColour(juce::Colour(0xffaebada)); g.setFont(juce::Font(12.0f, juce::Font::bold));
     g.drawText("X", closeRect(), juce::Justification::centred, false);
-    static const char* pn[4] = { "Linear", "Soft", "Hard", "S-Curve" };
-    for (int i = 0; i < 4; ++i)
+    static const char* pn[8] = { "Linear", "Soft", "Hard", "S-Curve", "Threshold", "Invert", "Steps", "Bump" };
+    for (int i = 0; i < 8; ++i)
     {   const auto pr = presetRect(i);
         const bool lit = (i == 0 && ! on);
         g.setColour(lit ? accent.withAlpha(0.30f) : juce::Colour(0xff20203a)); g.fillRoundedRectangle(pr, 3.0f);
         g.setColour(i == 0 ? juce::Colour(0xff9fd1ff) : juce::Colours::white);
-        g.setFont(juce::Font(10.5f, lit ? juce::Font::bold : juce::Font::plain));
+        g.setFont(juce::Font(10.0f, lit ? juce::Font::bold : juce::Font::plain));
         g.drawText(pn[i], pr, juce::Justification::centred, false);
     }
     const auto r = strip();
     g.setColour(juce::Colour(0xff181830)); g.fillRoundedRectangle(r, 4.0f);
+    // [2026-07-14 01:20] VALUE GRID (user idea): faint lines every 10%, brighter every 50%, numeric
+    // labels at 0/50/100 only (per-10% numbers would be unreadable at this size).
+    for (int i = 1; i < 10; ++i)
+    {
+        const float fx = r.getX() + r.getWidth() * (float) i / 10.0f;
+        const float fy = r.getBottom() - r.getHeight() * (float) i / 10.0f;
+        g.setColour(juce::Colour(i == 5 ? 0x30ffffff : 0x12ffffff));
+        g.drawVerticalLine((int) fx, r.getY(), r.getBottom());
+        g.drawHorizontalLine((int) fy, r.getX(), r.getRight());
+    }
+    g.setColour(juce::Colour(0xff707890)); g.setFont(juce::Font(8.5f));
+    for (int i = 0; i <= 2; ++i)
+    {
+        const juce::String lb = juce::String(i * 50) + "%";
+        g.drawText(lb, (int)(r.getX() + r.getWidth() * (float) i * 0.5f) - 12, (int) r.getBottom() + 1, 24, 9,
+                   juce::Justification::centred, false);
+        g.drawText(lb, (int) r.getX() - 1, (int)(r.getBottom() - r.getHeight() * (float) i * 0.5f) - 5, 24, 9,
+                   juce::Justification::centredLeft, false);
+    }
+    // AXIS WATERMARKS (the PitchEnv convention, user request): drawn arrows + captions.
+    g.setColour(juce::Colour(0x33ffffff));
+    { juce::Path ax; ax.startNewSubPath(r.getX() + 6.0f, r.getBottom() - 6.0f);
+      ax.lineTo(r.getX() + 78.0f, r.getBottom() - 6.0f);
+      ax.lineTo(r.getX() + 73.0f, r.getBottom() - 9.0f); ax.startNewSubPath(r.getX() + 78.0f, r.getBottom() - 6.0f);
+      ax.lineTo(r.getX() + 73.0f, r.getBottom() - 3.0f);
+      ax.startNewSubPath(r.getX() + 6.0f, r.getBottom() - 6.0f); ax.lineTo(r.getX() + 6.0f, r.getY() + 66.0f);
+      ax.lineTo(r.getX() + 3.0f, r.getY() + 71.0f); ax.startNewSubPath(r.getX() + 6.0f, r.getY() + 66.0f);
+      ax.lineTo(r.getX() + 9.0f, r.getY() + 71.0f);
+      g.strokePath(ax, juce::PathStrokeType(1.2f)); }
+    g.setFont(juce::Font(9.0f, juce::Font::bold));
+    g.drawText("Mod Source Amount", (int) r.getX() + 12, (int) r.getBottom() - 18, 130, 10, juce::Justification::centredLeft, false);
+    { juce::Graphics::ScopedSaveState ss(g);
+      g.addTransform(juce::AffineTransform::rotation(-juce::MathConstants<float>::halfPi, r.getX() + 16.0f, r.getY() + 80.0f));
+      g.drawText("What The Target Receives", (int) r.getX() - 46, (int) r.getY() + 74, 150, 10, juce::Justification::centredLeft, false); }
     g.setColour(juce::Colour(0x22ffffff));
     g.drawLine(r.getX(), r.getBottom(), r.getRight(), r.getY(), 1.0f);            // pass-through diagonal
     if (bipolarSrc) g.drawVerticalLine((int) r.getCentreX(), r.getY(), r.getBottom());   // source-at-rest marker
@@ -1204,9 +1313,9 @@ void RoutePicker::visibilityChanged()
     if (isVisible() && ! hooked)      { juce::Desktop::getInstance().addGlobalMouseListener(&closer); hooked = true; }
     else if (! isVisible() && hooked) { juce::Desktop::getInstance().removeGlobalMouseListener(&closer); hooked = false; }
 }
-void RoutePicker::openFor(int cs, int ct, float amt)
+void RoutePicker::openFor(int cs, int ct, float amt, float lagMs)
 {
-    curSrc = cs; curTgt = ct; curAmt = juce::jlimit(-1.0f, 1.0f, amt);
+    curSrc = cs; curTgt = ct; curAmt = juce::jlimit(-1.0f, 1.0f, amt); curLag = juce::jlimit(0.0f, 2000.0f, lagMs);
     srcModel.rows.clear();
     for (int i = 0; i < DrumChannel::MS_COUNT; ++i)
     { if (i == DrumChannel::MSLfoWave || i == DrumChannel::MSModLfo) continue;   // LFO 4 slot is the Mod Env tab now; Mod LFO dropped
@@ -1252,8 +1361,14 @@ void RoutePicker::openFor(int cs, int ct, float amt)
 juce::String RoutePicker::getTooltip()
 {   // rows serve their own tips via Col::getTooltipForRow; the picker itself tips the fader + remap row
     const auto p = getMouseXYRelative().toFloat();
+    if (lagRect().contains(p))
+        return "LAG: the source GLIDES toward its value over this time instead of jumping (0 = instant).\n\n"
+               "- The states reset at every hit, so the source SWELLS IN from zero - the \"aftertouch "
+               "shouldn't fire on the strike\" delay, done properly in the time domain.\n"
+               "- Composes with the map below: LAG = how fast it responds, MAP = how hard you must push.\n"
+               "- NOTE: envelope-time targets sample at the hit, so a lagged source reads ~0 there.";
     if (remapRect().contains(p))
-        return "REMAP: draw a transfer curve for THIS route (Vital-style).\n\n"
+        return "MODULATION AMOUNT MAP: draw a transfer curve for THIS route.\n\n"
                "- X = the source's value (bipolar sources like LFOs/Note span -1..+1, centre = at rest); "
                "Y = what actually reaches the target.\n"
                "- Presets inside: Linear = off (pass-through), Soft = late response (tame aftertouch), "
@@ -1302,16 +1417,40 @@ void RoutePicker::setAmtFromX(float x)
 }
 void RoutePicker::mouseDown(const juce::MouseEvent& e)
 {
-    if (remapRect().contains(e.position)) { if (onRemap) onRemap(); return; }   // [2026-07-14] open the curve editor
+    if (remapRect().contains(e.position)) { if (onRemap) onRemap(); return; }   // open the MOD AMOUNT MAP editor
+    lagDrag = lagRect().contains(e.position); if (lagDrag) { setLagFromX(e.position.x); return; }
     amtDrag = amtRect().contains(e.position); if (amtDrag) setAmtFromX(e.position.x);
 }
-void RoutePicker::mouseDrag(const juce::MouseEvent& e) { if (amtDrag) setAmtFromX(e.position.x); }
-void RoutePicker::mouseUp(const juce::MouseEvent&) { if (amtDrag && onAmtDragEnd) onAmtDragEnd(); amtDrag = false; }
+void RoutePicker::setLagFromX(float x)
+{   // [2026-07-14 01:33] LAG fader: hard left = instant (0), then log 5..1000 ms across the travel
+    const auto r = lagRect();
+    const float p = juce::jlimit(0.0f, 1.0f, (x - r.getX()) / juce::jmax(1.0f, r.getWidth()));
+    curLag = p <= 0.02f ? 0.0f : 5.0f * std::pow(200.0f, (p - 0.02f) / 0.98f);
+    if (onLag) onLag(curLag);
+    repaint();
+}
+void RoutePicker::mouseDrag(const juce::MouseEvent& e) { if (lagDrag) setLagFromX(e.position.x); else if (amtDrag) setAmtFromX(e.position.x); }
+void RoutePicker::mouseUp(const juce::MouseEvent&) { if ((amtDrag || lagDrag) && onAmtDragEnd) onAmtDragEnd(); amtDrag = lagDrag = false; }
 void RoutePicker::paint(juce::Graphics& g)
 {
     g.setColour(juce::Colour(0xff11111c)); g.fillRoundedRectangle(getLocalBounds().toFloat(), 6.0f);
     g.setColour(accent.withAlpha(0.6f)); g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(0.75f), 6.0f, 1.5f);
-    // AMOUNT fader (bipolar, centre = 0) - long, with the exact % written IN it (user).
+    // [2026-07-14 01:33] LAG fader (left half, under SOURCES): 0 = instant, log 5..1000 ms.
+    {
+        const auto lr2 = lagRect();
+        g.setColour(juce::Colour(0xff181828)); g.fillRoundedRectangle(lr2, 4.0f);
+        const float p = curLag <= 0.01f ? 0.0f : 0.02f + 0.98f * std::log(curLag / 5.0f) / std::log(200.0f);
+        if (p > 0.001f)
+        { g.setColour(juce::Colour(0xff35c0ff).withAlpha(0.30f));
+          g.fillRoundedRectangle(lr2.withWidth(juce::jmax(3.0f, lr2.getWidth() * juce::jlimit(0.0f, 1.0f, p))).reduced(1.5f), 3.0f);
+          g.setColour(juce::Colour(0xff35c0ff));
+          g.fillRect(lr2.getX() + lr2.getWidth() * juce::jlimit(0.0f, 1.0f, p) - 1.2f, lr2.getY() + 3.0f, 2.4f, lr2.getHeight() - 6.0f); }
+        g.setColour(juce::Colours::white); g.setFont(juce::Font(11.0f, juce::Font::bold));
+        g.drawText(curLag <= 0.01f ? juce::String("LAG  Off")
+                                   : "LAG  " + juce::String(juce::roundToInt(curLag)) + " ms",
+                   lr2, juce::Justification::centred, false);
+    }
+    // AMOUNT fader (bipolar, centre = 0; right half, under TARGETS) with the exact % written IN it.
     auto fr = amtRect();
     g.setColour(juce::Colour(0xff181828)); g.fillRoundedRectangle(fr, 4.0f);
     const float cx = fr.getCentreX(), half = fr.getWidth() * 0.5f - 4.0f, px = cx + modPosFromAmt(curAmt) * half;
@@ -1334,7 +1473,7 @@ void RoutePicker::paint(juce::Graphics& g)
       g.strokePath(curveGlyph, juce::PathStrokeType(1.4f)); }
     g.setFont(juce::Font(11.0f, remapOn ? juce::Font::bold : juce::Font::plain));
     g.setColour(remapOn ? juce::Colours::white : juce::Colour(0xffaebada));
-    g.drawText(remapOn ? "Remap curve: ON - click to edit" : "Remap curve: off - click to draw",
+    g.drawText(remapOn ? "Modulation amount map: ON - click to edit" : "Modulation amount map: off - click to draw",
                rr.withTrimmedLeft(22.0f), juce::Justification::centredLeft, false);
 }
 
@@ -2351,7 +2490,7 @@ void DragMidiSource::paint(juce::Graphics& g)
     g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(1), 5.0f, 1.0f);
     g.setColour(juce::Colours::white);
     g.setFont(juce::Font(13.0f, juce::Font::bold));
-    g.drawText("DRAG PITCH AS MIDI", getLocalBounds(), juce::Justification::centred);
+    g.drawText("DRAG MIDI", getLocalBounds(), juce::Justification::centred);   // [2026-07-14] shortened (user) - frees room for the CPU/RAM readout
 }
 
 void DragMidiSource::mouseDrag(const juce::MouseEvent& e)
@@ -5883,7 +6022,8 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         h = mix(h, f(sl.drift)); h = mix(h, f(sl.filterDrive));   // DRIFT (alive) + filter loop drive
         for (int r = 0; r < DrumChannel::MOD_ROUTES; ++r)   // MOD MATRIX routes + created sources
         { h = mix(h, sl.mod[r].src); h = mix(h, sl.mod[r].tgt); h = mix(h, f(sl.mod[r].amt));
-          h = mix(h, sl.mod[r].curveOn);   // [2026-07-14] REMAP curve rides the sound hash
+          h = mix(h, f(sl.mod[r].lagMs));   // [2026-07-14] LAG + MOD AMOUNT MAP ride the sound hash
+          h = mix(h, sl.mod[r].curveOn);
           if (sl.mod[r].curveOn) for (int k = 0; k < DrumChannel::Slot::MOD_CURVE_N; k += 4) h = mix(h, sl.mod[r].curve[k]); }
         h = mix(h, f(sl.modEnvA)); h = mix(h, f(sl.modEnvD)); h = mix(h, f(sl.modEnvH)); h = mix(h, f(sl.modEnvS)); h = mix(h, f(sl.modEnvR)); h = mix(h, f(sl.modLfoRate)); h = mix(h, sl.modLfoShape);
     }
@@ -7179,12 +7319,12 @@ void DrumSequencerEditor::setupComponents()
     dragMidi.getMidiFile = [this] { return proc.exportMidiFile(selectedChannel); };
     dragMidi.setTooltip(
         "Drag this onto a DAW track to export the SELECTED channel as a MIDI clip.\n\n"
-        "- Pitched slots (Oscillator / Modal / Physical) export from their own Freq knob; a slot in "
-        "Chord or Scale mode exports its FULL voicing. Both slots export together.\n"
-        "- A channel with only Sample/Noise slots exports its step/draw pitch on the channel's own note.\n"
-        "- Merged step chains come out as one long note; rolls and swing are kept.\n\n"
-        "MIDI lands transposed? Check the slots' Freq knobs - they set the pitch 0-point (the "
-        "keyboard plays real notes but never changes them).");
+        "- Notes carry their VELOCITY and length; rolls become sub-hits; swing is kept; merged step "
+        "chains come out as one long note.\n"
+        "- Piano-roll channels export the roll exactly as drawn (C4-based, Base Freq independent). "
+        "Step channels export with each pitched slot's Base Freq as the pitch 0-point.\n"
+        "- Slots in Chord/Scale mode export their FULL voicing; both slots export together. Pure "
+        "Sample/Noise channels export their step/draw pitch on the channel's own MIDI note.");
 
 
     // Preset menu
@@ -7327,6 +7467,23 @@ void DrumSequencerEditor::setupComponents()
     };
     refreshFollowButton();
 
+    // [2026-07-14 01:50] CPU / RAM readout (user design: stacked small, right of DRAG MIDI).
+    for (auto* l : { &lblCpu, &lblRam })
+    {
+        content.addAndMakeVisible(*l);
+        l->setFont(juce::Font(9.5f, juce::Font::bold));
+        l->setColour(juce::Label::textColourId, juce::Colour(0xff8fa0c0));
+        l->setJustificationType(juce::Justification::centredLeft);
+        l->setTooltip("Live resource readout.\n\n"
+                      "- CPU first number = how much of the AUDIO TIME BUDGET this plugin uses (the "
+                      "number that predicts crackles - near 100% = dropouts).\n"
+                      "- CPU second number = the whole machine, all apps, averaged across cores. A low "
+                      "total can still glitch if ONE core is pegged.\n"
+                      "- RAM = this process's memory. In a DAW that means BASAMAK + the DAW together "
+                      "(a plugin's own share can't be isolated); in the standalone it is just BASAMAK.");
+    }
+    lblCpu.setText("CPU --", juce::dontSendNotification);
+    lblRam.setText("RAM --", juce::dontSendNotification);
     content.addAndMakeVisible(btnTooltips);
     btnTooltips.setLookAndFeel(&tinyBtnLNF);
     btnTooltips.setClickingTogglesState(false);
@@ -8796,6 +8953,12 @@ void DrumSequencerEditor::setupComponents()
         return (gridIdx < params.size()) ? params[gridIdx].label : juce::String();
     };
     routePicker.onClose = [this] { routePicker.setVisible(false); };
+    routePicker.onLag = [this](float ms) {   // [2026-07-14 01:33] per-route LAG
+        if (ignoreKnobCallbacks) return;
+        auto& ch = proc.sequencer.channel(selectedChannel);
+        ch.slots[envTargetSlot()].mod[juce::jlimit(0, DrumChannel::MOD_ROUTES - 1, routePickRoute)].lagMs = ms;
+        ch.markDspDirty();
+    };
     // REMAP [2026-07-14]: the picker's remap row opens the curve overlay for the CURRENT route.
     content.addChildComponent(remapEd);
     routePicker.onRemap = [this] {
@@ -8806,7 +8969,7 @@ void DrumSequencerEditor::setupComponents()
             for (int k = 0; k < RemapEditor::N; ++k) cv[k] = (float) sl.mod[r].curve[k] / 255.0f;
             auto b = routePicker.getBounds();
             remapEd.setBounds(b.getX(), juce::jmax(0, b.getCentreY() - 130), juce::jmin(440, b.getWidth()), 260);
-            remapEd.openFor("REMAP  " + modFaders.routeSrcName(r) + "  >  " + modFaders.routeTgtName(r),
+            remapEd.openFor("MODULATION AMOUNT MAP   " + modFaders.routeSrcName(r) + "  >  " + modFaders.routeTgtName(r),
                             cv, sl.mod[r].curveOn != 0, DrumChannel::modSrcBipolar(sl.mod[r].src),
                             envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8));
         });
@@ -9507,11 +9670,10 @@ void DrumSequencerEditor::setupComponents()
     btnPlay.setTooltip("Start playback (used when DAW Sync is off, so the plugin runs on its own).");
     btnStop.setTooltip("Stop playback (used when DAW Sync is off).");
     comboPreset.setTooltip("Save or load a whole-kit preset: all channels, patterns and settings at once.");
-    dragMidi.setTooltip("Drag onto a DAW track to export the SELECTED channel's pitches as a MIDI clip.\n\n"
-                        "- Pitched slots (Oscillator/Modal/Karplus-Strong) export from their own Freq knob; "
-                        "CHORD/SCALE slots export their FULL voicing; both slots export together.\n"
-                        "- A pure Sample/Noise channel exports its step/draw pitch on the channel's own note.\n\n"
-                        "MIDI lands transposed? Check the slots' Freq knobs - they set the pitch 0-point.");
+    dragMidi.setTooltip("Drag onto a DAW track to export the SELECTED channel as a MIDI clip.\n\n"
+                        "- Notes carry their VELOCITY and length; rolls, swing and merged chains are kept.\n"
+                        "- Piano-roll channels export exactly as drawn (C4-based); step channels use each "
+                        "pitched slot's Base Freq as the 0-point; Chord/Scale slots export their full voicing.");
     patModeBtn.setTooltip("What happens after this pattern finishes: loop forever, stop after N loops, or jump to another pattern.");
 
     freqDisplay.setTooltip("Live spectrum (the frequencies of what's playing) + this slot's filter curve.\n\n"
@@ -10866,7 +11028,8 @@ void DrumSequencerEditor::openRoutePicker(int route)
     routePicker.accent = (si == 0) ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8);
     routePicker.engine = proc.sequencer.channel(selectedChannel).slots[si].engine;   // gates Warp/WavePos targets
     routePicker.remapOn = proc.sequencer.channel(selectedChannel).slots[si].mod[juce::jlimit(0, DrumChannel::MOD_ROUTES - 1, route)].curveOn != 0;
-    routePicker.openFor(modFaders.src[route], modFaders.tgt[route], modFaders.amt[route]);   // bounds set in layoutContent
+    routePicker.openFor(modFaders.src[route], modFaders.tgt[route], modFaders.amt[route],
+                        proc.sequencer.channel(selectedChannel).slots[si].mod[juce::jlimit(0, DrumChannel::MOD_ROUTES - 1, route)].lagMs);
     routePicker.toFront(false);
 }
 
@@ -11438,6 +11601,17 @@ void DrumSequencerEditor::timerCallback()
 
     // MIDI-in monitor: flash green + show the last CC whenever MIDI arrives.
     {
+        if (++sysStatTicks >= 30)   // [2026-07-14 01:50] ~2x/sec: CPU (plugin | machine) + RAM
+        {
+            sysStatTicks = 0;
+            const int plug = juce::roundToInt(proc.loadMeasurer.getLoadAsProportion() * 100.0);
+            const float sys = systemCpuPercent(), ram = processRamMB();
+            lblCpu.setText("CPU " + juce::String(juce::jlimit(0, 999, plug)) + "%"
+                           + (sys >= 0.0f ? " | " + juce::String(juce::roundToInt(sys)) + "%" : juce::String()),
+                           juce::dontSendNotification);
+            lblRam.setText(ram >= 0.0f ? "RAM " + juce::String(juce::roundToInt(ram)) + " MB" : juce::String("RAM --"),
+                           juce::dontSendNotification);
+        }
         uint32_t mc = proc.midiInCount.load(std::memory_order_relaxed);
         if (mc != lastMidiInSeen) { lastMidiInSeen = mc; midiFlash = 8; }
         int cn = proc.lastCcNum.load(std::memory_order_relaxed);
@@ -12002,7 +12176,9 @@ void DrumSequencerEditor::layoutContent()
     // Where the Channels/Patterns count boxes used to be: Tooltips toggle + the (global) Follow toggle.
     btnTooltips.setBounds(1188, 7, 74, 26);
     btnFollow.setBounds  (1270, 7, 74, 26);   // moved up from the pattern row (it's a GLOBAL setting)
-    dragMidi.setBounds    (W - 156, 7, 148, 26);   // wider - fills the space the old Keys toggle left
+    dragMidi.setBounds    (W - 156, 7, 84, 26);    // "DRAG MIDI" (shortened; the CPU/RAM readout sits right of it)
+    lblCpu.setVisible(true); lblCpu.setBounds(W - 68, 4, 62, 15);
+    lblRam.setVisible(true); lblRam.setBounds(W - 68, 20, 62, 15);
 
     // Pattern row: a window of the pattern buttons (16 visible; 24/32 scroll via patternBar).
     lblPatterns.setBounds(6, PAT_Y + 2, 60, 15);

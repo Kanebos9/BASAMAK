@@ -638,7 +638,7 @@ public:
         if (presetRect(1).contains(p)) return "SOFT: the effect arrives LATE - light source values do almost nothing (tame a hair-trigger aftertouch, make velocity gentler).";
         if (presetRect(2).contains(p)) return "HARD: the effect arrives EARLY - even light source values push the target far.";
         if (presetRect(3).contains(p)) return "S-CURVE: a smooth switch - quiet low zone, fast transition through the middle, settled top.";
-        return juce::String("Draw this route's TRANSFER CURVE (left-drag).\n\n")
+        return juce::String("MODULATION AMOUNT MAP: draw this route's transfer curve (left-drag).\n\n")
              + (bipolarSrc ? "- X = the source's full -1..+1 sweep (CENTRE = the source at rest).\n"
                            : "- X = the source's value from 0 (left) to full (right).\n")
              + "- Y = what actually reaches the target (bottom = nothing, top = full).\n"
@@ -662,9 +662,9 @@ private:
     bool closerHooked = false;
     int  lastI = -1;
     juce::Rectangle<float> closeRect()  const { return { (float) getWidth() - 24.0f, 4.0f, 20.0f, 16.0f }; }
-    juce::Rectangle<float> presetRect(int i) const
-    { return { 10.0f + (float) i * 62.0f, 22.0f, 58.0f, 16.0f }; }
-    juce::Rectangle<float> strip() const { return getLocalBounds().toFloat().reduced(10.0f).withTrimmedTop(44.0f).withTrimmedBottom(10.0f); }
+    juce::Rectangle<float> presetRect(int i) const   // [2026-07-14 01:20] 4x2 preset grid
+    { return { 10.0f + (float)(i % 4) * 62.0f, 22.0f + (float)(i / 4) * 19.0f, 58.0f, 16.0f }; }
+    juce::Rectangle<float> strip() const { return getLocalBounds().toFloat().reduced(10.0f).withTrimmedTop(62.0f).withTrimmedBottom(12.0f); }
     void applyPreset(int i);
     void drawAt(juce::Point<float> pos, bool connect);
     friend class DrumSequencerEditor;
@@ -681,8 +681,9 @@ class RoutePicker : public juce::Component,
 public:
     std::function<void(int src, int tgt)> onPicked;         // chosen source enum + target enum (live-apply)
     std::function<void(float amt)> onAmt;                   // route AMOUNT edited on the picker's own fader
-    std::function<void()> onRemap;                          // [2026-07-14] open the REMAP curve editor for this route
-    bool remapOn = false;                                   // drawn curve active (shown on the remap row)
+    std::function<void(float ms)>  onLag;                   // [2026-07-14 01:33] route LAG edited (ms; 0 = instant)
+    std::function<void()> onRemap;                          // [2026-07-14] open the MOD AMOUNT MAP editor for this route
+    bool remapOn = false;                                   // drawn map active (shown on the map row)
     std::function<void()> onAmtDragEnd;                     // amount fader released (auto-audition)
     std::function<void()> onClose;
     std::function<juce::String(int gridIdx)> gridKnobName;  // live engine-knob names for grid targets
@@ -690,7 +691,8 @@ public:
     int engine = -1;   // the slot's engine (set before openFor) - gates engine-specific targets (Warp = Osc only)
     RoutePicker();
     ~RoutePicker() override { juce::Desktop::getInstance().removeGlobalMouseListener(&closer); }
-    void openFor(int curSrc, int curTgt, float amt);        // (re)fill both lists, select current, become visible
+    void openFor(int curSrc, int curTgt, float amt, float lagMs = 0.0f);   // (re)fill both lists, select current, become visible
+    void setLagFromX(float x);                              // [2026-07-14 01:33] the LAG fader drag
     void visibilityChanged() override;
     void resized() override;
     void paint(juce::Graphics& g) override;
@@ -699,7 +701,7 @@ public:
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
 private:
-    bool amtDrag = false;
+    bool amtDrag = false, lagDrag = false;
     struct Col : public juce::ListBoxModel
     {
         RoutePicker& owner; bool isSrc;
@@ -717,9 +719,16 @@ private:
     juce::Label lblSrc, lblTgt;
     int curSrc = 0, curTgt = 0;
     float curAmt = 0.0f;                    // the route's amount (edited on the bottom fader)
-    juce::Rectangle<float> amtRect() const  // the horizontal AMOUNT fader (bottom, FULL width - user 2026-07-13)
+    float curLag = 0.0f;                    // the route's LAG in ms (0 = instant)
+    // [2026-07-14 01:33] bottom row = TWO half-width faders (user): LAG under the SOURCE column,
+    // AMOUNT under the TARGET column.
+    juce::Rectangle<float> lagRect() const
     { const float pad = 6.0f, h = 26.0f;
-      return { pad, (float) getHeight() - h - pad, (float) getWidth() - pad * 2.0f, h }; }
+      return { pad, (float) getHeight() - h - pad, (float) getWidth() * 0.5f - pad * 1.5f, h }; }
+    juce::Rectangle<float> amtRect() const
+    { const float pad = 6.0f, h = 26.0f;
+      return { (float) getWidth() * 0.5f + pad * 0.5f, (float) getHeight() - h - pad,
+               (float) getWidth() * 0.5f - pad * 1.5f, h }; }
     juce::Rectangle<float> remapRect() const   // [2026-07-14] the REMAP row (above the amount fader)
     { const float pad = 6.0f;
       return { pad, (float) getHeight() - 26.0f - pad - 24.0f, (float) getWidth() - pad * 2.0f, 20.0f }; }
@@ -768,8 +777,8 @@ public:
     juce::String getTooltip() override
     { return "12 modulation routes (this slot).\n\n"
              "- RIGHT-CLICK a fader: choose its SOURCE (left column) and TARGET (right column), set the "
-             "amount on the long fader, and DRAW a per-route REMAP curve on the row above it (a tiny "
-             "blue curve mark on a fader = remapped).\n"
+             "amount + LAG on the two faders, and DRAW a per-route MODULATION AMOUNT MAP on the row "
+             "above them (a tiny blue curve mark on a fader = mapped).\n"
              "- DRAG / click inside a fader: the amount - centre is 0, left negative, right positive "
              "(double-click = 0).\n"
              "- Yellow = slot 1, pink = slot 2. Per-voice on chords.\n"
@@ -2844,6 +2853,8 @@ private:
     LearnableKnob    knobMasterTilt  { "global_masterTilt",  proc.midiLearn };
     LearnableKnob    knobMasterSat   { "global_masterSat",   proc.midiLearn };
     juce::Label      lblRevDecay, lblMasterVol, lblMasterLimit, lblMasterGlue, lblMasterTilt, lblMasterSat;
+    juce::Label      lblCpu, lblRam;   // [2026-07-14 01:50] stacked CPU / RAM readout (right of DRAG MIDI)
+    int              sysStatTicks = 0;
     // MASTER = a narrow 3/5-width strip now: every master KNOB is shown as a VERTICAL drag-fader
     // (value inside, rotated; name in the Label below). These are VISUAL PROXIES over the hidden
     // knobs above - they reuse each knob's range/skew/format/default/MIDI, so no master logic changed.

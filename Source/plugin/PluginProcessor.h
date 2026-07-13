@@ -187,6 +187,7 @@ public:
     // for EVERY incoming message so the UI can tell whether MIDI reaches us at all.
     std::atomic<uint32_t> midiInCount { 0 };
     std::atomic<int> lastCcNum { -1 }, lastCcVal { -1 }, lastCcChan { -1 };
+    juce::AudioProcessLoadMeasurer loadMeasurer;                   // [2026-07-14 01:50] CPU readout: our share of the audio budget
     std::atomic<int> lastAtVal { 0 }, lastAtChan { 0 };            // [2026-07-14] aftertouch monitor
     std::atomic<juce::uint32> lastAtMs { 0 };                      // ...expires ~1.5 s after the last AT message
 
