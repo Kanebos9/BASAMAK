@@ -1,6 +1,20 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
+// ================================================================================================
+// FILE MAP [added 2026-07-13 22:20 - navigation aid; SEARCH for the quoted strings]. This file is
+// the plugin shell: MIDI in/out, the live keys engine, the master chain, state save/load.
+//   1. "MIDI-in monitor"        - per-message loop: monitor, MIDI-learn, MPE / AFTERTOUCH fan-out
+//                                 (pressure / slide / per-note pitch bend), note collection
+//   2. "handleKeyDown"          - the KEYS block: play/record, arp clock, split keyboard, takes
+//   3. "processBlock"           - sequencer render + sends -> reverb A/B + delay A/B
+//                                 ("processReverb" / "processDelay") -> Tilt/Sat/Glue/Limiter ->
+//                                 the master soft-clip (anti-gunshot; never remove)
+//   4. "routeCC"                - MIDI-learn dispatch incl. the ui_sel_* selected-scope targets
+//   5. "getStateInformation"    - whole-project persistence (patterns, takes, learn map)
+// Dated notes like [2026-07-13 21:20] mark the MPE additions.
+// ================================================================================================
+
 juce::AudioProcessor::BusesProperties DrumSequencerProcessor::makeBuses()
 {
     // Main stereo out + NUM_AUX_OUTS discrete stereo outs (default-disabled so standalone /

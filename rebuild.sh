@@ -20,14 +20,14 @@ rm -rf build
 cmake -B build -G Xcode -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" >/dev/null
 
 echo "==> Building VST3..."
-cmake --build build --config Release --target DrumSequencer_VST3 >/dev/null
+cmake --build build --config Release --target BASAMAK_VST3 >/dev/null
 
 echo "==> Building AU..."
-cmake --build build --config Release --target DrumSequencer_AU >/dev/null
+cmake --build build --config Release --target BASAMAK_AU >/dev/null
 
 echo "==> Building + installing Standalone to /Applications..."
-cmake --build build --config Release --target DrumSequencer_Standalone >/dev/null
-SA_APP=$(ls -dt build/DrumSequencer_artefacts/Release/Standalone/*.app 2>/dev/null | head -1)
+cmake --build build --config Release --target BASAMAK_Standalone >/dev/null
+SA_APP=$(ls -dt build/BASAMAK_artefacts/Release/Standalone/*.app 2>/dev/null | head -1)
 [ -n "$SA_APP" ] && cp -R "$SA_APP" "$APP_DIR/"
 
 echo "==> Done. Installed:"

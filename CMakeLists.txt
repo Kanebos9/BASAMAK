@@ -1,7 +1,7 @@
 # BASAMAK - a free, open-source drum & sample step-sequencer plugin (VST3 / AU / Standalone).
 # Copyright (C) 2026 Oguzhan Yazici. Licensed under the GNU AGPL v3 (see LICENSE).
 cmake_minimum_required(VERSION 3.22)
-project(DrumSequencer VERSION 1.3.9)
+project(BASAMAK VERSION 1.4.0)   # [2026-07-13 22:05] renamed from DrumSequencer (user); 1.4.0 = the audio-rate engine release
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -45,7 +45,7 @@ else()
     set(DAVULSEQ_COPY_AFTER_BUILD TRUE)
 endif()
 
-juce_add_plugin(DrumSequencer
+juce_add_plugin(BASAMAK
     COMPANY_NAME "OZ"
     VERSION ${PROJECT_VERSION}
     IS_SYNTH TRUE
@@ -61,11 +61,14 @@ juce_add_plugin(DrumSequencer
     COPY_PLUGIN_AFTER_BUILD ${DAVULSEQ_COPY_AFTER_BUILD}
     PLUGIN_MANUFACTURER_CODE OZ95
     PLUGIN_CODE Bsmk
+    # BUNDLE_ID pinned to the pre-rename value: hosts/macOS already know this identity, and the
+    # plugin's REAL identity (manufacturer/plugin codes above) never changes anyway.
+    BUNDLE_ID com.OZ.DrumSequencer
     FORMATS VST3 AU Standalone
     PRODUCT_NAME "${DAVULSEQ_PRODUCT_NAME}"
 )
 
-juce_generate_juce_header(DrumSequencer)
+juce_generate_juce_header(BASAMAK)
 
 # ---- Offline DSP regression tests (tests/run.sh builds + runs them all) ----
 # Console apps rendering the engine headlessly with Goertzel checks; OFF by default so normal
@@ -90,7 +93,7 @@ endif()
 
 
 
-target_sources(DrumSequencer PRIVATE
+target_sources(BASAMAK PRIVATE
     Source/plugin/PluginProcessor.cpp
     Source/plugin/FactoryContent.cpp
     Source/ui/PluginEditor.cpp
@@ -102,14 +105,14 @@ target_sources(DrumSequencer PRIVATE
 
 # Add each source folder to the include path so the plain #include "X.h"
 # lines keep resolving regardless of which subfolder a file lives in.
-target_include_directories(DrumSequencer PRIVATE
+target_include_directories(BASAMAK PRIVATE
     Source/dsp
     Source/midi
     Source/ui
     Source/plugin
 )
 
-target_compile_definitions(DrumSequencer PUBLIC
+target_compile_definitions(BASAMAK PUBLIC
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
@@ -117,7 +120,7 @@ target_compile_definitions(DrumSequencer PUBLIC
     BASAMAK_VERSION="${PROJECT_VERSION}"
 )
 
-target_link_libraries(DrumSequencer PRIVATE
+target_link_libraries(BASAMAK PRIVATE
     juce::juce_audio_utils
     juce::juce_audio_plugin_client
     juce::juce_dsp
@@ -135,17 +138,17 @@ PUBLIC
 set(ST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/soundtouch")
 if(EXISTS "${ST_DIR}/include/SoundTouch.h")
     file(GLOB ST_SRC "${ST_DIR}/source/SoundTouch/*.cpp")
-    target_sources(DrumSequencer PRIVATE ${ST_SRC})
-    target_include_directories(DrumSequencer PRIVATE "${ST_DIR}/include")
-    target_compile_definitions(DrumSequencer PUBLIC BASAMAK_HAVE_SOUNDTOUCH=1)
+    target_sources(BASAMAK PRIVATE ${ST_SRC})
+    target_include_directories(BASAMAK PRIVATE "${ST_DIR}/include")
+    target_compile_definitions(BASAMAK PUBLIC BASAMAK_HAVE_SOUNDTOUCH=1)
     message(STATUS "BASAMAK: SoundTouch (source) -> time-stretch ENABLED")
 else()
     find_path(ST_INC SoundTouch.h PATHS /opt/homebrew/include/soundtouch /usr/local/include/soundtouch)
     find_library(ST_LIB NAMES SoundTouch PATHS /opt/homebrew/lib /usr/local/lib)
     if(ST_INC AND ST_LIB)
-        target_include_directories(DrumSequencer PRIVATE "${ST_INC}")
-        target_link_libraries(DrumSequencer PRIVATE "${ST_LIB}")
-        target_compile_definitions(DrumSequencer PUBLIC BASAMAK_HAVE_SOUNDTOUCH=1)
+        target_include_directories(BASAMAK PRIVATE "${ST_INC}")
+        target_link_libraries(BASAMAK PRIVATE "${ST_LIB}")
+        target_compile_definitions(BASAMAK PUBLIC BASAMAK_HAVE_SOUNDTOUCH=1)
         message(STATUS "BASAMAK: SoundTouch (Homebrew: ${ST_LIB}) -> time-stretch ENABLED")
     else()
         message(STATUS "BASAMAK: SoundTouch NOT found -> time-stretch disabled")

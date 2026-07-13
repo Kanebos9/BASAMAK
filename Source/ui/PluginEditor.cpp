@@ -3,6 +3,23 @@
 #include "../plugin/UserPaths.h"
 #include <cstring>
 
+// ================================================================================================
+// FILE MAP [added 2026-07-13 22:20 - navigation aid; SEARCH for the quoted strings]. This file is
+// the whole editor: component classes first, then the DrumSequencerEditor implementation.
+//   1. Component classes (top ~half): "ADSRDisplay", "PitchEnvDisplay", "VoiceModDisplay",
+//      "FrequencyDisplay" (filters), "LfoDisplay" (MOD visual + Mod Env tab), "ModFaderMatrix" +
+//      "RoutePicker" (the 12-route matrix), "HarmonicEditor" (draw window), "WaveMorphDisplay",
+//      "SoundPickerPanel" + "TipList"/"TipCombo" (dropdowns), "StepGridComponent" lives in its
+//      OWN file (StepGridComponent.cpp shares PluginEditor.h)
+//   2. "kModSrcName"            - mod source/target display names (append-only enums)
+//   3. "setupComponents"        - every control's wiring + tooltips (one giant function)
+//   4. "layoutContent"          - every control's geometry (DESIGN_W canvas)
+//   5. "refreshDetailPanel"     - pushes channel state into the controls (change-only rules!)
+//   6. "timerCallback"          - 60 Hz UI tick: meters, playhead, mod rings, watchdogs
+//   7. "channelSoundHash"       - the modified-star hash (EVERY new sound field joins it)
+//   8. "writeChannelMix" / "readChannelMix" - .basamaksound (Sound Bank) persistence
+// ================================================================================================
+
 // Design height grows with the visible channel-row count. Keep these magic numbers in sync with the
 // layout constants GRID_TOP(84)/ROW_H(38) + the 24px gap + the 366px detail-panel block (see below).
 // At 8 channels this returns 778 == DESIGN_H.
@@ -5607,7 +5624,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
             { h = mix(h, f(sl.addH[fr][k])); h = mix(h, f(sl.addPh[fr][k])); }   // wavetable frames
         for (int sg = 0; sg < DrumChannel::ADD_FRAMES - 1; ++sg) h = mix(h, f(sl.addSeg[sg]));
         h = mix(h, sl.addLoop ? 1 : 0); h = mix(h, f(sl.addPos));
-        for (int d2 = 0; d2 < 4; ++d2) { h = mix(h, f(sl.lfoRate[d2])); h = mix(h, f(sl.lfoAmt[d2])); h = mix(h, f(sl.lfoSync[d2])); h = mix(h, sl.lfoSyncRate[d2]);
+        for (int d2 = 0; d2 < 4; ++d2) { h = mix(h, f(sl.lfoRate[d2])); h = mix(h, f(sl.lfoAmt[d2])); h = mix(h, f(sl.lfoSync[d2]));
                                          h = mix(h, sl.lfoShape[d2]); h = mix(h, sl.lfoFree[d2] ? 1 : 0); h = mix(h, sl.lfoLegato[d2] ? 1 : 0);
                                          if (sl.lfoShape[d2] == 7)   // the drawn LFO cycle IS the sound
                                              for (int k = 0; k < DrumChannel::Slot::LFO_CURVE_N; ++k)

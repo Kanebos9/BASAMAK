@@ -1,5 +1,26 @@
 #include "DrumChannel.h"
 #include <vector>
+
+// ================================================================================================
+// FILE MAP [added 2026-07-13 22:20 - navigation aid; SEARCH for the quoted strings, line numbers
+// drift]. This file is the whole per-channel DSP: sound engines, voices, modulation, persistence.
+//   1. "WAVETABLE BANK"            - the oscillator's named single-cycle shape tables
+//   2. "MODAL synthesis"           - struck-body material tables (bells/membranes)
+//   3. "Sound generation helpers"  - eqProcess biquad, envelopes (ahdsEnv/keyAdsr live in the .h),
+//                                    KS stiffness chain, noise, pitch detect
+//   4. "DrumChannel implementation" - lifecycle: prepareToPlay, trigger(), keyDown/keyUp (keys +
+//                                    MPE expression), chokes, glide
+//   5. "SAMPLE FILE CACHE"         - shared decoded-sample store (resampled to host rate)
+//   6. "MOD MATRIX (DSP)"          - computeModSources / applyModMatrix / applyHotBlock /
+//                                    modGridKnob. HOT targets are per-sample (see 8.)
+//   7. #include "Adaa.h" / "SincTable.h" - anti-aliased shapers + sample interpolation (own files)
+//   8. "renderInto"                - THE render: per-block bakeSlot config, the voice loop, the
+//                                    PER-SAMPLE audio-rate mod eval ("AUDIO-RATE MODULATION"),
+//                                    engine switch, filters, FX inserts, CHANNEL FX, sends
+//   9. "driveSample"               - the plain (legacy channel-stage) drive shapers
+//  10. "writeSlots" / "readSlots" / "writeChannel" / "readChannel" - persistence + migrations
+// Dated notes like [2026-07-13 19:57] mark everything added since the audio-rate engine batch.
+// ================================================================================================
 #if BASAMAK_HAVE_SOUNDTOUCH
  #include <SoundTouch.h>
 #endif
@@ -182,43 +203,7 @@ static inline void designStiffChain(float st, double baseF, double sr,
     }
 }
 
-// ================================================================================================
-// SINC SAMPLE INTERPOLATION [2026-07-13 20:45] - 8-tap Kaiser-windowed sinc, 2048-phase polyphase
-// table (the HQ upgrade over the old 4-point Hermite: flatter passband, interpolation images
-// ~40 dB lower on pitched / varispeed playback). Properties:
-//   - EXACT passthrough at integer read positions (sinc(k) = 0 for k != 0) - unity-speed playback
-//     of an untrimmed sample is bit-transparent, like before.
-//   - Each phase row is normalised to sum EXACTLY 1 (no DC / level ripple across phases).
-//   - Table is built once at plugin load (file-static ctor; ~64 KB), never on the audio thread.
-// ================================================================================================
-struct SincTable
-{
-    static constexpr int TAPS = 8, HALF = 4, PHASES = 2048;
-    float t[PHASES + 1][TAPS];                 // +1 guard row = fr exactly 1.0
-    SincTable()
-    {
-        auto besselI0 = [](double x) { double s = 1.0, term = 1.0; const double h = 0.5 * x;
-                                       for (int k = 1; k < 64; ++k) { term *= (h / k) * (h / k); s += term;
-                                                                      if (term < 1.0e-12 * s) break; } return s; };
-        const double beta = 8.0, i0b = besselI0(beta);
-        for (int p = 0; p <= PHASES; ++p)
-        {
-            const double fr = (double) p / (double) PHASES;
-            double sum = 0.0;
-            for (int j = 0; j < TAPS; ++j)
-            {
-                const double x = (double)(j - (HALF - 1)) - fr;              // tap offsets -3..+4
-                const double s = x == 0.0 ? 1.0 : std::sin(juce::MathConstants<double>::pi * x)
-                                                  / (juce::MathConstants<double>::pi * x);
-                const double r = x / (double) HALF;                          // window argument -1..1
-                const double w = std::abs(r) <= 1.0 ? besselI0(beta * std::sqrt(1.0 - r * r)) / i0b : 0.0;
-                t[p][j] = (float)(s * w); sum += s * w;
-            }
-            if (sum > 1.0e-9) for (int j = 0; j < TAPS; ++j) t[p][j] = (float)((double) t[p][j] / sum);
-        }
-    }
-};
-static const SincTable gSincTable;
+#include "SincTable.h"   // [2026-07-13 22:10] polyphase sinc interpolation moved to its own module
 
 //==============================================================================
 // Sound generation helpers
@@ -788,7 +773,6 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
             st.setProperty("lfR" + juce::String(d2), s.lfoRate[d2], nullptr);
             st.setProperty("lfA" + juce::String(d2), s.lfoAmt[d2], nullptr);
             st.setProperty("lfS" + juce::String(d2), s.lfoSync[d2], nullptr);   // tempo sync base (0 = off)
-            st.setProperty("lfSR" + juce::String(d2), s.lfoSyncRate[d2], nullptr);   // sync rate multiplier index
             st.setProperty("lfSh" + juce::String(d2), s.lfoShape[d2], nullptr);  // wave shape (0 sine .. 7 custom)
             st.setProperty("lfFr" + juce::String(d2), s.lfoFree[d2], nullptr);   // free-run (timeline-anchored)
             st.setProperty("lfLg" + juce::String(d2), s.lfoLegato[d2], nullptr); // legato retrig
@@ -967,7 +951,6 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
             s.lfoRate[d2] = (float)st.getProperty("lfR" + juce::String(d2), d.lfoRate[d2]);
             s.lfoAmt[d2]  = (float)st.getProperty("lfA" + juce::String(d2), d.lfoAmt[d2]);
             s.lfoSync[d2] = (float)st.getProperty("lfS" + juce::String(d2), d.lfoSync[d2]);
-            s.lfoSyncRate[d2] = (int)st.getProperty("lfSR" + juce::String(d2), d.lfoSyncRate[d2]);
             s.lfoShape[d2] = juce::jlimit(0, 7, (int) st.getProperty("lfSh" + juce::String(d2), d.lfoShape[d2]));
             s.lfoFree[d2]  = (bool) st.getProperty("lfFr" + juce::String(d2), d.lfoFree[d2]);
             s.lfoLegato[d2] = (bool) st.getProperty("lfLg" + juce::String(d2), d.lfoLegato[d2]);
@@ -2000,125 +1983,7 @@ void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals, SlotVoice* lat
     tmp.release = juce::jlimit(0.0f, 4.0f, tmp.release + latch->envModOfs[3] * 2.0f);
 }
 
-// ================================================================================================
-// ADAA - ANTIDERIVATIVE ANTI-ALIASING [2026-07-13 20:20]
-// First-order ADAA on every memoryless waveshaper (the drive types + the oscillator WARP fold):
-//   y = (F(u) - F(u_prev)) / (u - u_prev),  F = the shaper's closed-form antiderivative,
-// which integrates out the alias energy a naked nonlinearity sprays past Nyquist. This is the
-// modern (2026) replacement for brute-force 4x-8x oversampling of shaper stages: one float of
-// state per stream, no extra latency, no resampling filters. Falls back to f(midpoint) when the
-// input step is tiny. BITCRUSH is deliberately excluded - aliasing IS its sound. The LEGACY
-// channel-level drive stage (old projects) keeps the plain driveSample() path.
-// ================================================================================================
-static constexpr float kAdaaUnprimed = 1.0e9f;
-static inline float lnCoshF(float x)
-{ const float ax = std::abs(x); return ax > 12.0f ? ax - 0.6931472f : std::log(std::cosh(ax)); }
-// ADAA'd tanh core (shared by SoftClip / Tube / the Bass Amp stages).
-static inline float adaaTanh(float u, float& u1)
-{
-    if (u1 >= kAdaaUnprimed * 0.5f) { u1 = u; return std::tanh(u); }
-    const float d = u - u1;
-    const float y = std::abs(d) > 1.0e-4f ? (lnCoshF(u) - lnCoshF(u1)) / d : std::tanh(0.5f * (u + u1));
-    u1 = u; return y;
-}
-// Ideal periodic triangle fold (period 4, unity slope) + its primitive - the Foldback shaper.
-// (The old loop capped at 4 reflections; the periodic form IS the proper wavefolder - at extreme
-// drive the tone is slightly more correct than before, disclosed.)
-static inline float triFold(float v)
-{ float m = std::fmod(v - 1.0f, 4.0f); if (m < 0.0f) m += 4.0f; return std::abs(m - 2.0f) - 1.0f; }
-static inline float triFoldI(float v)   // primitive of the zero-mean triangle = itself periodic
-{ float m = std::fmod(v - 1.0f, 4.0f); if (m < 0.0f) m += 4.0f;
-  return m <= 2.0f ? m - 0.5f * m * m : 0.5f * m * m - 3.0f * m + 4.0f; }
-// The FUZZ transfer (0.6*t + 0.8*|t| - 0.24, t = tanh(1.5u), clamped at +1 above u0) + primitive.
-static inline float fuzzF(float u)
-{ const float t = std::tanh(1.5f * u);
-  return juce::jlimit(-1.0f, 1.0f, t * 0.6f + (std::abs(t) - 0.3f) * 0.8f); }
-static inline float fuzzFI(float u)
-{
-    constexpr float u0 = 0.93445f, F0 = 0.49200f;   // clamp knee (f(u0) = 1) + primitive there
-    if (u > u0) return F0 + (u - u0);
-    const float lc = lnCoshF(1.5f * u);   // (1/k)*lnCosh(ku) terms with k = 1.5 folded into the factors
-    return lc * (0.4f + 0.533333f * (u >= 0.0f ? 1.0f : -1.0f)) - 0.24f * u;
-}
-// The oscillator WARP fold: f = (1-w)x + w*sin(qx), q = (1+4w)*pi/2; F = (1-w)x^2/2 - (w/q)cos(qx).
-// F depends on w EXPLICITLY (unlike the drive shapers, where the amount only scales the input), so
-// with per-sample-modulated w both endpoints MUST use one midpoint w - mixing epochs puts a
-// parameter error over a tiny denominator (measured: a 0.84 spike on a swept warp; test [16]).
-static inline float warpFoldAdaa(float x, float w, float& x1, float& w1)
-{
-    if (x1 >= kAdaaUnprimed * 0.5f)
-    { x1 = x; w1 = w; const float q0 = (1.0f + w * 4.0f) * 1.5707963f;
-      return x + w * (std::sin(x * q0) - x); }
-    const float wm = 0.5f * (w + w1);                       // ONE parameter epoch for both endpoints
-    const float q  = (1.0f + wm * 4.0f) * 1.5707963f;
-    const float d  = x - x1; float y;
-    if (std::abs(d) > 1.0e-4f)
-    { auto F = [&](float v) { return 0.5f * (1.0f - wm) * v * v - (wm / q) * std::cos(v * q); };
-      y = (F(x) - F(x1)) / d; }
-    else y = 0.5f * (x + x1) + wm * (std::sin(0.5f * (x + x1) * q) - 0.5f * (x + x1));
-    x1 = x; w1 = w; return y;
-}
-// ADAA drive router: same gain taper / makeup / voicings as driveSample, aliasing integrated out.
-static float driveAdaa(float x, int driveType, float driveAmount, float& u1)
-{
-    using DC = DrumChannel;
-    if (driveType == DC::DriveExciter)
-    {   // ADAA on the synthesized-harmonics part only (the dry passes untouched, as designed).
-        auto h = [](float v) { const float t = std::tanh(v * 1.4f); return 1.15f * t * t + 0.75f * t * t * t; };
-        if (u1 >= kAdaaUnprimed * 0.5f) { u1 = x; return x + driveAmount * h(x); }
-        const float d = x - u1; float hv;
-        if (std::abs(d) > 1.0e-4f)
-        { auto H = [](float v) { const float k = 1.4f, t = std::tanh(k * v);
-                                 return 1.15f * (v - t / k) + (0.75f / k) * (lnCoshF(k * v) + 0.5f * (1.0f - t * t)); };
-          hv = (H(x) - H(u1)) / d; }
-        else hv = h(0.5f * (x + u1));
-        u1 = x; return x + driveAmount * hv;
-    }
-    const float a  = juce::jlimit(0.0f, 1.0f, driveAmount);
-    const float g  = 1.0f + a * a * 24.0f;
-    const float u  = x * g;
-    const float mk = 1.0f / (1.0f + (g - 1.0f) * 0.125f);
-    float y;
-    switch (driveType)
-    {
-        case DC::SoftClip: y = adaaTanh(u, u1); break;
-        case DC::Tube:
-        {   constexpr float b = 0.35f, tb = 0.33638f;   // tanh(0.35)
-            if (u1 >= kAdaaUnprimed * 0.5f) { u1 = u; y = 1.2f * (std::tanh(u + b) - tb); break; }
-            const float d = u - u1;
-            y = std::abs(d) > 1.0e-4f
-                ? 1.2f * ((lnCoshF(u + b) - lnCoshF(u1 + b)) / d - tb)
-                : 1.2f * (std::tanh(0.5f * (u + u1) + b) - tb);
-            u1 = u; break;
-        }
-        case DC::HardClip:
-        {
-            auto F = [](float v) { const float av = std::abs(v); return av <= 1.0f ? 0.5f * v * v : av - 0.5f; };
-            if (u1 >= kAdaaUnprimed * 0.5f) { u1 = u; y = juce::jlimit(-1.0f, 1.0f, u); break; }
-            const float d = u - u1;
-            y = std::abs(d) > 1.0e-4f ? (F(u) - F(u1)) / d
-                                      : juce::jlimit(-1.0f, 1.0f, 0.5f * (u + u1));
-            u1 = u; break;
-        }
-        case DC::Foldback:
-        {
-            if (u1 >= kAdaaUnprimed * 0.5f) { u1 = u; y = triFold(0.6f * u); break; }
-            const float d = u - u1;
-            y = std::abs(d) > 1.0e-4f ? (triFoldI(0.6f * u) - triFoldI(0.6f * u1)) / (0.6f * d)
-                                      : triFold(0.6f * 0.5f * (u + u1));
-            u1 = u; break;
-        }
-        case DC::Fuzz:
-        {
-            if (u1 >= kAdaaUnprimed * 0.5f) { u1 = u; y = fuzzF(u); break; }
-            const float d = u - u1;
-            y = std::abs(d) > 1.0e-4f ? (fuzzFI(u) - fuzzFI(u1)) / d : fuzzF(0.5f * (u + u1));
-            u1 = u; break;
-        }
-        default: u1 = u; y = u; break;   // (Bitcrush is routed to driveSample by the caller)
-    }
-    return y * mk;
-}
+#include "Adaa.h"   // [2026-07-13 22:10] ADAA shapers moved to their own module (user: group the code better)
 
 // [2026-07-13 19:57] BLOCK snapshot of the HOT (audio-rate) targets, applied onto the DISPLAY copy
 // only (the sc[] bake + the UI mod rings). The real render applies these per sample; without this the
@@ -2304,7 +2169,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         for (int d2 = 0; d2 < 4; ++d2) {   // per-slot LFOs (free-Hz / tempo-synced / KEY-tracked)
             // lfoSync: 0 = OFF (free Hz), > 0 = cycles per bar, -1 = LOCK TO GRID (draw = Grid 1/N,
             // else step count), -2 = KEY (rate follows the played PITCH x ratio; lfoRate = the ratio -
-            // the audio-rate FM mode). NOTE: lfoSyncRate is a DORMANT persisted field - never apply it.
+            // the audio-rate FM mode).
             c.lfoKeyRatio[d2] = 0.0f;
             float cpb = sl.lfoSync[d2];
             if (cpb <= -1.5f)                                   // KEY mode: per-voice, per-sample rate

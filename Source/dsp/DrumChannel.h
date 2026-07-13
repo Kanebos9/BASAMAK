@@ -622,11 +622,10 @@ public:
         // view. The curve IS what plays (all-zero = no modulation). Persisted "lfCv0..3".
         static constexpr int LFO_CURVE_N = 64;
         float lfoCurve[4][LFO_CURVE_N] = {};
-        // TEMPO SYNC per LFO (arp-style TWO faders): lfoSync = the BASE cycles-per-bar (0 = OFF/free Hz,
-        // -1 = LOCK TO GRID), lfoSyncRate = a RATE-multiplier index into DrumChannel::arpRateMul (x0.25..x3,
-        // default 4 = x1). Effective cycles/bar = base x rateMul, then Hz from the host bar length.
+        // TEMPO SYNC per LFO: lfoSync = cycles-per-bar (0 = OFF/free Hz, -1 = LOCK TO GRID,
+        // -2 = KEY: rate follows the played pitch x lfoRate-as-ratio). Hz from the host bar length.
+        // (The dormant lfoSyncRate rate-multiplier field was DELETED 2026-07-13 22:15 - declutter.)
         float lfoSync[4]     = { 0.0f, 0.0f, 0.0f, 0.0f };
-        int   lfoSyncRate[4] = { 4, 4, 4, 4 };   // index into arpRateMul (4 = x1) - DORMANT, never applied
         // -- legacy unified-engine (SrcSynth, retired) section extras, still read by nothing but
         //    kept as dormant fields so old-project persistence/migration stays graceful:
         //   oscFold = wavefold amount   oscLevel = osc section level   noiseLevel = noise section level
@@ -905,7 +904,6 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     // disclosed) so subs stay dry. reverbSend/delaySend fields below (legacy position) are THE
     // canonical sends now - they have UI faders in the CHANNEL FX box.
     int8_t revBus = 0, delBus = 0;   // which shared bus this channel feeds (0 = A, 1 = B; channel-wide like routing)
-    uint32_t humRng   = 0x9e3779b9u;   // per-channel RNG advanced each trigger (per-hit humanize variation)
     //   keysMinVel / keysMaxVel = the FLOOR + CEILING for keyboard velocity: a played key's velocity is
     //     remapped [0..1] -> [keysMinVel..keysMaxVel], so soft playing still sounds and loud is tamed.
     //     Per pattern/channel, keys only. Defaults 0/1 = raw velocity.

@@ -51,7 +51,7 @@ jobs:
         if: matrix.name != 'Windows'
         shell: bash
         run: |
-          VER=$(grep -m1 'project(DrumSequencer VERSION' CMakeLists.txt | sed -E 's/.*VERSION ([0-9.]+).*/\1/')
+          VER=$(grep -m1 'project(BASAMAK VERSION' CMakeLists.txt | sed -E 's/.*VERSION ([0-9.]+).*/\1/')
           OUT="BASAMAK-$VER-${{ matrix.name }}"   # version in the FILE name (was BASAMAK-<os>.zip = confusing across versions)
           mkdir -p "$OUT"
           find build -name "BASAMAK.vst3"      -maxdepth 8 -exec cp -R {} "$OUT/" \;
@@ -75,7 +75,7 @@ jobs:
         if: matrix.name == 'Windows'
         shell: pwsh
         run: |
-          $ver = (Select-String -Path CMakeLists.txt -Pattern 'project\(DrumSequencer VERSION ([0-9.]+)').Matches[0].Groups[1].Value
+          $ver = (Select-String -Path CMakeLists.txt -Pattern 'project\(BASAMAK VERSION ([0-9.]+)').Matches[0].Groups[1].Value
           $out = "BASAMAK-$ver-Windows"
           New-Item -ItemType Directory -Force $out | Out-Null
           $vst3 = Get-ChildItem -Recurse -Directory build -Filter BASAMAK.vst3 | Select-Object -First 1
