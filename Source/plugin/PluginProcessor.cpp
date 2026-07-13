@@ -1674,6 +1674,10 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
     chState.setProperty("keys2Dn",  ch.keysSlot2Down,  nullptr);   // KEYS slot-2 transpose (per pattern/channel)
     chState.setProperty("humanize", ch.humanizeAmt,    nullptr);   // HUMANIZE: between-slot timing/velocity jitter
     chState.setProperty("strum",    ch.strumAmt,       nullptr);   // STRUM: chord/scale note time-spread
+    chState.setProperty("chFxCho", ch.chChorus,  nullptr);   // CHANNEL FX (both slots combined)
+    chState.setProperty("chFxFlg", ch.chFlanger, nullptr);
+    chState.setProperty("chFxPhs", ch.chPhaser,  nullptr);
+    chState.setProperty("chFxCmp", ch.chComp,    nullptr);
     chState.setProperty("keysMinVel", ch.keysMinVel,   nullptr);   // KEYS: minimum played velocity floor
     chState.setProperty("keysMaxVel", ch.keysMaxVel,   nullptr);   // KEYS: maximum played velocity ceiling
     chState.setProperty("keysGlide",  ch.keysGlide,    nullptr);   // KEYS: mono legato glide (portamento) time
@@ -1840,6 +1844,10 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
     ch.keysSlot2Down  = juce::jlimit(-24, 24, (int) child.getProperty("keys2Dn", 0));   // KEYS slot-2 transpose (per channel; +down/-up)
     ch.humanizeAmt = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("humanize", 0.0f));   // HUMANIZE
     ch.strumAmt    = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("strum",    0.0f));   // STRUM
+    ch.chChorus  = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("chFxCho", 0.0f));   // CHANNEL FX (readSlots
+    ch.chFlanger = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("chFxFlg", 0.0f));   // migrates old per-slot
+    ch.chPhaser  = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("chFxPhs", 0.0f));   // chorus/comp onto these
+    ch.chComp    = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("chFxCmp", 0.0f));   // afterwards)
     ch.keysMinVel  = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("keysMinVel", 0.0f)); // KEYS min velocity
     ch.keysMaxVel  = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("keysMaxVel", 1.0f)); // KEYS max velocity
     ch.keysGlide   = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("keysGlide",  0.0f)); // KEYS mono glide

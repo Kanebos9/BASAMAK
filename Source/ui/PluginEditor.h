@@ -813,9 +813,13 @@ public:
         if (vertical_) g.fillRoundedRectangle(r.withTop(r.getBottom() - juce::jmax(5.0f, val_ * r.getHeight())), 4.0f);
         else           g.fillRoundedRectangle(r.withWidth(juce::jmax(5.0f, val_ * r.getWidth())), 4.0f);
         g.setColour(accent_.withAlpha(0.55f)); g.drawRoundedRectangle(r, 4.0f, 1.0f);
-        if (modRing_ >= 0.0f && ! vertical_)   // live modulated position = a cyan marker line
-        { const float mx = r.getX() + juce::jlimit(0.0f, 1.0f, modRing_) * r.getWidth();
-          g.setColour(juce::Colour(0xff35c0ff)); g.fillRect(mx - 1.0f, r.getY() + 1.0f, 2.0f, r.getHeight() - 2.0f); }
+        if (modRing_ >= 0.0f)   // live modulated position = a cyan marker line (across the fader)
+        { const float p = juce::jlimit(0.0f, 1.0f, modRing_);
+          g.setColour(juce::Colour(0xff35c0ff));
+          if (vertical_) { const float my = r.getBottom() - p * r.getHeight();
+                           g.fillRect(r.getX() + 1.0f, my - 1.0f, r.getWidth() - 2.0f, 2.0f); }
+          else           { const float mx = r.getX() + p * r.getWidth();
+                           g.fillRect(mx - 1.0f, r.getY() + 1.0f, 2.0f, r.getHeight() - 2.0f); } }
         g.setColour(juce::Colour(0xffeaf0fa)); g.setFont(juce::Font(11.5f, juce::Font::bold));
         juce::String t = name_.isEmpty() ? (format ? format(val_) : juce::String())   // value-only (name in a Label below)
                                          : (format ? name_ + "  " + format(val_) : name_);
@@ -2074,6 +2078,11 @@ public:
     // Fixed design WIDTH; the design HEIGHT grows with the number of visible channel rows
     // (contentHeightPx, recomputed by setVisibleChannels). DESIGN_H is the 8-channel default.
     static constexpr int DESIGN_W = 1510;   // widened to fit the Keys toggle next to Drag MIDI
+    // FX column split (relative to colTop, colH = 338): the per-slot FX box on top, the CHANNEL FX box
+    // (Chorus/Flanger/Phaser/Comp - whole instrument) under it. Used by layoutContent + paintContent.
+    static constexpr int FX_BOX_H  = 222;   // per-slot FX box height
+    static constexpr int CHFX_TOP  = 228;   // CHANNEL FX header top (below the FX box)
+    static constexpr int CHFX_BOX_H = 110;  // CHANNEL FX box height (228 + 110 = 338 = colH)
     static constexpr int DESIGN_H = 778;   // detail panel ends at the content (no dead bottom band)
 
     // How many channel rows the grid shows (4/8/12/16). The engine always has NUM_CHANNELS;
@@ -2401,14 +2410,15 @@ private:
     // channel-level fields with no UI = "assigned but nothing moves".
     LearnableKnob knobReverb  { "ui_sel_fxRev",   proc.midiLearn };
     LearnableKnob knobDelay   { "ui_sel_fxDel",   proc.midiLearn };
-    LearnableKnob knobChMix   { "ui_sel_fxCho",   proc.midiLearn };   // CHORUS - one macro knob (rate/depth = effect constants)
     LearnableKnob knobTone    { "ui_sel_fxTone",  proc.midiLearn };   // per-slot TONE tilt (dark..bright)
     LearnableKnob knobPunch   { "ui_sel_fxPunch", proc.midiLearn };   // per-slot PUNCH transient shaper
-    LearnableKnob knobComp    { "ui_sel_fxComp",  proc.midiLearn };   // per-slot one-knob COMPRESSOR
-    LearnableKnob knobFlanger { "ui_sel_fxFlanger", proc.midiLearn };   // per-slot bus FLANGER
-    LearnableKnob knobPhaser  { "ui_sel_fxPhaser",  proc.midiLearn };   // per-slot bus PHASER
     LearnableKnob knobRing    { "ui_sel_fxRing",    proc.midiLearn };   // per-slot RING modulator
-    juce::Label   lblChMix, lblTone, lblPunch, lblComp, lblFlanger, lblPhaser, lblRing;
+    // ---- CHANNEL FX box: Chorus / Flanger / Phaser / Comp act on the WHOLE channel (both slots
+    //      combined), so they do NOT follow the slot selector. Vertical faders (MASTER style), one row.
+    juce::Label   hdrChannelFx;
+    SlotDragFader chFxVF[4];                       // 0 Chorus, 1 Flanger, 2 Phaser, 3 Comp
+    juce::Label   lblChFx[4];
+    juce::Label   lblTone, lblPunch, lblRing;
     // REVERB MODE: clicking the "REVERB" header cycles Room -> Hall -> Plate -> Shimmer (whole
     // preset, like the other master flavour controls). A tiny MouseListener makes the Label clickable.
     struct HdrClick : juce::MouseListener

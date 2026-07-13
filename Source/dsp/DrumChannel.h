@@ -373,9 +373,11 @@ public:
                   MSRandom, MSModEnv, MSModLfo, MSStepModA, MSStepModB, MSModWheel, MS_COUNT };
     // TARGETS (order persisted - APPEND-ONLY). 0..MT_GRID_BASE-1 = fixed targets; MT_GRID_BASE+i =
     // the engine's own knob i (0..7) via slotParamsFor - the dropdown shows its live name.
+    // MTChChorus/MTChFlanger/MTChPhaser/MTChComp = the CHANNEL FX (whole-instrument); applied at
+    // channel level (channelMod accumulation), NOT on the slot copy in applyModMatrix.
     enum ModTgt { MTOff = 0, MTFilt1Cut, MTFilt1Res, MTFilt2Cut, MTFilt2Res, MTDrive, MTRevSend,
-                  MTDelSend, MTChorus, MTTone, MTPunch, MTComp, MTAtk, MTDec, MTSus, MTRel, MTPitch,
-                  MTWavePos, MTDetune, MTVibrato, MTWidth, MTDrift, MTVol, MTWarp, MTFlanger, MTPhaser, MTRing, MT_GRID_BASE };
+                  MTDelSend, MTChChorus, MTTone, MTPunch, MTChComp, MTAtk, MTDec, MTSus, MTRel, MTPitch,
+                  MTWavePos, MTDetune, MTVibrato, MTWidth, MTDrift, MTVol, MTWarp, MTChFlanger, MTChPhaser, MTRing, MT_GRID_BASE };
     static constexpr int MOD_TGT_GRID = 8;   // grid knobs MT_GRID_BASE .. MT_GRID_BASE+7
     static constexpr int MT_COUNT = MT_GRID_BASE + MOD_TGT_GRID;
     // (GridKnob + the mod-matrix DSP helpers are declared after the Slot struct, below.)
@@ -556,12 +558,10 @@ public:
         //    SEND amount into the shared reverb/delay engines (character set in the FX box). --
         int   fxDriveType = 0;                  // DrumChannel::DriveType
         float fxDrive = 0.0f, fxReverbSend = 0.0f, fxDelaySend = 0.0f;
-        // -- 3 one-knob per-slot FX (v1.3.5; all 0 = bypass = bit-identical) --
+        // -- per-slot one-knob tone FX (v1.3.5; all 0 = bypass = bit-identical). Chorus/Flanger/Phaser/
+        //    Comp are NO LONGER per-slot - they moved to CHANNEL FX (see DrumChannel::chChorus...). --
         float fxTone  = 0.0f;                   // tilt EQ -1 dark .. +1 bright (~800 Hz pivot, +/-6 dB)
         float fxPunch = 0.0f;                   // transient shaper -1 soften .. +1 punch (per hit)
-        float fxComp  = 0.0f;                   // one-knob compressor 0..1 (squash + makeup, per slot)
-        float fxFlanger = 0.0f;                 // per-slot bus FLANGER 0..1 (swept short delay + feedback; 0 = bypass = bit-identical)
-        float fxPhaser  = 0.0f;                 // per-slot bus PHASER 0..1 (swept allpass notches + feedback; 0 = bypass)
         float fxRing    = 0.0f;                 // ring modulator 0..1 (dry -> ring-modulated, ~200 Hz carrier; per voice)
         // -- ADDITIVE WAVETABLE (Wave = "Custom"): FOUR user-DRAWN harmonic frames (A/B/C/D), each
         //    baked to a table; addPos (0..1) scans across them (0 = A, 1 = D, linear crossfade of
@@ -643,11 +643,7 @@ public:
         int   filterType2   = FilterOff;
         float filterCutoff2 = 2500.0f, filterReso2 = 0.707f, filterEnvAmt2 = 0.0f;
         // === PER-SLOT FILTER (end) ===
-        // === PER-SLOT CHORUS (insert, after the filter/EQ) - lush multi-voice stereo widener.
-        //     ONE macro control (user): mix only. Rate/depth are EFFECT CONSTANTS in the DSP (like
-        //     the reverb's diffusion); the retired chRt/chDp file keys are ignored on load. ===
-        float chorusMix = 0.0f;           // 0 = OFF (dry, bit-identical) .. 1 = full wet
-        // === PER-SLOT CHORUS (end) ===
+        // (Chorus moved to CHANNEL FX - see DrumChannel::chChorus.)
         // === MOD MATRIX (begin) - 6 routes + two matrix-created sources (Mod Env / Mod LFO).
         //     amt 0 (default) on every route = bit-identical (the render path is unchanged). ===
         struct ModRoute { int8_t src = 0; int8_t tgt = 0; float amt = 0.0f; };   // amt bipolar -1..1
@@ -695,22 +691,26 @@ private: struct Voice; public:   // forward decl (defined privately below) so th
     float chDrvLp[2] = {}, chDrvDcX[2] = {}, chDrvDcY[2] = {};   // channel drive post-smoothing + Fuzz DC blocker (legacy multi-slot drive stage)
     // PER-SLOT CHORUS runtime: a stereo delay line + 3 LFO phases per slot (lazy-sized in renderInto);
     // the insert runs on the slot's summed output AFTER the voice loop, so it never touches the other slot.
-    std::vector<float> chorusDL[NUM_SLOTS], chorusDR[NUM_SLOTS];
-    int    chorusW[NUM_SLOTS]  = {};
-    double chorusPh[NUM_SLOTS] = {};
-    // PER-SLOT FLANGER + PHASER runtime (same bus-insert model as chorus; lazy state in renderInto).
-    std::vector<float> flangDL[NUM_SLOTS], flangDR[NUM_SLOTS];   // flanger delay lines
-    int    flangW[NUM_SLOTS]  = {};
-    double flangPh[NUM_SLOTS] = {};
-    float  phZL[NUM_SLOTS][6] = {}, phZR[NUM_SLOTS][6] = {};     // phaser allpass states (6 stages, stereo)
-    float  phFbL[NUM_SLOTS] = {}, phFbR[NUM_SLOTS] = {};         // phaser feedback
-    double phPh[NUM_SLOTS] = {};
+    // CHANNEL FX runtime (v1.3.9: Chorus/Flanger/Phaser/Comp are per-CHANNEL now - one instance on the
+    // whole channel's summed output, after both slots mix. Base amounts chChorus/... below; these are
+    // the single delay lines / allpass / comp state; chFxMod = the per-block modulation offset).
+    std::vector<float> chChorusDL, chChorusDR;   // channel chorus delay line
+    int    chChorusW  = 0;
+    double chChorusPh = 0.0;
+    std::vector<float> chFlangDL, chFlangDR;     // channel flanger delay line
+    int    chFlangW  = 0;
+    double chFlangPh = 0.0;
+    float  chPhZL[6] = {}, chPhZR[6] = {};       // channel phaser allpass states (6 stages, stereo)
+    float  chPhFbL = 0.0f, chPhFbR = 0.0f;
+    double chPhPh = 0.0;
+    float  chCompEnv = 0.0f;                     // channel compressor envelope
+    float  chFxMod[4] = {};                      // per-block modulation offset (chorus/flanger/phaser/comp)
+    float  chFxLive[4] = { -1000.0f, -1000.0f, -1000.0f, -1000.0f };   // live modulated channel-FX values for the UI rings (-1000 = no route)
     float  addTbl[NUM_SLOTS][ADD_FRAMES][ADD_TBL] = {};  // baked wavetable frames per slot - see rebuildAddTables()
     juce::Random driftRng { 0x9e3779b9 };    // DRIFT dice (audio thread only)
     double lfoBarPos  = -1.0;   // set by the Sequencer per block while PLAYING: bars into the playing
                                 // unit (group bar index + fraction); -1 = not playing (free clock)
     double lfoFreeSec = 0.0;    // free-run LFO clock while NOT playing (accumulated seconds)
-    float  compEnv[NUM_SLOTS] = {};           // one-knob compressor envelope per slot
     float  lfoBarSeconds = 2.0f;   // seconds per bar (set by the Sequencer each block) for tempo-synced per-slot LFOs
     int    lfoGridDiv    = 16;      // piano-roll Grid 1/N (set by the Sequencer) - for LFO/arp "Lock to grid" in draw mode
     // Legacy-authoring bridge: factory sounds built via buildSlotsFromLegacy can't set slot fields
@@ -854,6 +854,13 @@ private: struct Voice; public:   // forward decl (defined privately below) so th
     //     only meaningful when that slot is in CHORD or SCALE mode).
     float humanizeAmt = 0.0f;   // 0..1
     float strumAmt    = 0.0f;   // 0..1
+    // CHANNEL FX (v1.3.9, user): 4 effects that voice the WHOLE instrument (both slots combined),
+    // applied once on the channel's summed output. Part of the SOUND (channelSoundHash + mix files).
+    // All 0 = bypass = bit-identical. Modulatable via the mod matrix targets "... (Channel)".
+    float chChorus  = 0.0f;   // multi-voice stereo widener
+    float chFlanger = 0.0f;   // swept short delay + feedback (metallic jet)
+    float chPhaser  = 0.0f;   // swept allpass notches + feedback (swirl)
+    float chComp    = 0.0f;   // bus compressor = glue the two layers into one instrument
     uint32_t humRng   = 0x9e3779b9u;   // per-channel RNG advanced each trigger (per-hit humanize variation)
     //   keysMinVel / keysMaxVel = the FLOOR + CEILING for keyboard velocity: a played key's velocity is
     //     remapped [0..1] -> [keysMinVel..keysMaxVel], so soft playing still sounds and loud is tamed.
@@ -1227,7 +1234,6 @@ private:
     // Temp render buffer
     juce::AudioBuffer<float> renderBuf;
     juce::AudioBuffer<float> fxSendBuf;   // per-slot reverb/delay send sums (ch 0/1 = reverb L/R, 2/3 = delay L/R)
-    juce::AudioBuffer<float> chorusInBuf; // per-slot dry sum for the CHORUS insert (ch 2s/2s+1 = slot s L/R); only used when a slot's chorus is on
 
     void applyEQ(juce::AudioBuffer<float>& buf, int numSamples);
 };

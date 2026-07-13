@@ -112,7 +112,7 @@ int main()
     {   // [4] every route maxed = finite
         auto x = render([](DrumChannel& c){ voice(c);
             const int tg[6] = { DrumChannel::MTFilt1Cut, DrumChannel::MTPitch, DrumChannel::MTDrive,
-                                DrumChannel::MTComp, DrumChannel::MTWidth, DrumChannel::MT_GRID_BASE };
+                                DrumChannel::MTChComp, DrumChannel::MTWidth, DrumChannel::MT_GRID_BASE };
             const int sr2[6] = { DrumChannel::MSVel, DrumChannel::MSModEnv, DrumChannel::MSModLfo,
                                  DrumChannel::MSRandom, DrumChannel::MSNote, DrumChannel::MSAmpEnv };
             for (int r = 0; r < 6; ++r) { c.slots[0].mod[r].src = (int8_t) sr2[r];
@@ -150,14 +150,30 @@ int main()
         printf("[6] per-voice Note->cutoff: chord-vs-(A+B) maxdiff=%.4f (per-voice ~0), A-vs-B=%.4f (>0.02) -> %s\n",
                superpos, ab, CHK(superpos < 0.05f && ab > 0.02f && finite(outAB)) ? "OK" : "FAIL");
     }
-    {   // [7] FLANGER + PHASER (per-slot bus inserts): render FINITE + audibly change the tone; 0 = bit-identical.
+    {   // [7] CHANNEL FX (Chorus/Flanger/Phaser/Comp act on the whole channel, both slots combined):
+        //     render FINITE + audibly change the tone; all 0 = bit-identical (covered by [1]).
         auto dry = render(voice, 0.9f, 0.6);
-        auto flg = render([](DrumChannel& c){ voice(c); c.slots[0].fxFlanger = 1.0f; }, 0.9f, 0.6);
-        auto phs = render([](DrumChannel& c){ voice(c); c.slots[0].fxPhaser  = 1.0f; }, 0.9f, 0.6);
-        const float fd = maxdiff(dry, flg), pd = maxdiff(dry, phs);
-        printf("[7] flanger d=%.4f finite=%d, phaser d=%.4f finite=%d (both >0.001) -> %s\n",
-               fd, (int) finite(flg), pd, (int) finite(phs),
-               CHK(fd > 0.001f && pd > 0.001f && finite(flg) && finite(phs)) ? "OK" : "FAIL");
+        auto flg = render([](DrumChannel& c){ voice(c); c.chFlanger = 1.0f; }, 0.9f, 0.6);
+        auto phs = render([](DrumChannel& c){ voice(c); c.chPhaser  = 1.0f; }, 0.9f, 0.6);
+        auto cho = render([](DrumChannel& c){ voice(c); c.chChorus  = 1.0f; }, 0.9f, 0.6);
+        auto cmp = render([](DrumChannel& c){ voice(c); c.chComp    = 1.0f; }, 0.9f, 0.6);
+        const float fd = maxdiff(dry, flg), pd = maxdiff(dry, phs), cd = maxdiff(dry, cho), md = maxdiff(dry, cmp);
+        const bool ok = fd > 0.001f && pd > 0.001f && cd > 0.001f && md > 0.001f
+                     && finite(flg) && finite(phs) && finite(cho) && finite(cmp);
+        printf("[7] CHANNEL FX: flanger=%.4f phaser=%.4f chorus=%.4f comp=%.4f (all >0.001, finite) -> %s\n",
+               fd, pd, cd, md, CHK(ok) ? "OK" : "FAIL");
+    }
+    {   // [8] CHANNEL FX are MODULATABLE from a slot's matrix ("... (Channel)" targets): an LFO routed to
+        //     Chorus (Channel) must change the render vs the same sound with the route removed.
+        auto off = render([](DrumChannel& c){ voice(c); c.chChorus = 0.5f; }, 0.9f, 0.8);
+        auto on  = render([](DrumChannel& c){ voice(c); c.chChorus = 0.5f;
+            c.slots[0].lfoRate[0] = 3.0f; c.slots[0].lfoAmt[0] = 1.0f;
+            c.slots[0].mod[0].src = DrumChannel::MSLfoFilt;      // LFO 1
+            c.slots[0].mod[0].tgt = DrumChannel::MTChChorus;     // -> Chorus (Channel)
+            c.slots[0].mod[0].amt = 1.0f; }, 0.9f, 0.8);
+        const float d = maxdiff(off, on);
+        printf("[8] slot matrix -> Chorus (Channel): maxdiff=%.4f (>0.002), finite=%d -> %s\n",
+               d, (int) finite(on), CHK(d > 0.002f && finite(on)) ? "OK" : "FAIL");
     }
     printf(fails == 0 ? ">>> ModMatrixTest PASS\n" : ">>> ModMatrixTest FAIL (%d)\n", fails);
     return fails;
