@@ -1546,6 +1546,36 @@ static void nSwirlLead(DC& c) {     // saw lead where HARDER notes swirl more (V
     c.chPhaser = 0.25f; c.chComp = 0.35f;
     c.delaySend = 0.18f; c.volume = 0.58f;
 }
+// ---- SUB + FORMANT showcases (v1.3.9): the two new FX knobs doing what nothing else can - a clean
+//      tracked octave-down under the sound, and a vowel filter that TALKS when the matrix sweeps it. ----
+static void nTalkingBass(DC& c) {  // FORMANT swept by a free LFO = the bass literally talks; big SUB underneath
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 110.0f;
+    s.atk = 0.004f; s.dec = 0.8f; s.sustain = 0.8f; s.release = 0.15f;
+    s.fxFormant = 0.4f;                                   // parked mid-vowel; the LFO does the talking
+    s.fxSub = 0.7f;                                       // clean octave-down = the weight
+    s.lfoRate[0] = 0.35f; s.lfoAmt[0] = 0.8f; s.lfoFree[0] = true;
+    modRoute(s, DC::MSLfoFilt, DC::MTFormant, 0.5f);      // LFO 1 -> Formant = ah-oh-ee vowels
+    c.chComp = 0.35f; c.volume = 0.8f;
+}
+static void nVowelPad(DC& c) {     // slow vowel morph across a wide saw pad = a choir-ish "aah-ooh" drift
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
+    s.oscUnison = 5; s.oscDetune = 0.2f; s.uniSpread = 0.5f;
+    s.atk = 0.3f; s.dec = 1.6f; s.sustain = 0.85f; s.release = 0.9f;
+    s.fxFormant = 0.5f;
+    s.lfoRate[0] = 0.08f; s.lfoAmt[0] = 0.7f; s.lfoFree[0] = true;
+    modRoute(s, DC::MSLfoFilt, DC::MTFormant, 0.45f);     // very slow free vowel drift
+    c.chChorus = 0.3f; s.fxReverbSend = 0.3f; c.volume = 0.6f;
+}
+static void nSubPluck(DC& c) {     // bright resonant pluck with a BIG clean octave-down = instant bass hook
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 130.81f;   // C3 - the sub lands at C2
+    s.atk = 0.002f; s.dec = 0.5f; s.sustain = 0.0f; s.release = 0.3f;
+    s.filterType = DC::LowPass; s.filterCutoff = 2500.0f; s.filterReso = 1.8f; s.filterEnvAmt = 0.4f;
+    s.fxSub = 0.85f;                                      // the sub bypasses the filter = always clean
+    c.volume = 0.78f;
+}
 static void nNotchBass(DC& c) {     // phaser-ish bass: a swept NOTCH + keytrack, tempo-synced 1/2-note notch motion
     auto& s = mkSlot(c, DC::SrcOsc);
     s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 65.41f;         // C2
@@ -1646,7 +1676,8 @@ static void aClarinet(DC& c) {     // woody odd pipe: hollow start blooming into
     wtFrame(s, 3, {{1,0.9f},{2,0.08f},{3,0.85f},{5,0.65f},{7,0.35f},{9,0.45f},{11,0.2f}});
     s.atk = 0.07f; s.dec = 0.5f; s.sustain = 0.85f; s.release = 0.22f;
     s.filterType = DC::LowPass; s.filterCutoff = 2400.0f; s.filterReso = 0.8f; ktRoute(s, 0.5f);
-    s.fxTone = -0.25f; s.drift = 0.2f; s.vibrato = 0.10f;
+    s.filterType2 = DC::Bell; s.filterCutoff2 = 250.0f; s.filterReso2 = 2.0f;   // warm low-mid lift (was Tone -0.25)
+    s.drift = 0.2f; s.vibrato = 0.10f;
     windMotion(s, 0.09f, 0.14f, 0.6f);
     s.addLoop = true;                     // user: loop the glide (the tone breathes out AND back)
     windBreath(c, 0.12f, 2600.0f, 0.06f, 0.5f, 0.6f, 0.25f);
@@ -1658,7 +1689,8 @@ static void aFlute(DC& c) {        // soft pure start blooming into a singing bo
     wtFrame(s, 2, {{1,1.0f},{2,0.5f},{3,0.16f},{4,0.07f}});                          // C: blown brighter
     wtFrame(s, 3, {{1,1.0f},{2,0.5f},{3,0.16f},{4,0.07f}});
     s.atk = 0.09f; s.dec = 0.6f; s.sustain = 0.9f; s.release = 0.25f;
-    s.drift = 0.3f; s.vibrato = 0.16f; s.fxTone = 0.1f;
+    s.drift = 0.3f; s.vibrato = 0.16f;
+    s.filterType = DC::Bell; s.filterCutoff = 3200.0f; s.filterReso = 1.5f;   // airy lift (was Tone 0.1)
     windMotion(s, 0.11f, 0.16f, 0.7f);
     s.addLoop = true;                     // user: loop the glide (the tone breathes out AND back)
     windBreath(c, 0.18f, 3400.0f, 0.07f, 0.6f, 0.75f, 0.28f);
@@ -1717,7 +1749,8 @@ static void aDulcimer(DC& c) {     // full 1/h series with every 4th harmonic RE
     for (int f = 1; f < DC::ADD_FRAMES; ++f)         // uniform strip (static sound, like mkAdd)
         for (int k = 0; k < DC::ADD_HARM; ++k) s.addH[f][k] = s.addH[0][k];
     s.atk = 0.002f; s.dec = 0.8f; s.sustain = 0.0f; s.release = 0.4f;
-    s.fxTone = 0.2f; s.fxDelaySend = 0.1f; c.volume = 0.75f;
+    s.filterType = DC::Bell; s.filterCutoff = 3500.0f; s.filterReso = 2.0f;   // hammered sparkle (was Tone 0.2)
+    s.fxDelaySend = 0.1f; c.volume = 0.75f;
 }
 static void aOctaveSub(DC& c) {    // sine + half-strength octave = a sub that reads on small speakers
     auto& s = mkAdd(c, {{1,1.0f},{2,0.5f}});
@@ -1742,14 +1775,17 @@ static void xSquashClap(DC& c) {   // compressor slammed on a clap = long sizzli
     auto& s = mkSlot(c, DC::SrcNoise);
     s.noiseType = 0; s.atk = 0.002f; s.hold = 0.02f; s.dec = 0.35f; s.sustain = 0.0f;
     s.filterType = DC::BandPass; s.filterCutoff = 1400.0f; s.filterReso = 1.4f;
-    c.chComp = 0.8f; s.fxTone = 0.3f; c.volume = 0.8f;
+    s.filterType2 = DC::Bell; s.filterCutoff2 = 4000.0f; s.filterReso2 = 2.5f;   // sizzle lift (was Tone 0.3)
+    c.chComp = 0.8f; c.volume = 0.8f;
 }
 static void xFeltPiano(DC& c) {    // softened attack + dark tilt = the felt-piano intimacy
     auto& s = mkSlot(c, DC::SrcOsc);
     s.oscShape = s.oscShapeB = 10; s.oscFreq = 261.63f;              // Bell hammer tone
     s.fmDepth = 0.1f; s.fmPitch = 0.5f; s.fmEnvFollow = true;
     s.atk = 0.004f; s.dec = 1.6f; s.sustain = 0.25f; s.release = 0.4f;
-    s.fxPunch = -0.6f; s.fxTone = -0.5f; c.chComp = 0.2f;
+    s.fxPunch = -0.6f; c.chComp = 0.2f;
+    s.filterType  = DC::LowPass; s.filterCutoff  = 4500.0f; s.filterReso  = 0.7f;   // highs down +
+    s.filterType2 = DC::Bell;    s.filterCutoff2 = 220.0f;  s.filterReso2 = 3.5f;   // lows up = the felt tilt (was Tone -0.5)
     s.fxReverbSend = 0.15f; c.volume = 0.78f;
 }
 static void xTightSnare(DC& c) {   // punch + comp = a dry, in-your-face snare crack
@@ -1768,7 +1804,8 @@ static void xGlueBass(DC& c) {     // heavy one-knob comp holding a saw+sub toge
     s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 55.0f;
     s.atk = 0.004f; s.dec = 0.6f; s.sustain = 0.75f; s.release = 0.12f;
     s.filterType = DC::LowPass; s.filterCutoff = 800.0f; s.filterReso = 1.0f; ktRoute(s, 0.5f);
-    c.chComp = 0.7f; s.fxTone = -0.2f;
+    c.chComp = 0.7f;
+    s.filterType2 = DC::Bell; s.filterCutoff2 = 120.0f; s.filterReso2 = 2.0f;   // low warmth (was Tone -0.2)
     auto& b = mkSlot2(c, DC::SrcOsc, 0.6f);
     b.oscShape = b.oscShapeB = DC::WvSine; b.oscFreq = 55.0f;
     b.atk = 0.004f; b.dec = 0.6f; b.sustain = 0.8f; b.release = 0.12f;
@@ -1778,7 +1815,8 @@ static void xCrispHat(DC& c) {     // bright tilt + snap on purple noise = prist
     auto& s = mkSlot(c, DC::SrcNoise);
     s.noiseType = 3; s.atk = 0.001f; s.dec = 0.06f; s.sustain = 0.0f;
     s.filterType = DC::HighPass; s.filterCutoff = 5000.0f; s.filterReso = 0.8f;
-    s.fxTone = 0.6f; s.fxPunch = 0.4f; c.volume = 0.72f;
+    s.filterType2 = DC::Bell; s.filterCutoff2 = 8000.0f; s.filterReso2 = 4.5f;   // pristine top lift (was Tone 0.6)
+    s.fxPunch = 0.4f; c.volume = 0.72f;
 }
 
 
@@ -2117,7 +2155,9 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Muted Bass", gMutedBass, "Bass" },
     { "Fuzz Bass", gFuzzBass, "Bass" },
     { "Amp Bass", gAmpBass, "Bass" },            // KS bass through the BASS AMP split rig
-    { "Hungry Bass", uHungryBass, "Bass" },      // USER IMPORT (my growl)
+    { "Hungry Bass", uHungryBass, "Bass" },          // USER IMPORT (my growl)
+    { "Talking Bass", nTalkingBass, "Bass" },        // FORMANT + SUB showcase (LFO -> Formant = it talks)
+    { "Sub Pluck", nSubPluck, "Bass" },              // SUB showcase: clean octave-down under a bright pluck
     { "Granite Bass", grGraniteBass, "Bass" },   // GRANULAR
     { "Prowl Bass", nProwlBass, "Bass" },        // free-run filter LFO showcase
     { "Keys Bass", kKeysBass, "Bass" },
@@ -2155,7 +2195,8 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Motion Pad", kMotionPad, "Pads & Choirs" },
     { "Brass Pad", kBrassPad, "Pads & Choirs" },
     { "Chorus Pad", nChorusPad, "Pads & Choirs" },
-    { "Jet Pad", nJetPad, "Pads & Choirs" },        // CHANNEL FX showcase: LFO -> Flanger (Channel)
+    { "Jet Pad", nJetPad, "Pads & Choirs" },          // CHANNEL FX showcase: LFO -> Flanger (Channel)
+    { "Vowel Pad", nVowelPad, "Pads & Choirs" },      // FORMANT showcase: slow LFO -> vowel morph
     { "Vox Pad", nVoxBP, "Pads & Choirs" },
     { "Sync Sweep", nSyncSweep, "Pads & Choirs" },
     { "Comb Pad", aCombPad, "Pads & Choirs" },

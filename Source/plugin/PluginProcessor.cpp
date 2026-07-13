@@ -1233,9 +1233,10 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
     {
         static const std::pair<const char*, int> kSelKnobs[] = {
             { "ui_sel_fxDrive", SelFxDrive }, { "ui_sel_fxRev", SelFxRev }, { "ui_sel_fxDel", SelFxDel },
-            { "ui_sel_fxCho", SelFxCho }, { "ui_sel_fxTone", SelFxTone }, { "ui_sel_fxPunch", SelFxPunch },
+            { "ui_sel_fxCho", SelFxCho }, { "ui_sel_fxSub", SelFxSub }, { "ui_sel_fxPunch", SelFxPunch },
             { "ui_sel_fxComp", SelFxComp },
             { "ui_sel_fxFlanger", SelFxFlanger }, { "ui_sel_fxPhaser", SelFxPhaser }, { "ui_sel_fxRing", SelFxRing },
+            { "ui_sel_fxFormant", SelFxFormant },
             { "ui_sel_envA", SelEnvA }, { "ui_sel_envH", SelEnvH }, { "ui_sel_envD", SelEnvD },
             { "ui_sel_envS", SelEnvS }, { "ui_sel_envR", SelEnvR },
             { "ui_sel_uniCount", SelUniCount }, { "ui_sel_uniDet", SelUniDet }, { "ui_sel_uniVib", SelUniVib },

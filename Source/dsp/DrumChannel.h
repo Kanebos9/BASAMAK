@@ -375,11 +375,16 @@ public:
     // the engine's own knob i (0..7) via slotParamsFor - the dropdown shows its live name.
     // MTChChorus/MTChFlanger/MTChPhaser/MTChComp = the CHANNEL FX (whole-instrument); applied at
     // channel level (channelMod accumulation), NOT on the slot copy in applyModMatrix.
+    // MTTone is RETIRED (the Tone knob was removed - the Bell filter covers it): the index is reserved,
+    // old routes to it are inert, the picker never offers it. NEW fixed targets append AFTER the grid
+    // block (MTSub/MTFormant) so saved grid routes never shift.
     enum ModTgt { MTOff = 0, MTFilt1Cut, MTFilt1Res, MTFilt2Cut, MTFilt2Res, MTDrive, MTRevSend,
                   MTDelSend, MTChChorus, MTTone, MTPunch, MTChComp, MTAtk, MTDec, MTSus, MTRel, MTPitch,
-                  MTWavePos, MTDetune, MTVibrato, MTWidth, MTDrift, MTVol, MTWarp, MTChFlanger, MTChPhaser, MTRing, MT_GRID_BASE };
+                  MTWavePos, MTDetune, MTVibrato, MTWidth, MTDrift, MTVol, MTWarp, MTChFlanger, MTChPhaser, MTRing, MT_GRID_BASE,
+                  MTSub = MT_GRID_BASE + 8, MTFormant };
     static constexpr int MOD_TGT_GRID = 8;   // grid knobs MT_GRID_BASE .. MT_GRID_BASE+7
-    static constexpr int MT_COUNT = MT_GRID_BASE + MOD_TGT_GRID;
+    static constexpr int MT_GRID_END = MT_GRID_BASE + MOD_TGT_GRID;   // grid range check: >= BASE && < END
+    static constexpr int MT_COUNT = MTFormant + 1;
     // (GridKnob + the mod-matrix DSP helpers are declared after the Slot struct, below.)
     // DRIFT visual honesty: the newest voice's REAL rolled detunes (cents) for the editor's unison
     // view - the drawn lines move with what actually played. Returns voice count (0 = none active).
@@ -560,9 +565,11 @@ public:
         float fxDrive = 0.0f, fxReverbSend = 0.0f, fxDelaySend = 0.0f;
         // -- per-slot one-knob tone FX (v1.3.5; all 0 = bypass = bit-identical). Chorus/Flanger/Phaser/
         //    Comp are NO LONGER per-slot - they moved to CHANNEL FX (see DrumChannel::chChorus...). --
-        float fxTone  = 0.0f;                   // tilt EQ -1 dark .. +1 bright (~800 Hz pivot, +/-6 dB)
         float fxPunch = 0.0f;                   // transient shaper -1 soften .. +1 punch (per hit)
         float fxRing    = 0.0f;                 // ring modulator 0..1 (dry -> ring-modulated, ~200 Hz carrier; per voice)
+        // (fxTone RETIRED 2026-07-13 - the Bell filter type covers the tilt, movable.)
+        float fxSub     = 0.0f;                 // SUB: clean sine ONE OCTAVE below the slot's pitch (0 = off; pitched engines only)
+        float fxFormant = 0.0f;                 // FORMANT: vowel morph 0 = off, up = A -> E -> I -> O -> U (fixed intensity)
         // -- ADDITIVE WAVETABLE (Wave = "Custom"): FOUR user-DRAWN harmonic frames (A/B/C/D), each
         //    baked to a table; addPos (0..1) scans across them (0 = A, 1 = D, linear crossfade of
         //    the two neighbours). addPh = each harmonic's phase (radians) - set by the freehand WAVE
@@ -1080,7 +1087,8 @@ private:
         // === PER-SLOT FILTER (begin) - resonant LP state (stereo); coeffs live in SC ===
         float    drvLp[2] = {}, drvDcX[2] = {}, drvDcY[2] = {};   // drive post-smoothing (~8 kHz, harsh types) + Fuzz DC blocker
         float    ampPre[2] = {}, ampLp1[2] = {}, ampLp2[2] = {};  // BASS AMP: low split + 2-pole cabinet state
-        float    toneZ[2] = {};                       // per-slot TONE tilt (1-pole split state)
+        float    fmtZ1[2][2] = {}, fmtZ2[2][2] = {};  // FORMANT band-pass state [band][ch]
+        double   subPh = 0.0;                         // SUB oscillator phase (per voice)
         float    pFast[2] = {}, pSlow[2] = {};        // per-slot PUNCH transient followers (fast/slow)
         double   ringPh = 0.0;                        // RING modulator carrier phase (per voice)
         double   filtIc1[2][2] = {}, filtIc2[2][2] = {};   // TPT/ZDF SVF integrators [filter 0/1][stereo side]

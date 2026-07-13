@@ -192,6 +192,23 @@ int main()
         printf("[9] Vol-mod de-zipper: max sample delta=%.5f peak-after-0.1s=%.4f rms=%.4f (delta <0.02 with sound) -> %s\n",
                md, pk, rms(out), CHK(md < 0.02f && pk > 0.05f && finite(out)) ? "OK" : "FAIL");
     }
+    {   // [10] SUB + FORMANT are AUDIBLE (user: "make sure the difference can actually be audible"):
+        //      fxSub on a 110 Hz saw must add strong 55 Hz energy (Goertzel); fxFormant must reshape
+        //      the output; both 0 = bit-identical (covered by [1]'s path being unchanged).
+        auto dry = render(voice, 0.9f, 0.6);
+        auto sub = render([](DrumChannel& c){ voice(c); c.slots[0].fxSub = 0.9f; }, 0.9f, 0.6);
+        auto fmt = render([](DrumChannel& c){ voice(c); c.slots[0].fxFormant = 0.5f; }, 0.9f, 0.6);
+        auto goe = [&](const std::vector<float>& x, double f) {
+            const double w = 2.0 * 3.14159265358979 * f / SR, cw = 2.0 * std::cos(w);
+            double s0 = 0, s1 = 0, s2 = 0;
+            for (size_t i = (size_t)(SR * 0.05); i < x.size() && i < (size_t)(SR * 0.5); ++i)
+            { s0 = (double) x[i] + cw * s1 - s2; s2 = s1; s1 = s0; }
+            return std::sqrt(std::abs(s1 * s1 + s2 * s2 - cw * s1 * s2)); };
+        const double d55 = goe(dry, 55.0), s55 = goe(sub, 55.0);
+        const float fdif = maxdiff(dry, fmt);
+        printf("[10] SUB 55Hz energy %.1f -> %.1f (expect >3x), FORMANT maxdiff=%.4f (>0.02) -> %s\n",
+               d55, s55, fdif, CHK(s55 > d55 * 3.0 && fdif > 0.02f && finite(sub) && finite(fmt)) ? "OK" : "FAIL");
+    }
     printf(fails == 0 ? ">>> ModMatrixTest PASS\n" : ">>> ModMatrixTest FAIL (%d)\n", fails);
     return fails;
 }

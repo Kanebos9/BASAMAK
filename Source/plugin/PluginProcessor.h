@@ -158,7 +158,7 @@ public:
     // editor's timer drains and applies them to the CURRENT selection (pattern/channel/slot)
     // through the same code paths the on-screen controls use. SPSC ring (keyQ pattern): the
     // audio thread writes, the editor reads. Full ring = events dropped (the UI catches up).
-    enum SelCC : int { SelFxDrive = 0, SelFxRev, SelFxDel, SelFxCho, SelFxTone, SelFxPunch, SelFxComp,
+    enum SelCC : int { SelFxDrive = 0, SelFxRev, SelFxDel, SelFxCho, SelFxSub, SelFxPunch, SelFxComp,
                        SelEnvA, SelEnvH, SelEnvD, SelEnvS, SelEnvR,
                        SelUniCount, SelUniDet, SelUniVib, SelUniWidth, SelUniDrift,
                        SelStrum, SelMinVel, SelMaxVel, SelGlide, SelSlotOfs,
@@ -166,7 +166,7 @@ public:
                        SelChNext, SelChPrev, SelPatNext, SelPatPrev,
                        SelFollow, SelTest, SelChVol, SelSwing, SelBpm, SelUndo, SelRedo,
                        SelSlotFreq, SelSlotFmAmt, SelSlotWarp,   // the selected slot's Osc faders
-                       SelFxFlanger, SelFxPhaser, SelFxRing,     // the selected slot's new FX
+                       SelFxFlanger, SelFxPhaser, SelFxRing, SelFxFormant,   // slot Ring/Formant + CHANNEL FX flanger/phaser
                        SelSlotPBase = 1000,    // 1000 + N = the N-th knob of the selected slot's engine grid
                        SelStepBase  = 2000 };  // 2000 + N = step N on the selected channel
     struct SelCCEvt { int t; float v; };

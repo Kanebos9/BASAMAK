@@ -2410,7 +2410,8 @@ private:
     // channel-level fields with no UI = "assigned but nothing moves".
     LearnableKnob knobReverb  { "ui_sel_fxRev",   proc.midiLearn };
     LearnableKnob knobDelay   { "ui_sel_fxDel",   proc.midiLearn };
-    LearnableKnob knobTone    { "ui_sel_fxTone",  proc.midiLearn };   // per-slot TONE tilt (dark..bright)
+    LearnableKnob knobSub     { "ui_sel_fxSub",     proc.midiLearn };   // per-slot SUB oscillator (octave below)
+    LearnableKnob knobFormant { "ui_sel_fxFormant", proc.midiLearn };   // per-slot FORMANT vowel morph
     LearnableKnob knobPunch   { "ui_sel_fxPunch", proc.midiLearn };   // per-slot PUNCH transient shaper
     LearnableKnob knobRing    { "ui_sel_fxRing",    proc.midiLearn };   // per-slot RING modulator
     // ---- CHANNEL FX box: Chorus / Flanger / Phaser / Comp act on the WHOLE channel (both slots
@@ -2418,7 +2419,7 @@ private:
     juce::Label   hdrChannelFx;
     SlotDragFader chFxVF[4];                       // 0 Chorus, 1 Flanger, 2 Phaser, 3 Comp
     juce::Label   lblChFx[4];
-    juce::Label   lblTone, lblPunch, lblRing;
+    juce::Label   lblSub, lblFormant, lblPunch, lblRing;
     // REVERB MODE: clicking the "REVERB" header cycles Room -> Hall -> Plate -> Shimmer (whole
     // preset, like the other master flavour controls). A tiny MouseListener makes the Label clickable.
     struct HdrClick : juce::MouseListener

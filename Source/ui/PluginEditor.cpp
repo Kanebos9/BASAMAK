@@ -957,11 +957,15 @@ static const char* kModSrcName[DrumChannel::MS_COUNT] =   // the LFOs are GENERI
 { "Off", "Velocity", "Note", "Amp Env", "LFO 1", "LFO 2", "LFO 3", "LFO 4",
   "Random", "Mod Env", "Mod LFO", "Step Mod A", "Step Mod B", "Mod Wheel" };
 // "(Channel)" = a CHANNEL FX target: it acts on the whole instrument (both slots combined), not this slot.
+// "Tone (retired)" = the removed Tone knob's reserved index - never offered, old routes inert.
+// Sub/Formant sit ABOVE the grid block (MTSub/MTFormant) so their names come from kModTgtHiName.
 static const char* kModTgtFixedName[DrumChannel::MT_GRID_BASE] =
 { "Off", "Filter 1 Cutoff", "Filter 1 Reso", "Filter 2 Cutoff", "Filter 2 Reso", "Drive",
-  "Reverb Send", "Delay Send", "Chorus (Channel)", "Tone", "Punch", "Comp (Channel)", "Attack", "Decay", "Sustain",
+  "Reverb Send", "Delay Send", "Chorus (Channel)", "Tone (retired)", "Punch", "Comp (Channel)", "Attack", "Decay", "Sustain",
   "Release", "Pitch", "Wave Position", "Detune", "Vibrato", "Width", "Drift", "Volume", "Warp",
   "Flanger (Channel)", "Phaser (Channel)", "Ring" };
+static juce::String kModTgtHiName(int t)   // fixed targets ABOVE the grid range
+{ return t == DrumChannel::MTSub ? "Sub" : t == DrumChannel::MTFormant ? "Formant" : juce::String(); }
 // Engine display name (matches the slot engine dropdown) for the mod-target parentheses "(Oscillator)" etc.
 static juce::String engineDisplayName(int engine)
 {
@@ -1025,6 +1029,7 @@ void RoutePicker::openFor(int cs, int ct, float amt)
     tgtModel.rows.clear();
     for (int t = 0; t < DrumChannel::MT_GRID_BASE; ++t)
     {   // ENGINE-GATED targets: only offer what this slot's engine can actually do (no dead routes).
+        if (t == DrumChannel::MTTone) continue;                                       // RETIRED (Tone removed)
         if (t == DrumChannel::MTWarp    && engine != DrumChannel::SrcOsc) continue;   // wavefold = Oscillator only
         if (t == DrumChannel::MTWavePos && engine != DrumChannel::SrcOsc) continue;   // Osc wavetable frame only (granular position = the "Position" grid knob)
         juce::String nm = kModTgtFixedName[t];
@@ -1037,6 +1042,9 @@ void RoutePicker::openFor(int cs, int ct, float amt)
     { const juce::String nm = gridKnobName ? gridKnobName(i) : juce::String();
       if (nm.isNotEmpty()) tgtModel.rows.push_back({ DrumChannel::MT_GRID_BASE + i,
                               eng.isNotEmpty() ? (nm + " (" + eng + ")") : nm }); }
+    // Fixed targets ABOVE the grid (appended so saved grid routes never shift): Sub + Formant.
+    tgtModel.rows.push_back({ DrumChannel::MTSub,     "Sub" });
+    tgtModel.rows.push_back({ DrumChannel::MTFormant, "Formant" });
     srcList.updateContent(); tgtList.updateContent();
     selectCurrentRows();
     setVisible(true); toFront(true);
@@ -1101,6 +1109,7 @@ juce::String ModFaderMatrix::routeTgtName(int r) const
     const int t = tgt[r];
     if (t <= 0) return {};
     if (t < DrumChannel::MT_GRID_BASE) return juce::String(kModTgtFixedName[t]);   // fixed targets = short name (no engine parens on the fader)
+    if (t >= DrumChannel::MT_GRID_END) return kModTgtHiName(t);                    // Sub / Formant (above the grid)
     const juce::String nm = gridKnobName ? gridKnobName(t - DrumChannel::MT_GRID_BASE) : juce::String();   // grid = the param's own name
     return nm.isNotEmpty() ? nm : ("Knob " + juce::String(t - DrumChannel::MT_GRID_BASE + 1));
 }
@@ -5545,7 +5554,8 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         for (int e = 0; e < DrumChannel::NUM_EQ_BANDS; ++e) { const auto& eb = sl.eqBand[e]; h = mix(h, eb.on ? 1 : 0); h = mix(h, f(eb.freq)); h = mix(h, f(eb.gainDb)); h = mix(h, f(eb.q)); }
         h = mix(h, sl.filterType); h = mix(h, f(sl.filterCutoff)); h = mix(h, f(sl.filterReso)); h = mix(h, f(sl.filterEnvAmt));   // per-slot filter 1
         h = mix(h, sl.filterType2); h = mix(h, f(sl.filterCutoff2)); h = mix(h, f(sl.filterReso2)); h = mix(h, f(sl.filterEnvAmt2));   // filter 2
-        h = mix(h, f(sl.fxTone)); h = mix(h, f(sl.fxPunch)); h = mix(h, f(sl.fxRing));   // Tone/Punch/Ring (per slot)
+        h = mix(h, f(sl.fxPunch)); h = mix(h, f(sl.fxRing));                       // Punch/Ring (per slot)
+        h = mix(h, f(sl.fxSub)); h = mix(h, f(sl.fxFormant));                      // Sub/Formant (per slot)
         for (int fr = 0; fr < DrumChannel::ADD_FRAMES; ++fr)
             for (int k = 0; k < DrumChannel::ADD_HARM; ++k)
             { h = mix(h, f(sl.addH[fr][k])); h = mix(h, f(sl.addPh[fr][k])); }   // wavetable frames
@@ -6469,7 +6479,8 @@ void DrumSequencerEditor::applySelCC(int t, float v, bool& slotDirty, bool& keys
         case P::SelFxDrive: sl.fxDrive = v; break;
         case P::SelFxRev:   sl.fxReverbSend = v; break;
         case P::SelFxDel:   sl.fxDelaySend = v; break;
-        case P::SelFxTone:  sl.fxTone  = v * 2.0f - 1.0f; break;
+        case P::SelFxSub:     sl.fxSub = v; break;
+        case P::SelFxFormant: sl.fxFormant = v; break;
         case P::SelFxPunch: sl.fxPunch = v * 2.0f - 1.0f; break;
         case P::SelFxRing:  sl.fxRing = v; break;
         // CHANNEL FX (whole instrument, both slots) - these write the CHANNEL, not the slot.
@@ -8111,28 +8122,39 @@ void DrumSequencerEditor::setupComponents()
 
     setupKnob(knobReverb,  lblRev, "Rev Send", 0.0,  1.0,   0.0,   1.0, fmtPct);   // SEND into the shared reverb
     setupKnob(knobDelay,   lblDel, "Dly Send", 0.0,  1.0,   0.0,   1.0, fmtPct);   // SEND into the shared delay
-    setupKnob(knobTone,  lblTone,  "Tone",  -1.0, 1.0, 0.0, 1.0,
-              [](double v){ const int t = juce::roundToInt(v * 100.0);
-                            return t == 0 ? juce::String("Flat") : (t < 0 ? "Dark " + juce::String(-t) : "Brt " + juce::String(t)); });
     setupKnob(knobPunch, lblPunch, "Punch", -1.0, 1.0, 0.0, 1.0,
               [](double v){ const int t = juce::roundToInt(v * 100.0);
                             return t == 0 ? juce::String("Off") : (t < 0 ? "Soft " + juce::String(-t) : "+" + juce::String(t)); });
     setupKnob(knobRing,  lblRing,  "Ring",   0.0, 1.0, 0.0, 1.0,
               [](double v){ return v <= 0.001 ? juce::String("Off") : juce::String(juce::roundToInt(v * 100.0)) + "%"; });
-    knobTone.onValueChange  = [this]{ if(!ignoreKnobCallbacks) proc.sequencer.channel(selectedChannel).slots[envTargetSlot()].fxTone  = (float)knobTone.getValue(); };
+    setupKnob(knobSub,   lblSub,   "Sub",    0.0, 1.0, 0.0, 1.0,
+              [](double v){ return v <= 0.001 ? juce::String("Off") : juce::String(juce::roundToInt(v * 100.0)) + "%"; });
+    setupKnob(knobFormant, lblFormant, "Formant", 0.0, 1.0, 0.0, 1.0,
+              [](double v){ if (v <= 0.001) return juce::String("Off");
+                            static const char* vw[5] = { "A", "E", "I", "O", "U" };   // the vowel the knob sits on
+                            const float pos = juce::jlimit(0.0f, 1.0f, ((float) v - 0.12f) / 0.88f) * 4.0f;
+                            return juce::String(vw[juce::jlimit(0, 4, juce::roundToInt(pos))]) + " " + juce::String(juce::roundToInt(v * 100.0)) + "%"; });
     knobPunch.onValueChange = [this]{ if(!ignoreKnobCallbacks) proc.sequencer.channel(selectedChannel).slots[envTargetSlot()].fxPunch = (float)knobPunch.getValue(); };
     knobRing.onValueChange  = [this]{ if(!ignoreKnobCallbacks) proc.sequencer.channel(selectedChannel).slots[envTargetSlot()].fxRing  = (float)knobRing.getValue(); };
-    for (auto* k : { &knobTone, &knobPunch, &knobRing })
+    knobSub.onValueChange   = [this]{ if(!ignoreKnobCallbacks) proc.sequencer.channel(selectedChannel).slots[envTargetSlot()].fxSub   = (float)knobSub.getValue(); };
+    knobFormant.onValueChange = [this]{ if(!ignoreKnobCallbacks) proc.sequencer.channel(selectedChannel).slots[envTargetSlot()].fxFormant = (float)knobFormant.getValue(); };
+    for (auto* k : { &knobPunch, &knobRing, &knobSub, &knobFormant })
         k->onDragEnd = [this]{ if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel); };
-    knobTone.setTooltip("TONE (per slot): one-knob tilt EQ around ~800 Hz.\n\n"
-        "- Left = darker/warmer (highs down, lows up), right = brighter/thinner (+/-6 dB).\n"
-        "- The quick tone fix now that the old 5-band EQ is gone; for resonant shaping use the FILTER display.");
     knobPunch.setTooltip("PUNCH (per slot): transient shaper - reshapes each hit's ATTACK.\n\n"
         "- Right = more snap/click (drums cut through), left = softened attack (felt-piano, pillowy pads).\n"
         "- Works per hit on this slot only; 0 = untouched.");
     knobRing.setTooltip("RING (per slot): ring modulator against a fixed ~200 Hz carrier.\n\n"
         "- Up = metallic/bell/clangorous sidebands blended over the dry tone.\n"
         "- Great on mallets, FX and toms for inharmonic colour; 0 = dry.");
+    knobSub.setTooltip("SUB (per slot): a clean sine ONE OCTAVE below this slot's pitch, mixed underneath.\n\n"
+        "- Follows the note (keys, steps, glide) and the pitch envelope; shaped by the slot's amp envelope.\n"
+        "- Added AFTER the slot filter/EQ/drive, so it stays clean however hard you mangle the top.\n"
+        "- Pitched engines only (Oscillator / Karplus-Strong / Modal / Granular) - inert on Noise and Sample.\n\n"
+        "Tip: instant weight on basses and plucks; also fattens a thin lead without touching its character.");
+    knobFormant.setTooltip("FORMANT (per slot): vowel filter - turning the knob morphs A - E - I - O - U.\n\n"
+        "- Two vocal-tract resonances (F1 + F2) blended over the dry tone at a fixed intensity.\n"
+        "- Route an LFO (or Mod Wheel / Step Mod) to the matrix target \"Formant\" and the slot TALKS.\n"
+        "- 0 = off (bit-identical); the effect eases in over the first ~12% of the knob.");
 
     // ---- CHANNEL FX (Chorus / Flanger / Phaser / Comp): the WHOLE instrument, both slots combined.
     //      They do NOT follow the slot selector - one set per channel, saved with the sound. ----
@@ -10046,7 +10068,7 @@ void DrumSequencerEditor::onSlotEngineChange(int box)
         const int ne = boxEngine[box];
         for (auto& r : ch.slots[box].mod)
         {
-            const bool gridTgt = (r.tgt >= DrumChannel::MT_GRID_BASE);
+            const bool gridTgt = (r.tgt >= DrumChannel::MT_GRID_BASE && r.tgt < DrumChannel::MT_GRID_END);   // engine knobs only (Sub/Formant sit above + survive)
             const bool warpTgt = (r.tgt == DrumChannel::MTWarp    && ne != DrumChannel::SrcOsc);
             const bool wposTgt = (r.tgt == DrumChannel::MTWavePos && ne != DrumChannel::SrcOsc);   // Wave Position = Osc-only now
             if (gridTgt || warpTgt || wposTgt) { r.src = DrumChannel::MSOff; r.tgt = DrumChannel::MTOff; r.amt = 0.0f; }
@@ -10309,9 +10331,10 @@ void DrumSequencerEditor::updateFxFaders(const DrumChannel::Slot& sl)
     const juce::Colour acc = envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8);
     fxDriveFader.setAccent(acc);   // keytrack faders keep their F1/F2 filter colours
     fxDriveFader.setValue01(sl.fxDrive);
-    knobTone.setValue   (sl.fxTone,       juce::dontSendNotification);
     knobPunch.setValue  (sl.fxPunch,      juce::dontSendNotification);
     knobRing.setValue   (sl.fxRing,       juce::dontSendNotification);
+    knobSub.setValue    (sl.fxSub,        juce::dontSendNotification);
+    knobFormant.setValue(sl.fxFormant,    juce::dontSendNotification);
     // CHANNEL FX read the CHANNEL (both slots combined) - they never follow the slot selector.
     { const auto& ch = proc.sequencer.channel(selectedChannel);
       const float chv[4] = { ch.chChorus, ch.chFlanger, ch.chPhaser, ch.chComp };
@@ -10997,8 +11020,8 @@ void DrumSequencerEditor::timerCallback()
         auto liveFx = [&mc](int s, int i) -> float
         { return mc.slots[s].modActive() ? mc.slotModLiveFx[s][i] : -1000.0f; };
         struct RK { LearnableKnob* k; int idx; };
-        const RK rk[5] = { { &knobReverb, 0 }, { &knobDelay, 1 },
-                           { &knobTone, 3 }, { &knobPunch, 4 }, { &knobRing, 20 } };
+        const RK rk[6] = { { &knobReverb, 0 }, { &knobDelay, 1 },
+                           { &knobSub, 3 }, { &knobPunch, 4 }, { &knobFormant, 5 }, { &knobRing, 20 } };
         for (auto& r : rk)
         { const float raw = liveFx(ms, r.idx); r.k->setModRing(raw < -900.0f ? -1.0f : (float) r.k->valueToProportionOfLength(raw)); }
         // CHANNEL FX faders: rung from the channel-level live values (both slots' routes feed them).
@@ -11819,8 +11842,8 @@ void DrumSequencerEditor::layoutContent()
         };
         const int fxRowStep = KSB + kboxH + 14;
         const int row2 = colTop + 66, row3 = row2 + fxRowStep;
-        kFx(knobReverb, lblRev, 0, row2); kFx(knobDelay, lblDel, 1, row2); kFx(knobTone, lblTone, 2, row2);
-        kFx(knobPunch, lblPunch, 0, row3); kFx(knobRing, lblRing, 1, row3);
+        kFx(knobReverb, lblRev, 0, row2); kFx(knobDelay, lblDel, 1, row2); kFx(knobPunch, lblPunch, 2, row2);
+        kFx(knobSub, lblSub, 0, row3); kFx(knobFormant, lblFormant, 1, row3); kFx(knobRing, lblRing, 2, row3);
 
         // ===== CHANNEL FX box (under the shortened FX box): Chorus / Flanger / Phaser / Comp as FOUR
         //       VERTICAL faders in ONE row (MASTER style). These act on the WHOLE channel (both slots)

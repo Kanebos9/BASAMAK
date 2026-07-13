@@ -736,8 +736,9 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("flR2", s.filterReso2, nullptr); st.setProperty("flE2", s.filterEnvAmt2, nullptr);
         // === PER-SLOT FILTER (end) ===
         // (chM/fxCp/fxFl/fxPh retired - Chorus/Comp/Flanger/Phaser are CHANNEL FX now, saved on the channel.)
-        st.setProperty("fxTn", s.fxTone, nullptr); st.setProperty("fxPn", s.fxPunch, nullptr);
-        st.setProperty("fxRg", s.fxRing, nullptr);
+        st.setProperty("fxPn", s.fxPunch, nullptr); st.setProperty("fxRg", s.fxRing, nullptr);
+        st.setProperty("fxSb", s.fxSub, nullptr);   st.setProperty("fxFm", s.fxFormant, nullptr);
+        // ("fxTn" retired - Tone removed 2026-07-13; the Bell filter covers the tilt. Old keys ignored.)
         for (int f = 0; f < ADD_FRAMES; ++f)            // ADDITIVE WAVETABLE: 4 drawn frames (CSV per frame)
         { juce::String hs, ps;
           for (int k = 0; k < ADD_HARM; ++k) { const juce::String c2 = k < ADD_HARM - 1 ? "," : "";
@@ -870,9 +871,10 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         s.filterReso2   = (float)st.getProperty("flR2", d.filterReso2);   s.filterEnvAmt2 = (float)st.getProperty("flE2", d.filterEnvAmt2);
         const float legacyKt2 = (float) st.getProperty("flK2", 0.0f);
         // === PER-SLOT FILTER (end) ===
-        s.fxTone  = (float)st.getProperty("fxTn", d.fxTone);
         s.fxPunch = (float)st.getProperty("fxPn", d.fxPunch);
         s.fxRing  = (float)st.getProperty("fxRg", d.fxRing);
+        s.fxSub     = (float)st.getProperty("fxSb", d.fxSub);
+        s.fxFormant = (float)st.getProperty("fxFm", d.fxFormant);
         // LEGACY MIGRATION: chorus + comp used to be PER SLOT ("chM"/"fxCp"). They are CHANNEL FX now -
         // take the strongest slot's amount onto the channel (applied once to both layers combined).
         legacyChorus = juce::jmax(legacyChorus, (float) st.getProperty("chM",  0.0f));
@@ -1464,10 +1466,11 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         for (int fi = 0; fi < 2; ++fi) {   // both SVFs start clean each hit (no retrigger click); snap the smoothed cutoff
             sv.filtIc1[fi][0] = sv.filtIc1[fi][1] = sv.filtIc2[fi][0] = sv.filtIc2[fi][1] = 0.0; sv.filtGm[fi] = -1.0; sv.filtKm[fi] = -1.0; }
         sv.wSm = -1.0f;   // weight smoother snaps to the (possibly modulated) weight on the first sample
-        for (int lr = 0; lr < 2; ++lr) {   // drive smoothing/DC + tone + punch state start clean each hit
+        for (int lr = 0; lr < 2; ++lr) {   // drive smoothing/DC + formant + punch state start clean each hit
             sv.drvLp[lr] = sv.drvDcX[lr] = sv.drvDcY[lr] = 0.0f;
-            sv.toneZ[lr] = 0.0f; sv.pFast[lr] = sv.pSlow[lr] = 0.0f; }
-        sv.ringPh = 0.0;
+            sv.pFast[lr] = sv.pSlow[lr] = 0.0f;
+            for (int b2 = 0; b2 < 2; ++b2) { sv.fmtZ1[b2][lr] = 0.0f; sv.fmtZ2[b2][lr] = 0.0f; } }
+        sv.ringPh = 0.0; sv.subPh = 0.0;
         sv.fmCarrier = sv.fmMod = sv.fmSubPhase = 0.0; sv.fmFbState = 0.0f;
         sv.wtPhase = 0.0; sv.modalInit = false; sv.modalHold = false;   // re-strike the modal bank on this hit
         for (auto& row : sv.modalY1) for (auto& v2 : row) v2 = 0.0f;   // clean resonator state every hit
@@ -1887,8 +1890,10 @@ void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals) const
             case MTRevSend:  add(tmp.fxReverbSend, 0, 1); break;
             case MTDelSend:  add(tmp.fxDelaySend, 0, 1); break;
             case MTChChorus: case MTChComp: break;   // CHANNEL FX: accumulated separately (channelMod), not on the slot copy
-            case MTTone:     add(tmp.fxTone, -1, 1); break;
+            case MTTone:     break;                  // RETIRED (Tone removed; the Bell filter covers it) - old routes are inert
             case MTPunch:    add(tmp.fxPunch, -1, 1); break;
+            case MTSub:      add(tmp.fxSub, 0, 1); break;
+            case MTFormant:  add(tmp.fxFormant, 0, 1); break;   // sweep = the slot TALKS
             case MTAtk:      tmp.atk = juce::jlimit(0.0f, 6.0f, tmp.atk + m * 1.0f); break;
             case MTDec:      tmp.dec = juce::jlimit(0.0f, 6.0f, tmp.dec + m * 2.0f); break;
             case MTSus:      add(tmp.sustain, 0, 1); break;
@@ -1905,7 +1910,7 @@ void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals) const
             case MTChFlanger: case MTChPhaser: break;   // CHANNEL FX: accumulated separately (channelMod)
             case MTRing:     add(tmp.fxRing, 0, 1); break;
             default:
-                if (r.tgt >= MT_GRID_BASE && r.tgt < MT_COUNT)
+                if (r.tgt >= MT_GRID_BASE && r.tgt < MT_GRID_END)   // engine GRID knobs only (Sub/Formant sit above)
                 {
                     const GridKnob gk = modGridKnob(tmp.engine, r.tgt - MT_GRID_BASE);
                     if (gk.field != nullptr) { float& f = tmp.*(gk.field); f = juce::jlimit(gk.mn, gk.mx, f + m * (gk.mx - gk.mn)); }
@@ -2017,7 +2022,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         // leg has boundary 1e18 + slope 0, so the position parks at that leg's left frame.
         float wtT1 = 0.0f, wtT2 = 0.0f, wtT3 = 0.0f;
         float wtInv0 = 0.0f, wtInv1 = 0.0f, wtInv2 = 0.0f;
-        float  toneK = 0.0f, toneGL = 1.0f, toneGH = 1.0f;   // TONE tilt (1-pole split + complementary gains)
+        float  subAmt = 0.0f; double subHz = 0.0;     // SUB: half the slot's base pitch (0 = unpitched engine = inert)
+        float  fmtMix = 0.0f; Biquad fmtBq[2];        // FORMANT: two vowel band-passes + wet mix
         float  punch = 0.0f;   // PUNCH transient shaper (-1 soften .. +1 punch)
         float  ring = 0.0f;   // RING (per-voice mod); Chorus/Flanger/Phaser/Comp are CHANNEL FX now (not per-slot)
         // === PER-SLOT FILTER (end) ===
@@ -2374,11 +2380,31 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         else { for (int f = 0; f < ADD_FRAMES; ++f) c.wtFrm[f] = nullptr; c.wtPos = 0.0f; c.wtGlide = false; }
         c.punch   = juce::jlimit(-1.0f, 1.0f, sl.fxPunch);
         c.ring    = juce::jlimit(0.0f, 1.0f, sl.fxRing);
-        { const float t = juce::jlimit(-1.0f, 1.0f, sl.fxTone);          // TONE tilt: +/-6 dB around ~800 Hz
-          if (t != 0.0f) { c.toneK  = 1.0f - std::exp(-2.0f * (float) kPi * 800.0f / (float) juce::jmax(1.0, sr));
-                           c.toneGL = juce::Decibels::decibelsToGain(-t * 6.0f);
-                           c.toneGH = juce::Decibels::decibelsToGain( t * 6.0f); }
-          else { c.toneK = 0.0f; c.toneGL = c.toneGH = 1.0f; } }
+        // SUB: a clean sine ONE OCTAVE below the slot's ONE base pitch (slotBaseHz = the roll's C4
+        // world too). Unpitched engines (Noise / Sample) have no base -> the knob is inert there.
+        c.subAmt = juce::jlimit(0.0f, 1.0f, sl.fxSub);
+        c.subHz  = 0.0;
+        if (c.subAmt > 0.0f)
+            switch (sl.engine) {
+                case SrcOsc: case SrcFM: case SrcGrain: case SrcPhys: case SrcModal:
+                    c.subHz = 0.5 * slotBaseHz(s, sl); break;
+                default: break;
+            }
+        {   // FORMANT: the knob = vowel position A -> E -> I -> O -> U; the wet ramps in over the
+            // first ~12% so 0 stays bit-identical and low values ease in instead of jumping to "A".
+            const float fv = juce::jlimit(0.0f, 1.0f, sl.fxFormant);
+            c.fmtMix = fv <= 0.001f ? 0.0f : juce::jmin(1.0f, fv / 0.12f);
+            if (c.fmtMix > 0.0f)
+            {
+                static const float Fm1[5] = { 800.0f, 400.0f, 250.0f, 400.0f, 350.0f };    // F1: A E I O U
+                static const float Fm2[5] = { 1150.0f, 2000.0f, 2300.0f, 800.0f, 600.0f }; // F2: A E I O U
+                const float pos = juce::jlimit(0.0f, 1.0f, (fv - 0.12f) / 0.88f) * 4.0f;
+                const int   vi  = juce::jlimit(0, 3, (int) pos); const float fr = pos - (float) vi;
+                auto ip = [&](const float* T) { return (double) (T[vi] * std::pow(T[vi + 1] / T[vi], fr)); };  // log interp
+                c.fmtBq[0].bandpass(sr, juce::jlimit(60.0, sr * 0.45, ip(Fm1)), 7.0);
+                c.fmtBq[1].bandpass(sr, juce::jlimit(60.0, sr * 0.45, ip(Fm2)), 7.0);
+            }
+        }
         };
     chFxMod[0] = chFxMod[1] = chFxMod[2] = chFxMod[3] = 0.0f;   // CHANNEL FX mod offset (both slots' routes accumulate below)
     for (int s = 0; s < NUM_SLOTS; ++s)
@@ -2413,8 +2439,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             // live snapshot for the editor's mod RINGS (raw modulated FX values). Indices 2/5/18/19 were
             // the per-slot chorus/comp/flanger/phaser - those are CHANNEL FX now (rung via chFxLive).
             slotModLiveFx[s][0] = modTmp.fxReverbSend; slotModLiveFx[s][1] = modTmp.fxDelaySend;
-            slotModLiveFx[s][2] = -1000.0f;            slotModLiveFx[s][3] = modTmp.fxTone;
-            slotModLiveFx[s][4] = modTmp.fxPunch;      slotModLiveFx[s][5] = -1000.0f;
+            slotModLiveFx[s][2] = -1000.0f;            slotModLiveFx[s][3] = modTmp.fxSub;      // [3] = Sub (was Tone)
+            slotModLiveFx[s][4] = modTmp.fxPunch;      slotModLiveFx[s][5] = modTmp.fxFormant;  // [5] = Formant (was Comp)
             slotModLiveFx[s][6] = modTmp.fxDrive;
             slotModLiveFx[s][7] = modTmp.filterCutoff; slotModLiveFx[s][8] = modTmp.filterCutoff2;
             for (int gi = 0; gi < MOD_TGT_GRID; ++gi) {   // the 8 engine GRID knobs (FM Amount, Ratio, ...)
@@ -3297,13 +3323,15 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     }
                 }
 
-                // TONE (tilt EQ, per slot): 1-pole split at ~800 Hz + complementary +/-6 dB gains.
-                if (c.toneK > 0.0f) {
-                    auto tone = [&](float x, int lr) -> float {
-                        sv.toneZ[lr] += c.toneK * (x - sv.toneZ[lr]);
-                        return sv.toneZ[lr] * c.toneGL + (x - sv.toneZ[lr]) * c.toneGH;
+                // FORMANT (per slot): two vowel band-passes (F1 + F2, interpolated A->E->I->O->U)
+                // blended over the dry = vocal colour; sweep it (knob or matrix) and the slot TALKS.
+                if (c.fmtMix > 0.0f) {
+                    auto fmt = [&](float x, int lr) -> float {
+                        const float w1 = eqProcess(c.fmtBq[0], sv.fmtZ1[0], sv.fmtZ2[0], x, lr);
+                        const float w2 = eqProcess(c.fmtBq[1], sv.fmtZ1[1], sv.fmtZ2[1], x, lr);
+                        return x * (1.0f - c.fmtMix) + (w1 + w2) * 1.9f * c.fmtMix;
                     };
-                    if (stereo) { sL = tone(sL, 0); sR = tone(sR, 1); } else sig = tone(sig, 0);
+                    if (stereo) { sL = fmt(sL, 0); sR = fmt(sR, 1); } else sig = fmt(sig, 0);
                 }
                 // PUNCH (transient shaper, per slot/per hit): fast-vs-slow envelope difference finds the
                 // attack; positive boosts it (snap), negative softens it (felt/pillowy). Bounded gains.
@@ -3322,6 +3350,15 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     const float m = (float) std::sin(sv.ringPh), rg = c.ring;
                     if (stereo) { sL = sL * (1.0f - rg) + sL * m * rg; sR = sR * (1.0f - rg) + sR * m * rg; }
                     else          sig = sig * (1.0f - rg) + sig * m * rg;
+                }
+                // SUB (per slot, LAST in the chain so it stays clean - it bypasses the slot filter/EQ/
+                // drive): a sine ONE OCTAVE below the slot's pitch, following note/step/glide (noteMul)
+                // + the pitch envelope (pe3Mul) + the slot's own amp env. Unpitched engines = inert.
+                if (c.subAmt > 0.0f && c.subHz > 0.0) {
+                    sv.subPh += 2.0 * kPi * c.subHz * (double) noteMul * pe3Mul / sr;
+                    if (sv.subPh > 2.0 * kPi) sv.subPh -= 2.0 * kPi;
+                    const float sub = (float) std::sin(sv.subPh) * env * c.subAmt * 0.9f;
+                    if (stereo) { sL += sub * 0.7071f; sR += sub * 0.7071f; } else sig += sub;
                 }
                 vEnv = juce::jmax(vEnv, env);
                 // HUMANIZE velocity jitter: sv.velScale (~1) loosens this slot's level per hit (1 = identical).
