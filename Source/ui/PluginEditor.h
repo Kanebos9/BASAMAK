@@ -689,14 +689,14 @@ public:
              "- DRAG / click inside a fader: the amount - centre is 0, left negative, right positive "
              "(double-click = 0).\n"
              "- Yellow = slot 1, pink = slot 2. Per-voice on chords.\n"
-             "- LFO -> Pitch and LFO -> Volume run at AUDIO RATE (per sample): crank the LFO speed = "
-             "real FM / ring-mod timbres. Other level/shape amounts are de-zippered (~3 ms); "
-             "Pitch from non-LFO sources moves in small frequency steps (staircase glide, no crackle).\n"
+             "- AUDIO RATE: pitch, volume, filter cutoff/reso, drive, ring, sub, punch, warp, FM "
+             "amount and wave position are modulated PER SAMPLE from ANY source - crank an LFO into "
+             "the audio range = real FM / AM / filter-FM timbres.\n"
              "- Attack / Decay / Sustain / Release are sampled ONCE PER HIT (a fast source scatters "
-             "the hits, it never wobbles a running envelope - that would crackle; use the Volume "
-             "target for continuous level movement).\n"
-             "- MOD WHEEL is a source (CC1 by default). Learn it to any CC via the MIDI dropdown -> "
-             "\"MIDI-learn: selection controls...\" -> Mod Wheel."; }
+             "the hits, it never wobbles a running envelope; use the Volume target for continuous "
+             "level movement). Engine knobs / detune / width / formant move at block rate, smoothed.\n"
+             "- Sources include MOD WHEEL (CC1, learnable via the MIDI dropdown), PRESSURE "
+             "(aftertouch - per note on MPE controllers) and SLIDE (MPE CC74)."; }
     juce::String routeSrcName(int r) const;
     juce::String routeTgtName(int r) const;
 private:

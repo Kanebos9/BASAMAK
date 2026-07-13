@@ -2259,7 +2259,6 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         float wtInv0 = 0.0f, wtInv1 = 0.0f, wtInv2 = 0.0f;
         float  subAmt = 0.0f; double subHz = 0.0;     // SUB: half the slot's base pitch (0 = unpitched engine = inert)
         float  panL = 1.0f, panR = 1.0f;              // static SLOT PAN gains (equal-power, unity at centre)
-        bool   modLive = false;                       // this config came from a live per-voice matrix bake (engages the de-zipper bank)
         float  fmtMix = 0.0f; Biquad fmtBq[2];        // FORMANT: two vowel band-passes + wet mix
         float  punch = 0.0f;   // PUNCH transient shaper (-1 soften .. +1 punch)
         float  ring = 0.0f;   // RING amount (per-voice mod); Chorus/Flanger/Phaser/Comp are CHANNEL FX now (not per-slot)
@@ -2916,7 +2915,6 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             if (vm.engine == SrcGrain) vm.grainPos = slots[s].grainPos; else vm.addPos = slots[s].addPos;
             bakeSlot(s, vm, vsc[s]);
             vsc[s].wtPosOfs = wpo;
-            vsc[s].modLive  = true;   // engage the per-sample de-zipper bank for this voice's render
             for (int d = 0; d < 4; ++d) vsc[s].lfoSrcUsed[d] = sc[s].lfoSrcUsed[d];   // route-based -> keep phases advancing
             cs[s] = &vsc[s];
         }
