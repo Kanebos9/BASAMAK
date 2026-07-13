@@ -3255,7 +3255,7 @@ int FrequencyDisplay::nearestBand(juce::Point<float> p) const
     int best = -1; float bd = 16.0f * 16.0f;
     for (int fi = 0; fi < 2; ++fi)
     {
-        const bool fOn = (fType[fi] >= DrumChannel::LowPass && fType[fi] <= DrumChannel::Notch);
+        const bool fOn = (fType[fi] >= DrumChannel::LowPass && fType[fi] <= DrumChannel::Notch) || fType[fi] == DrumChannel::Bell;
         if (fOn) { const float de = p.getDistanceSquaredFrom(filtEnvPos(a, fi)); if (de < bd) { bd = de; best = kFiltEnv(fi); } }
         const float dm = p.getDistanceSquaredFrom(filtPos(a, fi));
         const float bias = (fi == activeFilt) ? 6.0f : 0.0f;   // small pull toward the active filter's diamond
@@ -3319,15 +3319,15 @@ void FrequencyDisplay::paint(juce::Graphics& g)
 
     // === TWO per-slot resonant FILTERS in series (F1 = orange, F2 = cyan). Each is just a DIAMOND
     //     (drag = cutoff X / reso Y). DOUBLE-CLICK a diamond = enable/disable it; RIGHT-CLICK = change
-    //     its type (LP -> HP -> BP -> Notch). The type name sits on the diamond. No buttons, no menu. ===
-    static const char* tn[6] = { "OFF", "LP", "HP", "BP", "NOTCH", "FORMANT" };
+    //     its type (LP -> HP -> BP -> Notch -> Bell). The type name sits on the diamond. No buttons. ===
+    static const char* tn[7] = { "OFF", "LP", "HP", "BP", "NOTCH", "FORMANT", "BELL" };
     if (sampleRate > 0.0)
     {
         const int act = drag >= 0 ? drag : hover;
         for (int fi = 0; fi < 2; ++fi)
         {
             const auto fcol = filtColour(fi);
-            const bool fOn  = (fType[fi] >= DrumChannel::LowPass && fType[fi] <= DrumChannel::Notch);
+            const bool fOn  = (fType[fi] >= DrumChannel::LowPass && fType[fi] <= DrumChannel::Notch) || fType[fi] == DrumChannel::Bell;
             const auto mp   = filtPos(a, fi);
             {   // response curve for this filter's type (dim when off)
                 Biquad bq; const double fc = juce::jlimit(20.0, sampleRate * 0.49, (double) fCutoff[fi]);
@@ -3336,6 +3336,7 @@ void FrequencyDisplay::paint(juce::Graphics& g)
                     case DrumChannel::HighPass: bq.highpass(sampleRate, fc, q); break;
                     case DrumChannel::BandPass: bq.bandpass(sampleRate, fc, q); break;
                     case DrumChannel::Notch:    bq.notch   (sampleRate, fc, q); break;
+                    case DrumChannel::Bell:     bq.peaking (sampleRate, fc, 1.1, q); break;   // Y = BOOST dB (fixed Q 1.1, like the DSP)
                     default:                    bq.lowpass (sampleRate, fc, q); break;
                 }
                 juce::Path resp; bool started = false;
@@ -3383,7 +3384,7 @@ void FrequencyDisplay::paint(juce::Graphics& g)
             else     { g.setColour(fcol.withAlpha(0.45f)); g.strokePath(dia, juce::PathStrokeType(1.5f)); }
             // Type name ON the diamond (a small tag just above it): the user always sees F1/F2's type.
             g.setColour(fOn ? fcol : fcol.withAlpha(0.6f)); g.setFont(juce::Font(9.5f, juce::Font::bold));
-            g.drawText(juce::String("F") + juce::String(fi + 1) + " " + tn[juce::jlimit(0, 5, fType[fi])],
+            g.drawText(juce::String("F") + juce::String(fi + 1) + " " + tn[juce::jlimit(0, 6, fType[fi])],
                        juce::jlimit(left, right - 52.0f, mp.x - 26.0f), mp.y - r - 13.0f, 52.0f, 11.0f, juce::Justification::centred, false);
         }
         // one-line gesture hint (no buttons to discover from)
@@ -3403,8 +3404,10 @@ void FrequencyDisplay::mouseDown(const juce::MouseEvent& e)
     const int fi = b % 2;
     activeFilt = fi;   // grabbing a handle selects its filter (Keytrack fader follows it)
     if (e.mods.isRightButtonDown() || e.mods.isPopupMenu())
-    {   // RIGHT-CLICK a diamond = cycle its type: Off -> LP -> HP -> BP -> Notch -> Off (no menu)
-        int nt = fType[fi] + 1; if (nt > DrumChannel::Notch) nt = DrumChannel::FilterOff;   // skip Formant (legacy)
+    {   // RIGHT-CLICK a diamond = cycle its type: Off -> LP -> HP -> BP -> Notch -> Bell -> Off (no menu)
+        int nt = fType[fi] + 1;
+        if (nt == DrumChannel::Formant)   nt = DrumChannel::Bell;        // skip Formant (legacy)
+        else if (nt > DrumChannel::Bell)  nt = DrumChannel::FilterOff;
         fType[fi] = nt;
         if (onFilterEdit) onFilterEdit(fi, fType[fi], fCutoff[fi], fReso[fi], fEnvAmt[fi]);
         if (onEdit) onEdit(); if (onDragEnd) onDragEnd();
@@ -3435,8 +3438,9 @@ void FrequencyDisplay::mouseDrag(const juce::MouseEvent& e)
         if (onFilterEdit) onFilterEdit(fi, fType[fi], fCutoff[fi], fReso[fi], fEnvAmt[fi]);
         repaint(); return;
     }
-    // diamond: X = cutoff, Y = resonance. Dragging an OFF filter turns it on (LowPass).
-    if (fType[fi] < DrumChannel::LowPass || fType[fi] > DrumChannel::Notch) fType[fi] = DrumChannel::LowPass;
+    // diamond: X = cutoff, Y = resonance (Bell: Y = boost dB). Dragging an OFF filter turns it on (LowPass).
+    if ((fType[fi] < DrumChannel::LowPass || fType[fi] > DrumChannel::Notch) && fType[fi] != DrumChannel::Bell)
+        fType[fi] = DrumChannel::LowPass;
     fCutoff[fi] = juce::jlimit(20.0f, 20000.0f, freqForX(a, e.position.x));
     fReso[fi]   = normToReso((a.getBottom() - a.getHeight() * 0.06f - e.position.y) / (a.getHeight() * 0.85f));
     if (onFilterEdit) onFilterEdit(fi, fType[fi], fCutoff[fi], fReso[fi], fEnvAmt[fi]);
@@ -3450,7 +3454,8 @@ void FrequencyDisplay::mouseDoubleClick(const juce::MouseEvent& e)
     const int fi = b % 2;
     if (b == kFiltEnv(fi)) { fEnvAmt[fi] = 0.0f; if (onFilterEdit) onFilterEdit(fi, fType[fi], fCutoff[fi], fReso[fi], fEnvAmt[fi]); repaint(); return; }
     activeFilt = fi;   // toggle that filter on/off
-    fType[fi] = (fType[fi] >= DrumChannel::LowPass && fType[fi] <= DrumChannel::Notch) ? DrumChannel::FilterOff : DrumChannel::LowPass;
+    const bool wasOn = (fType[fi] >= DrumChannel::LowPass && fType[fi] <= DrumChannel::Notch) || fType[fi] == DrumChannel::Bell;
+    fType[fi] = wasOn ? DrumChannel::FilterOff : DrumChannel::LowPass;
     if (onFilterEdit) onFilterEdit(fi, fType[fi], fCutoff[fi], fReso[fi], fEnvAmt[fi]);
     repaint();
 }
@@ -3474,16 +3479,22 @@ juce::String FrequencyDisplay::getTooltip()
                "- NEEDS A FILTER ON (a diamond enabled) - it is dimmed and silent otherwise.\n"
                "- Off = the exact clean filter you had before.\n\n"
                "Tip: turn resonance up and Drive to ~40% on a bass - it growls instead of whistling.";
-    static const char* tn[6] = { "Off", "Low-pass", "High-pass", "Band-pass", "Notch", "Formant" };
+    static const char* tn[7] = { "Off", "Low-pass", "High-pass", "Band-pass", "Notch", "Formant", "Bell" };
     const int b = drag >= 0 ? drag : hover;
     if (b == kFiltEnv(0) || b == kFiltEnv(1))
     { const int fi = b % 2; return juce::String("Filter ") + juce::String(fi + 1) + " ENVELOPE: the cutoff opens/closes by "
            + juce::String(fEnvAmt[fi] * 5.0f, 1) + " octaves each hit (right of the diamond = sweep DOWN, left = UP). Double-click resets."; }
     if (b == kFilt(0) || b == kFilt(1))
-    { const int fi = b % 2; return juce::String("Filter ") + juce::String(fi + 1) + " (" + tn[juce::jlimit(0, 5, fType[fi])] + "): DRAG the diamond = cutoff ("
+    { const int fi = b % 2;
+      if (fType[fi] == DrumChannel::Bell)
+          return juce::String("Filter ") + juce::String(fi + 1) + " (Bell): a BOOSTING peak - the one filter type that ADDS energy. "
+                 "DRAG the diamond = frequency (" + juce::String(juce::roundToInt(fCutoff[fi])) + " Hz) + boost (+"
+                 + juce::String(fReso[fi], 1) + " dB, fixed musical Q). RIGHT-CLICK = change type, DOUBLE-CLICK = on/off.";
+      return juce::String("Filter ") + juce::String(fi + 1) + " (" + tn[juce::jlimit(0, 6, fType[fi])] + "): DRAG the diamond = cutoff ("
            + juce::String(juce::roundToInt(fCutoff[fi])) + " Hz) + reso (Q " + juce::String(fReso[fi], 2) + "). RIGHT-CLICK = change type, DOUBLE-CLICK = on/off, wheel = reso."; }
     return "TWO resonant filters in series (F1 orange, F2 cyan). Each is a DIAMOND: drag = cutoff/reso, double-click "
-           "= on/off, right-click = type. Stack e.g. High-Pass + Low-Pass = a band. The Keytrack fader tracks the note.";
+           "= on/off, right-click = type (LP / HP / BP / Notch / BELL - Bell BOOSTS a band, Y = +dB). "
+           "Stack e.g. High-Pass + Low-Pass = a band. Bell + a low cutoff = a movable tone lift.";
 }
 
 //==============================================================================
@@ -7907,7 +7918,7 @@ void DrumSequencerEditor::setupComponents()
         // The LFO's "filter is off" warning must update the INSTANT a filter is toggled here (a full
         // refreshDetailPanel doesn't run on a filter edit). Recompute from the LFO's own slot.
         auto& lsl = ch.slots[envTargetSlot()];
-        auto on = [](int t){ return t >= DrumChannel::LowPass && t <= DrumChannel::Notch; };
+        auto on = [](int t){ return (t >= DrumChannel::LowPass && t <= DrumChannel::Notch) || t == DrumChannel::Bell; };
         lfoDisplay.setFilterOn(on(lsl.filterType) || on(lsl.filterType2));
     };
 
@@ -8184,7 +8195,7 @@ void DrumSequencerEditor::setupComponents()
         sl.lfoRate[dest] = rate; sl.lfoAmt[dest] = amt;
         ch.markDspDirty();
         bool lfoRt[4]; lfoRoutedMask(sl, lfoRt);
-        lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve, lfoRt, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)), (sl.oscShape >= DrumChannel::WvCustom || sl.engine == DrumChannel::SrcGrain),
+        lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve, lfoRt, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || sl.filterType == DrumChannel::Bell || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch) || sl.filterType2 == DrumChannel::Bell), (sl.oscShape >= DrumChannel::WvCustom || sl.engine == DrumChannel::SrcGrain),
                              envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8));
     };
     // Tempo sync is edited IN the visual (Sync button + snapped wave drag) - write it straight back.
@@ -8230,8 +8241,8 @@ void DrumSequencerEditor::setupComponents()
         // panel = "takes some time and sometimes never shows" (user report).
         bool lfoRt[4]; lfoRoutedMask(sl, lfoRt);
         lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve, lfoRt,
-                             ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch)
-                              || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)),
+                             ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || sl.filterType == DrumChannel::Bell
+                              || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch) || sl.filterType2 == DrumChannel::Bell),
                              (sl.oscShape >= DrumChannel::WvCustom || sl.engine == DrumChannel::SrcGrain),
                              envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8));
     };
@@ -9264,7 +9275,7 @@ void DrumSequencerEditor::setShapeSlot(int s)
     comboDriveType.setSelectedId(sl.fxDriveType + 1, juce::dontSendNotification);
     updateFxFaders(sl);
     bool lfoRt[4]; lfoRoutedMask(sl, lfoRt);
-        lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve, lfoRt, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)), (sl.oscShape >= DrumChannel::WvCustom || sl.engine == DrumChannel::SrcGrain),
+        lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve, lfoRt, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || sl.filterType == DrumChannel::Bell || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch) || sl.filterType2 == DrumChannel::Bell), (sl.oscShape >= DrumChannel::WvCustom || sl.engine == DrumChannel::SrcGrain),
                          envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8));
     // The 12-fader matrix + the Mod Env follow the selected slot too (yellow slot 1 / pink slot 2).
     modFaders.slotIdx = envTargetSlot();
@@ -10370,7 +10381,7 @@ void DrumSequencerEditor::refreshDetailPanel()
       comboDriveType.setSelectedId(sl.fxDriveType + 1, juce::dontSendNotification);
       updateFxFaders(sl);
       bool lfoRt[4]; lfoRoutedMask(sl, lfoRt);
-        lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve, lfoRt, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch)), (sl.oscShape >= DrumChannel::WvCustom || sl.engine == DrumChannel::SrcGrain),
+        lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve, lfoRt, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || sl.filterType == DrumChannel::Bell || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch) || sl.filterType2 == DrumChannel::Bell), (sl.oscShape >= DrumChannel::WvCustom || sl.engine == DrumChannel::SrcGrain),
                            envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8));
       modFaders.slotIdx = envTargetSlot();
       modFaders.accent = envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8);
@@ -11044,7 +11055,7 @@ void DrumSequencerEditor::timerCallback()
     }
     { // keep the LFO's "filter is off" warning correct regardless of how the filter was toggled (change-gated = cheap)
         auto& lsl = proc.sequencer.channel(selectedChannel).slots[envTargetSlot()];
-        auto fOn = [](int t){ return t >= DrumChannel::LowPass && t <= DrumChannel::Notch; };
+        auto fOn = [](int t){ return (t >= DrumChannel::LowPass && t <= DrumChannel::Notch) || t == DrumChannel::Bell; };
         lfoDisplay.setFilterOn(fOn(lsl.filterType) || fOn(lsl.filterType2));
     }
 }
@@ -11103,13 +11114,23 @@ void DrumSequencerEditor::zoomToGroup(juce::Rectangle<int> designRect)
     if (zoomed) unzoom();
     zoomRect = designRect;
 
+    // Close the floating overlays FIRST (same rule as layoutContent): they park over multiple
+    // columns, so the lift below would otherwise drag them into the zoom - and addAndMakeVisible
+    // would force-SHOW even a hidden one (user: "wavetable menu in the background / modulation
+    // list covering the screen" when magnifying).
+    if (soundPicker != nullptr && soundPicker->isVisible())
+        static_cast<SoundPickerPanel&>(*soundPicker).close();
+    harmEd.setVisible(false);
+    lfoCurveEd.setVisible(false);
+    routePicker.setVisible(false);
+
     // Lift every control whose centre is inside the group box into the panel,
     // re-positioned relative to the group (the panel's transform enlarges them).
     const auto origin = designRect.getTopLeft();
     juce::Array<juce::Component*> toMove;
     for (auto* c : content.getChildren())
     {
-        bool skip = false;
+        bool skip = ! c->isVisible();   // NEVER lift hidden components (addAndMakeVisible would show them)
         for (auto& zb : zoomBtns) if (c == &zb) skip = true;       // keep "+" buttons in place
         for (auto& fo : srcFade)  if (c == &fo) skip = true;       // and the fade overlays
         if (! skip && designRect.contains(c->getBounds().getCentre()))
@@ -11778,7 +11799,7 @@ void DrumSequencerEditor::layoutContent()
         comboOutput.setBounds(0, 0, 0, 0); lblOutput.setBounds(0, 0, 0, 0);
 
         // ===== FX column (cxFx, per-sound only): 1/2 selector | Drive dropdown + Drive-amount fader |
-        //       Reverb/Delay/Pan KNOBS | Chorus/Ch-Rate/Ch-Depth KNOBS | LFO visual + Sync/Rate faders. =====
+        //       Rev/Dly sends + Tone/Punch/Ring KNOBS | then the CHANNEL FX box (whole instrument). =====
         hdrSend.setBounds(cxFx, colTop, fxColW, hdrH);                            // "FX" header
         slotSelFx.setBounds(cxFx + 6, colTop + 18, fxColW - 12, 16);
         knobDrive.setBounds(0, 0, 0, 0); knobDrive.setVisible(false);            // drive AMOUNT is the fader now

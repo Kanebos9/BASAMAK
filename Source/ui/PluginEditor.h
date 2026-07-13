@@ -2604,10 +2604,9 @@ private:
     //-- Visuals
     FrequencyDisplay freqDisplay;
     LfoDisplay       lfoDisplay;     // per-slot LFO visual (FX box bottom; follows the FX slot selector)
-    // Per-slot FX + Chorus as Arp-style drag-faders (replaced the Drive/Reverb/Delay knobs; the knobs
-    // stay as hidden MIDI-learn shims). Accent = the edited slot's colour (yellow / pink).
-    SlotDragFader fxDriveFader, fxReverbFader, fxDelayFader;      // Drive amount + Reverb/Delay sends
-    SlotDragFader chorusMixFader, chorusRateFader, chorusDepthFader;
+    // Per-slot Drive amount as an Arp-style drag-fader (accent = the edited slot's colour).
+    // (fxReverb/fxDelay/chorus* sibling faders were dead declarations - removed in the review sweep.)
+    SlotDragFader fxDriveFader;
     // (The LFO Sync/Rate faders were REMOVED - tempo sync lives INSIDE the LFO visual now: its Sync
     //  button cycles Off/Sync/Grid and dragging the wave snaps through the musical rates.)
     juce::dsp::FFT   fft { SpectrumTap::fftOrder };

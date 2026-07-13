@@ -175,6 +175,23 @@ int main()
         printf("[8] slot matrix -> Chorus (Channel): maxdiff=%.4f (>0.002), finite=%d -> %s\n",
                d, (int) finite(on), CHK(d > 0.002f && finite(on)) ? "OK" : "FAIL");
     }
+    {   // [9] DE-ZIPPER: a fast LFO -> Volume on a pure sine must NOT step at block edges (the
+        //     "crackling when parameters go up and down fast" bug). Weight is smoothed per sample
+        //     (~3 ms), so the max sample-to-sample delta stays near the sine's own slope.
+        auto out = render([](DrumChannel& c){
+            for (auto& sl : c.slots) sl = Slot();
+            auto& s = c.slots[0];
+            s.engine = DrumChannel::SrcOsc; s.weight = 0.5f;
+            s.oscShape = s.oscShapeB = DrumChannel::WvSine; s.oscFreq = 110.0f;
+            s.atk = 0.002f; s.hold = 0.9f; s.dec = 0.5f;
+            s.lfoRate[0] = 8.0f; s.lfoAmt[0] = 1.0f;
+            s.mod[0].src = DrumChannel::MSLfoFilt; s.mod[0].tgt = DrumChannel::MTVol; s.mod[0].amt = 1.0f; }, 0.9f, 0.9);
+        float md = 0.0f, pk = 0.0f;
+        for (size_t i = (size_t)(SR * 0.1); i + 1 < out.size(); ++i)
+        { md = std::max(md, std::abs(out[i + 1] - out[i])); pk = std::max(pk, std::abs(out[i])); }
+        printf("[9] Vol-mod de-zipper: max sample delta=%.5f peak-after-0.1s=%.4f rms=%.4f (delta <0.02 with sound) -> %s\n",
+               md, pk, rms(out), CHK(md < 0.02f && pk > 0.05f && finite(out)) ? "OK" : "FAIL");
+    }
     printf(fails == 0 ? ">>> ModMatrixTest PASS\n" : ">>> ModMatrixTest FAIL (%d)\n", fails);
     return fails;
 }

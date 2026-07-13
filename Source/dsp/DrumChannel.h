@@ -705,6 +705,8 @@ private: struct Voice; public:   // forward decl (defined privately below) so th
     double chPhPh = 0.0;
     float  chCompEnv = 0.0f;                     // channel compressor envelope
     float  chFxMod[4] = {};                      // per-block modulation offset (chorus/flanger/phaser/comp)
+    float  chFxSm[4] = { -1.0f, -1.0f, -1.0f, -1.0f };   // per-SAMPLE smoothed amounts (de-zipper; -1 = snap on first use)
+    bool   chFxOn[4] = {};                       // engage tracking: off->on clears that effect's lines (no stale-buffer burst)
     float  chFxLive[4] = { -1000.0f, -1000.0f, -1000.0f, -1000.0f };   // live modulated channel-FX values for the UI rings (-1000 = no route)
     float  addTbl[NUM_SLOTS][ADD_FRAMES][ADD_TBL] = {};  // baked wavetable frames per slot - see rebuildAddTables()
     juce::Random driftRng { 0x9e3779b9 };    // DRIFT dice (audio thread only)
@@ -817,7 +819,9 @@ private: struct Voice; public:   // forward decl (defined privately below) so th
 
     //-- Filter: only Off + Formant remain (LP/HP now live in the EQ). Enum values kept so
     //   old saved projects still parse; LowPass..Notch are no longer offered or processed.
-    enum FilterType { FilterOff = 0, LowPass, HighPass, BandPass, Notch, Formant };
+    // Bell (appended - persisted indices never renumber) = a BOOSTING peak: X = frequency, Y = boost
+    // amount (the reso field stores dB ~0.3..12; fixed musical Q). The one filter type that ADDS energy.
+    enum FilterType { FilterOff = 0, LowPass, HighPass, BandPass, Notch, Formant, Bell };
     int   filterType   = FilterOff;
     float filterCutoff = 1000.0f;  // Formant: vowel position
     float filterReso   = 0.707f;   // Formant: sharpness
@@ -1081,6 +1085,8 @@ private:
         double   ringPh = 0.0;                        // RING modulator carrier phase (per voice)
         double   filtIc1[2][2] = {}, filtIc2[2][2] = {};   // TPT/ZDF SVF integrators [filter 0/1][stereo side]
         double   filtGm[2]  = { -1.0, -1.0 };              // per-sample smoothed cutoff coeff per filter (-1 = snap)
+        double   filtKm[2]  = { -1.0, -1.0 };              // per-sample smoothed damping K (de-zippers block-rate RESO modulation)
+        float    wSm = -1.0f;                              // per-sample smoothed slot weight (de-zippers block-rate VOLUME modulation)
         double   filtGkt[2] = { -1.0, -1.0 };              // per-voice KEYTRACK target per filter (tan coeff; -1 = off)
         // === PER-SLOT FILTER (end) ===
         // Per-step LENGTH: effective decay (seconds) replacing this slot's dec so the note's fall
