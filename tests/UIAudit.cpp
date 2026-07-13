@@ -16,8 +16,8 @@ int main() {
         juce::StringArray v;
         if (ch->driveType != DrumChannel::DriveOff && ch->driveAmount > 0.001f)
             v.add("chanDrive(" + juce::String(ch->driveType) + "," + juce::String(ch->driveAmount, 2) + ")");
-        if (ch->reverbSend > 0.001f) v.add("chanRev(" + juce::String(ch->reverbSend, 2) + ")");
-        if (ch->delaySend  > 0.001f) v.add("chanDly(" + juce::String(ch->delaySend, 2) + ")");
+        // (channel reverbSend/delaySend are VISIBLE controls now - the CHANNEL FX box send faders,
+        //  2026-07-13 - so they are no longer hidden state.)
         if (ch->filterType != 0)     v.add("chanFilter(" + juce::String(ch->filterType) + ")");
         for (int s = 0; s < DrumChannel::NUM_SLOTS; ++s)
         {

@@ -112,7 +112,7 @@ int main()
     {   // [4] every route maxed = finite
         auto x = render([](DrumChannel& c){ voice(c);
             const int tg[6] = { DrumChannel::MTFilt1Cut, DrumChannel::MTPitch, DrumChannel::MTDrive,
-                                DrumChannel::MTChComp, DrumChannel::MTWidth, DrumChannel::MT_GRID_BASE };
+                                DrumChannel::MTChFxBAmt, DrumChannel::MTWidth, DrumChannel::MT_GRID_BASE };
             const int sr2[6] = { DrumChannel::MSVel, DrumChannel::MSModEnv, DrumChannel::MSModLfo,
                                  DrumChannel::MSRandom, DrumChannel::MSNote, DrumChannel::MSAmpEnv };
             for (int r = 0; r < 6; ++r) { c.slots[0].mod[r].src = (int8_t) sr2[r];
@@ -150,29 +150,34 @@ int main()
         printf("[6] per-voice Note->cutoff: chord-vs-(A+B) maxdiff=%.4f (per-voice ~0), A-vs-B=%.4f (>0.02) -> %s\n",
                superpos, ab, CHK(superpos < 0.05f && ab > 0.02f && finite(outAB)) ? "OK" : "FAIL");
     }
-    {   // [7] CHANNEL FX (Chorus/Flanger/Phaser/Comp act on the whole channel, both slots combined):
-        //     render FINITE + audibly change the tone; all 0 = bit-identical (covered by [1]).
+    {   // [7] CHANNEL FX slots (2 selectable effects on the whole channel): each type renders FINITE +
+        //     audibly changes the tone; CHARACTER changes the voicing; all Off = bit-identical ([1]).
         auto dry = render(voice, 0.9f, 0.6);
-        auto flg = render([](DrumChannel& c){ voice(c); c.chFlanger = 1.0f; }, 0.9f, 0.6);
-        auto phs = render([](DrumChannel& c){ voice(c); c.chPhaser  = 1.0f; }, 0.9f, 0.6);
-        auto cho = render([](DrumChannel& c){ voice(c); c.chChorus  = 1.0f; }, 0.9f, 0.6);
-        auto cmp = render([](DrumChannel& c){ voice(c); c.chComp    = 1.0f; }, 0.9f, 0.6);
-        const float fd = maxdiff(dry, flg), pd = maxdiff(dry, phs), cd = maxdiff(dry, cho), md = maxdiff(dry, cmp);
-        const bool ok = fd > 0.001f && pd > 0.001f && cd > 0.001f && md > 0.001f
-                     && finite(flg) && finite(phs) && finite(cho) && finite(cmp);
-        printf("[7] CHANNEL FX: flanger=%.4f phaser=%.4f chorus=%.4f comp=%.4f (all >0.001, finite) -> %s\n",
-               fd, pd, cd, md, CHK(ok) ? "OK" : "FAIL");
+        auto mk = [&](int type, float amt, float chr) {
+            return render([type, amt, chr](DrumChannel& c){ voice(c);
+                c.chFxType[0] = type; c.chFxAmt[0] = amt; c.chFxChar[0] = chr; }, 0.9f, 0.6); };
+        auto cho = mk(DrumChannel::ChFxChorus,  1.0f, 0.5f);
+        auto flg = mk(DrumChannel::ChFxFlanger, 1.0f, 0.5f);
+        auto phs = mk(DrumChannel::ChFxPhaser,  1.0f, 0.5f);
+        auto cmp = mk(DrumChannel::ChFxComp,    1.0f, 0.5f);
+        auto flgC = mk(DrumChannel::ChFxFlanger, 1.0f, 0.95f);   // character = faster/deeper sweep
+        const float cd = maxdiff(dry, cho), fd = maxdiff(dry, flg), pd = maxdiff(dry, phs), md = maxdiff(dry, cmp);
+        const float chd = maxdiff(flg, flgC);
+        const bool ok = cd > 0.001f && fd > 0.001f && pd > 0.001f && md > 0.001f && chd > 0.001f
+                     && finite(cho) && finite(flg) && finite(phs) && finite(cmp) && finite(flgC);
+        printf("[7] CHANNEL FX slots: chorus=%.3f flanger=%.3f phaser=%.3f comp=%.3f character=%.3f (all >0.001) -> %s\n",
+               cd, fd, pd, md, chd, CHK(ok) ? "OK" : "FAIL");
     }
-    {   // [8] CHANNEL FX are MODULATABLE from a slot's matrix ("... (Channel)" targets): an LFO routed to
-        //     Chorus (Channel) must change the render vs the same sound with the route removed.
-        auto off = render([](DrumChannel& c){ voice(c); c.chChorus = 0.5f; }, 0.9f, 0.8);
-        auto on  = render([](DrumChannel& c){ voice(c); c.chChorus = 0.5f;
+    {   // [8] CHANNEL FX are MODULATABLE from a slot's matrix (FX A Amount (Channel)): an LFO routed
+        //     to it must change the render vs the same sound with the route removed.
+        auto off = render([](DrumChannel& c){ voice(c); c.chFxType[0] = DrumChannel::ChFxChorus; c.chFxAmt[0] = 0.5f; }, 0.9f, 0.8);
+        auto on  = render([](DrumChannel& c){ voice(c); c.chFxType[0] = DrumChannel::ChFxChorus; c.chFxAmt[0] = 0.5f;
             c.slots[0].lfoRate[0] = 3.0f; c.slots[0].lfoAmt[0] = 1.0f;
             c.slots[0].mod[0].src = DrumChannel::MSLfoFilt;      // LFO 1
-            c.slots[0].mod[0].tgt = DrumChannel::MTChChorus;     // -> Chorus (Channel)
+            c.slots[0].mod[0].tgt = DrumChannel::MTChFxAAmt;     // -> FX A Amount (Channel)
             c.slots[0].mod[0].amt = 1.0f; }, 0.9f, 0.8);
         const float d = maxdiff(off, on);
-        printf("[8] slot matrix -> Chorus (Channel): maxdiff=%.4f (>0.002), finite=%d -> %s\n",
+        printf("[8] slot matrix -> FX A Amount (Channel): maxdiff=%.4f (>0.002), finite=%d -> %s\n",
                d, (int) finite(on), CHK(d > 0.002f && finite(on)) ? "OK" : "FAIL");
     }
     {   // [9] DE-ZIPPER: a fast LFO -> Volume on a pure sine must NOT step at block edges (the
@@ -208,6 +213,49 @@ int main()
         const float fdif = maxdiff(dry, fmt);
         printf("[10] SUB 55Hz energy %.1f -> %.1f (expect >3x), FORMANT maxdiff=%.4f (>0.02) -> %s\n",
                d55, s55, fdif, CHK(s55 > d55 * 3.0 && fdif > 0.02f && finite(sub) && finite(fmt)) ? "OK" : "FAIL");
+    }
+    {   // [11] AUDIO-RATE LFO -> PITCH = real FM: a 200 Hz sine LFO on a 400 Hz sine must create
+        //      SIDEBANDS at 400 +- 200 Hz (Goertzel) - block-rate application physically cannot.
+        auto goe = [&](const std::vector<float>& x, double f) {
+            const double w = 2.0 * 3.14159265358979 * f / SR, cw = 2.0 * std::cos(w);
+            double s0 = 0, s1 = 0, s2 = 0;
+            for (size_t i = (size_t)(SR * 0.10); i < x.size() && i < (size_t)(SR * 0.55); ++i)
+            { s0 = (double) x[i] + cw * s1 - s2; s2 = s1; s1 = s0; }
+            return std::sqrt(std::abs(s1 * s1 + s2 * s2 - cw * s1 * s2)); };
+        auto fmv = render([](DrumChannel& c){
+            for (auto& sl : c.slots) sl = Slot();
+            auto& s = c.slots[0];
+            s.engine = DrumChannel::SrcOsc; s.weight = 1.0f;
+            s.oscShape = s.oscShapeB = DrumChannel::WvSine; s.oscFreq = 400.0f;
+            s.atk = 0.002f; s.hold = 0.9f; s.dec = 0.5f;
+            s.lfoRate[0] = 200.0f; s.lfoAmt[0] = 0.35f;          // audio-rate LFO (the new range)
+            s.mod[0].src = DrumChannel::MSLfoFilt; s.mod[0].tgt = DrumChannel::MTPitch; s.mod[0].amt = 1.0f; }, 0.9f, 0.6);
+        const double car = goe(fmv, 400.0), lo = goe(fmv, 200.0), hi = goe(fmv, 600.0);
+        printf("[11] audio-rate FM: carrier=%.0f sidebands 200Hz=%.0f 600Hz=%.0f (expect sidebands > carrier*0.05) -> %s\n",
+               car, lo, hi, CHK(lo > car * 0.05 && hi > car * 0.05 && finite(fmv)) ? "OK" : "FAIL");
+    }
+    {   // [12] KEY-tracked LFO (Sync = Key, ratio 1): the modulator follows the played pitch, so the
+        //      upper sideband sits at 2 x f0 for ANY note (the FM colour is consistent across keys).
+        auto goe = [&](const std::vector<float>& x, double f) {
+            const double w = 2.0 * 3.14159265358979 * f / SR, cw = 2.0 * std::cos(w);
+            double s0 = 0, s1 = 0, s2 = 0;
+            for (size_t i = (size_t)(SR * 0.10); i < x.size() && i < (size_t)(SR * 0.5); ++i)
+            { s0 = (double) x[i] + cw * s1 - s2; s2 = s1; s1 = s0; }
+            return std::sqrt(std::abs(s1 * s1 + s2 * s2 - cw * s1 * s2)); };
+        auto mkK = [&](float baseHz) {
+            return render([baseHz](DrumChannel& c){
+                for (auto& sl : c.slots) sl = Slot();
+                auto& s = c.slots[0];
+                s.engine = DrumChannel::SrcOsc; s.weight = 1.0f;
+                s.oscShape = s.oscShapeB = DrumChannel::WvSine; s.oscFreq = baseHz;
+                s.atk = 0.002f; s.hold = 0.9f; s.dec = 0.5f;
+                s.lfoSync[0] = -2.0f; s.lfoRate[0] = 1.0f; s.lfoAmt[0] = 0.35f;   // KEY mode, ratio x1
+                s.mod[0].src = DrumChannel::MSLfoFilt; s.mod[0].tgt = DrumChannel::MTPitch; s.mod[0].amt = 1.0f; }, 0.9f, 0.6); };
+        auto a = mkK(300.0f); auto b = mkK(450.0f);
+        const double sbA = goe(a, 600.0), carA = goe(a, 300.0);
+        const double sbB = goe(b, 900.0), carB = goe(b, 450.0);
+        printf("[12] KEY-tracked FM: 300Hz note 2f=%.0f (car %.0f), 450Hz note 2f=%.0f (car %.0f) (2f > car*0.05 both) -> %s\n",
+               sbA, carA, sbB, carB, CHK(sbA > carA * 0.05 && sbB > carB * 0.05 && finite(a) && finite(b)) ? "OK" : "FAIL");
     }
     printf(fails == 0 ? ">>> ModMatrixTest PASS\n" : ">>> ModMatrixTest FAIL (%d)\n", fails);
     return fails;

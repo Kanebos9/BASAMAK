@@ -117,6 +117,8 @@ void DrumSequencerProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
 
     fdn.prepare(sampleRate);
     fdn.reset();
+    fdnB.prepare(sampleRate);
+    fdnB.reset();
 
     // Shared per-slot spectrum scratch: sized for the biggest engine-rate block (min 8192 for safety).
     analysisScratch.assign((size_t) juce::jmax(8192, samplesPerBlock * kEngineOS), 0.0f);
@@ -124,6 +126,8 @@ void DrumSequencerProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     // Delay buffer: 2 seconds max
     delayBuffer.setSize(2, (int)(sampleRate * 2.0));
     delayBuffer.clear();
+    delayBufferB.setSize(2, (int)(sampleRate * 2.0));
+    delayBufferB.clear();
     delayFbLp[0] = delayFbLp[1] = delayFbHp[0] = delayFbHp[1] = 0.0f;
     for (auto& n : activeMidiNote) n = -1;   // no held MIDI-out notes yet
 
@@ -132,8 +136,15 @@ void DrumSequencerProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     reverbSendBase.setSize(2, juce::jmax(1, samplesPerBlock));
     delaySendBase.setSize (2, juce::jmax(1, samplesPerBlock));
     reverbSendOS.clear(); delaySendOS.clear(); reverbSendBase.clear(); delaySendBase.clear();   // no startup garbage into the FX
+    reverbSendOSB.setSize  (2, juce::jmax(1, samplesPerBlock * kEngineOS));   // BUS B mirrors
+    delaySendOSB.setSize   (2, juce::jmax(1, samplesPerBlock * kEngineOS));
+    reverbSendBaseB.setSize(2, juce::jmax(1, samplesPerBlock));
+    delaySendBaseB.setSize (2, juce::jmax(1, samplesPerBlock));
+    reverbSendOSB.clear(); delaySendOSB.clear(); reverbSendBaseB.clear(); delaySendBaseB.clear();
     reverbPreBuffer.setSize(2, (int)(sampleRate * 0.130) + 2);   // up to ~120 ms pre-delay
     reverbPreBuffer.clear(); reverbPreHead = 0;
+    reverbPreBufferB.setSize(2, (int)(sampleRate * 0.130) + 2);
+    reverbPreBufferB.clear(); reverbPreHeadB = 0;
     delayWriteHead = 0;
     limiterGain = 1.0f;
     masterGlueEnv = 0.0f;
@@ -852,11 +863,13 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         }
     }
     reverbSendOS.clear(); delaySendOS.clear();   // per-channel send sums accumulate here (OS rate)
+    reverbSendOSB.clear(); delaySendOSB.clear(); // bus B sums
     // (The sequencer computes each rendered pattern's OWN anySolo internally - passing the
     //  VIEWED pattern's used to silence the whole playing pattern when view != playback.)
     auto events = sequencer.processBlock(osMain, currentSampleRate * kEngineOS, nOS,
                                           getPlayHead(), auxPtrs, NUM_AUX_OUTS,
-                                          &reverbSendOS, &delaySendOS);
+                                          &reverbSendOS, &delaySendOS,
+                                          &reverbSendOSB, &delaySendOSB);
     engineOS->processSamplesDown(hostBlock);   // -> `audio` at the host rate
 
 
@@ -879,6 +892,8 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         };
         downAvg(reverbSendOS, reverbSendBase);
         downAvg(delaySendOS,  delaySendBase);
+        downAvg(reverbSendOSB, reverbSendBaseB);
+        downAvg(delaySendOSB,  delaySendBaseB);
     }
 
     //-- Emit MIDI for MIDI-out channels (they sequence other plugins). A note is HELD for its
@@ -972,7 +987,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
 
     //-- Scrub the FX sends BEFORE the delay/reverb: a channel glitch must never enter a feedback line
     //   (it would get trapped + echo forever = the "gunshot that echoes"). Non-finite -> 0, clamp ±4.
-    for (auto* buf : { &delaySendBase, &reverbSendBase })
+    for (auto* buf : { &delaySendBase, &reverbSendBase, &delaySendBaseB, &reverbSendBaseB })
         for (int ch = 0; ch < buf->getNumChannels(); ++ch)
         {
             float* d = buf->getWritePointer(ch);
@@ -980,9 +995,11 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                 d[i] = std::isfinite(d[i]) ? juce::jlimit(-64.0f, 64.0f, d[i]) : 0.0f;  // only block NaN/absurd into the FX
         }
 
-    //-- Process shared reverb + delay
-    processDelay(audio, delaySendBase, numSamples);
-    processReverb(audio, reverbSendBase, numSamples);
+    //-- Process shared reverb + delay (bus A, then bus B - each with its own params + state)
+    processDelay (audio, delaySendBase,   numSamples, false);
+    processDelay (audio, delaySendBaseB,  numSamples, true);
+    processReverb(audio, reverbSendBase,  numSamples, false);
+    processReverb(audio, reverbSendBaseB, numSamples, true);
 
     //-- Master output stage (final): volume, pan, optional mono, safety limiter
     {
@@ -1233,10 +1250,10 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
     {
         static const std::pair<const char*, int> kSelKnobs[] = {
             { "ui_sel_fxDrive", SelFxDrive }, { "ui_sel_fxRev", SelFxRev }, { "ui_sel_fxDel", SelFxDel },
-            { "ui_sel_fxCho", SelFxCho }, { "ui_sel_fxSub", SelFxSub }, { "ui_sel_fxPunch", SelFxPunch },
-            { "ui_sel_fxComp", SelFxComp },
-            { "ui_sel_fxFlanger", SelFxFlanger }, { "ui_sel_fxPhaser", SelFxPhaser }, { "ui_sel_fxRing", SelFxRing },
-            { "ui_sel_fxFormant", SelFxFormant },
+            { "ui_sel_cfxAmtA", SelChFxAmtA }, { "ui_sel_fxSub", SelFxSub }, { "ui_sel_fxPunch", SelFxPunch },
+            { "ui_sel_cfxAmtB", SelChFxAmtB },
+            { "ui_sel_cfxChrA", SelChFxChrA }, { "ui_sel_cfxChrB", SelChFxChrB }, { "ui_sel_fxRing", SelFxRing },
+            { "ui_sel_fxFormant", SelFxFormant }, { "ui_sel_fxRingHz", SelFxRingHz },
             { "ui_sel_envA", SelEnvA }, { "ui_sel_envH", SelEnvH }, { "ui_sel_envD", SelEnvD },
             { "ui_sel_envS", SelEnvS }, { "ui_sel_envR", SelEnvR },
             { "ui_sel_uniCount", SelUniCount }, { "ui_sel_uniDet", SelUniDet }, { "ui_sel_uniVib", SelUniVib },
@@ -1330,68 +1347,90 @@ void DrumSequencerProcessor::updateAnySolo()
         if (ch.solo) { anySolo = true; break; }
 }
 
-void DrumSequencerProcessor::processReverb(juce::AudioBuffer<float>& audio, juce::AudioBuffer<float>& send, int numSamples)
+void DrumSequencerProcessor::processReverb(juce::AudioBuffer<float>& audio, juce::AudioBuffer<float>& send, int numSamples, bool busB)
 {
     // True send/return: `send` already holds Sum(channel x its reverbSend), so a channel at send=0
     // contributes nothing. We reverb the send (WET ONLY) then add the tail back to Main.
+    // TWO BUSES (v1.3.9): the same engine twice - A and B each have their OWN params (MasterFX
+    // ...B fields) + state, and every channel picks its bus (revBus). CPU = one extra FDN, small.
     if (audio.getNumChannels() < 2) return;
+
+    auto& mfx = masterFX();
+    const float pPre   = busB ? mfx.reverbPreDelayB : mfx.reverbPreDelay;
+    const float pRoom  = busB ? mfx.reverbRoomB     : mfx.reverbRoom;
+    const float pDamp  = busB ? mfx.reverbDampB     : mfx.reverbDamp;
+    const float pWet   = busB ? mfx.reverbWetB      : mfx.reverbWet;
+    const float pWidth = busB ? mfx.reverbWidthB    : mfx.reverbWidth;
+    const int   pMode  = busB ? mfx.reverbModeB     : mfx.reverbMode;
+    FDNReverb& f                    = busB ? fdnB            : fdn;
+    juce::AudioBuffer<float>& preB  = busB ? reverbPreBufferB : reverbPreBuffer;
+    int& preHead                    = busB ? reverbPreHeadB   : reverbPreHead;
 
     float* sL = send.getWritePointer(0);
     float* sR = send.getWritePointer(1);
 
     // Pre-delay: push a gap (0..120 ms) before the tail so the dry transient is heard first (drums).
-    // The send is fed through a short delay line before the reverb. Always buffered so the line stays
-    // warm; only delayed when Pre > 0.
     {
-        const int preMax   = reverbPreBuffer.getNumSamples();
-        const int preSamps = juce::jlimit(0, preMax - 1, (int)(masterFX().reverbPreDelay * 0.120 * currentSampleRate));
-        float* pbL = reverbPreBuffer.getWritePointer(0);
-        float* pbR = reverbPreBuffer.getWritePointer(1);
+        const int preMax   = preB.getNumSamples();
+        const int preSamps = juce::jlimit(0, preMax - 1, (int)(pPre * 0.120 * currentSampleRate));
+        float* pbL = preB.getWritePointer(0);
+        float* pbR = preB.getWritePointer(1);
         for (int i = 0; i < numSamples; ++i)
         {
-            const int rd = (reverbPreHead + i - preSamps + preMax) % preMax;
-            const int wr = (reverbPreHead + i) % preMax;
+            const int rd = (preHead + i - preSamps + preMax) % preMax;
+            const int wr = (preHead + i) % preMax;
             const float inL = sL[i], inR = sR[i];
             if (preSamps > 0) { sL[i] = pbL[rd]; sR[i] = pbR[rd]; }
             pbL[wr] = inL; pbR[wr] = inR;
         }
-        reverbPreHead = (reverbPreHead + numSamples) % preMax;
+        preHead = (preHead + numSamples) % preMax;
     }
 
-    // Modulated FDN reverb (in place: send -> wet tail). "Decay" knob = 1 - reverbDamp (more = longer).
-    const float decay01 = 1.0f - juce::jlimit(0.0f, 1.0f, masterFX().reverbDamp);
-    fdn.process(sL, sR, sL, sR, numSamples,
-                juce::jlimit(0.0f, 1.0f, masterFX().reverbRoom),     // Size -> room
-                decay01,                                             // Decay -> feedback time
-                0.35f,                                               // damping LP (smooth, musical)
-                juce::jlimit(0.0f, 1.0f, masterFX().reverbWidth),    // Width
-                juce::jlimit(0, 3, masterFX().reverbMode));          // Room/Hall/Plate/Shimmer voicing
+    // Modulated FDN reverb (in place: send -> wet tail). "Decay" knob = 1 - damp (more = longer).
+    const float decay01 = 1.0f - juce::jlimit(0.0f, 1.0f, pDamp);
+    f.process(sL, sR, sL, sR, numSamples,
+              juce::jlimit(0.0f, 1.0f, pRoom),     // Size -> room
+              decay01,                             // Decay -> feedback time
+              0.35f,                               // damping LP (smooth, musical)
+              juce::jlimit(0.0f, 1.0f, pWidth),    // Width
+              juce::jlimit(0, 3, pMode));          // Room/Hall/Plate/Shimmer voicing
 
-    // MAKE-UP: the FDN attenuates ~12 dB internally, so the wet was ~ -46 dB at factory sends and
-    // still ~ -26 dB fully cranked = inaudible ("reverb does nothing"). Bring it up to a usable range.
-    const float wet = juce::jlimit(0.0f, 1.0f, masterFX().reverbWet) * 5.0f;
+    // MAKE-UP: the FDN attenuates ~12 dB internally - bring the wet up to a usable range.
+    const float wet = juce::jlimit(0.0f, 1.0f, pWet) * 5.0f;
     audio.addFrom(0, 0, sL, numSamples, wet);   // add the wet tail to Main (scaled by Wet)
     audio.addFrom(1, 0, sR, numSamples, wet);
 }
 
-void DrumSequencerProcessor::processDelay(juce::AudioBuffer<float>& audio, juce::AudioBuffer<float>& send, int numSamples)
+void DrumSequencerProcessor::processDelay(juce::AudioBuffer<float>& audio, juce::AudioBuffer<float>& send, int numSamples, bool busB)
 {
     // True send/return: `send` already holds Sum(channel x its delaySend). It feeds the delay line;
     // the wet echoes return to Main. (We always run so existing echoes ring out naturally.)
-    const int delayLen = delayBuffer.getNumSamples();
+    // TWO BUSES (v1.3.9): A and B each have their own params (MasterFX ...B) + line/state.
+    auto& mfx = masterFX();
+    const double pTime = busB ? mfx.delayTimeB     : mfx.delayTime;
+    const bool  pSync  = busB ? mfx.delaySyncB     : mfx.delaySync;
+    const int   pDiv   = busB ? mfx.delayDivisionB : mfx.delayDivision;
+    const float pFb    = busB ? mfx.delayFeedbackB : mfx.delayFeedback;
+    const float pWet2  = busB ? mfx.delayWetB      : mfx.delayWet;
+    const bool  pPing  = busB ? mfx.delayPingPongB : mfx.delayPingPong;
+    juce::AudioBuffer<float>& dBuf = busB ? delayBufferB : delayBuffer;
+    int&   head = busB ? delayWriteHeadB : delayWriteHead;
+    float* fbLp = busB ? delayFbLpB : delayFbLp;
+    float* fbHp = busB ? delayFbHpB : delayFbHp;
+    const int delayLen = dBuf.getNumSamples();
 
     // Sync mode: Time selects a note division (in beats) relative to host tempo.
-    double delaySecs = masterFX().delayTime;
-    if (masterFX().delaySync)
+    double delaySecs = pTime;
+    if (pSync)
     {
         static const double divBeats[] = { 0.25, 1.0/3.0, 0.5, 0.75, 1.0, 1.5, 2.0 }; // 1/16,1/8T,1/8,1/8.,1/4,1/4.,1/2
         const int n = (int) (sizeof(divBeats) / sizeof(divBeats[0]));
-        const double beats = divBeats[juce::jlimit(0, n - 1, masterFX().delayDivision)];
+        const double beats = divBeats[juce::jlimit(0, n - 1, pDiv)];
         const double bpm = currentBpm > 1.0 ? currentBpm : 120.0;
         delaySecs = beats * 60.0 / bpm;
     }
     const int delaySamples = juce::jlimit(1, delayLen - 1, (int)(delaySecs * currentSampleRate));
-    const float feedback = juce::jlimit(0.0f, 0.98f, masterFX().delayFeedback);
+    const float feedback = juce::jlimit(0.0f, 0.98f, pFb);
 
     // Fixed musical feedback tone: each repeat is low-passed (~4 kHz, tape-style darkening) and
     // high-passed (~180 Hz, stops low-end build-up). The wet RETURN stays full-band; only the
@@ -1403,20 +1442,20 @@ void DrumSequencerProcessor::processDelay(juce::AudioBuffer<float>& audio, juce:
     // Process L+R together so Ping-Pong can cross-feed the feedback (L's tail feeds R's line
     // and vice-versa, so echoes bounce across the stereo field). Main only; aux outs stay dry.
     const bool stereo = audio.getNumChannels() >= 2;
-    const bool ping   = masterFX().delayPingPong && stereo;
-    const int  nDly   = delayBuffer.getNumChannels();
+    const bool ping   = pPing && stereo;
+    const int  nDly   = dBuf.getNumChannels();
     float* outL = audio.getWritePointer(0);
     float* outR = stereo ? audio.getWritePointer(1) : nullptr;
     const float* inL = send.getReadPointer(0);
     const float* inR = send.getReadPointer(stereo ? 1 : 0);
-    float* dL   = delayBuffer.getWritePointer(0);
-    float* dR   = delayBuffer.getWritePointer(juce::jmin(1, nDly - 1));
-    const float wet = juce::jlimit(0.0f, 1.0f, masterFX().delayWet);   // delay return level (MASTER "Wet" knob)
+    float* dL   = dBuf.getWritePointer(0);
+    float* dR   = dBuf.getWritePointer(juce::jmin(1, nDly - 1));
+    const float wet = juce::jlimit(0.0f, 1.0f, pWet2);   // delay return level (MASTER "Wet" knob)
 
     for (int i = 0; i < numSamples; ++i)
     {
-        const int readPos  = (delayWriteHead + i - delaySamples + delayLen) % delayLen;
-        const int writePos = (delayWriteHead + i) % delayLen;
+        const int readPos  = (head + i - delaySamples + delayLen) % delayLen;
+        const int writePos = (head + i) % delayLen;
 
         const float dryL = inL[i];                            // delay INPUT = the send sum
         const float dryR = stereo ? inR[i] : inL[i];
@@ -1426,17 +1465,17 @@ void DrumSequencerProcessor::processDelay(juce::AudioBuffer<float>& audio, juce:
         outL[i] += delL * wet;                                // echoes return to Main
         if (stereo) outR[i] += delR * wet;
 
-        delayFbLp[0] += lpCoef * (delL - delayFbLp[0]);       // band-limit each feedback tap
-        delayFbHp[0] += hpCoef * (delayFbLp[0] - delayFbHp[0]);
-        const float fbL = delayFbLp[0] - delayFbHp[0];
-        delayFbLp[1] += lpCoef * (delR - delayFbLp[1]);
-        delayFbHp[1] += hpCoef * (delayFbLp[1] - delayFbHp[1]);
-        const float fbR = delayFbLp[1] - delayFbHp[1];
+        fbLp[0] += lpCoef * (delL - fbLp[0]);       // band-limit each feedback tap
+        fbHp[0] += hpCoef * (fbLp[0] - fbHp[0]);
+        const float fbL = fbLp[0] - fbHp[0];
+        fbLp[1] += lpCoef * (delR - fbLp[1]);
+        fbHp[1] += hpCoef * (fbLp[1] - fbHp[1]);
+        const float fbR = fbLp[1] - fbHp[1];
 
         if (ping) { dL[writePos] = dryL + fbR * feedback; dR[writePos] = dryR + fbL * feedback; }
         else      { dL[writePos] = dryL + fbL * feedback; dR[writePos] = dryR + fbR * feedback; }
     }
-    delayWriteHead = (delayWriteHead + numSamples) % delayLen;
+    head = (head + numSamples) % delayLen;
 }
 
 juce::File DrumSequencerProcessor::exportMidiFile(int channel)
@@ -1675,10 +1714,15 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
     chState.setProperty("keys2Dn",  ch.keysSlot2Down,  nullptr);   // KEYS slot-2 transpose (per pattern/channel)
     chState.setProperty("humanize", ch.humanizeAmt,    nullptr);   // HUMANIZE: between-slot timing/velocity jitter
     chState.setProperty("strum",    ch.strumAmt,       nullptr);   // STRUM: chord/scale note time-spread
-    chState.setProperty("chFxCho", ch.chChorus,  nullptr);   // CHANNEL FX (both slots combined)
-    chState.setProperty("chFxFlg", ch.chFlanger, nullptr);
-    chState.setProperty("chFxPhs", ch.chPhaser,  nullptr);
-    chState.setProperty("chFxCmp", ch.chComp,    nullptr);
+    for (int f = 0; f < 2; ++f)   // CHANNEL FX slots (type + amount + character) + sends + buses
+    { const juce::String k(f);
+      chState.setProperty("cfxT" + k, ch.chFxType[f], nullptr);
+      chState.setProperty("cfxA" + k, ch.chFxAmt[f],  nullptr);
+      chState.setProperty("cfxC" + k, ch.chFxChar[f], nullptr); }
+    chState.setProperty("chRev", ch.reverbSend, nullptr);   // channel sends (per-slot sends retired)
+    chState.setProperty("chDel", ch.delaySend,  nullptr);
+    chState.setProperty("revBus", (int) ch.revBus, nullptr);   // which shared reverb/delay bus (A/B)
+    chState.setProperty("delBus", (int) ch.delBus, nullptr);
     chState.setProperty("keysMinVel", ch.keysMinVel,   nullptr);   // KEYS: minimum played velocity floor
     chState.setProperty("keysMaxVel", ch.keysMaxVel,   nullptr);   // KEYS: maximum played velocity ceiling
     chState.setProperty("keysGlide",  ch.keysGlide,    nullptr);   // KEYS: mono legato glide (portamento) time
@@ -1845,10 +1889,30 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
     ch.keysSlot2Down  = juce::jlimit(-24, 24, (int) child.getProperty("keys2Dn", 0));   // KEYS slot-2 transpose (per channel; +down/-up)
     ch.humanizeAmt = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("humanize", 0.0f));   // HUMANIZE
     ch.strumAmt    = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("strum",    0.0f));   // STRUM
-    ch.chChorus  = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("chFxCho", 0.0f));   // CHANNEL FX (readSlots
-    ch.chFlanger = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("chFxFlg", 0.0f));   // migrates old per-slot
-    ch.chPhaser  = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("chFxPhs", 0.0f));   // chorus/comp onto these
-    ch.chComp    = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("chFxCmp", 0.0f));   // afterwards)
+    for (int f = 0; f < 2; ++f)   // CHANNEL FX slots (readSlots migrates a pre-slot-system file after this)
+    { const juce::String k(f);
+      ch.chFxType[f] = juce::jlimit(0, 4, (int) child.getProperty("cfxT" + k, 0));
+      ch.chFxAmt[f]  = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("cfxA" + k, 0.0f));
+      ch.chFxChar[f] = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("cfxC" + k, 0.5f)); }
+    {   // MIGRATION: last week's 4-fixed-effect files ("chFxCho"...) -> the strongest two FX slots
+        struct OldFx { int type; float amt; };
+        OldFx v[4] = { { DrumChannel::ChFxChorus,  juce::jlimit(0.0f, 1.0f, (float) child.getProperty("chFxCho", 0.0f)) },
+                       { DrumChannel::ChFxFlanger, juce::jlimit(0.0f, 1.0f, (float) child.getProperty("chFxFlg", 0.0f)) },
+                       { DrumChannel::ChFxPhaser,  juce::jlimit(0.0f, 1.0f, (float) child.getProperty("chFxPhs", 0.0f)) },
+                       { DrumChannel::ChFxComp,    juce::jlimit(0.0f, 1.0f, (float) child.getProperty("chFxCmp", 0.0f)) } };
+        for (int f = 0; f < 2; ++f)
+        {
+            if (ch.chFxType[f] != DrumChannel::ChFxOff) continue;   // new keys present = no migration
+            int best = -1; for (int j = 0; j < 4; ++j) if (v[j].amt > 0.001f && (best < 0 || v[j].amt > v[best].amt)) best = j;
+            if (best < 0) break;
+            ch.chFxType[f] = v[best].type; ch.chFxAmt[f] = v[best].amt; ch.chFxChar[f] = 0.5f;   // 0.5 = the old fixed voicing
+            v[best].amt = 0.0f;
+        }
+    }
+    ch.reverbSend = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("chRev", (float) ch.reverbSend));   // channel sends
+    ch.delaySend  = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("chDel", (float) ch.delaySend));    // (legacy field default kept)
+    ch.revBus = (int8_t) juce::jlimit(0, 1, (int) child.getProperty("revBus", 0));
+    ch.delBus = (int8_t) juce::jlimit(0, 1, (int) child.getProperty("delBus", 0));
     ch.keysMinVel  = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("keysMinVel", 0.0f)); // KEYS min velocity
     ch.keysMaxVel  = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("keysMaxVel", 1.0f)); // KEYS max velocity
     ch.keysGlide   = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("keysGlide",  0.0f)); // KEYS mono glide
@@ -2113,6 +2177,18 @@ juce::ValueTree DrumSequencerProcessor::captureStateTree()
         patState.setProperty("delFB",   m.delayFeedback, nullptr);
         patState.setProperty("delWet",  m.delayWet,      nullptr);
         patState.setProperty("revMode", m.reverbMode,     nullptr);
+        patState.setProperty("mRoomB",  m.reverbRoomB,   nullptr);   // BUS B reverb + delay params
+        patState.setProperty("mDampB",  m.reverbDampB,   nullptr);
+        patState.setProperty("mRWetB",  m.reverbWetB,    nullptr);
+        patState.setProperty("mRPreB",  m.reverbPreDelayB, nullptr);
+        patState.setProperty("mRWidB",  m.reverbWidthB,  nullptr);
+        patState.setProperty("revModeB", m.reverbModeB,  nullptr);
+        patState.setProperty("dTimeB",  m.delayTimeB,    nullptr);
+        patState.setProperty("dFbB",    m.delayFeedbackB, nullptr);
+        patState.setProperty("dWetB",   m.delayWetB,     nullptr);
+        patState.setProperty("dSyncB",  m.delaySyncB,    nullptr);
+        patState.setProperty("dDivB",   m.delayDivisionB, nullptr);
+        patState.setProperty("dPingB",  m.delayPingPongB, nullptr);
         patState.setProperty("delSync", m.delaySync,     nullptr);
         patState.setProperty("delDiv",  m.delayDivision, nullptr);
         patState.setProperty("delPP",   m.delayPingPong, nullptr);
@@ -2258,6 +2334,18 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
             m.delayFeedback = (float)child.getProperty("delFB",   0.3f);
             m.delayWet      = (float)child.getProperty("delWet",  0.3f);   // 0.3 = the old fixed return level
             m.reverbMode    = juce::jlimit(0, 3, (int) child.getProperty("revMode", 1));   // default Hall = original
+            m.reverbRoomB     = (float)child.getProperty("mRoomB", 0.5f);   // BUS B (defaults = a tight Room)
+            m.reverbDampB     = (float)child.getProperty("mDampB", 0.5f);
+            m.reverbWetB      = (float)child.getProperty("mRWetB", 0.4f);
+            m.reverbPreDelayB = (float)child.getProperty("mRPreB", 0.0f);
+            m.reverbWidthB    = (float)child.getProperty("mRWidB", 1.0f);
+            m.reverbModeB     = juce::jlimit(0, 3, (int) child.getProperty("revModeB", 0));
+            m.delayTimeB      = (float)child.getProperty("dTimeB", 0.375f);
+            m.delayFeedbackB  = (float)child.getProperty("dFbB",   0.3f);
+            m.delayWetB       = (float)child.getProperty("dWetB",  0.3f);
+            m.delaySyncB      = (bool) child.getProperty("dSyncB", false);
+            m.delayDivisionB  = (int)  child.getProperty("dDivB",  4);
+            m.delayPingPongB  = (bool) child.getProperty("dPingB", false);
             m.delaySync     = (bool) child.getProperty("delSync", false);
             m.delayDivision = (int)  child.getProperty("delDiv",  4);
             m.delayPingPong = (bool) child.getProperty("delPP",   false);

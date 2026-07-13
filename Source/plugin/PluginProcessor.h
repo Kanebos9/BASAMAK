@@ -108,7 +108,8 @@ public:
 
     // Reverb / Delay engines (the FX are shared; their KNOB VALUES are stored
     // per-pattern in Sequencer::Pattern::master, see Sequencer.h).
-    FDNReverb fdn;                       // modulated FDN reverb (smoother than Freeverb)
+    FDNReverb fdn;                       // modulated FDN reverb, bus A (smoother than Freeverb)
+    FDNReverb fdnB;                      // bus B (its own mode/size/decay - e.g. Hall keys / Room drums)
     float limiterGain    = 1.0f;        // limiter gain-reduction envelope (audio thread state)
     float masterGlueEnv  = 0.0f;        // master "glue" compressor detector envelope (audio thread state)
     float masterTiltL    = 0.0f;        // master tilt-EQ one-pole low-band state (L/R)
@@ -158,7 +159,7 @@ public:
     // editor's timer drains and applies them to the CURRENT selection (pattern/channel/slot)
     // through the same code paths the on-screen controls use. SPSC ring (keyQ pattern): the
     // audio thread writes, the editor reads. Full ring = events dropped (the UI catches up).
-    enum SelCC : int { SelFxDrive = 0, SelFxRev, SelFxDel, SelFxCho, SelFxSub, SelFxPunch, SelFxComp,
+    enum SelCC : int { SelFxDrive = 0, SelFxRev, SelFxDel, SelChFxAmtA, SelFxSub, SelFxPunch, SelChFxAmtB,
                        SelEnvA, SelEnvH, SelEnvD, SelEnvS, SelEnvR,
                        SelUniCount, SelUniDet, SelUniVib, SelUniWidth, SelUniDrift,
                        SelStrum, SelMinVel, SelMaxVel, SelGlide, SelSlotOfs,
@@ -166,7 +167,7 @@ public:
                        SelChNext, SelChPrev, SelPatNext, SelPatPrev,
                        SelFollow, SelTest, SelChVol, SelSwing, SelBpm, SelUndo, SelRedo,
                        SelSlotFreq, SelSlotFmAmt, SelSlotWarp,   // the selected slot's Osc faders
-                       SelFxFlanger, SelFxPhaser, SelFxRing, SelFxFormant,   // slot Ring/Formant + CHANNEL FX flanger/phaser
+                       SelChFxChrA, SelChFxChrB, SelFxRing, SelFxFormant, SelFxRingHz,   // CHANNEL FX A/B Character + slot Ring/Formant/RingHz
                        SelSlotPBase = 1000,    // 1000 + N = the N-th knob of the selected slot's engine grid
                        SelStepBase  = 2000 };  // 2000 + N = step N on the selected channel
     struct SelCCEvt { int t; float v; };
@@ -291,14 +292,21 @@ private:
     int delayWriteHead = 0;
     float delayFbLp[2] = { 0.0f, 0.0f };   // LP state per channel (feedback darkening)
     float delayFbHp[2] = { 0.0f, 0.0f };   // HP state per channel (feedback mud removal)
+    juce::AudioBuffer<float> delayBufferB;  // BUS B delay line + state
+    int delayWriteHeadB = 0;
+    float delayFbLpB[2] = { 0.0f, 0.0f }, delayFbHpB[2] = { 0.0f, 0.0f };
 
     // True per-channel FX sends. Channels sum their post-fader signal x send into these at the
     // OVERSAMPLED rate (rendered alongside the engine); the processor averages them down to the
     // host rate, then reverb/delay process the down-rate sum and add the wet back to Main.
     juce::AudioBuffer<float> reverbSendOS, delaySendOS;     // accumulation buffers (host rate x kEngineOS)
     juce::AudioBuffer<float> reverbSendBase, delaySendBase; // down-sampled to host rate
+    juce::AudioBuffer<float> reverbSendOSB, delaySendOSB;   // BUS B accumulation (OS rate)
+    juce::AudioBuffer<float> reverbSendBaseB, delaySendBaseB;
     juce::AudioBuffer<float> reverbPreBuffer;               // reverb pre-delay line (0..120 ms)
     int reverbPreHead = 0;
+    juce::AudioBuffer<float> reverbPreBufferB;              // bus B pre-delay line
+    int reverbPreHeadB = 0;
 
     // Master limiter lookahead: a short delay so the gain dips BEFORE a transient (cleaner catch).
     // Always delays by limiterLAlen samples (reported as latency) so the latency stays constant.
@@ -313,6 +321,6 @@ private:
 
     void routeCC(const juce::MidiMessage& msg);
     void updateAnySolo();
-    void processDelay(juce::AudioBuffer<float>& audio, juce::AudioBuffer<float>& send, int numSamples);
-    void processReverb(juce::AudioBuffer<float>& audio, juce::AudioBuffer<float>& send, int numSamples);
+    void processDelay(juce::AudioBuffer<float>& audio, juce::AudioBuffer<float>& send, int numSamples, bool busB = false);
+    void processReverb(juce::AudioBuffer<float>& audio, juce::AudioBuffer<float>& send, int numSamples, bool busB = false);
 };

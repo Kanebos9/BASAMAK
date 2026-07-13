@@ -30,6 +30,14 @@ public:
         float reverbPreDelay = 0.0f;    // 0..1 -> 0..120 ms gap before the reverb tail (drums love this)
         int   reverbMode = 1;           // 0 Room / 1 Hall (= the original voicing, default) / 2 Plate / 3 Shimmer
         float reverbWidth    = 1.0f;    // reverb stereo width (0 = mono/narrow tail, 1 = full wide)
+        // BUS B (v1.3.9): a SECOND shared reverb + delay - e.g. A = Hall for keys, B = tight Room
+        // for drums. Channels pick their bus per channel (revBus/delBus, right-click the send fader).
+        // Same param set as A; edited via the A/B selector in MASTER.
+        float reverbRoomB = 0.5f, reverbDampB = 0.5f, reverbWetB = 0.4f;
+        float reverbPreDelayB = 0.0f; int reverbModeB = 0;   // B defaults to ROOM (the drum bus)
+        float reverbWidthB = 1.0f;
+        float delayTimeB = 0.375f, delayFeedbackB = 0.3f, delayWetB = 0.3f;
+        bool  delaySyncB = false; int delayDivisionB = 4; bool delayPingPongB = false;
         float volume = 0.9f;
         bool  mono   = false;
         float limit  = 0.003f;          // 0 = limiter off; default ~-0.1 dB ceiling (light/transparent)
@@ -166,8 +174,10 @@ public:
         juce::AudioPlayHead* playHead,
         juce::AudioBuffer<float>* const* auxBuses = nullptr,  // per-aux-out views (nullptr = disabled)
         int numAux = 0,
-        juce::AudioBuffer<float>* reverbSendBus = nullptr,    // per-channel reverb-send sum (Main-routed only)
-        juce::AudioBuffer<float>* delaySendBus  = nullptr);   // per-channel delay-send sum
+        juce::AudioBuffer<float>* reverbSendBus  = nullptr,   // per-channel reverb-send sum, bus A (Main-routed only)
+        juce::AudioBuffer<float>* delaySendBus   = nullptr,   // per-channel delay-send sum, bus A
+        juce::AudioBuffer<float>* reverbSendBusB = nullptr,   // bus B sums (a channel picks its bus via revBus/delBus)
+        juce::AudioBuffer<float>* delaySendBusB  = nullptr);
 
     void reset();
     void resetChains()           { for (auto& p : patterns) p.chainStep = 0; }   // chain positions back to the start

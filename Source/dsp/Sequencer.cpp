@@ -22,7 +22,9 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
     juce::AudioBuffer<float>* const* auxBuses,
     int numAux,
     juce::AudioBuffer<float>* reverbSendBus,
-    juce::AudioBuffer<float>* delaySendBus)
+    juce::AudioBuffer<float>* delaySendBus,
+    juce::AudioBuffer<float>* reverbSendBusB,
+    juce::AudioBuffer<float>* delaySendBusB)
 {
     juce::Array<TriggerEvent> events;
     if (numSamples <= 0) return events;
@@ -119,8 +121,10 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
             juce::AudioBuffer<float>* dest = toMain ? &audio : auxBuses[ob - 1];
             // Sends only apply to Main-routed channels (aux outs are dry, on their own DAW track).
             chan.renderInto(*dest, segStart, segEnd - segStart, soloPlay,
-                            toMain ? reverbSendBus : nullptr,
-                            toMain ? delaySendBus  : nullptr);
+                            toMain ? reverbSendBus  : nullptr,
+                            toMain ? delaySendBus   : nullptr,
+                            toMain ? reverbSendBusB : nullptr,   // channel revBus/delBus pick A or B
+                            toMain ? delaySendBusB  : nullptr);
         }
         segStart = segEnd;
     }

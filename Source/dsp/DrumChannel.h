@@ -378,9 +378,14 @@ public:
     // MTTone is RETIRED (the Tone knob was removed - the Bell filter covers it): the index is reserved,
     // old routes to it are inert, the picker never offers it. NEW fixed targets append AFTER the grid
     // block (MTSub/MTFormant) so saved grid routes never shift.
+    // CHANNEL-level targets (applied via the channelMod accumulation, both slots' routes add):
+    //   MTRevSend/MTDelSend = the channel sends (sends moved to channel level 2026-07-13);
+    //   MTChFxAAmt/MTChFxAChr/MTChFxBAmt/MTChFxBChr = the two CHANNEL FX slots' Amount + Character
+    //   (repurposed in place from the old fixed Chorus/Comp/Flanger/Phaser targets - the amount
+    //   indices map to where the migration parks each old effect, so old dev routes stay sensible).
     enum ModTgt { MTOff = 0, MTFilt1Cut, MTFilt1Res, MTFilt2Cut, MTFilt2Res, MTDrive, MTRevSend,
-                  MTDelSend, MTChChorus, MTTone, MTPunch, MTChComp, MTAtk, MTDec, MTSus, MTRel, MTPitch,
-                  MTWavePos, MTDetune, MTVibrato, MTWidth, MTDrift, MTVol, MTWarp, MTChFlanger, MTChPhaser, MTRing, MT_GRID_BASE,
+                  MTDelSend, MTChFxAAmt, MTTone, MTPunch, MTChFxBAmt, MTAtk, MTDec, MTSus, MTRel, MTPitch,
+                  MTWavePos, MTDetune, MTVibrato, MTWidth, MTDrift, MTVol, MTWarp, MTChFxAChr, MTChFxBChr, MTRing, MT_GRID_BASE,
                   MTSub = MT_GRID_BASE + 8, MTFormant };
     static constexpr int MOD_TGT_GRID = 8;   // grid knobs MT_GRID_BASE .. MT_GRID_BASE+7
     static constexpr int MT_GRID_END = MT_GRID_BASE + MOD_TGT_GRID;   // grid range check: >= BASE && < END
@@ -562,11 +567,12 @@ public:
         // -- Per-slot FX (per sound). Drive = an insert on this slot's signal; Reverb/Delay = this slot's
         //    SEND amount into the shared reverb/delay engines (character set in the FX box). --
         int   fxDriveType = 0;                  // DrumChannel::DriveType
-        float fxDrive = 0.0f, fxReverbSend = 0.0f, fxDelaySend = 0.0f;
+        float fxDrive = 0.0f;   // (fxReverbSend/fxDelaySend retired 2026-07-13 - sends are CHANNEL-level now)
         // -- per-slot one-knob tone FX (v1.3.5; all 0 = bypass = bit-identical). Chorus/Flanger/Phaser/
         //    Comp are NO LONGER per-slot - they moved to CHANNEL FX (see DrumChannel::chChorus...). --
         float fxPunch = 0.0f;                   // transient shaper -1 soften .. +1 punch (per hit)
-        float fxRing    = 0.0f;                 // ring modulator 0..1 (dry -> ring-modulated, ~200 Hz carrier; per voice)
+        float fxRing    = 0.0f;                 // ring modulator 0..1 (dry -> ring-modulated; per voice)
+        float fxRingHz  = 200.0f;               // RING carrier: Hz (default 200 = the old fixed constant); < 26 = TRACK the note
         // (fxTone RETIRED 2026-07-13 - the Bell filter type covers the tilt, movable.)
         float fxSub     = 0.0f;                 // SUB: clean sine ONE OCTAVE below the slot's pitch (0 = off; pitched engines only)
         float fxFormant = 0.0f;                 // FORMANT: vowel morph 0 = off, up = A -> E -> I -> O -> U (fixed intensity)
@@ -698,23 +704,23 @@ private: struct Voice; public:   // forward decl (defined privately below) so th
     float chDrvLp[2] = {}, chDrvDcX[2] = {}, chDrvDcY[2] = {};   // channel drive post-smoothing + Fuzz DC blocker (legacy multi-slot drive stage)
     // PER-SLOT CHORUS runtime: a stereo delay line + 3 LFO phases per slot (lazy-sized in renderInto);
     // the insert runs on the slot's summed output AFTER the voice loop, so it never touches the other slot.
-    // CHANNEL FX runtime (v1.3.9: Chorus/Flanger/Phaser/Comp are per-CHANNEL now - one instance on the
-    // whole channel's summed output, after both slots mix. Base amounts chChorus/... below; these are
-    // the single delay lines / allpass / comp state; chFxMod = the per-block modulation offset).
-    std::vector<float> chChorusDL, chChorusDR;   // channel chorus delay line
-    int    chChorusW  = 0;
-    double chChorusPh = 0.0;
-    std::vector<float> chFlangDL, chFlangDR;     // channel flanger delay line
-    int    chFlangW  = 0;
-    double chFlangPh = 0.0;
-    float  chPhZL[6] = {}, chPhZR[6] = {};       // channel phaser allpass states (6 stages, stereo)
-    float  chPhFbL = 0.0f, chPhFbR = 0.0f;
-    double chPhPh = 0.0;
-    float  chCompEnv = 0.0f;                     // channel compressor envelope
-    float  chFxMod[4] = {};                      // per-block modulation offset (chorus/flanger/phaser/comp)
-    float  chFxSm[4] = { -1.0f, -1.0f, -1.0f, -1.0f };   // per-SAMPLE smoothed amounts (de-zipper; -1 = snap on first use)
-    bool   chFxOn[4] = {};                       // engage tracking: off->on clears that effect's lines (no stale-buffer burst)
-    float  chFxLive[4] = { -1000.0f, -1000.0f, -1000.0f, -1000.0f };   // live modulated channel-FX values for the UI rings (-1000 = no route)
+    // CHANNEL FX runtime: per FX SLOT (A/B) state - each slot owns a delay line (chorus needs ~60 ms,
+    // flanger ~12; sized for its current type), phaser allpasses and a comp envelope, so any type can
+    // sit in any slot (even the same type twice). chFxMod = per-block matrix offsets
+    // [0 A-Amt, 1 A-Chr, 2 B-Amt, 3 B-Chr, 4 RevSend, 5 DelSend]; chFxSm = per-sample smoothed amounts.
+    std::vector<float> chFxDL[2], chFxDR[2];
+    int    chFxW[2]  = {};
+    double chFxPhs[2] = {};
+    float  chFxPzL[2][6] = {}, chFxPzR[2][6] = {};   // phaser allpass states per slot
+    float  chFxFbL[2] = {}, chFxFbR[2] = {};
+    float  chFxCompEnv[2] = {};
+    float  chFxMod[6] = {};
+    float  chFxSm[2] = { -1.0f, -1.0f };             // per-SAMPLE smoothed slot amounts (-1 = snap on first use)
+    bool   chFxRun[2] = {};                          // engage tracking: off->on clears that slot's state (no stale burst)
+    float  chSendHpZ[2] = {};                        // reverb-send high-pass state (~150 Hz; subs stay out of the verb)
+    float  chSendSmR = -1.0f, chSendSmD = -1.0f;     // per-sample smoothed send gains (de-zipper; -1 = snap)
+    float  chFxLive[6] = { -1000, -1000, -1000, -1000, -1000, -1000 };   // live modulated channel values for the UI rings
+                                                                          // [A-Amt, A-Chr, B-Amt, B-Chr, RevSend, DelSend]; -1000 = no route
     float  addTbl[NUM_SLOTS][ADD_FRAMES][ADD_TBL] = {};  // baked wavetable frames per slot - see rebuildAddTables()
     juce::Random driftRng { 0x9e3779b9 };    // DRIFT dice (audio thread only)
     double lfoBarPos  = -1.0;   // set by the Sequencer per block while PLAYING: bars into the playing
@@ -865,13 +871,20 @@ private: struct Voice; public:   // forward decl (defined privately below) so th
     //     only meaningful when that slot is in CHORD or SCALE mode).
     float humanizeAmt = 0.0f;   // 0..1
     float strumAmt    = 0.0f;   // 0..1
-    // CHANNEL FX (v1.3.9, user): 4 effects that voice the WHOLE instrument (both slots combined),
-    // applied once on the channel's summed output. Part of the SOUND (channelSoundHash + mix files).
-    // All 0 = bypass = bit-identical. Modulatable via the mod matrix targets "... (Channel)".
-    float chChorus  = 0.0f;   // multi-voice stereo widener
-    float chFlanger = 0.0f;   // swept short delay + feedback (metallic jet)
-    float chPhaser  = 0.0f;   // swept allpass notches + feedback (swirl)
-    float chComp    = 0.0f;   // bus compressor = glue the two layers into one instrument
+    // CHANNEL FX (v1.3.9 round-2, user): TWO selectable effect SLOTS on the WHOLE instrument (both
+    // sound slots combined), run in series A -> B. Each = a TYPE + Amount + CHARACTER (the second
+    // dimension: chorus = rate/depth, flanger/phaser = sweep speed + feedback, comp = attack).
+    // Character 0.5 = the old fixed constants EXACTLY (migration-safe). Part of the SOUND
+    // (channelSoundHash + mix files). Amount 0 / type Off = bypass = bit-identical.
+    enum ChFxType { ChFxOff = 0, ChFxChorus, ChFxFlanger, ChFxPhaser, ChFxComp };
+    int   chFxType[2] = { 0, 0 };
+    float chFxAmt [2] = { 0.0f, 0.0f };
+    float chFxChar[2] = { 0.5f, 0.5f };
+    // CHANNEL SENDS (moved from per-slot 2026-07-13): how much of the finished channel (post
+    // CHANNEL FX) feeds the shared reverb / delay. The reverb send is HIGH-PASSED ~150 Hz (fixed,
+    // disclosed) so subs stay dry. reverbSend/delaySend fields below (legacy position) are THE
+    // canonical sends now - they have UI faders in the CHANNEL FX box.
+    int8_t revBus = 0, delBus = 0;   // which shared bus this channel feeds (0 = A, 1 = B; channel-wide like routing)
     uint32_t humRng   = 0x9e3779b9u;   // per-channel RNG advanced each trigger (per-hit humanize variation)
     //   keysMinVel / keysMaxVel = the FLOOR + CEILING for keyboard velocity: a played key's velocity is
     //     remapped [0..1] -> [keysMinVel..keysMaxVel], so soft playing still sounds and loud is tamed.
@@ -1008,8 +1021,10 @@ private: struct Voice; public:   // forward decl (defined privately below) so th
     void keyUp();
     static float physDecayScale(int material);   // material ring-length multiplier (for the UI's tail read-out)
     void renderInto(juce::AudioBuffer<float>& dest, int startSample, int numSamples, bool anySolo,
-                    juce::AudioBuffer<float>* reverbSendBus = nullptr,
-                    juce::AudioBuffer<float>* delaySendBus  = nullptr);
+                    juce::AudioBuffer<float>* reverbSendBus  = nullptr,
+                    juce::AudioBuffer<float>* delaySendBus   = nullptr,
+                    juce::AudioBuffer<float>* reverbSendBusB = nullptr,   // bus B (revBus/delBus pick per channel)
+                    juce::AudioBuffer<float>* delaySendBusB  = nullptr);
     void updateDSP();
 
     // Call (from any thread) after changing eq/filter values; the audio thread
@@ -1247,7 +1262,7 @@ private:
 
     // Temp render buffer
     juce::AudioBuffer<float> renderBuf;
-    juce::AudioBuffer<float> fxSendBuf;   // per-slot reverb/delay send sums (ch 0/1 = reverb L/R, 2/3 = delay L/R)
+    // (fxSendBuf retired - sends are CHANNEL-level now, tapped from the finished renderBuf.)
 
     void applyEQ(juce::AudioBuffer<float>& buf, int numSamples);
 };

@@ -689,6 +689,8 @@ public:
              "- DRAG / click inside a fader: the amount - centre is 0, left negative, right positive "
              "(double-click = 0).\n"
              "- Yellow = slot 1, pink = slot 2. Per-voice on chords.\n"
+             "- LFO -> Pitch and LFO -> Volume run at AUDIO RATE (per sample): crank the LFO speed = "
+             "real FM / ring-mod timbres. Other routes are block-rate (smoothed).\n"
              "- MOD WHEEL is a source (CC1 by default). Learn it to any CC via the MIDI dropdown -> "
              "\"MIDI-learn: selection controls...\" -> Mod Wheel."; }
     juce::String routeSrcName(int r) const;
@@ -835,9 +837,12 @@ public:
     }
     MidiLearnManager* mlm = nullptr;                 // right-click MIDI-learn (only faders GIVEN a pid)
     juce::String learnPid;
+    std::function<bool()> onRightClick;              // custom right-click (bus menus); true = handled
     void mouseDown(const juce::MouseEvent& e) override
-    { if ((e.mods.isPopupMenu() || e.mods.isRightButtonDown()) && mlm != nullptr && learnPid.isNotEmpty())
-      { showMidiLearnMenu(this, *mlm, learnPid, -1); return; }
+    { if (e.mods.isPopupMenu() || e.mods.isRightButtonDown())
+      { if (onRightClick && onRightClick()) return;
+        if (mlm != nullptr && learnPid.isNotEmpty()) showMidiLearnMenu(this, *mlm, learnPid, -1);
+        return; }
       drag_ = true; apply(e); }
     void mouseDrag(const juce::MouseEvent& e) override { apply(e); }
     void mouseUp  (const juce::MouseEvent&)   override { if (drag_ && onDragEnd) onDragEnd(); drag_ = false; }
@@ -939,7 +944,9 @@ private:
     juce::Point<float> dnPos_;
     // The wave's true speed in Hz for dest d (what the DSP actually plays - synced rates included).
     float effHz(int d) const { const float s = sync_[d];
-        return s == 0.0f ? rate_[d] : (s < 0.0f ? gridCpb_ : s) / barSec_; }
+        return s == 0.0f ? rate_[d]
+             : s <= -1.5f ? 261.63f * rate_[d]                       // KEY: drawn at middle C x ratio (per-voice in the DSP)
+             : (s < 0.0f ? gridCpb_ : s) / barSec_; }
     // GENERIC LFO: the hue follows what the LFO AFFECTS (its assigned destination), so the wave
     // colour tells you its effect at a glance; Off = neutral grey.
     juce::Colour destCol(int lfoIdx) const;   // fixed per-LFO identity hue (impl in .cpp - needs kLfoDestCol)
@@ -2408,23 +2415,28 @@ private:
     // FX row = SELECTED-SCOPE MIDI targets: the CC acts on whatever pattern/channel/slot is
     // selected (SelCC ring -> editor timer). The old p{P}_ch{C}_* ids routed to LEGACY
     // channel-level fields with no UI = "assigned but nothing moves".
-    LearnableKnob knobReverb  { "ui_sel_fxRev",   proc.midiLearn };
-    LearnableKnob knobDelay   { "ui_sel_fxDel",   proc.midiLearn };
+    // (knobReverb/knobDelay retired - the sends are CHANNEL FX box faders now, pids ui_sel_fxRev/fxDel.)
     LearnableKnob knobSub     { "ui_sel_fxSub",     proc.midiLearn };   // per-slot SUB oscillator (octave below)
     LearnableKnob knobFormant { "ui_sel_fxFormant", proc.midiLearn };   // per-slot FORMANT vowel morph
     LearnableKnob knobPunch   { "ui_sel_fxPunch", proc.midiLearn };   // per-slot PUNCH transient shaper
     LearnableKnob knobRing    { "ui_sel_fxRing",    proc.midiLearn };   // per-slot RING modulator
+    LearnableKnob knobRingHz  { "ui_sel_fxRingHz",  proc.midiLearn };   // RING carrier (Hz; hard left = track the note)
     // ---- CHANNEL FX box: Chorus / Flanger / Phaser / Comp act on the WHOLE channel (both slots
     //      combined), so they do NOT follow the slot selector. Vertical faders (MASTER style), one row.
     juce::Label   hdrChannelFx;
-    SlotDragFader chFxVF[4];                       // 0 Chorus, 1 Flanger, 2 Phaser, 3 Comp
-    juce::Label   lblChFx[4];
-    juce::Label   lblSub, lblFormant, lblPunch, lblRing;
+    // CHANNEL FX = TWO selectable effect slots (type combo + Amount + Character faders) + the channel
+    // Reverb/Delay SEND faders (right-click a send fader = pick its bus A/B + MIDI-learn).
+    juce::ComboBox comboChFx[2];
+    SlotDragFader  chFxAmtF[2], chFxChrF[2];
+    SlotDragFader  sendRevF, sendDelF;
+    juce::Label   lblSub, lblFormant, lblPunch, lblRing, lblRingHz;
     // REVERB MODE: clicking the "REVERB" header cycles Room -> Hall -> Plate -> Shimmer (whole
     // preset, like the other master flavour controls). A tiny MouseListener makes the Label clickable.
     struct HdrClick : juce::MouseListener
-    { std::function<void()> fn; void mouseDown(const juce::MouseEvent&) override { if (fn) fn(); } };
-    HdrClick revModeClick;
+    { std::function<void()> fn; std::function<void(const juce::MouseEvent&)> fnE;
+      void mouseDown(const juce::MouseEvent& e) override { if (fnE) fnE(e); else if (fn) fn(); } };
+    HdrClick revModeClick, delayBusClick;
+    bool masterBusB = false;               // which shared bus the MASTER reverb/delay rows EDIT (A or B)
     void refreshReverbModeHeader();
     void openLfoCurveEditor(int dest);   // LFO SHAPER overlay
     void openRoutePicker(int route);     // two-column source|target picker for one matrix fader
