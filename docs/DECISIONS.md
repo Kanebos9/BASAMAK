@@ -152,6 +152,9 @@
 | 97 | FreqShift Character curve = 1500^|2c-1| - 1 Hz (centre exactly 0, ~3 Hz at 60%, ~1.5 kHz at the ends) | the musical zone (barber-pole 0.5..50 Hz) needs most of the throw; a linear map would waste it | my call |
 | 98 | Rotary = ratio-locked rotor (0.34x the horn phase), no speed-ramp inertia | true Leslie inertia (accel/decel on speed switch) needs a slewed rate state; ratio-lock keeps it deterministic + cheap - add inertia only if the user asks | my call, disclosed |
 | 73 | Base Freq is NOT a matrix target (modGridKnob returns none for Phys/Modal grid index 0) | user: pitch control already exists (MTPitch); a second per-slot pitch route would be redundant + confusing | user instruction |
+| 99 | Slot Pan (the 6th FX knob) is NOT a matrix target and has no motion | division of labour: placement = static knobs (slot pan / step + note pan), stereo MOVEMENT = Channel FX Auto-Pan exclusively - avoids a 4th overlapping pan mechanism | user-approved split |
+| 100 | Dropdown per-item tooltips = a custom TipList panel (TipCombo showPopup override), not PopupMenu custom items | juce::ComboBox/PopupMenu can't tooltip items; the content-child panel reuses the proven PickerCombo latch + Closer + focus-watchdog machinery (closes on outside click AND host-focus loss, per the user's spec) | user allowed "make a new dropdown" |
+| 101 | MonoToggle rows = STEREO on top / MONO below, active row lit amber | reads as a state display + button in one; top = the default state | my call within the user's two-row-button spec |
 
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /

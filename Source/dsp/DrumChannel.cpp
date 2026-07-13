@@ -739,6 +739,7 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         // (chM/fxCp/fxFl/fxPh retired - Chorus/Comp/Flanger/Phaser are CHANNEL FX now, saved on the channel.)
         st.setProperty("fxPn", s.fxPunch, nullptr); st.setProperty("fxRg", s.fxRing, nullptr);
         st.setProperty("fxRgH", s.fxRingHz, nullptr);   // Ring carrier (Hz; < 26 = track the note)
+        st.setProperty("sPan",  s.pan,      nullptr);   // static slot pan (-1..+1)
         st.setProperty("fxSb", s.fxSub, nullptr);   st.setProperty("fxFm", s.fxFormant, nullptr);
         // ("fxTn" retired - Tone removed 2026-07-13; the Bell filter covers the tilt. Old keys ignored.)
         for (int f = 0; f < ADD_FRAMES; ++f)            // ADDITIVE WAVETABLE: 4 drawn frames (CSV per frame)
@@ -887,6 +888,7 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         s.fxPunch = (float)st.getProperty("fxPn", d.fxPunch);
         s.fxRing  = (float)st.getProperty("fxRg", d.fxRing);
         s.fxRingHz = (float)st.getProperty("fxRgH", d.fxRingHz);
+        s.pan      = (float)st.getProperty("sPan",  d.pan);
         s.fxSub     = (float)st.getProperty("fxSb", d.fxSub);
         s.fxFormant = (float)st.getProperty("fxFm", d.fxFormant);
         // LEGACY MIGRATION: chorus + comp used to be PER SLOT ("chM"/"fxCp"). They are CHANNEL FX now -
@@ -2047,6 +2049,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         float wtT1 = 0.0f, wtT2 = 0.0f, wtT3 = 0.0f;
         float wtInv0 = 0.0f, wtInv1 = 0.0f, wtInv2 = 0.0f;
         float  subAmt = 0.0f; double subHz = 0.0;     // SUB: half the slot's base pitch (0 = unpitched engine = inert)
+        float  panL = 1.0f, panR = 1.0f;              // static SLOT PAN gains (equal-power, unity at centre)
         float  fmtMix = 0.0f; Biquad fmtBq[2];        // FORMANT: two vowel band-passes + wet mix
         float  punch = 0.0f;   // PUNCH transient shaper (-1 soften .. +1 punch)
         float  ring = 0.0f;   // RING amount (per-voice mod); Chorus/Flanger/Phaser/Comp are CHANNEL FX now (not per-slot)
@@ -2443,6 +2446,10 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         // world too). Unpitched engines (Noise / Sample) have no base -> the knob is inert there.
         c.subAmt = juce::jlimit(0.0f, 1.0f, sl.fxSub);
         c.subHz  = 0.0;
+        {   // SLOT PAN: equal-power with UNITY at centre (sqrt(1 -/+ p)) - pan 0 = bit-identical.
+            const float pp = juce::jlimit(-1.0f, 1.0f, sl.pan);
+            c.panL = std::sqrt(1.0f - pp); c.panR = std::sqrt(1.0f + pp);
+        }
         if (c.subAmt > 0.0f)
             switch (sl.engine) {
                 case SrcOsc: case SrcFM: case SrcGrain: case SrcPhys: case SrcModal:
@@ -3465,8 +3472,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 // (MTVol / blend moves) never steps audibly. Constant weight = snap-once = bit-identical.
                 if (sv.wSm < 0.0f) sv.wSm = c.weight; else sv.wSm += wSmK * (c.weight - sv.wSm);
                 const float wEff = sv.wSm * sv.velScale * sv.driftGain;   // driftGain = per-note breath (1 = off)
-                const float cL = (stereo ? sL : sig) * wEff;
-                const float cR = (stereo ? sR : sig) * wEff;
+                const float cL = (stereo ? sL : sig) * wEff * c.panL;   // SLOT PAN places the layer
+                const float cR = (stereo ? sR : sig) * wEff * c.panR;
                 mixL += cL; mixR += cR;   // all slots sum to the mix; CHANNEL FX process the sum after the loop
                 // === PER-SLOT EQ (begin) - capture THIS slot's mono output for its spectrum ===
                 if (s == tapSlot && i < analysisBufLen) {

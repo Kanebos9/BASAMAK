@@ -242,7 +242,7 @@ void WaveMorphDisplay::paint(juce::Graphics& g)
     // Compact form (resonator open, box is tight): drop the A/B label strip, use it all for the wave.
     auto labelRow = compact ? juce::Rectangle<float>() : full.removeFromBottom(13.0f);
     auto in = full;
-    const float cy = in.getCentreY(), hh = in.getHeight() * 0.5f - 1.0f;
+    const float cy = in.getCentreY();
 
     auto* s = getSlot ? getSlot() : nullptr;
     const int   wave  = s ? juce::jlimit(0, DrumChannel::oscShapeCount() - 1, s->oscShape) : 0;  // the single Wave
@@ -4493,12 +4493,6 @@ void KeysPanel::resized()
     placeKnob(maxVelKnob, lblMaxVel, knobArea.removeFromLeft(62));
     placeKnob(glideKnob,  lblGlide,  knobArea);
     strip.removeFromLeft(12);
-    // POLY + TRANSPOSE-LOCK toggles (the hint text used to live here): label above, switch below.
-    auto placeTog = [&strip](ToggleSwitch& sw, juce::Label& l, int w) {
-        auto col = strip.removeFromLeft(w);
-        l.setBounds(col.removeFromTop(15));
-        sw.setBounds(col.getCentreX() - 16, col.getY() + 4, 32, 18);
-    };
     { auto col = strip.removeFromLeft(60);                                   // Poly / Arp / Guide: ONE column
       lblPoly.setBounds(col.removeFromTop(13));
       polySwitch.setBounds(col.getCentreX() - 16, col.getY(),      32, 16);  // Poly toggle
@@ -5591,7 +5585,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         h = mix(h, sl.filterType); h = mix(h, f(sl.filterCutoff)); h = mix(h, f(sl.filterReso)); h = mix(h, f(sl.filterEnvAmt));   // per-slot filter 1
         h = mix(h, sl.filterType2); h = mix(h, f(sl.filterCutoff2)); h = mix(h, f(sl.filterReso2)); h = mix(h, f(sl.filterEnvAmt2));   // filter 2
         h = mix(h, f(sl.filterGain)); h = mix(h, f(sl.filterGain2));   // BELL bipolar gains
-        h = mix(h, f(sl.fxPunch)); h = mix(h, f(sl.fxRing)); h = mix(h, f(sl.fxRingHz));   // Punch/Ring/RingHz (per slot)
+        h = mix(h, f(sl.fxPunch)); h = mix(h, f(sl.fxRing)); h = mix(h, f(sl.fxRingHz)); h = mix(h, f(sl.pan));   // Punch/Ring/RingHz/Pan (per slot)
         h = mix(h, f(sl.fxSub)); h = mix(h, f(sl.fxFormant));                      // Sub/Formant (per slot)
         for (int fr = 0; fr < DrumChannel::ADD_FRAMES; ++fr)
             for (int k = 0; k < DrumChannel::ADD_HARM; ++k)
@@ -6545,6 +6539,7 @@ void DrumSequencerEditor::applySelCC(int t, float v, bool& slotDirty, bool& keys
         case P::SelFxPunch: sl.fxPunch = v * 2.0f - 1.0f; break;
         case P::SelFxRing:  sl.fxRing = v; break;
         case P::SelFxRingHz: sl.fxRingHz = v < 0.02f ? 25.0f : 25.0f * std::pow(160.0f, v); break;   // 25..4000 log; hard left = Track
+        case P::SelSlotPan:  sl.pan      = v * 2.0f - 1.0f; break;   // static slot pan L..R
         // CHANNEL FX (whole instrument, both slots) - these write the CHANNEL, not the slot.
         case P::SelChFxAmtA: ch.chFxAmt[0]  = v; slotDirty = true; break;
         case P::SelChFxChrA: ch.chFxChar[0] = v; slotDirty = true; break;
@@ -8062,6 +8057,22 @@ void DrumSequencerEditor::setupComponents()
         if (ignoreKnobCallbacks) return;
         proc.sequencer.channel(selectedChannel).slots[envTargetSlot()].fxDriveType = comboDriveType.getSelectedId() - 1;
     };
+    comboDriveType.onOpenList = [this] {   // per-item tooltips (hover a type = what it does)
+        fxTypeList.openFor(&comboDriveType, {
+            { 1,  "Drive: Off", "No drive." },
+            { 2,  "Soft Clip",  "Rounded tanh saturation - warm, stays gentle even when pushed hard." },
+            { 3,  "Hard Clip",  "Flat-top clipping - raw, buzzy, aggressive." },
+            { 4,  "Tube",       "Asymmetric valve-style warmth - adds even harmonics, keeps dynamics." },
+            { 5,  "Foldback",   "Wavefolder: peaks fold back DOWN instead of clipping - metallic, synthy." },
+            { 6,  "Fuzz",       "Rectified broken-speaker fuzz - splatty, thick, unstable." },
+            { 7,  "Bitcrush",   "Digital lo-fi: bit-depth + sample-rate reduction grit." },
+            { 9,  "Bass Amp",   "The split rig: LOWS pass clean, only mids/highs drive - fat bass that never farts out. Amount = amp gain." },
+            { 10, "Exciter",    "Synthesizes fresh 2nd + 3rd harmonics and blends them IN - the dry signal passes untouched, so it gets bigger and brighter WITHOUT clipping." } },
+            comboDriveType.getSelectedId(),
+            [this](int id) { comboDriveType.setSelectedId(id, juce::sendNotificationSync); });
+    };
+    comboDriveType.listOpen      = [this] { return fxTypeList.openForCombo(&comboDriveType); };
+    comboDriveType.onToggleClose = [this] { fxTypeList.close(); };
 
     // Per-channel output routing: Main, or one of the discrete aux outs (process each drum
     // on its own DAW track). Aux outs must be enabled in the host; standalone = Main only.
@@ -8247,11 +8258,39 @@ void DrumSequencerEditor::setupComponents()
         "- HARD LEFT = \"Track\": the carrier FOLLOWS THE NOTE (tuned ring mod - the colour stays consistent across the keyboard).\n"
         "- Only audible while the Ring knob is up.");
 
+    setupKnob(knobSlotPan, lblSlotPan, "Pan", -1.0, 1.0, 0.0, 1.0,
+              [](double v){ return std::abs(v) < 0.01 ? juce::String("C")
+                                                      : (v < 0 ? "L" : "R") + juce::String(juce::roundToInt(std::abs(v) * 100.0)); });
+    knobSlotPan.onValueChange = [this]{ if(!ignoreKnobCallbacks) proc.sequencer.channel(selectedChannel).slots[envTargetSlot()].pan = (float)knobSlotPan.getValue(); };
+    knobSlotPan.onDragEnd     = [this]{ if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel); };
+    knobSlotPan.setTooltip("SLOT PAN: place THIS LAYER left or right (static, equal-power).\n\n"
+        "- Pan the two slots apart = instant instrument WIDTH, even on mono engines (KS / samples / noise) - and real stereo for the Widener to work on.\n"
+        "- Composes with per-step / per-note pan (those move the whole hit; this places the layer inside it).\n"
+        "- Deliberately NOT a matrix target: placement is static - stereo MOVEMENT is Channel FX Auto-Pan's job.\n"
+        "- Double-click = centre.");
+
     // ---- CHANNEL FX: TWO selectable effect SLOTS (A -> B in series) on the WHOLE instrument, plus
     //      the channel REVERB/DELAY SEND faders. None of this follows the slot selector - one set per
     //      channel, saved with the sound. ----
     setupGroupHeader(hdrChannelFx, "CHANNEL FX");
+    content.addChildComponent(fxTypeList);   // shared per-item-tooltip dropdown (channel FX + drive types)
     {
+        // Per-ITEM tooltips (user: "i wanna see individual tooltips when i hover on them") - a plain
+        // ComboBox popup can't do that, so TipCombo opens the TipList panel instead.
+        auto chFxTipItems = [] {
+            return std::vector<TipList::Item> {
+                { 1,  "Off",       "No effect in this slot." },
+                { 2,  "Chorus",    "3-voice stereo thickener / widener - the classic detuned shimmer.\n\nCharacter = sweep speed + depth." },
+                { 3,  "Flanger",   "Swept comb filter - the metallic \"jet\" whoosh.\n\nCharacter = sweep speed + feedback bite." },
+                { 4,  "Phaser",    "6-stage all-pass swirl - softer and hollower than the flanger.\n\nCharacter = sweep speed + resonance." },
+                { 5,  "Comp",      "Glue compressor across the whole instrument (both slots together).\n\nCharacter = attack: left = fast / smashy, right = slow / punchy." },
+                { 6,  "Tape",      "Tape wobble: wow + flutter pitch drift + softened highs. Adds ~3 ms latency while on.\n\nCharacter = wobble speed." },
+                { 7,  "Auto-Pan",  "Moves the WHOLE instrument left-right. It drives itself (internal LFO) - no matrix routing needed.\n\nCharacter = pan speed." },
+                { 8,  "Widener",   "Mid/Side width boost with a bass-mono floor - needs STEREO content first (Chorus, unison Width, slot pans).\n\nCharacter = the bass-mono crossover (right = more of the low end stays centred)." },
+                { 9,  "OTT",       "3-band up + down compression - the modern \"dense and bright\" sheen. High amounts get aggressive.\n\nCharacter = compression speed." },
+                { 10, "FreqShift", "Single-sideband frequency shifter - moves every harmonic by the SAME Hz, so the sound turns inharmonic.\n\nCharacter = the shift: centre = 0, right = up, left = down. Tiny = barber-pole detune, big = alien metal." },
+                { 11, "Rotary",    "Leslie speaker: horn doppler + tremolo + rotor pan.\n\nCharacter = rotor speed (left = slow chorale, right = fast tremolo)." } };
+        };
         for (int i = 0; i < 3; ++i)
         {
             auto& cb = comboChFx[i];
@@ -8264,14 +8303,8 @@ void DrumSequencerEditor::setupComponents()
             cb.setSelectedId(1, juce::dontSendNotification);
             cb.setTooltip(juce::String("CHANNEL FX slot ") + (i == 0 ? "A" : i == 1 ? "B" : "C") + ": pick an effect for the WHOLE instrument "
                           "(both sound slots combined; runs A -> B -> C in series).\n\n"
-                          "- Chorus = widener | Flanger = jet | Phaser = swirl | Comp = glue | Tape = wow/flutter "
-                          "(~3 ms latency while on) | Auto-Pan = stereo movement | Widener = M/S width (needs stereo "
-                          "content) | OTT = 3-band up+down compression (density/sheen) | FreqShift = single-sideband "
-                          "shifter (Character: centre = 0, right = up, left = down - tiny shifts = barber-pole detune, "
-                          "big = alien metal) | Rotary = Leslie horn+rotor.\n"
-                          "- AMOUNT = how much. CHARACTER = the 2nd dimension: sweep/wobble/pan/rotor SPEED "
-                          "(chorus/flanger/phaser/tape/auto-pan/OTT/rotary), attack (comp), bass-mono crossover "
-                          "(widener), the SHIFT itself (FreqShift). 50% = the classic voicing.\n"
+                          "- Hover each entry in the open list for what it does.\n"
+                          "- AMOUNT = how much. CHARACTER = the effect's second dimension (speed / attack / crossover / shift); 50% = the classic voicing.\n"
                           "- Both faders are matrix targets: \"FX " + juce::String(i == 0 ? "A" : i == 1 ? "B" : "C") + " Amount/Character (Channel)\".");
             cb.onChange = [this, i] {
                 if (ignoreKnobCallbacks) return;
@@ -8282,6 +8315,12 @@ void DrumSequencerEditor::setupComponents()
                 ch.markDspDirty(); refreshDetailPanel();
                 if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel);
             };
+            cb.onOpenList = [this, i, chFxTipItems] {
+                fxTypeList.openFor(&comboChFx[i], chFxTipItems(), comboChFx[i].getSelectedId(),
+                                   [this, i](int id) { comboChFx[i].setSelectedId(id, juce::sendNotificationSync); });
+            };
+            cb.listOpen      = [this, i] { return fxTypeList.openForCombo(&comboChFx[i]); };
+            cb.onToggleClose = [this]    { fxTypeList.close(); };
             auto setupF = [this](SlotDragFader& f, const char* nm, const juce::String& tip) {
                 content.addAndMakeVisible(f);
                 f.setAccent(juce::Colour(0xff35c0ff));   // channel scope = cyan (not a slot colour)
@@ -9131,13 +9170,9 @@ void DrumSequencerEditor::setupComponents()
     swDelayPingPong.onClick = [this] { if (!ignoreKnobCallbacks) { const bool on = swDelayPingPong.getToggleState();
         for (auto& p : proc.sequencer.patterns) (masterBusB ? p.master.delayPingPongB : p.master.delayPingPong) = on; } };
 
-    content.addAndMakeVisible(lblMasterMono);
-    lblMasterMono.setText("Stereo/Mono", juce::dontSendNotification);   // off(left)=Stereo is the default; on=Mono
-    lblMasterMono.setFont(juce::Font(9.5f)); lblMasterMono.setJustificationType(juce::Justification::centred);
-    lblMasterMono.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
-    content.addAndMakeVisible(swMasterMono);
-    swMasterMono.onClick = [this] { if (ignoreKnobCallbacks) return;   // Mono is preset-wide too -> write ALL patterns
-        const bool on = swMasterMono.getToggleState(); for (auto& p : proc.sequencer.patterns) p.master.mono = on; };
+    content.addAndMakeVisible(monoToggle);   // two-row STEREO/MONO button (the old label + tiny switch was unreadable)
+    monoToggle.onChange = [this](bool on) { if (ignoreKnobCallbacks) return;   // Mono is preset-wide too -> write ALL patterns
+        for (auto& p : proc.sequencer.patterns) p.master.mono = on; };
 
     content.addAndMakeVisible(btnSaveMix);
     btnSaveMix.setLookAndFeel(&tinyBtnLNF);   // smaller font so the long text fits + reads
@@ -9176,7 +9211,7 @@ void DrumSequencerEditor::setupComponents()
                          "- Length without pitch change = Stretch.");
     knobLayNoiseType.setTooltip("Noise colour: White (bright/hissy), Pink (softer), Brown (deep/rumbly), Grey (balanced), Purple (very bright/airy).");
     swDelaySync.setTooltip("Lock the delay time to the tempo (note values like 1/8, 1/4) instead of free milliseconds.");
-    swMasterMono.setTooltip("Switch the final output between Stereo (off) and Mono (on, both speakers identical).");
+    monoToggle.setTooltip("Switch the final output between STEREO and MONO (both speakers identical). The lit row = the current mode; click to toggle.");
     for (int i = 0; i < 4; ++i)
         srcSwitch[i].setTooltip("Turn this sound source on or off. Active sources are blended by the pad.");
 
@@ -10485,6 +10520,7 @@ void DrumSequencerEditor::updateFxFaders(const DrumChannel::Slot& sl)
     knobSub.setValue    (sl.fxSub,        juce::dontSendNotification);
     knobFormant.setValue(sl.fxFormant,    juce::dontSendNotification);
     knobRingHz.setValue (sl.fxRingHz,     juce::dontSendNotification);
+    knobSlotPan.setValue(sl.pan,          juce::dontSendNotification);
     // CHANNEL FX + sends read the CHANNEL (both slots combined) - they never follow the slot selector.
     { const auto& ch = proc.sequencer.channel(selectedChannel);
       for (int i = 0; i < 3; ++i)
@@ -10586,7 +10622,7 @@ void DrumSequencerEditor::refreshDetailPanel()
     knobMasterGlue.setValue (proc.masterFX().glue,              juce::dontSendNotification);
     knobMasterTilt.setValue (proc.masterFX().tilt,             juce::dontSendNotification);
     knobMasterSat.setValue  (proc.masterFX().sat,             juce::dontSendNotification);
-    swMasterMono.setToggleState(proc.masterFX().mono,           juce::dontSendNotification);
+    if (monoToggle.mono != proc.masterFX().mono) { monoToggle.mono = proc.masterFX().mono; monoToggle.repaint(); }
     // Sync the MASTER vertical faders from their (just-updated) proxy knobs.
     { LearnableKnob* mvk[NMVF] = { &knobMasterTilt, &knobMasterSat, &knobMasterGlue, &knobMasterLimit,
         &knobReverbRoom, &knobReverbDecay, &knobReverbWet, &knobReverbPre, &knobReverbWidth,
@@ -10921,7 +10957,8 @@ void DrumSequencerEditor::timerCallback()
     // old gate on getNumModalComponents() > 0 meant the focus check NEVER RAN with only the
     // picker open = "doesn't close when I click outside the plugin" (round-2 report).
     const bool pickerOpen = soundPicker != nullptr && soundPicker->isVisible();
-    if (juce::ModalComponentManager::getInstance()->getNumModalComponents() > 0 || pickerOpen)
+    const bool tipsOpen   = fxTypeList.isVisible();   // the per-item-tooltip type dropdown joins the watchdog
+    if (juce::ModalComponentManager::getInstance()->getNumModalComponents() > 0 || pickerOpen || tipsOpen)
     {
         bool anyFocused = juce::Process::isForegroundProcess();
         if (anyFocused)
@@ -10947,6 +10984,7 @@ void DrumSequencerEditor::timerCallback()
             outsideFocusTicks = 0;
             juce::PopupMenu::dismissAllActiveMenus();
             if (pickerOpen) static_cast<SoundPickerPanel&>(*soundPicker).close();
+            if (tipsOpen)   fxTypeList.close();
         }
         else if (anyFocused) outsideFocusTicks = 0;
     }
@@ -11306,6 +11344,7 @@ void DrumSequencerEditor::zoomToGroup(juce::Rectangle<int> designRect)
     harmEd.setVisible(false);
     lfoCurveEd.setVisible(false);
     routePicker.setVisible(false);
+    fxTypeList.close();   // anchored under a combo that just moved (close() frees the combo latch)
 
     // Lift every control whose centre is inside the group box into the panel,
     // re-positioned relative to the group (the panel's transform enlarges them).
@@ -11605,6 +11644,7 @@ void DrumSequencerEditor::layoutContent()
     harmEd.setVisible(false);   // same rule for the DRAW HARMONICS overlay
     lfoCurveEd.setVisible(false);   // and the LFO SHAPER overlay
     routePicker.setVisible(false);  // and the route source|target picker
+    fxTypeList.close();             // and the per-item-tooltip type dropdown
     const int W = DESIGN_W;
     const int gridLeft = STRIP_W + 4;
     const int gridW = W - gridLeft - 12;            // step grid now spans the full width
@@ -11828,9 +11868,7 @@ void DrumSequencerEditor::layoutContent()
           vf(0, lblMasterTilt, 0, fy); vf(1, lblMasterSat, 1, fy);
           vf(2, lblMasterGlue, 2, fy); vf(3, lblMasterLimit, 3, fy);
           const int mx = sx + 8 + 4 * FPITCH;
-          lblMasterMono.setVisible(true); lblMasterMono.setJustificationType(juce::Justification::centred);
-          lblMasterMono.setFont(juce::Font(9.5f, juce::Font::bold));
-          lblMasterMono.setBounds(mx - 5, fy + 8, FW + 10, 11); swMasterMono.setBounds(mx, fy + 22, 30, 16); }
+          monoToggle.setVisible(true); monoToggle.setBounds(mx - 7, fy + 4, FW + 14, 38); }
         // Row 2: REVERB - Size / Decay / Wet / Pre / Width
         { hdrReverb.setVisible(true); refreshReverbModeHeader();
           hdrReverb.setBounds(sx + 6, colTop + 126, masterW - 12, hdrH);
@@ -12003,7 +12041,7 @@ void DrumSequencerEditor::layoutContent()
         const int fxRowStep = KSB + kboxH + 10;
         const int row2 = colTop + 62, row3 = row2 + fxRowStep;
         kFx(knobPunch, lblPunch, 0, row2); kFx(knobSub, lblSub, 1, row2); kFx(knobFormant, lblFormant, 2, row2);
-        kFx(knobRing, lblRing, 0, row3); kFx(knobRingHz, lblRingHz, 1, row3);
+        kFx(knobRing, lblRing, 0, row3); kFx(knobRingHz, lblRingHz, 1, row3); kFx(knobSlotPan, lblSlotPan, 2, row3);
 
         // ===== CHANNEL FX box (under the shortened FX box): Chorus / Flanger / Phaser / Comp as FOUR
         //       VERTICAL faders in ONE row (MASTER style). These act on the WHOLE channel (both slots)

@@ -1255,6 +1255,7 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
             { "ui_sel_cfxChrA", SelChFxChrA }, { "ui_sel_cfxChrB", SelChFxChrB }, { "ui_sel_fxRing", SelFxRing },
             { "ui_sel_cfxAmtC", SelChFxAmtC }, { "ui_sel_cfxChrC", SelChFxChrC },
             { "ui_sel_fxFormant", SelFxFormant }, { "ui_sel_fxRingHz", SelFxRingHz },
+            { "ui_sel_slotPan", SelSlotPan },
             { "ui_sel_envA", SelEnvA }, { "ui_sel_envH", SelEnvH }, { "ui_sel_envD", SelEnvD },
             { "ui_sel_envS", SelEnvS }, { "ui_sel_envR", SelEnvR },
             { "ui_sel_uniCount", SelUniCount }, { "ui_sel_uniDet", SelUniDet }, { "ui_sel_uniVib", SelUniVib },

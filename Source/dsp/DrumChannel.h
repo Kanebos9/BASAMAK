@@ -576,6 +576,9 @@ public:
         // (fxTone RETIRED 2026-07-13 - the Bell filter type covers the tilt, movable.)
         float fxSub     = 0.0f;                 // SUB: clean sine ONE OCTAVE below the slot's pitch (0 = off; pitched engines only)
         float fxFormant = 0.0f;                 // FORMANT: vowel morph 0 = off, up = A -> E -> I -> O -> U (fixed intensity)
+        float pan       = 0.0f;                 // static SLOT PAN -1..+1 = place THIS LAYER in the field (equal-power,
+                                                // unity at centre = bit-identical). Deliberately NOT a matrix target -
+                                                // placement is static; MOVEMENT belongs to Channel FX Auto-Pan (user call).
         // -- ADDITIVE WAVETABLE (Wave = "Custom"): FOUR user-DRAWN harmonic frames (A/B/C/D), each
         //    baked to a table; addPos (0..1) scans across them (0 = A, 1 = D, linear crossfade of
         //    the two neighbours). addPh = each harmonic's phase (radians) - set by the freehand WAVE

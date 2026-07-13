@@ -1956,6 +1956,95 @@ struct IconButtonLNF : juce::LookAndFeel_V4
 };
 
 // A TextButton that draws a clean down-triangle on the right (so it reads as a dropdown, like a ComboBox).
+// In-editor DROPDOWN LIST with PER-ITEM TOOLTIPS (juce::ComboBox popups can't do per-item tips -
+// long-documented limitation). A content child like the Arp/Route popups: hover a row = that row's
+// tooltip; click = pick + close; click anywhere else (or the plugin losing OS focus - the editor
+// watchdog) = close. Anchored under its combo. One shared instance serves every TipCombo.
+class TipList : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    struct Item { int id; juce::String name, tip; };
+    void openFor(juce::ComboBox* anchor, std::vector<Item> its, int curId, std::function<void(int)> pick)
+    {
+        anchor_ = anchor; items = std::move(its); cur = curId; onPick = std::move(pick); hover = -1;
+        int w = 150; for (auto& it : items) w = juce::jmax(w, 16 + (int) juce::GlyphArrangement::getStringWidthInt(juce::Font(12.5f, juce::Font::bold), it.name));
+        const int h = (int) items.size() * rh + 6;
+        auto* par = getParentComponent();
+        auto ab = par != nullptr ? par->getLocalArea(anchor_, anchor_->getLocalBounds()) : anchor_->getBounds();
+        int x = ab.getX(), y = ab.getBottom() + 2;
+        if (par != nullptr) { x = juce::jlimit(0, juce::jmax(0, par->getWidth() - w), x);
+                              if (y + h > par->getHeight()) y = juce::jmax(0, ab.getY() - 2 - h); }   // open upward if needed
+        setBounds(x, y, w, h);
+        setVisible(true); toFront(false);
+    }
+    void close()
+    { if (! isVisible()) return; setVisible(false);
+      if (anchor_ != nullptr) anchor_->hidePopup();   // LATCH RULE: free the combo's menuActive or the next click is swallowed
+      anchor_ = nullptr; }
+    bool openForCombo(const juce::Component* c) const { return isVisible() && anchor_ == c; }
+    void paint(juce::Graphics& g) override
+    {
+        g.fillAll(juce::Colour(0xff181830));
+        g.setColour(juce::Colour(0xff777fa8)); g.drawRect(getLocalBounds(), 1);
+        for (int i = 0; i < (int) items.size(); ++i)
+        {
+            auto r = rowRect(i);
+            const bool isCur = items[(size_t) i].id == cur;
+            if (i == hover) { g.setColour(juce::Colour(0xff2c3454)); g.fillRect(r); }
+            else if (isCur) { g.setColour(juce::Colour(0x33e8bf4d)); g.fillRect(r); }
+            g.setColour(isCur ? juce::Colour(0xffffe9b0) : juce::Colours::white);
+            g.setFont(juce::Font(12.5f, isCur ? juce::Font::bold : juce::Font::plain));
+            g.drawText(items[(size_t) i].name, r.reduced(8, 0), juce::Justification::centredLeft, false);
+        }
+    }
+    void mouseMove(const juce::MouseEvent& e) override { const int h = rowAt(e.position); if (h != hover) { hover = h; repaint(); } }
+    void mouseExit(const juce::MouseEvent&) override { hover = -1; repaint(); }
+    void mouseDown(const juce::MouseEvent& e) override
+    { const int i = rowAt(e.position); if (i >= 0 && onPick) { auto cb = onPick; const int id = items[(size_t) i].id; close(); cb(id); } }
+    juce::String getTooltip() override
+    { const int i = rowAt(getMouseXYRelative().toFloat()); return i >= 0 ? items[(size_t) i].tip : juce::String(); }
+    void visibilityChanged() override
+    { auto& d = juce::Desktop::getInstance();
+      if (isVisible()) d.addGlobalMouseListener(&closer); else d.removeGlobalMouseListener(&closer); }
+    ~TipList() override { juce::Desktop::getInstance().removeGlobalMouseListener(&closer); }
+private:
+    static constexpr int rh = 19;
+    juce::Rectangle<int> rowRect(int i) const { return { 1, 3 + i * rh, getWidth() - 2, rh }; }
+    int rowAt(juce::Point<float> p) const
+    { for (int i = 0; i < (int) items.size(); ++i) if (rowRect(i).toFloat().contains(p)) return i; return -1; }
+    std::vector<Item> items; int cur = 0, hover = -1;
+    juce::ComboBox* anchor_ = nullptr;
+    std::function<void(int)> onPick;
+    struct Closer : juce::MouseListener
+    {
+        TipList& o; explicit Closer(TipList& t) : o(t) {}
+        void mouseDown(const juce::MouseEvent& e) override
+        {
+            if (! o.isVisible()) return;
+            const auto sp = e.getScreenPosition();
+            if (o.getScreenBounds().contains(sp)) return;
+            if (o.anchor_ != nullptr && o.anchor_->getScreenBounds().contains(sp)) return;   // toggle = the combo's job
+            o.close();
+        }
+    } closer { *this };
+};
+
+// A ComboBox whose popup is the TipList above (per-item tooltips). Same latch rules as PickerCombo:
+// never clear menuActive in showPopup; the list calls hidePopup() on close; a click while OUR list
+// is open toggle-closes it.
+struct TipCombo : juce::ComboBox
+{
+    std::function<void()> onOpenList;
+    std::function<bool()> listOpen;
+    std::function<void()> onToggleClose;
+    void showPopup() override { if (onOpenList) onOpenList(); else juce::ComboBox::showPopup(); }
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        if (listOpen && listOpen()) { if (onToggleClose) onToggleClose(); return; }
+        juce::ComboBox::mouseDown(e);
+    }
+};
+
 // Compact ComboBox skin for NARROW combos (the CHANNEL FX type pickers): a SMALL 7px chevron instead
 // of the stock wide arrow button, and the text SQUEEZES to fit (never "..." - user hates the dots).
 struct TinyComboLNF : juce::LookAndFeel_V4
@@ -2431,7 +2520,8 @@ private:
     LearnableKnob knobReso    { "", proc.midiLearn };
     LearnableKnob knobEnvAmt  { "", proc.midiLearn };
     LearnableKnob knobDrive   { "", proc.midiLearn };
-    juce::ComboBox comboFilterType, comboDriveType;
+    juce::ComboBox comboFilterType;
+    TipCombo       comboDriveType;   // drive-type dropdown with PER-ITEM tooltips (TipList)
 
 
     juce::ComboBox comboOutput;      // per-channel routing (Main / Out 1..N / MIDI Out)
@@ -2448,18 +2538,45 @@ private:
     LearnableKnob knobPunch   { "ui_sel_fxPunch", proc.midiLearn };   // per-slot PUNCH transient shaper
     LearnableKnob knobRing    { "ui_sel_fxRing",    proc.midiLearn };   // per-slot RING modulator
     LearnableKnob knobRingHz  { "ui_sel_fxRingHz",  proc.midiLearn };   // RING carrier (Hz; hard left = track the note)
+    LearnableKnob knobSlotPan { "ui_sel_slotPan",   proc.midiLearn };   // static SLOT PAN (placement; movement = Auto-Pan)
     // ---- CHANNEL FX box: Chorus / Flanger / Phaser / Comp act on the WHOLE channel (both slots
     //      combined), so they do NOT follow the slot selector. Vertical faders (MASTER style), one row.
     juce::Label   hdrChannelFx;
     // CHANNEL FX = TWO selectable effect slots (type combo + Amount + Character faders) + the channel
     // Reverb/Delay SEND faders (right-click a send fader = pick its bus A/B + MIDI-learn).
-    juce::ComboBox comboChFx[3];
+    TipCombo comboChFx[3];
+    TipList  fxTypeList;           // shared per-item-tooltip dropdown (channel FX types + drive types)
     TinyComboLNF   tinyComboLNF;   // compact skin for the three type combos (cleared in teardown!)
     SlotDragFader  chFxAmtF[3], chFxChrF[3];
     SlotDragFader  sendRevF, sendDelF;
-    juce::Label   lblSub, lblFormant, lblPunch, lblRing, lblRingHz;
+    juce::Label   lblSub, lblFormant, lblPunch, lblRing, lblRingHz, lblSlotPan;
     // REVERB MODE: clicking the "REVERB" header cycles Room -> Hall -> Plate -> Shimmer (whole
     // preset, like the other master flavour controls). A tiny MouseListener makes the Label clickable.
+    // Two-row STEREO/MONO toggle button (the old label+tiny switch was unreadable - user): both words
+    // stacked inside one button, the ACTIVE row bright, the other dim. Click anywhere = toggle.
+    struct MonoToggle : juce::Component, public juce::SettableTooltipClient
+    {
+        bool mono = false;
+        std::function<void(bool)> onChange;
+        void mouseDown(const juce::MouseEvent&) override { mono = ! mono; if (onChange) onChange(mono); repaint(); }
+        void paint(juce::Graphics& g) override
+        {
+            auto r = getLocalBounds().toFloat().reduced(0.5f);
+            g.setColour(juce::Colour(0xff26264a)); g.fillRoundedRectangle(r, 4.0f);
+            g.setColour(juce::Colour(0xff4a4a6e)); g.drawRoundedRectangle(r, 4.0f, 1.0f);
+            auto top = getLocalBounds().removeFromTop(getHeight() / 2).toFloat();
+            auto bot = getLocalBounds().removeFromBottom(getHeight() / 2).toFloat();
+            auto row = [&](juce::Rectangle<float> rr, const char* txt, bool on) {
+                if (on) { g.setColour(juce::Colour(0xffd9a13d).withAlpha(0.25f)); g.fillRoundedRectangle(rr.reduced(2.0f, 1.5f), 3.0f); }
+                g.setColour(on ? juce::Colour(0xffffe9b0) : juce::Colour(0xff6a7290));
+                g.setFont(juce::Font(10.5f, on ? juce::Font::bold : juce::Font::plain));
+                g.drawText(txt, rr, juce::Justification::centred, false);
+            };
+            row(top, "STEREO", ! mono);
+            row(bot, "MONO",   mono);
+        }
+    };
+    MonoToggle monoToggle;
     struct HdrClick : juce::MouseListener
     { std::function<void()> fn; std::function<void(const juce::MouseEvent&)> fnE;
       void mouseDown(const juce::MouseEvent& e) override { if (fnE) fnE(e); else if (fn) fn(); } };
@@ -2610,8 +2727,7 @@ private:
     LearnableKnob    knobMasterGlue  { "global_masterGlue",  proc.midiLearn };
     LearnableKnob    knobMasterTilt  { "global_masterTilt",  proc.midiLearn };
     LearnableKnob    knobMasterSat   { "global_masterSat",   proc.midiLearn };
-    ToggleSwitch     swMasterMono;
-    juce::Label      lblRevDecay, lblMasterVol, lblMasterLimit, lblMasterMono, lblMasterGlue, lblMasterTilt, lblMasterSat;
+    juce::Label      lblRevDecay, lblMasterVol, lblMasterLimit, lblMasterGlue, lblMasterTilt, lblMasterSat;
     // MASTER = a narrow 3/5-width strip now: every master KNOB is shown as a VERTICAL drag-fader
     // (value inside, rotated; name in the Label below). These are VISUAL PROXIES over the hidden
     // knobs above - they reuse each knob's range/skew/format/default/MIDI, so no master logic changed.

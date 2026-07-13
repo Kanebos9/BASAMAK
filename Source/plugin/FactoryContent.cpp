@@ -1456,7 +1456,7 @@ static void gAmpBass(DC& c) {      // finger bass through the BASS AMP split rig
     c.volume = 0.85f;
 }
 static void gMutedGuitar(DC& c) {  // funk mute: the percussive "chick" scratch
-    auto& s = mkGtr(c, 130.81f, 0.55f, 0.15f, 0.12f);
+    mkGtr(c, 130.81f, 0.55f, 0.15f, 0.12f);
     c.volume = 0.85f;
 }
 static void gStrumAcoustic(DC& c) {   // GUITAR-VOICED chords (E-shape barre, 6 notes): turn the KEYS
