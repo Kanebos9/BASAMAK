@@ -1462,6 +1462,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         // what makes a recording SOUND like the take (a sustain-0 pluck used to get its whole ring
         // compressed into the note length). keyNote -1 = keyUp(note) never matches it.
         v.isKey = true; v.keyNote = -1; v.keyOff = gateSamples;
+        v.keyChan = 0; v.pressTgt = v.pressCur = v.slideTgt = v.slideCur = v.bendTgt = v.bendCur = 0.0f;
     }
     // SLIDE: start at THIS step's own pitch (normal attack) and glide per-sample toward the
     // NEXT step's pitch, landing exactly when the glide time (= the step span) runs out.
@@ -1749,7 +1750,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
 // slot is re-tuned from its OWN base Freq to the pressed note (so both slots sound the same
 // musical pitch regardless of their Freq knobs); slot 2 can be transposed DOWN by slot2Down
 // semitones (sub-oscillator style). Ineligible slots (Sample/Noise/legacy) stay silent.
-int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly, int slotMask)
+int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly, int slotMask, int midiChan)
 {
     // MONO LEGATO GLIDE (portamento): if a key is still HELD when this new one is pressed and Glide > 0,
     // the new note SLIDES from the held note's pitch to the new pitch. Poly never glides. Glide 0 = the
@@ -1779,6 +1780,8 @@ int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly,
     const int vi = trigger(velocity, glideFrom, 0.0f, 0, /*glideTo*/ 0.0f, glideSamp, /*forceOverlap*/ true, slotMask);
     Voice& v = voices[vi];
     v.isKey = true; v.keyOff = -1; v.keyNote = midiNote;   // tag: keyUp(note) releases only this note's voices
+    v.keyChan = (int8_t) juce::jlimit(0, 16, midiChan);     // MPE: expression events find this voice by channel
+    v.pressTgt = v.pressCur = v.slideTgt = v.slideCur = v.bendTgt = v.bendCur = 0.0f;
     double targetHz = 440.0 * std::pow(2.0, (double)(midiNote - 69) / 12.0);
     // PIANO-ROLL TUNE: a tuned bar's keys target the TUNED pitch, so live play always matches
     // what the recorded notes will play back (the user's never-differ rule survives the fader).
@@ -1927,6 +1930,7 @@ void DrumChannel::computeModSources(int s, const Slot& sl, float* out, const Voi
         out[MSStepModB] = juce::jlimit(0.0f, 1.0f, stepModB[st]);
     }
     out[MSModWheel] = juce::jlimit(0.0f, 1.0f, modWheel);   // live MIDI mod wheel (CC1)
+    if (nv != nullptr) { out[MSPressure] = nv->pressCur; out[MSSlide] = nv->slideCur; }   // MPE (per-voice)
 }
 
 // Apply the 6 routes onto a scratch Slot before the config bake. Cutoffs + pitch are MULTIPLICATIVE
@@ -3033,6 +3037,15 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         for (int i = 0; i < numSamples; ++i)
         {
             const long tv = v.voiceSamples;   // voice age (shared); each slot shadows it below by its own onset delay
+            // [2026-07-13 21:20] MPE expression slews (~3 ms) + the per-note BEND multiplier.
+            double bendMul = 1.0;
+            if (v.isKey)
+            {
+                v.pressCur += wSmK * (v.pressTgt - v.pressCur);
+                v.slideCur += wSmK * (v.slideTgt - v.slideCur);
+                v.bendCur  += wSmK * (v.bendTgt  - v.bendCur);
+                if (std::abs(v.bendCur) > 1.0e-4f) bendMul = std::exp2((double) v.bendCur / 12.0);
+            }
             const float kg = v.killing ? v.killGain : 1.0f;
             if (v.glideRemain > 0)   // 303 slide: per-sample pitch glide toward this step's pitch
             {
@@ -3085,6 +3098,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             case MSModLfo: { const double pt = c.modLfoPh0 + c.modLfoInc * (double) i;
                                              const uint32_t cy = (uint32_t) juce::jmax(0.0, pt / (2.0 * kPi));
                                              val = lfoShapeVal(c.mLfoShape, pt - (double) cy * 2.0 * kPi, cy); } break;
+                            case MSPressure: val = v.pressCur; break;
+                            case MSSlide:    val = v.slideCur; break;
                             case MSStepModA: val = arA0 + arAStep * (float) i; break;
                             case MSStepModB: val = arB0 + arBStep * (float) i; break;
                             case MSModWheel: val = arW0 + arWStep * (float) i; break;
@@ -3144,6 +3159,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 //     ANY source -> Pitch is real per-sample FM now (fast LFO = sidebands, Mod Env =
                 //     smooth glide, Step Mod = ramped steps) - not just the old LFO-only special case. ===
                 if (arPitchMul != 1.0) pe3Mul *= arPitchMul;
+                if (bendMul != 1.0)    pe3Mul *= bendMul;   // MPE per-note pitch bend (slewed, semitone-ranged)
 
                 switch (c.engine)
                 {

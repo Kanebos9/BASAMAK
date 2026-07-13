@@ -955,7 +955,8 @@ void LfoCurveEditor::mouseDrag(const juce::MouseEvent& e)
 //==============================================================================
 static const char* kModSrcName[DrumChannel::MS_COUNT] =   // the LFOs are GENERIC now (index, not destination)
 { "Off", "Velocity", "Note", "Amp Env", "LFO 1", "LFO 2", "LFO 3", "LFO 4",
-  "Random", "Mod Env", "Mod LFO", "Step Mod A", "Step Mod B", "Mod Wheel" };
+  "Random", "Mod Env", "Mod LFO", "Step Mod A", "Step Mod B", "Mod Wheel",
+  "Pressure", "Slide (CC74)" };   // [2026-07-13 21:20] MPE/aftertouch sources
 // "(Channel)" = a CHANNEL FX target: it acts on the whole instrument (both slots combined), not this slot.
 // "Tone (retired)" = the removed Tone knob's reserved index - never offered, old routes inert.
 // Sub/Formant sit ABOVE the grid block (MTSub/MTFormant) so their names come from kModTgtHiName.

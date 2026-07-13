@@ -373,7 +373,9 @@ public:
     static constexpr int MOD_ROUTES = 12;   // 12 inline route faders (6 rows x 2 cols) per slot
     // SOURCES (order persisted - APPEND-ONLY). Values sampled once per block from the newest voice.
     enum ModSrc { MSOff = 0, MSVel, MSNote, MSAmpEnv, MSLfoFilt, MSLfoPitch, MSLfoVol, MSLfoWave,
-                  MSRandom, MSModEnv, MSModLfo, MSStepModA, MSStepModB, MSModWheel, MS_COUNT };
+                  MSRandom, MSModEnv, MSModLfo, MSStepModA, MSStepModB, MSModWheel,
+                  MSPressure, MSSlide,   // [2026-07-13 21:20] MPE/aftertouch + slide (CC74) - per-voice, per-sample
+                  MS_COUNT };
     // TARGETS (order persisted - APPEND-ONLY). 0..MT_GRID_BASE-1 = fixed targets; MT_GRID_BASE+i =
     // the engine's own knob i (0..7) via slotParamsFor - the dropdown shows its live name.
     // MTChChorus/MTChFlanger/MTChPhaser/MTChComp = the CHANNEL FX (whole-instrument); applied at
@@ -1034,8 +1036,23 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     // ringing first - a new key CUTS the old (classic lead feel, bit-identical to the old keyboard);
     // poly=true stacks held notes like a piano (each voice tagged with its keyNote).
     // keyUp(note) releases ONLY that note's voices into the slot release; keyUp() releases all.
-    int  keyDown(int midiNote, float velocity, int slot2Down, bool poly = false, int slotMask = 0);
+    int  keyDown(int midiNote, float velocity, int slot2Down, bool poly = false, int slotMask = 0, int midiChan = 0);   // midiChan = MPE/expression tag (0 = on-screen)
     void keyUp(int midiNote);
+    // [2026-07-13 21:20] MPE / AFTERTOUCH: fan an expression value onto matching key voices.
+    // type 0 = pressure (0..1), 1 = slide/CC74 (0..1), 2 = pitch bend (SEMITONES). midiChan <= 0
+    // matches every key voice; note >= 0 additionally requires that note (poly aftertouch).
+    void applyExpression(int type, int midiChan, float val, int note = -1)
+    {
+        for (auto& v : voices)
+        {
+            if (! v.active() || ! v.isKey) continue;
+            if (midiChan > 0 && v.keyChan != midiChan) continue;
+            if (note >= 0 && v.keyNote != note) continue;
+            switch (type) { case 0: v.pressTgt = val; break;
+                            case 1: v.slideTgt = val; break;
+                            default: v.bendTgt = val; break; }
+        }
+    }
     void keyUp();
     static float physDecayScale(int material);   // material ring-length multiplier (for the UI's tail read-out)
     void renderInto(juce::AudioBuffer<float>& dest, int startSample, int numSamples, bool anySolo,
@@ -1196,6 +1213,12 @@ private:
         bool     isKey  = false;    // KEYS voice: held-note ADSR (sustain/release live) + per-slot keySemis
         long     keyOff = -1;       // voiceSamples when the key was RELEASED (-1 = still held / not a key voice)
         int      keyNote = -1;      // POLY keys: the MIDI note this voice is playing (keyUp(note) releases only its own voices)
+        // [2026-07-13 21:20] MPE / AFTERTOUCH expression, per voice: targets set from MIDI (message
+        // fan-out), currents slewed PER SAMPLE (~3 ms) in the render. bend is in SEMITONES.
+        int8_t   keyChan  = 0;      // the note's MIDI channel (0 = on-screen keyboard / arp)
+        float    pressTgt = 0, pressCur = 0;   // aftertouch (channel or poly) 0..1
+        float    slideTgt = 0, slideCur = 0;   // MPE slide / CC74 0..1
+        float    bendTgt  = 0, bendCur  = 0;   // per-note pitch bend (semitones, range per channel)
         const juce::AudioBuffer<float>* smpBuf = nullptr;  // velocity-layer buffer chosen at trigger
         SlotVoice sv[NUM_SLOTS];
         bool active() const { return playHead >= 0.0; }

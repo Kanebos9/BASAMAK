@@ -194,9 +194,40 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         {
             if (msg.isNoteOn())
                 midiKeyEvts[nMidiKeyEvts++] = { 1, (uint8_t) (msg.getNoteNumber() & 0x7f),
-                                                (uint8_t) juce::jlimit(1, 127, (int) std::lround(msg.getFloatVelocity() * 127.0f)) };
+                                                (uint8_t) juce::jlimit(1, 127, (int) std::lround(msg.getFloatVelocity() * 127.0f)),
+                                                (uint8_t) juce::jlimit(0, 16, msg.getChannel()) };   // MPE: the note's channel
             else
-                midiKeyEvts[nMidiKeyEvts++] = { 0, (uint8_t) (msg.getNoteNumber() & 0x7f), 0 };
+                midiKeyEvts[nMidiKeyEvts++] = { 0, (uint8_t) (msg.getNoteNumber() & 0x7f), 0, 0 };
+        }
+
+        // ==========================================================================================
+        // MPE / AFTERTOUCH [2026-07-13 21:20]: pressure, slide (CC74) and per-note PITCH BEND fan out
+        // onto the matching key voices (audio-rate mod sources "Pressure" / "Slide (CC74)"; bend is a
+        // per-sample pitch multiplier). Channel pressure + bend hit every voice on that MIDI channel
+        // (a normal ch-1 keyboard = all its held notes; an MPE member channel = exactly one note);
+        // POLY aftertouch targets its note. CC74 reaches here only when it is NOT MIDI-learned (the
+        // learn `continue` above wins - deliberate precedence). RPN 0 reprograms a channel's bend
+        // range; defaults: ch 1 = 2 st, ch 2-16 = 48 st (the MPE member convention).
+        // ==========================================================================================
+        if (msg.isChannelPressure())
+            expressionSweep(0, msg.getChannel(), (float) msg.getChannelPressureValue() / 127.0f);
+        else if (msg.isAftertouch())
+            expressionSweep(0, msg.getChannel(), (float) msg.getAfterTouchValue() / 127.0f, msg.getNoteNumber());
+        else if (msg.isPitchWheel())
+        {
+            const int mch = juce::jlimit(1, 16, msg.getChannel()) - 1;
+            const float semis = ((float) msg.getPitchWheelValue() - 8192.0f) / 8192.0f * bendRange_[mch];
+            expressionSweep(2, msg.getChannel(), semis);
+        }
+        else if (msg.isController())
+        {
+            const int mch = juce::jlimit(1, 16, msg.getChannel()) - 1, ccN = msg.getControllerNumber(), ccV = msg.getControllerValue();
+            if      (ccN == 101) rpnMsb_[mch] = (uint8_t) ccV;
+            else if (ccN == 100) rpnLsb_[mch] = (uint8_t) ccV;
+            else if (ccN == 6 && rpnMsb_[mch] == 0 && rpnLsb_[mch] == 0)
+                bendRange_[mch] = juce::jlimit(1.0f, 96.0f, (float) ccV);   // RPN 0 = pitch bend sensitivity
+            else if (ccN == 74)
+                expressionSweep(1, msg.getChannel(), (float) ccV / 127.0f);   // MPE SLIDE (timbre)
         }
 
         // Route CC messages to assigned parameters/steps
@@ -549,6 +580,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             keysHeldMaskLo.store(0, std::memory_order_relaxed); keysHeldMaskHi.store(0, std::memory_order_relaxed);
         };
 
+        int keyChanNow = 0;   // [2026-07-13 21:20] MPE: the channel of the key event being handled
         auto handleKeyDown = [&](int note, float vel)
         {
             if (arpKc.arpOn)   // ARP owns the note: it generates the riff from this root
@@ -611,7 +643,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             int tgtCh = chIdx;
             const int playNote = splitMap(note, tgtCh);
             auto& tc = sequencer.patterns[keyPat].channels[tgtCh];   // the pressed HALF's channel (full sound)
-            tc.keyDown(playNote, kvel, tc.keysSlot2Down, tc.keysPolyMode);
+            tc.keyDown(playNote, kvel, tc.keysSlot2Down, tc.keysPolyMode, 0, keyChanNow);   // MPE: tag the voice with its channel
             // Held stack: a re-press moves the note to the top (most recent). openIdx/Pat ride along.
             for (int i = 0; i < keysHeldCount; ++i)
                 if (keysHeldStack[i] == note)
@@ -733,12 +765,14 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
              t != keyQHead.load(std::memory_order_acquire); ++t)
         {
             const KeyQEvt e = keyQ[t % KEYQ];
+            keyChanNow = (int) e.chan;
             if (e.down) handleKeyDown((int) e.note, (float) e.vel / 127.0f); else handleKeyUp((int) e.note);
             keyQTail.store(t + 1, std::memory_order_release);
         }
         for (int i = 0; i < nMidiKeyEvts; ++i)
         {
             const KeyQEvt& e = midiKeyEvts[i];
+            keyChanNow = (int) e.chan;
             if (e.down) handleKeyDown((int) e.note, (float) e.vel / 127.0f); else handleKeyUp((int) e.note);
         }
 

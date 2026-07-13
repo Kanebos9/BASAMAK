@@ -388,6 +388,37 @@ int main()
                aliasN, aliasA, harmA,
                CHK(aliasA < aliasN * 0.6 && harmA > aliasA && finite(adaa)) ? "OK" : "FAIL");
     }
+    {   // [18] MPE PRESSURE: a held key voice tagged with MIDI channel 3; pressure fanned onto
+        //      channel 3 must move a Pressure->Cutoff route audibly; the SAME pressure on channel 5
+        //      must not touch it (per-channel voice matching = the MPE contract).
+        auto run = [&](int pressChan) {
+            auto* q = new Sequencer();
+            q->setStandaloneBpm(120.0f);
+            auto& c = q->patterns[0].channels[0];
+            for (auto& sl : c.slots) sl = Slot();
+            auto& s = c.slots[0];
+            s.engine = DrumChannel::SrcOsc; s.weight = 1.0f;
+            s.oscShape = s.oscShapeB = DrumChannel::WvSaw; s.oscFreq = 110.0f;
+            s.atk = 0.005f; s.hold = 0.1f; s.dec = 0.4f; s.sustain = 0.8f; s.release = 0.2f;
+            s.filterType = DrumChannel::LowPass; s.filterCutoff = 350.0f; s.filterReso = 2.0f;
+            s.mod[0].src = DrumChannel::MSPressure; s.mod[0].tgt = DrumChannel::MTFilt1Cut; s.mod[0].amt = 1.0f;
+            for (auto& p2 : q->patterns) for (auto& c2 : p2.channels) c2.prepareToPlay(SR, BS);
+            c.keyDown(60, 0.9f, 0, true, 0, 3);            // held key on MIDI channel 3
+            std::vector<float> out;
+            juce::AudioBuffer<float> buf(2, BS);
+            for (int b = 0; b < (int)(0.5 * SR / BS); ++b)
+            {
+                if (b == 8 && pressChan > 0) c.applyExpression(0, pressChan, 1.0f);   // full pressure
+                buf.clear(); q->processBlock(buf, SR, BS, nullptr);
+                for (int i2 = 0; i2 < BS; ++i2) out.push_back(buf.getSample(0, i2));
+            }
+            delete q; return out;
+        };
+        auto base = run(0), hit = run(3), miss = run(5);
+        const float dHit = maxdiff(base, hit), dMiss = maxdiff(base, miss);
+        printf("[18] MPE pressure: ch3 press diff=%.4f (>0.02), wrong-ch diff=%.4f (==0) -> %s\n",
+               dHit, dMiss, CHK(dHit > 0.02f && dMiss == 0.0f && finite(hit)) ? "OK" : "FAIL");
+    }
     printf(fails == 0 ? ">>> ModMatrixTest PASS\n" : ">>> ModMatrixTest FAIL (%d)\n", fails);
     return fails;
 }

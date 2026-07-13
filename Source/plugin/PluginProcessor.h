@@ -194,24 +194,36 @@ public:
     // dropped all but the last). Producer = message thread ONLY (incoming MIDI on the audio thread
     // calls the handler directly, keeping this strictly single-producer). Audio thread drains all
     // pending events each block, in order, onto the selected channel via keyDown/keyUp(note).
-    struct KeyQEvt { uint8_t down, note, vel; };   // vel 1..127 (downs only)
+    struct KeyQEvt { uint8_t down, note, vel, chan; };   // vel 1..127 (downs only); chan = MIDI ch 1-16, 0 = on-screen [2026-07-13 21:20 MPE]
     static constexpr int KEYQ = 64;
     KeyQEvt keyQ[KEYQ];
     std::atomic<uint32_t> keyQHead { 0 }, keyQTail { 0 };   // head = write (message), tail = read (audio)
     std::atomic<int>      keysSlot2Down { 0 };     // slot-2 transpose in semitones (+down/-up), persisted
+    // [2026-07-13 21:20] MPE / AFTERTOUCH: per-MIDI-channel pitch-bend range (RPN 0 programmable;
+    // defaults: ch 1 = 2 st = a normal keyboard / the MPE manager, ch 2-16 = 48 st = MPE members),
+    // and the expression sweep that fans pressure / slide / bend onto matching key voices everywhere
+    // (the handleKeyUp all-patterns precedent; non-matching voices cost one compare each).
+    uint8_t rpnMsb_[16] = { 0x7f,0x7f,0x7f,0x7f,0x7f,0x7f,0x7f,0x7f,0x7f,0x7f,0x7f,0x7f,0x7f,0x7f,0x7f,0x7f };
+    uint8_t rpnLsb_[16] = { 0x7f,0x7f,0x7f,0x7f,0x7f,0x7f,0x7f,0x7f,0x7f,0x7f,0x7f,0x7f,0x7f,0x7f,0x7f,0x7f };
+    float   bendRange_[16] = { 2, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48 };
+    void expressionSweep(int type, int midiChan, float val, int note = -1)
+    {
+        for (auto& p : sequencer.patterns)
+            for (auto& c : p.channels) c.applyExpression(type, midiChan, val, note);
+    }
     void pushKeyDown(int note, float vel01)
     {
         const uint32_t h = keyQHead.load(std::memory_order_relaxed);
         if (h - keyQTail.load(std::memory_order_acquire) >= (uint32_t) KEYQ) return;   // full: drop (never blocks)
         keyQ[h % KEYQ] = { 1, (uint8_t)(note & 0x7f),
-                           (uint8_t) juce::jlimit(1, 127, (int) std::lround(vel01 * 127.0f)) };
+                           (uint8_t) juce::jlimit(1, 127, (int) std::lround(vel01 * 127.0f)), 0 };
         keyQHead.store(h + 1, std::memory_order_release);
     }
     void pushKeyUp(int note)
     {
         const uint32_t h = keyQHead.load(std::memory_order_relaxed);
         if (h - keyQTail.load(std::memory_order_acquire) >= (uint32_t) KEYQ) return;
-        keyQ[h % KEYQ] = { 0, (uint8_t)(note & 0x7f), 0 };
+        keyQ[h % KEYQ] = { 0, (uint8_t)(note & 0x7f), 0, 0 };
         keyQHead.store(h + 1, std::memory_order_release);
     }
 
