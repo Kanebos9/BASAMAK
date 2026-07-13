@@ -259,6 +259,9 @@ public:
     // 0..numSteps); -1 = not playing. The step-mod sources read the lane value at this position.
     float  modStepPos = -1.0f;
     float  modWheel   = 0.0f;   // live MIDI mod-wheel (CC1) 0..1, forwarded by the Sequencer (shared mod source)
+    // [2026-07-13 19:57] AUDIO-RATE steppy-source slew memory (block-linear ramps): last block-end
+    // values of the Step Mod lanes + Mod Wheel; -1 = snap on the first block after reset.
+    float  arStepACur = -1.0f, arStepBCur = -1.0f, arWheelCur = -1.0f;
     int    numSteps          = 8;
     int    midiNote          = 36; // default C2, overridden per channel
     int    ccRangeStart      = 1;  // first CC number for this channel
@@ -685,6 +688,7 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     // before the config bake. nvIn = the voice to sample (nullptr = newest active = block-rate base).
     void computeModSources(int s, const Slot& sl, float* out, const Voice* nvIn = nullptr) const;
     void applyModMatrix(Slot& tmp, const float* srcVals, SlotVoice* latch = nullptr) const;   // latch = per-note env-target snapshot
+    void applyHotBlock(Slot& tmp, const float* srcVals) const;   // [2026-07-13 19:57] block snapshot of the per-sample targets (UI rings / sc copy only)
     // Effective BASE frequency for a pitched slot. In PIANO ROLL every pitched engine plays a
     // C4-ABSOLUTE base (+ the Tune fader), independent of the Freq knob - so the roll is knob-free
     // (the knob is never forced/faded/parked; it stays the STEP-mode base). Slot 2 keeps its
@@ -1125,7 +1129,7 @@ private:
         double   filtKm[2]  = { -1.0, -1.0 };              // per-sample smoothed damping K (de-zippers block-rate RESO modulation)
         float    envModOfs[4] {};                          // mod-matrix env offsets (Atk/Dec/Sus/Rel), LATCHED at the hit
         bool     envModLatched = false;                    // env(t, params) is stateless - per-block env changes JUMP the level (crackle)
-        float    modSm[7] {};  bool modSmOn = false;       // de-zipper bank: drive/ring/sub/punch/warp/FM-idx/wave-pos (matrix-live only)
+        float    lastEnv = 0.0f;                           // [2026-07-13 19:57] previous sample's amp env = the per-sample Amp Env mod SOURCE
         float    fmtPosSm = -1.0f;                         // block-rate FORMANT position glide (Q-7 BP coeffs must not step)
         float    wSm = -1.0f;                              // per-sample smoothed slot weight (de-zippers block-rate VOLUME modulation)
         double   filtGkt[2] = { -1.0, -1.0 };              // per-voice KEYTRACK target per filter (tan coeff; -1 = off)
