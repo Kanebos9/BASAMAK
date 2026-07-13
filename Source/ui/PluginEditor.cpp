@@ -965,7 +965,8 @@ static const char* kModTgtFixedName[DrumChannel::MT_GRID_BASE] =
   "Release", "Pitch", "Wave Position", "Detune", "Vibrato", "Width", "Drift", "Volume", "Warp",
   "FX A Character (Channel)", "FX B Character (Channel)", "Ring" };
 static juce::String kModTgtHiName(int t)   // fixed targets ABOVE the grid range
-{ return t == DrumChannel::MTSub ? "Sub" : t == DrumChannel::MTFormant ? "Formant" : juce::String(); }
+{ return t == DrumChannel::MTSub ? "Sub" : t == DrumChannel::MTFormant ? "Formant"
+       : t == DrumChannel::MTChFxCAmt ? "FX C Amount (Channel)" : t == DrumChannel::MTChFxCChr ? "FX C Character (Channel)" : juce::String(); }
 // Engine display name (matches the slot engine dropdown) for the mod-target parentheses "(Oscillator)" etc.
 static juce::String engineDisplayName(int engine)
 {
@@ -1045,6 +1046,8 @@ void RoutePicker::openFor(int cs, int ct, float amt)
     // Fixed targets ABOVE the grid (appended so saved grid routes never shift): Sub + Formant.
     tgtModel.rows.push_back({ DrumChannel::MTSub,     "Sub" });
     tgtModel.rows.push_back({ DrumChannel::MTFormant, "Formant" });
+    tgtModel.rows.push_back({ DrumChannel::MTChFxCAmt, "FX C Amount (Channel)" });
+    tgtModel.rows.push_back({ DrumChannel::MTChFxCChr, "FX C Character (Channel)" });
     srcList.updateContent(); tgtList.updateContent();
     selectCurrentRows();
     setVisible(true); toFront(true);
@@ -5552,7 +5555,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
     h = mix(h, c.keysSlot2Down);   // slot-2 pitch is part of the SOUND now (rides + refreshes with mixes)
     h = mix(h, f(c.strumAmt));     // STRUM is per-sound too (user order: guitar sounds ship strummed)
     // CHANNEL FX (both slots combined) are part of the SOUND: chorus / flanger / phaser / comp.
-    for (int fx = 0; fx < 2; ++fx)
+    for (int fx = 0; fx < 3; ++fx)
     { h = mix(h, c.chFxType[fx]); h = mix(h, f(c.chFxAmt[fx])); h = mix(h, f(c.chFxChar[fx])); }
     h = mix(h, f(c.reverbSend)); h = mix(h, f(c.delaySend));   // channel sends are part of the SOUND
     h = mix(h, c.keysPolyMode ? 1 : 0);   // keys Poly/Mono is per-sound too
@@ -5652,7 +5655,7 @@ juce::int64 DrumSequencerEditor::stateHash() const
             h = mix(h, channelSoundHash(ch));
             h = mix(h, ch.numSteps);
             h = mix(h, f(ch.humanizeAmt)); h = mix(h, f(ch.strumAmt)); h = mix(h, f(ch.keysMinVel)); h = mix(h, f(ch.keysMaxVel)); h = mix(h, f(ch.keysGlide));   // HUMANIZE / STRUM / min+max-vel / GLIDE (undoable)
-            for (int fx = 0; fx < 2; ++fx) { h = mix(h, ch.chFxType[fx]); h = mix(h, f(ch.chFxAmt[fx])); h = mix(h, f(ch.chFxChar[fx])); }   // CHANNEL FX (undoable)
+            for (int fx = 0; fx < 3; ++fx) { h = mix(h, ch.chFxType[fx]); h = mix(h, f(ch.chFxAmt[fx])); h = mix(h, f(ch.chFxChar[fx])); }   // CHANNEL FX (undoable)
             h = mix(h, f(ch.reverbSend)); h = mix(h, f(ch.delaySend)); h = mix(h, ch.revBus); h = mix(h, ch.delBus);
             h = mix(h, ch.mergeWith + 1); h = mix(h, ch.keysSplitW1); h = mix(h, ch.keysSplitW2);   // MERGE&SPLIT pair + windows
             h = mix(h, ch.arpOn ? 1 : 0); h = mix(h, ch.arpLen); h = mix(h, ch.arpSync); h = mix(h, ch.arpRate);
@@ -5720,7 +5723,7 @@ void DrumSequencerEditor::resetChannelToDefault(DrumChannel& c, int ch)
     c.drawMode = false; c.drawVel = 1.0f; c.drawPan = 0.0f; c.drawTuneCents = 0.0f;   // fresh channel = step mode
     c.keysSlot2Down = 0;                                      // KEYS slot-2 transpose (channel-wide) resets too
     c.humanizeAmt = 0.0f; c.strumAmt = 0.0f; c.keysMinVel = 0.0f; c.keysMaxVel = 1.0f; c.keysGlide = 0.0f;   // HUMANIZE / STRUM / vel range / GLIDE default
-    for (int fx = 0; fx < 2; ++fx) { c.chFxType[fx] = 0; c.chFxAmt[fx] = 0.0f; c.chFxChar[fx] = 0.5f; }   // CHANNEL FX off
+    for (int fx = 0; fx < 3; ++fx) { c.chFxType[fx] = 0; c.chFxAmt[fx] = 0.0f; c.chFxChar[fx] = 0.5f; }   // CHANNEL FX off
     c.reverbSend = 0.0f; c.delaySend = 0.0f;   // channel sends off (the sound sets its own)
     c.mergeWith = -1; c.keysSplitW1 = 60; c.keysSplitW2 = 12;   // MERGE&SPLIT off / identity windows
     { DrumChannel d; c.arpOn = d.arpOn; c.arpLen = d.arpLen; c.arpSync = d.arpSync; c.arpRate = d.arpRate;
@@ -5790,7 +5793,7 @@ void DrumSequencerEditor::writeChannelMix(juce::ValueTree& t, const DrumChannel&
     }
     t.setProperty("keys2Dn",  ch.keysSlot2Down,      nullptr);   // slot-2 pitch rides with the sound mix
     t.setProperty("strum",    ch.strumAmt,           nullptr);   // STRUM rides with the sound (user order)
-    for (int fx = 0; fx < 2; ++fx)   // CHANNEL FX slots ride with the sound
+    for (int fx = 0; fx < 3; ++fx)   // CHANNEL FX slots ride with the sound
     { const juce::String k(fx);
       t.setProperty("cfxT" + k, ch.chFxType[fx], nullptr);
       t.setProperty("cfxA" + k, ch.chFxAmt[fx],  nullptr);
@@ -5885,9 +5888,9 @@ void DrumSequencerEditor::readChannelMix(const juce::ValueTree& t, DrumChannel& 
     }
     ch.keysSlot2Down = juce::jlimit(-24, 24, (int) t.getProperty("keys2Dn", 0));   // slot-2 pitch (0 for old mix files)
     ch.strumAmt = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("strum", 0.0f));   // per-sound strum (0 for old files)
-    for (int fx = 0; fx < 2; ++fx)   // CHANNEL FX slots (readSlots migrates pre-slot-system files after this)
+    for (int fx = 0; fx < 3; ++fx)   // CHANNEL FX slots (readSlots migrates pre-slot-system files after this)
     { const juce::String k(fx);
-      ch.chFxType[fx] = juce::jlimit(0, 7, (int) t.getProperty("cfxT" + k, 0));
+      ch.chFxType[fx] = juce::jlimit(0, 10, (int) t.getProperty("cfxT" + k, 0));
       ch.chFxAmt[fx]  = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("cfxA" + k, 0.0f));
       ch.chFxChar[fx] = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("cfxC" + k, 0.5f)); }
     {   // MIGRATION: last week's 4-fixed-effect mix files -> the strongest two FX slots
@@ -5896,7 +5899,7 @@ void DrumSequencerEditor::readChannelMix(const juce::ValueTree& t, DrumChannel& 
                        { DrumChannel::ChFxFlanger, juce::jlimit(0.0f, 1.0f, (float) t.getProperty("chFxFlg", 0.0f)) },
                        { DrumChannel::ChFxPhaser,  juce::jlimit(0.0f, 1.0f, (float) t.getProperty("chFxPhs", 0.0f)) },
                        { DrumChannel::ChFxComp,    juce::jlimit(0.0f, 1.0f, (float) t.getProperty("chFxCmp", 0.0f)) } };
-        for (int fx = 0; fx < 2; ++fx)
+        for (int fx = 0; fx < 3; ++fx)
         {
             if (ch.chFxType[fx] != DrumChannel::ChFxOff) continue;
             int best = -1; for (int j = 0; j < 4; ++j) if (v[j].amt > 0.001f && (best < 0 || v[j].amt > v[best].amt)) best = j;
@@ -6547,6 +6550,8 @@ void DrumSequencerEditor::applySelCC(int t, float v, bool& slotDirty, bool& keys
         case P::SelChFxChrA: ch.chFxChar[0] = v; slotDirty = true; break;
         case P::SelChFxAmtB: ch.chFxAmt[1]  = v; slotDirty = true; break;
         case P::SelChFxChrB: ch.chFxChar[1] = v; slotDirty = true; break;
+        case P::SelChFxAmtC: ch.chFxAmt[2]  = v; slotDirty = true; break;
+        case P::SelChFxChrC: ch.chFxChar[2] = v; slotDirty = true; break;
         case P::SelEnvA: case P::SelEnvH: case P::SelEnvD: case P::SelEnvS: case P::SelEnvR:
         {   // read the current 5 (Modal mirrors the Ring read-back), replace ONE, write via the
             // ONE apply path so the per-engine mapping stays identical to dragging the editor
@@ -8044,12 +8049,15 @@ void DrumSequencerEditor::setupComponents()
     comboDriveType.addItem("Fuzz",      6);
     comboDriveType.addItem("Bitcrush",  7);
     comboDriveType.addItem("Bass Amp",   9);    // SPLIT rig: clean lows + driven mids/highs
+    comboDriveType.addItem("Exciter",    10);   // synthesized 2nd+3rd harmonics blended in (keeps dynamics)
     comboDriveType.setTooltip("Drive TYPE for this slot (the fader beside it = the amount).\n\n"
                               "- Soft Clip / Tube: warm, rounded saturation (Tube adds even harmonics).\n"
                               "- Hard Clip / Fuzz / Foldback: aggressive, buzzy, metallic.\n"
                               "- Bitcrush: digital lo-fi grit.\n"
                               "- BASS AMP: the split rig - lows stay CLEAN, only the mids/highs distort "
-                              "= fat, never farty (fixed voicing; the amount is the amp GAIN).");
+                              "= fat, never farty (fixed voicing; the amount is the amp GAIN).\n"
+                              "- EXCITER: synthesizes 2nd + 3rd harmonics and blends them IN - the dry signal "
+                              "passes untouched, so dynamics survive: bigger and brighter WITHOUT clipping.");
     comboDriveType.onChange = [this] {   // per-slot drive type
         if (ignoreKnobCallbacks) return;
         proc.sequencer.channel(selectedChannel).slots[envTargetSlot()].fxDriveType = comboDriveType.getSelectedId() - 1;
@@ -8244,7 +8252,7 @@ void DrumSequencerEditor::setupComponents()
     //      channel, saved with the sound. ----
     setupGroupHeader(hdrChannelFx, "CHANNEL FX");
     {
-        for (int i = 0; i < 2; ++i)
+        for (int i = 0; i < 3; ++i)
         {
             auto& cb = comboChFx[i];
             content.addAndMakeVisible(cb);
@@ -8252,26 +8260,29 @@ void DrumSequencerEditor::setupComponents()
             cb.addItem("Off", 1);   // SHORT names: the 66px combo must read without "..." (user)
             cb.addItem("Chorus", 2); cb.addItem("Flanger", 3); cb.addItem("Phaser", 4); cb.addItem("Comp", 5);
             cb.addItem("Tape", 6); cb.addItem("Auto-Pan", 7); cb.addItem("Widener", 8);
+            cb.addItem("OTT", 9); cb.addItem("FreqShift", 10); cb.addItem("Rotary", 11);
             cb.setSelectedId(1, juce::dontSendNotification);
-            cb.setTooltip(juce::String("CHANNEL FX slot ") + (i == 0 ? "A" : "B") + ": pick an effect for the WHOLE instrument "
-                          "(both sound slots combined; A runs before B).\n\n"
+            cb.setTooltip(juce::String("CHANNEL FX slot ") + (i == 0 ? "A" : i == 1 ? "B" : "C") + ": pick an effect for the WHOLE instrument "
+                          "(both sound slots combined; runs A -> B -> C in series).\n\n"
                           "- Chorus = widener | Flanger = jet | Phaser = swirl | Comp = glue | Tape = wow/flutter "
-                          "wobble (~3 ms latency while on) | Auto-Pan = stereo movement | Widener = M/S width "
-                          "(needs stereo content - unison Width or Chorus first).\n"
-                          "- AMOUNT = how much. CHARACTER = the 2nd dimension: sweep/wobble/pan SPEED "
-                          "(chorus/flanger/phaser/tape/auto-pan), attack (comp), bass-mono crossover (widener). "
-                          "50% = the classic voicing.\n"
-                          "- Both faders are matrix targets: \"FX " + juce::String(i == 0 ? "A" : "B") + " Amount/Character (Channel)\".");
+                          "(~3 ms latency while on) | Auto-Pan = stereo movement | Widener = M/S width (needs stereo "
+                          "content) | OTT = 3-band up+down compression (density/sheen) | FreqShift = single-sideband "
+                          "shifter (Character: centre = 0, right = up, left = down - tiny shifts = barber-pole detune, "
+                          "big = alien metal) | Rotary = Leslie horn+rotor.\n"
+                          "- AMOUNT = how much. CHARACTER = the 2nd dimension: sweep/wobble/pan/rotor SPEED "
+                          "(chorus/flanger/phaser/tape/auto-pan/OTT/rotary), attack (comp), bass-mono crossover "
+                          "(widener), the SHIFT itself (FreqShift). 50% = the classic voicing.\n"
+                          "- Both faders are matrix targets: \"FX " + juce::String(i == 0 ? "A" : i == 1 ? "B" : "C") + " Amount/Character (Channel)\".");
             cb.onChange = [this, i] {
                 if (ignoreKnobCallbacks) return;
                 auto& ch = proc.sequencer.channel(selectedChannel);
-                ch.chFxType[i] = juce::jlimit(0, 7, comboChFx[i].getSelectedId() - 1);
+                ch.chFxType[i] = juce::jlimit(0, 10, comboChFx[i].getSelectedId() - 1);
                 if (ch.chFxType[i] != DrumChannel::ChFxOff && ch.chFxAmt[i] <= 0.001f)
                     ch.chFxAmt[i] = 0.5f;   // picking an effect with amount 0 would be silent - start audible (disclosed)
                 ch.markDspDirty(); refreshDetailPanel();
                 if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel);
             };
-            auto setupF = [this](SlotDragFader& f, const char* nm, const char* tip) {
+            auto setupF = [this](SlotDragFader& f, const char* nm, const juce::String& tip) {
                 content.addAndMakeVisible(f);
                 f.setAccent(juce::Colour(0xff35c0ff));   // channel scope = cyan (not a slot colour)
                 f.setLabel(nm);
@@ -8281,12 +8292,11 @@ void DrumSequencerEditor::setupComponents()
                 f.setTooltip(tip);
                 f.onDragEnd = [this]{ if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel); };
             };
-            setupF(chFxAmtF[i], "Amt", i == 0 ? "FX A AMOUNT: how much of the effect (0 = bypass). Matrix target \"FX A Amount (Channel)\"."
-                                              : "FX B AMOUNT: how much of the effect (0 = bypass). Matrix target \"FX B Amount (Channel)\".");
-            setupF(chFxChrF[i], "Chr", i == 0 ? "FX A CHARACTER: the effect's second dimension - sweep speed/intensity (chorus/flanger/phaser) or attack (comp). 50% = the classic voicing. Matrix target \"FX A Character (Channel)\"."
-                                              : "FX B CHARACTER: the effect's second dimension - sweep speed/intensity (chorus/flanger/phaser) or attack (comp). 50% = the classic voicing. Matrix target \"FX B Character (Channel)\".");
-            chFxAmtF[i].learnPid = i == 0 ? "ui_sel_cfxAmtA" : "ui_sel_cfxAmtB";
-            chFxChrF[i].learnPid = i == 0 ? "ui_sel_cfxChrA" : "ui_sel_cfxChrB";
+            const juce::String sl9 = i == 0 ? "A" : i == 1 ? "B" : "C";
+            setupF(chFxAmtF[i], "Amt", "FX " + sl9 + " AMOUNT: how much of the effect (0 = bypass). Matrix target \"FX " + sl9 + " Amount (Channel)\".");
+            setupF(chFxChrF[i], "Chr", "FX " + sl9 + " CHARACTER: the effect's second dimension (speed / attack / crossover / shift - see the type dropdown's tooltip). 50% = the classic voicing. Matrix target \"FX " + sl9 + " Character (Channel)\".");
+            chFxAmtF[i].learnPid = i == 0 ? "ui_sel_cfxAmtA" : i == 1 ? "ui_sel_cfxAmtB" : "ui_sel_cfxAmtC";
+            chFxChrF[i].learnPid = i == 0 ? "ui_sel_cfxChrA" : i == 1 ? "ui_sel_cfxChrB" : "ui_sel_cfxChrC";
             chFxAmtF[i].setDefault(0.0f);
             chFxAmtF[i].onChange = [this, i](float v) {
                 if (ignoreKnobCallbacks) return;
@@ -8304,7 +8314,10 @@ void DrumSequencerEditor::setupComponents()
             content.addAndMakeVisible(f);
             f.setAccent(juce::Colour(0xff35c0ff));
             f.setLabel(nm);
-            f.format = [](float v){ return v <= 0.001f ? juce::String("Off") : juce::String(juce::roundToInt(v * 100.0f)) + "%"; };
+            f.format = [this, isRev](float v){   // value + BUS name, e.g. "73% Bus A" (user request)
+                auto& ch = proc.sequencer.channel(selectedChannel);
+                const juce::String bus = juce::String(" Bus ") + ((isRev ? ch.revBus : ch.delBus) != 0 ? "B" : "A");
+                return (v <= 0.001f ? juce::String("Off") : juce::String(juce::roundToInt(v * 100.0f)) + "%") + bus; };
             f.setDefault(0.0f);
             f.mlm = &proc.midiLearn; f.learnPid = isRev ? "ui_sel_fxRev" : "ui_sel_fxDel";
             f.setTooltip(juce::String(isRev ? "REVERB" : "DELAY") + " SEND (channel): how much of the finished channel feeds the shared "
@@ -8338,6 +8351,7 @@ void DrumSequencerEditor::setupComponents()
                     for (auto& pat : proc.sequencer.patterns)
                         (isRev ? pat.channels[chIdx].revBus : pat.channels[chIdx].delBus) = bus;
                     juce::ignoreUnused(ch2);
+                    f.repaint();   // the fader shows the bus name - update it instantly
                 });
                 return true;
             };
@@ -10473,14 +10487,14 @@ void DrumSequencerEditor::updateFxFaders(const DrumChannel::Slot& sl)
     knobRingHz.setValue (sl.fxRingHz,     juce::dontSendNotification);
     // CHANNEL FX + sends read the CHANNEL (both slots combined) - they never follow the slot selector.
     { const auto& ch = proc.sequencer.channel(selectedChannel);
-      for (int i = 0; i < 2; ++i)
-      { comboChFx[i].setSelectedId(juce::jlimit(0, 7, ch.chFxType[i]) + 1, juce::dontSendNotification);
+      for (int i = 0; i < 3; ++i)
+      { comboChFx[i].setSelectedId(juce::jlimit(0, 10, ch.chFxType[i]) + 1, juce::dontSendNotification);
         chFxAmtF[i].setValue01(ch.chFxAmt[i]);
         chFxChrF[i].setValue01(ch.chFxChar[i]);
         const bool on = ch.chFxType[i] != DrumChannel::ChFxOff;
         chFxAmtF[i].setAlpha(on ? 1.0f : 0.4f); chFxChrF[i].setAlpha(on ? 1.0f : 0.4f); }
-      sendRevF.setValue01(ch.reverbSend);
-      sendDelF.setValue01(ch.delaySend); }
+      sendRevF.setValue01(ch.reverbSend); sendRevF.repaint();   // repaint: the bus name in the value may have changed
+      sendDelF.setValue01(ch.delaySend); sendDelF.repaint(); }
     // (LFO tempo sync lives INSIDE the LfoDisplay now - setValues carries sl.lfoSync.)
 }
 
@@ -11167,9 +11181,10 @@ void DrumSequencerEditor::timerCallback()
         for (auto& r : rk)
         { const float raw = liveFx(ms, r.idx); r.k->setModRing(raw < -900.0f ? -1.0f : (float) r.k->valueToProportionOfLength(raw)); }
         // CHANNEL FX faders: rung from the channel-level live values (both slots' routes feed them).
-        {   // CHANNEL FX + send faders: [A-Amt, A-Chr, B-Amt, B-Chr, RevSend, DelSend]
-            SlotDragFader* cf[6] = { &chFxAmtF[0], &chFxChrF[0], &chFxAmtF[1], &chFxChrF[1], &sendRevF, &sendDelF };
-            for (int i = 0; i < 6; ++i)
+        {   // CHANNEL FX + send faders: [A-Amt, A-Chr, B-Amt, B-Chr, RevSend, DelSend, C-Amt, C-Chr]
+            SlotDragFader* cf[8] = { &chFxAmtF[0], &chFxChrF[0], &chFxAmtF[1], &chFxChrF[1],
+                                     &sendRevF, &sendDelF, &chFxAmtF[2], &chFxChrF[2] };
+            for (int i = 0; i < 8; ++i)
             { const float raw = mc.chFxLive[i]; cf[i]->setModRing(raw < -900.0f ? -1.0f : juce::jlimit(0.0f, 1.0f, raw)); }
         }
         const float drv = liveFx(ms, 6);   // Drive is a fader (0..1)
@@ -11979,14 +11994,14 @@ void DrumSequencerEditor::layoutContent()
         fxDriveFader.setBounds(fxX + dComboW + 4, dRow, fxW - dComboW - 4, 22);
         // Rows 2 + 3: the PER-SLOT FX knobs. Chorus/Flanger/Phaser/Comp moved OUT to CHANNEL FX below,
         // so the FX box is shorter now (5 knobs: Rev/Dly sends + Tone/Punch/Ring).
-        const int KSB = 46, kboxH = 16, cw = fxW / 3;
+        const int KSB = 44, kboxH = 14, cw = fxW / 3;   // compressed: the CHANNEL FX box below grew a 3rd row
         auto kFx = [&](LearnableKnob& kn, juce::Label& l, int col, int y) {
             kn.setVisible(true); l.setVisible(true);
             kn.setBounds(fxX + col * cw + (cw - KSB) / 2, y, KSB, KSB + kboxH);
             l.setBounds(fxX + col * cw, y + KSB + kboxH, cw, 12);
         };
-        const int fxRowStep = KSB + kboxH + 14;
-        const int row2 = colTop + 66, row3 = row2 + fxRowStep;
+        const int fxRowStep = KSB + kboxH + 10;
+        const int row2 = colTop + 62, row3 = row2 + fxRowStep;
         kFx(knobPunch, lblPunch, 0, row2); kFx(knobSub, lblSub, 1, row2); kFx(knobFormant, lblFormant, 2, row2);
         kFx(knobRing, lblRing, 0, row3); kFx(knobRingHz, lblRingHz, 1, row3);
 
@@ -11995,17 +12010,17 @@ void DrumSequencerEditor::layoutContent()
         //       and do NOT follow the slot selector. =====
         hdrChannelFx.setVisible(true);
         hdrChannelFx.setBounds(cxFx, colTop + CHFX_TOP, fxColW, hdrH);
-        {   // 2 effect-slot rows [type combo | Amount | Character] + a sends row [Rev | Dly]
+        {   // THREE effect-slot rows [type combo | Amount | Character] + the sends row [Rev | Dly] below
             const int y0 = colTop + CHFX_TOP + 20, rh = 19, gap2 = 3;
             const int cbW = 66, fW2 = (fxW - cbW - 3 * gap2) / 2;
-            for (int i = 0; i < 2; ++i)
+            for (int i = 0; i < 3; ++i)
             {
                 const int y = y0 + i * (rh + gap2);
                 comboChFx[i].setVisible(true); comboChFx[i].setBounds(fxX, y, cbW, rh);
                 chFxAmtF[i].setVisible(true);  chFxAmtF[i].setBounds(fxX + cbW + gap2, y, fW2, rh);
                 chFxChrF[i].setVisible(true);  chFxChrF[i].setBounds(fxX + cbW + gap2 * 2 + fW2, y, fW2, rh);
             }
-            const int ys = y0 + 2 * (rh + gap2) + 3, sW = (fxW - gap2) / 2;
+            const int ys = y0 + 3 * (rh + gap2) + 3, sW = (fxW - gap2) / 2;   // sends sit LOWER (room for the value + bus name)
             sendRevF.setVisible(true); sendRevF.setBounds(fxX, ys, sW, rh);
             sendDelF.setVisible(true); sendDelF.setBounds(fxX + sW + gap2, ys, fxW - sW - gap2, rh);
         }

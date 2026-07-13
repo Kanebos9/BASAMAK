@@ -386,10 +386,10 @@ public:
     enum ModTgt { MTOff = 0, MTFilt1Cut, MTFilt1Res, MTFilt2Cut, MTFilt2Res, MTDrive, MTRevSend,
                   MTDelSend, MTChFxAAmt, MTTone, MTPunch, MTChFxBAmt, MTAtk, MTDec, MTSus, MTRel, MTPitch,
                   MTWavePos, MTDetune, MTVibrato, MTWidth, MTDrift, MTVol, MTWarp, MTChFxAChr, MTChFxBChr, MTRing, MT_GRID_BASE,
-                  MTSub = MT_GRID_BASE + 8, MTFormant };
+                  MTSub = MT_GRID_BASE + 8, MTFormant, MTChFxCAmt, MTChFxCChr };   // slot C Amount/Character (Channel)
     static constexpr int MOD_TGT_GRID = 8;   // grid knobs MT_GRID_BASE .. MT_GRID_BASE+7
     static constexpr int MT_GRID_END = MT_GRID_BASE + MOD_TGT_GRID;   // grid range check: >= BASE && < END
-    static constexpr int MT_COUNT = MTFormant + 1;
+    static constexpr int MT_COUNT = MTChFxCChr + 1;
     // (GridKnob + the mod-matrix DSP helpers are declared after the Slot struct, below.)
     // DRIFT visual honesty: the newest voice's REAL rolled detunes (cents) for the editor's unison
     // view - the drawn lines move with what actually played. Returns voice count (0 = none active).
@@ -709,19 +709,21 @@ private: struct Voice; public:   // forward decl (defined privately below) so th
     // flanger ~12; sized for its current type), phaser allpasses and a comp envelope, so any type can
     // sit in any slot (even the same type twice). chFxMod = per-block matrix offsets
     // [0 A-Amt, 1 A-Chr, 2 B-Amt, 3 B-Chr, 4 RevSend, 5 DelSend]; chFxSm = per-sample smoothed amounts.
-    std::vector<float> chFxDL[2], chFxDR[2];
-    int    chFxW[2]  = {};
-    double chFxPhs[2] = {};
-    float  chFxPzL[2][6] = {}, chFxPzR[2][6] = {};   // phaser allpass states per slot
-    float  chFxFbL[2] = {}, chFxFbR[2] = {};
-    float  chFxCompEnv[2] = {};
-    float  chFxMod[6] = {};
-    float  chFxSm[2] = { -1.0f, -1.0f };             // per-SAMPLE smoothed slot amounts (-1 = snap on first use)
-    bool   chFxRun[2] = {};                          // engage tracking: off->on clears that slot's state (no stale burst)
+    std::vector<float> chFxDL[3], chFxDR[3];
+    int    chFxW[3]  = {};
+    double chFxPhs[3] = {};
+    float  chFxPzL[3][6] = {}, chFxPzR[3][6] = {};   // allpass/split/env states per slot (meaning per type)
+    float  chFxFbL[3] = {}, chFxFbR[3] = {};
+    float  chFxCompEnv[3] = {};
+    float  chFxHil[3][64] = {};                      // FREQ SHIFTER Hilbert allpass states (2 paths x 4 biquads x 4 x stereo)
+    // chFxMod = per-block matrix offsets [0 A-Amt, 1 A-Chr, 2 B-Amt, 3 B-Chr, 4 RevSend, 5 DelSend, 6 C-Amt, 7 C-Chr]
+    float  chFxMod[8] = {};
+    float  chFxSm[3] = { -1.0f, -1.0f, -1.0f };      // per-SAMPLE smoothed slot amounts (-1 = snap on first use)
+    bool   chFxRun[3] = {};                          // engage tracking: off->on clears that slot's state (no stale burst)
     float  chSendHpZ[2] = {};                        // reverb-send high-pass state (~150 Hz; subs stay out of the verb)
     float  chSendSmR = -1.0f, chSendSmD = -1.0f;     // per-sample smoothed send gains (de-zipper; -1 = snap)
-    float  chFxLive[6] = { -1000, -1000, -1000, -1000, -1000, -1000 };   // live modulated channel values for the UI rings
-                                                                          // [A-Amt, A-Chr, B-Amt, B-Chr, RevSend, DelSend]; -1000 = no route
+    float  chFxLive[8] = { -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000 };   // live modulated channel values (UI rings)
+                                                                          // [A-Amt, A-Chr, B-Amt, B-Chr, RevSend, DelSend, C-Amt, C-Chr]
     float  addTbl[NUM_SLOTS][ADD_FRAMES][ADD_TBL] = {};  // baked wavetable frames per slot - see rebuildAddTables()
     juce::Random driftRng { 0x9e3779b9 };    // DRIFT dice (audio thread only)
     double lfoBarPos  = -1.0;   // set by the Sequencer per block while PLAYING: bars into the playing
@@ -843,7 +845,9 @@ private: struct Voice; public:   // forward decl (defined privately below) so th
 
     //-- Drive / distortion (sits after the filter, before the EQ)
     enum DriveType { DriveOff = 0, SoftClip, HardClip, Tube, Foldback, Fuzz, Bitcrush,
-                     DriveAmpRetired, DriveBassAmp };   // BASS AMP = the split rig (clean lows +
+                     DriveAmpRetired, DriveBassAmp,
+                     DriveExciter };  // EXCITER = synthesized 2nd+3rd harmonics blended IN (keeps
+                                      // dynamics - "bigger without distorting"); BASS AMP = the split rig (clean lows +
                      // driven mids/highs). Slot 7 = the retired Guitar/Lead amps (user killed
                      // both; a stray saved 7 plays as Tube). Values are persisted - never renumber.
     int   driveType   = DriveOff;
@@ -878,11 +882,15 @@ private: struct Voice; public:   // forward decl (defined privately below) so th
     // Character 0.5 = the old fixed constants EXACTLY (migration-safe). Part of the SOUND
     // (channelSoundHash + mix files). Amount 0 / type Off = bypass = bit-identical.
     // Tape = wow/flutter pitch wobble + gentle HF softening (adds ~3 ms constant latency while on);
-    // AutoPan = equal-power stereo movement; Widen = M/S width with a bass-mono crossover (Character).
-    enum ChFxType { ChFxOff = 0, ChFxChorus, ChFxFlanger, ChFxPhaser, ChFxComp, ChFxTape, ChFxAutoPan, ChFxWiden };
-    int   chFxType[2] = { 0, 0 };
-    float chFxAmt [2] = { 0.0f, 0.0f };
-    float chFxChar[2] = { 0.5f, 0.5f };
+    // AutoPan = equal-power stereo movement; Widen = M/S width with a bass-mono crossover (Character);
+    // Ott = 3-band UP+DOWN compression (the Xfer-style density/sheen; Character = speed);
+    // FreqShift = single-sideband Hilbert shifter (Character = bipolar shift, barber-pole to metal);
+    // Rotary = Leslie: crossover horn/rotor doppler + AM + pan (Character = rotor speed).
+    enum ChFxType { ChFxOff = 0, ChFxChorus, ChFxFlanger, ChFxPhaser, ChFxComp, ChFxTape, ChFxAutoPan, ChFxWiden,
+                    ChFxOtt, ChFxFreqShift, ChFxRotary };
+    int   chFxType[3] = { 0, 0, 0 };            // THREE slots now (A -> B -> C in series)
+    float chFxAmt [3] = { 0.0f, 0.0f, 0.0f };
+    float chFxChar[3] = { 0.5f, 0.5f, 0.5f };
     // CHANNEL SENDS (moved from per-slot 2026-07-13): how much of the finished channel (post
     // CHANNEL FX) feeds the shared reverb / delay. The reverb send is HIGH-PASSED ~150 Hz (fixed,
     // disclosed) so subs stay dry. reverbSend/delaySend fields below (legacy position) are THE

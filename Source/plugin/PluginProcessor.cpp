@@ -1253,6 +1253,7 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
             { "ui_sel_cfxAmtA", SelChFxAmtA }, { "ui_sel_fxSub", SelFxSub }, { "ui_sel_fxPunch", SelFxPunch },
             { "ui_sel_cfxAmtB", SelChFxAmtB },
             { "ui_sel_cfxChrA", SelChFxChrA }, { "ui_sel_cfxChrB", SelChFxChrB }, { "ui_sel_fxRing", SelFxRing },
+            { "ui_sel_cfxAmtC", SelChFxAmtC }, { "ui_sel_cfxChrC", SelChFxChrC },
             { "ui_sel_fxFormant", SelFxFormant }, { "ui_sel_fxRingHz", SelFxRingHz },
             { "ui_sel_envA", SelEnvA }, { "ui_sel_envH", SelEnvH }, { "ui_sel_envD", SelEnvD },
             { "ui_sel_envS", SelEnvS }, { "ui_sel_envR", SelEnvR },
@@ -1714,7 +1715,7 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
     chState.setProperty("keys2Dn",  ch.keysSlot2Down,  nullptr);   // KEYS slot-2 transpose (per pattern/channel)
     chState.setProperty("humanize", ch.humanizeAmt,    nullptr);   // HUMANIZE: between-slot timing/velocity jitter
     chState.setProperty("strum",    ch.strumAmt,       nullptr);   // STRUM: chord/scale note time-spread
-    for (int f = 0; f < 2; ++f)   // CHANNEL FX slots (type + amount + character) + sends + buses
+    for (int f = 0; f < 3; ++f)   // CHANNEL FX slots (type + amount + character) + sends + buses
     { const juce::String k(f);
       chState.setProperty("cfxT" + k, ch.chFxType[f], nullptr);
       chState.setProperty("cfxA" + k, ch.chFxAmt[f],  nullptr);
@@ -1889,9 +1890,9 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
     ch.keysSlot2Down  = juce::jlimit(-24, 24, (int) child.getProperty("keys2Dn", 0));   // KEYS slot-2 transpose (per channel; +down/-up)
     ch.humanizeAmt = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("humanize", 0.0f));   // HUMANIZE
     ch.strumAmt    = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("strum",    0.0f));   // STRUM
-    for (int f = 0; f < 2; ++f)   // CHANNEL FX slots (readSlots migrates a pre-slot-system file after this)
+    for (int f = 0; f < 3; ++f)   // CHANNEL FX slots (readSlots migrates a pre-slot-system file after this)
     { const juce::String k(f);
-      ch.chFxType[f] = juce::jlimit(0, 7, (int) child.getProperty("cfxT" + k, 0));
+      ch.chFxType[f] = juce::jlimit(0, 10, (int) child.getProperty("cfxT" + k, 0));
       ch.chFxAmt[f]  = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("cfxA" + k, 0.0f));
       ch.chFxChar[f] = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("cfxC" + k, 0.5f)); }
     {   // MIGRATION: last week's 4-fixed-effect files ("chFxCho"...) -> the strongest two FX slots
@@ -1900,7 +1901,7 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
                        { DrumChannel::ChFxFlanger, juce::jlimit(0.0f, 1.0f, (float) child.getProperty("chFxFlg", 0.0f)) },
                        { DrumChannel::ChFxPhaser,  juce::jlimit(0.0f, 1.0f, (float) child.getProperty("chFxPhs", 0.0f)) },
                        { DrumChannel::ChFxComp,    juce::jlimit(0.0f, 1.0f, (float) child.getProperty("chFxCmp", 0.0f)) } };
-        for (int f = 0; f < 2; ++f)
+        for (int f = 0; f < 3; ++f)
         {
             if (ch.chFxType[f] != DrumChannel::ChFxOff) continue;   // new keys present = no migration
             int best = -1; for (int j = 0; j < 4; ++j) if (v[j].amt > 0.001f && (best < 0 || v[j].amt > v[best].amt)) best = j;

@@ -170,13 +170,19 @@ int main()
             c.slots[0].oscUnison = 3; c.slots[0].uniSpread = 0.6f; }, 0.9f, 0.6);
         const float cd = maxdiff(dry, cho), fd = maxdiff(dry, flg), pd = maxdiff(dry, phs), md = maxdiff(dry, cmp);
         const float chd = maxdiff(flg, flgC);
+        auto ott = mk(DrumChannel::ChFxOtt,       1.0f, 0.5f);
+        auto rot = mk(DrumChannel::ChFxRotary,    1.0f, 0.5f);
+        auto exc = render([](DrumChannel& c){ voice(c);
+            c.slots[0].fxDriveType = DrumChannel::DriveExciter; c.slots[0].fxDrive = 0.7f; }, 0.9f, 0.6);
         const float td = maxdiff(dry, tap), ad = maxdiff(dry, apn), wd2 = maxdiff(widOff, wid);
+        const float od = maxdiff(dry, ott), rd2 = maxdiff(dry, rot), ed = maxdiff(dry, exc);
         const bool ok = cd > 0.001f && fd > 0.001f && pd > 0.001f && md > 0.001f && chd > 0.001f
                      && td > 0.001f && ad > 0.001f && wd2 > 0.001f
+                     && od > 0.001f && rd2 > 0.001f && ed > 0.001f
                      && finite(cho) && finite(flg) && finite(phs) && finite(cmp) && finite(flgC)
-                     && finite(tap) && finite(apn) && finite(wid);
-        printf("[7] CHANNEL FX slots: chorus=%.3f flanger=%.3f phaser=%.3f comp=%.3f character=%.3f tape=%.3f autopan=%.3f widen=%.3f (all >0.001) -> %s\n",
-               cd, fd, pd, md, chd, td, ad, wd2, CHK(ok) ? "OK" : "FAIL");
+                     && finite(tap) && finite(apn) && finite(wid) && finite(ott) && finite(rot) && finite(exc);
+        printf("[7] CHANNEL FX slots: cho=%.2f flg=%.2f phs=%.2f cmp=%.2f chr=%.2f tape=%.2f pan=%.2f wid=%.2f ott=%.2f rot=%.2f exciter=%.2f (all >0.001) -> %s\n",
+               cd, fd, pd, md, chd, td, ad, wd2, od, rd2, ed, CHK(ok) ? "OK" : "FAIL");
     }
     {   // [8] CHANNEL FX are MODULATABLE from a slot's matrix (FX A Amount (Channel)): an LFO routed
         //     to it must change the render vs the same sound with the route removed.
@@ -277,6 +283,26 @@ int main()
         const float ud = maxdiff(up, dn), uf = maxdiff(up, fl), df = maxdiff(dn, fl);
         printf("[13] bipolar Bell: boost-vs-cut=%.3f boost-vs-flat=%.3f cut-vs-flat=%.3f (all >0.01) -> %s\n",
                ud, uf, df, CHK(ud > 0.01f && uf > 0.01f && df > 0.01f && finite(up) && finite(dn)) ? "OK" : "FAIL");
+    }
+    {   // [14] FREQUENCY SHIFTER quality: a 400 Hz sine shifted up ~+100 Hz must land at 500 Hz with
+        //      the 300 Hz IMAGE rejected (that's what makes it true single-sideband, not ring mod).
+        auto goe = [&](const std::vector<float>& x, double f2) {
+            const double w = 2.0 * 3.14159265358979 * f2 / SR, cw = 2.0 * std::cos(w);
+            double s0 = 0, s1 = 0, s2 = 0;
+            for (size_t i = (size_t)(SR * 0.10); i < x.size() && i < (size_t)(SR * 0.5); ++i)
+            { s0 = (double) x[i] + cw * s1 - s2; s2 = s1; s1 = s0; }
+            return std::sqrt(std::abs(s1 * s1 + s2 * s2 - cw * s1 * s2)); };
+        // Character c: shift = 1500^|2c-1| - 1 -> +100 Hz at c = 0.5 + log(101)/log(1500)/2 = 0.8156
+        auto sh = render([](DrumChannel& c){
+            for (auto& sl : c.slots) sl = Slot();
+            auto& s = c.slots[0];
+            s.engine = DrumChannel::SrcOsc; s.weight = 1.0f;
+            s.oscShape = s.oscShapeB = DrumChannel::WvSine; s.oscFreq = 400.0f;
+            s.atk = 0.002f; s.hold = 0.9f; s.dec = 0.5f;
+            c.chFxType[0] = DrumChannel::ChFxFreqShift; c.chFxAmt[0] = 1.0f; c.chFxChar[0] = 0.8156f; }, 0.9f, 0.6);
+        const double at500 = goe(sh, 500.0), at400 = goe(sh, 400.0), at300 = goe(sh, 300.0);
+        printf("[14] FreqShift SSB: 500Hz=%.0f (target), 400Hz=%.0f (dry residue), 300Hz=%.0f (image; expect target > 4x image) -> %s\n",
+               at500, at400, at300, CHK(at500 > 4.0 * juce::jmax(1.0, at300) && finite(sh)) ? "OK" : "FAIL");
     }
     printf(fails == 0 ? ">>> ModMatrixTest PASS\n" : ">>> ModMatrixTest FAIL (%d)\n", fails);
     return fails;

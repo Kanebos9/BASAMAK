@@ -2114,9 +2114,9 @@ public:
     static constexpr int DESIGN_W = 1510;   // widened to fit the Keys toggle next to Drag MIDI
     // FX column split (relative to colTop, colH = 338): the per-slot FX box on top, the CHANNEL FX box
     // (Chorus/Flanger/Phaser/Comp - whole instrument) under it. Used by layoutContent + paintContent.
-    static constexpr int FX_BOX_H  = 222;   // per-slot FX box height
-    static constexpr int CHFX_TOP  = 228;   // CHANNEL FX header top (below the FX box)
-    static constexpr int CHFX_BOX_H = 110;  // CHANNEL FX box height (228 + 110 = 338 = colH)
+    static constexpr int FX_BOX_H  = 206;   // per-slot FX box height (knobs compressed for the 3rd FX row below)
+    static constexpr int CHFX_TOP  = 212;   // CHANNEL FX header top (below the FX box)
+    static constexpr int CHFX_BOX_H = 126;  // CHANNEL FX box height (212 + 126 = 338 = colH)
     static constexpr int DESIGN_H = 778;   // detail panel ends at the content (no dead bottom band)
 
     // How many channel rows the grid shows (4/8/12/16). The engine always has NUM_CHANNELS;
@@ -2453,9 +2453,9 @@ private:
     juce::Label   hdrChannelFx;
     // CHANNEL FX = TWO selectable effect slots (type combo + Amount + Character faders) + the channel
     // Reverb/Delay SEND faders (right-click a send fader = pick its bus A/B + MIDI-learn).
-    juce::ComboBox comboChFx[2];
-    TinyComboLNF   tinyComboLNF;   // compact skin for the two type combos (cleared in teardown!)
-    SlotDragFader  chFxAmtF[2], chFxChrF[2];
+    juce::ComboBox comboChFx[3];
+    TinyComboLNF   tinyComboLNF;   // compact skin for the three type combos (cleared in teardown!)
+    SlotDragFader  chFxAmtF[3], chFxChrF[3];
     SlotDragFader  sendRevF, sendDelF;
     juce::Label   lblSub, lblFormant, lblPunch, lblRing, lblRingHz;
     // REVERB MODE: clicking the "REVERB" header cycles Room -> Hall -> Plate -> Shimmer (whole

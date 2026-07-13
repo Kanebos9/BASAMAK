@@ -32,7 +32,7 @@ static void ktRoute(DC::Slot& s, float kt)
 // Put an effect into the first free CHANNEL FX slot (A then B). Character 0.5 = the classic voicing.
 static void chFx(DC& c, int type, float amt, float chr = 0.5f)
 {
-    for (int f = 0; f < 2; ++f)
+    for (int f = 0; f < 3; ++f)
         if (c.chFxType[f] == DC::ChFxOff)
         { c.chFxType[f] = type; c.chFxAmt[f] = amt; c.chFxChar[f] = chr; return; }
 }
@@ -88,7 +88,7 @@ static void clearSound(DC& c)
     c.sliceCount = 1; c.stretchAmt = 1.0f;
     c.keysSlot2Down = 0;   // slot-2 pitch is TIED TO THE SOUND now: each sound sets its own (default 0),
                            // so picking a new sound refreshes it instead of leaking the previous value.
-    for (int f = 0; f < 2; ++f) { c.chFxType[f] = 0; c.chFxAmt[f] = 0.0f; c.chFxChar[f] = 0.5f; }   // CHANNEL FX ride with the sound
+    for (int f = 0; f < 3; ++f) { c.chFxType[f] = 0; c.chFxAmt[f] = 0.0f; c.chFxChar[f] = 0.5f; }   // CHANNEL FX ride with the sound
     c.reverbSend = 0.0f; c.delaySend = 0.0f;   // channel sends ride with the sound too
     c.markDspDirty();
 }
@@ -2861,7 +2861,7 @@ static void resetAll(Sequencer& s)
             ch.duckBy = -1; ch.duckAmt = 0.5f;   // sidechain duck is routing-like -> preset-level too
             ch.keysSlot2Down = 0;   // KEYS slot-2 transpose (channel-wide) is preset-level too
             ch.humanizeAmt = 0.0f; ch.strumAmt = 0.0f; ch.keysMinVel = 0.0f; ch.keysMaxVel = 1.0f; ch.keysGlide = 0.0f;   // HUMANIZE / STRUM / vel range / GLIDE reset
-            for (int f2 = 0; f2 < 2; ++f2) { ch.chFxType[f2] = 0; ch.chFxAmt[f2] = 0.0f; ch.chFxChar[f2] = 0.5f; }   // CHANNEL FX reset
+            for (int f2 = 0; f2 < 3; ++f2) { ch.chFxType[f2] = 0; ch.chFxAmt[f2] = 0.0f; ch.chFxChar[f2] = 0.5f; }   // CHANNEL FX reset
             ch.reverbSend = 0.0f; ch.delaySend = 0.0f;
             ch.mergeWith = -1; ch.keysSplitW1 = 60; ch.keysSplitW2 = 12;   // MERGE&SPLIT reset (per-pattern pairing + split windows)
             { DC d; ch.arpOn = d.arpOn; ch.arpLen = d.arpLen; ch.arpSync = d.arpSync; ch.arpRate = d.arpRate;

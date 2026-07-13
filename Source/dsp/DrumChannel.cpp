@@ -1012,7 +1012,7 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
     {   // old per-slot chorus/comp -> the first free CHANNEL FX slots (character 0.5 = the old voicing)
         auto place = [&](int type, float amt) {
             if (amt <= 0.001f) return;
-            for (int f2 = 0; f2 < 2; ++f2)
+            for (int f2 = 0; f2 < 3; ++f2)
                 if (chFxType[f2] == ChFxOff)
                 { chFxType[f2] = type; chFxAmt[f2] = juce::jlimit(0.0f, 1.0f, amt); chFxChar[f2] = 0.5f; return; }
         };
@@ -1931,7 +1931,7 @@ void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals) const
             case MTVol:      if (r.src >= MSLfoFilt && r.src <= MSLfoWave) break;   // LFO -> Vol = AUDIO-RATE (per-sample AM in the render)
                              add(tmp.weight, 0, 1); break;   // other sources: block-rate slot level (smoothed)
             case MTWarp:     add(tmp.oscWarp, 0, 1); break;  // wavefold amount
-            case MTChFxAChr: case MTChFxBChr: break;    // CHANNEL FX Character: accumulated separately (channelMod)
+            case MTChFxAChr: case MTChFxBChr: case MTChFxCAmt: case MTChFxCChr: break;   // CHANNEL FX C + Characters: accumulated separately (channelMod)
             case MTRing:     add(tmp.fxRing, 0, 1); break;
             default:
                 if (r.tgt >= MT_GRID_BASE && r.tgt < MT_GRID_END)   // engine GRID knobs only (Sub/Formant sit above)
@@ -2490,7 +2490,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 const float m = r.amt * srcVals[juce::jlimit(0, MS_COUNT - 1, (int) r.src)];
                 switch (r.tgt) { case MTChFxAAmt: chFxMod[0] += m; break; case MTChFxAChr: chFxMod[1] += m; break;
                                  case MTChFxBAmt: chFxMod[2] += m; break; case MTChFxBChr: chFxMod[3] += m; break;
-                                 case MTRevSend:  chFxMod[4] += m; break; case MTDelSend:  chFxMod[5] += m; break; default: break; }
+                                 case MTRevSend:  chFxMod[4] += m; break; case MTDelSend:  chFxMod[5] += m; break;
+                                 case MTChFxCAmt: chFxMod[6] += m; break; case MTChFxCChr: chFxMod[7] += m; break; default: break; }
             }
             // WAVE / grain POSITION modulation is applied in the RENDER as an offset (so it works even
             // when the wavetable is GLIDING, which overrides the static position) - bake the base position.
@@ -3400,11 +3401,12 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     // (naked waveshaping = fizzy top - every synth drive has a post-filter), and FUZZ
                     // gets a DC blocker (its rectified blend adds a constant offset = headroom loss).
                     const bool harsh = c.fxDriveType == HardClip || c.fxDriveType == Foldback || c.fxDriveType == Fuzz;
-                    if (harsh) {
+                    const bool needDc = c.fxDriveType == Fuzz || c.fxDriveType == DriveExciter;   // t*t terms carry DC
+                    if (harsh || needDc) {
                         const float k = drvLpK;   // ~8 kHz at the engine rate (baked per block)
                         auto post = [&](float y, int lr) -> float {
-                            sv.drvLp[lr] += k * (y - sv.drvLp[lr]); y = sv.drvLp[lr];
-                            if (c.fxDriveType == Fuzz) {           // DC blocker: y = x - x1 + R*y1
+                            if (harsh) { sv.drvLp[lr] += k * (y - sv.drvLp[lr]); y = sv.drvLp[lr]; }   // (Exciter stays BRIGHT - no LP)
+                            if (needDc) {                          // DC blocker: y = x - x1 + R*y1
                                 const float o = y - sv.drvDcX[lr] + 0.9995f * sv.drvDcY[lr];
                                 sv.drvDcX[lr] = y; sv.drvDcY[lr] = o; y = o;
                             }
@@ -3500,11 +3502,13 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
     //     amount 0 (and no modulation) = the slot is skipped = bit-identical. ===
     {
         const float smK = 1.0f - std::exp(-1.0f / (0.004f * (float) sr));
-        const float aTgt[2] = { juce::jlimit(0.0f, 1.0f, chFxAmt[0] + chFxMod[0]),      // slot A/B modulated Amount
-                                juce::jlimit(0.0f, 1.0f, chFxAmt[1] + chFxMod[2]) };
-        const float cTgt[2] = { juce::jlimit(0.0f, 1.0f, chFxChar[0] + chFxMod[1]),     // slot A/B modulated Character
-                                juce::jlimit(0.0f, 1.0f, chFxChar[1] + chFxMod[3]) };
-        for (int fx = 0; fx < 2; ++fx)
+        const float aTgt[3] = { juce::jlimit(0.0f, 1.0f, chFxAmt[0] + chFxMod[0]),      // slot A/B/C modulated Amount
+                                juce::jlimit(0.0f, 1.0f, chFxAmt[1] + chFxMod[2]),
+                                juce::jlimit(0.0f, 1.0f, chFxAmt[2] + chFxMod[6]) };
+        const float cTgt[3] = { juce::jlimit(0.0f, 1.0f, chFxChar[0] + chFxMod[1]),     // slot A/B/C modulated Character
+                                juce::jlimit(0.0f, 1.0f, chFxChar[1] + chFxMod[3]),
+                                juce::jlimit(0.0f, 1.0f, chFxChar[2] + chFxMod[7]) };
+        for (int fx = 0; fx < 3; ++fx)
         {
             const int type = chFxType[fx];
             float& sm = chFxSm[fx];
@@ -3515,6 +3519,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 std::fill(chFxDL[fx].begin(), chFxDL[fx].end(), 0.0f);
                 std::fill(chFxDR[fx].begin(), chFxDR[fx].end(), 0.0f);
                 for (int k = 0; k < 6; ++k) { chFxPzL[fx][k] = chFxPzR[fx][k] = 0.0f; }
+                for (int k = 0; k < 64; ++k) chFxHil[fx][k] = 0.0f;
                 chFxFbL[fx] = chFxFbR[fx] = 0.0f; chFxCompEnv[fx] = 0.0f;
             }
             chFxRun[fx] = runNow;
@@ -3593,6 +3598,128 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         ph += dPh; if (ph > 2.0 * kPi) ph -= 2.0 * kPi;
                     }
                     chFxPhs[fx] = ph; chFxFbL[fx] = juce::jlimit(-4.0f, 4.0f, fbL); chFxFbR[fx] = juce::jlimit(-4.0f, 4.0f, fbR); sm = amt;
+                } break;
+                case ChFxOtt:
+                {   // OTT: 3-band UP + DOWN compression (the Xfer-style density). Bands split at ~120 Hz
+                    // and ~2.5 kHz (phase-coherent one-pole splits); each band's level is dragged toward
+                    // a target from BOTH directions (quiet up, loud down), gains capped +-14 dB, and the
+                    // whole effect is blended by Amount (the classic OTT "Depth"). CHARACTER = speed.
+                    const float spd  = std::pow(4.0f, 1.0f - 2.0f * ch1);                 // 0.25x..4x time scale
+                    const float att  = 1.0f - std::exp(-1.0f / (0.004f * spd * (float) sr));
+                    const float rel  = 1.0f - std::exp(-1.0f / (0.090f * spd * (float) sr));
+                    const float kLo  = 1.0f - std::exp(-2.0f * (float) kPi * 120.0f  / (float) sr);
+                    const float kMid = 1.0f - std::exp(-2.0f * (float) kPi * 2500.0f / (float) sr);
+                    const float tgt3[3] = { 0.22f, 0.16f, 0.10f };                        // per-band targets
+                    float amt = sm;
+                    for (int i = 0; i < numSamples; ++i)
+                    {
+                        amt += smK * (aTgt[fx] - amt);
+                        // split L+R with shared coefficients (states: PzL/PzR [0]=lowLP [1]=midLP)
+                        chFxPzL[fx][0] += kLo  * (outL[i] - chFxPzL[fx][0]);
+                        chFxPzR[fx][0] += kLo  * (outR[i] - chFxPzR[fx][0]);
+                        chFxPzL[fx][1] += kMid * (outL[i] - chFxPzL[fx][1]);
+                        chFxPzR[fx][1] += kMid * (outR[i] - chFxPzR[fx][1]);
+                        const float loL = chFxPzL[fx][0],            loR = chFxPzR[fx][0];
+                        const float miL = chFxPzL[fx][1] - loL,      miR = chFxPzR[fx][1] - loR;
+                        const float hiL = outL[i] - chFxPzL[fx][1],  hiR = outR[i] - chFxPzR[fx][1];
+                        const float bl[3] = { loL, miL, hiL }, br[3] = { loR, miR, hiR };
+                        float oL = 0.0f, oR = 0.0f;
+                        for (int b2 = 0; b2 < 3; ++b2)
+                        {
+                            float& env = chFxPzL[fx][2 + b2];                              // band envelope ([2..4])
+                            const float lvl = juce::jmax(std::abs(bl[b2]), std::abs(br[b2]));
+                            env += (lvl > env ? att : rel) * (lvl - env);
+                            float g = 1.0f;
+                            if (env > 1.0e-4f)
+                                g = std::pow(tgt3[b2] / env, env > tgt3[b2] ? 0.55f : 0.45f);   // down / UP compression
+                            g = juce::jlimit(0.2f, 5.0f, g);                               // +-14 dB cap
+                            g = 1.0f + (g - 1.0f) * amt;                                   // Depth blend
+                            oL += bl[b2] * g; oR += br[b2] * g;
+                        }
+                        outL[i] = oL * 0.9f; outR[i] = oR * 0.9f;                          // trim (OTT gets LOUD)
+                    }
+                    sm = amt;
+                } break;
+                case ChFxFreqShift:
+                {   // FREQUENCY SHIFTER: true single-sideband via an IIR Hilbert pair (2 allpass cascades
+                    // ~90 deg apart), heterodyned by a quadrature oscillator. NOT a pitch shifter and NOT
+                    // ring mod - every frequency moves by the SAME +-Hz, breaking harmonicity: tiny shifts
+                    // = barber-pole detune/phasing, big = alien metal. CHARACTER = the shift (centre = 0,
+                    // right = up, left = down, log to ~1.5 kHz). Amount = mix.
+                    static const float hA[4] = { 0.6923878f, 0.9360654322959f, 0.9882295226860f, 0.9987488452737f };
+                    static const float hB[4] = { 0.4021921162426f, 0.8561710882420f, 0.9722909545651f, 0.9952884791278f };
+                    const float dch = 2.0f * ch1 - 1.0f;
+                    const double shiftHz = (dch >= 0.0f ? 1.0 : -1.0) * (std::pow(1500.0, (double) std::abs(dch)) - 1.0);
+                    double ph = chFxPhs[fx];
+                    const double dPh = 2.0 * kPi * shiftHz / sr;
+                    float amt = sm;
+                    // state layout per channel side (32 floats): path A biquads [0..15], path B [16..31]
+                    auto ap2 = [](float x, float a, float* st) -> float {
+                        // 2nd-order allpass y[n] = a*(x[n] + y[n-2]) - x[n-2]; st = {x1, x2, y1, y2}
+                        const float y = a * (x + st[3]) - st[1];
+                        st[1] = st[0]; st[0] = x; st[3] = st[2]; st[2] = y;
+                        return y; };
+                    auto shift1 = [&](float x, float* st, double phase) -> float {
+                        float i1 = x, q1 = x;
+                        for (int k = 0; k < 4; ++k) i1 = ap2(i1, hA[k] * hA[k], st + k * 4);
+                        for (int k = 0; k < 4; ++k) q1 = ap2(q1, hB[k] * hB[k], st + 16 + k * 4);
+                        // path A LEADS path B by ~90 deg (verified by test [14]: the minus form picked
+                        // the LOWER sideband) - the upper-sideband select is I*cos + Q*sin here.
+                        return i1 * (float) std::cos(phase) + q1 * (float) std::sin(phase); };
+                    for (int i = 0; i < numSamples; ++i)
+                    {
+                        amt += smK * (aTgt[fx] - amt);
+                        const float wetL = shift1(outL[i], chFxHil[fx],      ph);
+                        const float wetR = shift1(outR[i], chFxHil[fx] + 32, ph);
+                        outL[i] += (wetL - outL[i]) * amt;
+                        outR[i] += (wetR - outR[i]) * amt;
+                        ph += dPh; if (ph > 2.0 * kPi) ph -= 2.0 * kPi; else if (ph < 0.0) ph += 2.0 * kPi;
+                    }
+                    chFxPhs[fx] = ph; sm = amt;
+                } break;
+                case ChFxRotary:
+                {   // ROTARY (Leslie): crossover ~800 Hz; the HORN (highs) spins fast - doppler (modulated
+                    // delay) + AM + pan; the ROTOR (lows) spins at 0.34x - gentle AM + slight pan.
+                    // CHARACTER = speed (0.7 Hz chorale .. 7 Hz tremolo). Amount = intensity.
+                    const int flen = juce::jmax(64, (int) (0.006 * sr));
+                    if ((int) chFxDL[fx].size() != flen) { chFxDL[fx].assign((size_t) flen, 0.0f); chFxDR[fx].assign((size_t) flen, 0.0f); chFxW[fx] = 0; chFxPhs[fx] = 0.0; }
+                    int w = chFxW[fx]; double ph = chFxPhs[fx];
+                    const double hornHz = 0.7 * std::pow(10.0, (double) ch1);   // 0.7..7 Hz
+                    const double dPh = 2.0 * kPi * hornHz / sr;
+                    const float  kX  = 1.0f - std::exp(-2.0f * (float) kPi * 800.0f / (float) sr);
+                    const float  baseS = (float) (0.0022 * sr);
+                    float amt = sm;
+                    auto rd = [&](const std::vector<float>& buf, float delay) -> float {
+                        float rp = (float) w - delay; while (rp < 0.0f) rp += (float) flen;
+                        const int i0 = (int) rp; const float fr = rp - (float) i0;
+                        const int i1 = (i0 + 1 < flen) ? i0 + 1 : 0;
+                        return buf[(size_t) i0] + (buf[(size_t) i1] - buf[(size_t) i0]) * fr; };
+                    for (int i = 0; i < numSamples; ++i)
+                    {
+                        amt += smK * (aTgt[fx] - amt);
+                        const double rotPh = ph * 0.34;
+                        const float hs = (float) std::sin(ph),  hc = (float) std::cos(ph);
+                        const float rs = (float) std::sin(rotPh);
+                        // split (states [0]/[1] = LP per side); highs into the doppler line
+                        chFxPzL[fx][0] += kX * (outL[i] - chFxPzL[fx][0]);
+                        chFxPzR[fx][0] += kX * (outR[i] - chFxPzR[fx][0]);
+                        const float loL = chFxPzL[fx][0], loR = chFxPzR[fx][0];
+                        chFxDL[fx][(size_t) w] = outL[i] - loL; chFxDR[fx][(size_t) w] = outR[i] - loR;
+                        const float d = baseS + amt * (float)(0.0011 * sr) * hs;          // horn doppler
+                        float hiL = rd(chFxDL[fx], d), hiR = rd(chFxDR[fx], d);
+                        const float hAM = 1.0f - amt * 0.35f * (0.5f + 0.5f * hc);        // horn AM
+                        const float pn  = amt * 0.7f * hc;                                 // horn pan
+                        hiL *= hAM * std::sqrt(juce::jlimit(0.0f, 2.0f, 1.0f - pn));
+                        hiR *= hAM * std::sqrt(juce::jlimit(0.0f, 2.0f, 1.0f + pn));
+                        const float rAM = 1.0f - amt * 0.18f * (0.5f + 0.5f * rs);        // rotor AM (gentle)
+                        const float rpn = amt * 0.25f * rs;
+                        const float lL = loL * rAM * std::sqrt(juce::jlimit(0.0f, 2.0f, 1.0f - rpn));
+                        const float lR = loR * rAM * std::sqrt(juce::jlimit(0.0f, 2.0f, 1.0f + rpn));
+                        outL[i] = lL + hiL; outR[i] = lR + hiR;
+                        if (++w >= flen) w = 0;
+                        ph += dPh; if (ph > 2.0 * kPi) ph -= 2.0 * kPi;
+                    }
+                    chFxW[fx] = w; chFxPhs[fx] = ph; sm = amt;
                 } break;
                 case ChFxTape:
                 {   // TAPE wow/flutter: the whole channel passes through a slowly-warped delay line =
@@ -3706,6 +3833,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         chFxLive[3] = chTgt(MTChFxBChr) ? cTgt[1] : -1000.0f;
         chFxLive[4] = chTgt(MTRevSend)  ? juce::jlimit(0.0f, 1.0f, reverbSend + chFxMod[4]) : -1000.0f;
         chFxLive[5] = chTgt(MTDelSend)  ? juce::jlimit(0.0f, 1.0f, delaySend  + chFxMod[5]) : -1000.0f;
+        chFxLive[6] = chTgt(MTChFxCAmt) ? aTgt[2] : -1000.0f;
+        chFxLive[7] = chTgt(MTChFxCChr) ? cTgt[2] : -1000.0f;
     }
 
     // Per-slot filter env-follow: remember this block's per-slot level for next block's sweep.
@@ -3944,6 +4073,13 @@ void DrumChannel::updateFilter(float envModLevel, double cutoffMul)
 float DrumChannel::applyDrive(float x) const { return driveSample(x, driveType, driveAmount); }
 float DrumChannel::driveSample(float x, int driveType, float driveAmount)
 {
+    if (driveType == DriveExciter)
+    {   // EXCITER: synthesized 2nd + 3rd harmonics BLENDED IN (Chebyshev-style on a soft-limited
+        // copy) - the dry passes untouched, so dynamics survive: "bigger without distorting".
+        // (The t*t term carries DC - the render's post stage DC-blocks this type.)
+        const float t = std::tanh(x * 1.4f);
+        return x + driveAmount * (1.15f * t * t + 0.75f * t * t * t);
+    }
     // v6 PERCEPTUAL TAPER: gain rises with amount SQUARED, so the musical range spreads across the
     // whole control instead of hitting near-square-wave by ~20% (the old linear 1+24a did). Factory
     // drive amounts were remapped a -> sqrt(a) (and old user files migrate on load), which lands on
