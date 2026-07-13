@@ -1976,7 +1976,7 @@ void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals, SlotVoice* lat
             // per voice) - env-follow is itself block-rate, and a voice COUNT is inherently stepped.
             case MTFilt1Env: add(tmp.filterEnvAmt,  -1, 1); break;
             case MTFilt2Env: add(tmp.filterEnvAmt2, -1, 1); break;
-            case MTUniCount: tmp.oscUnison = juce::jlimit(1, 16, tmp.oscUnison + juce::roundToInt(m * 15.0f)); break;
+            case MTUniCount: break;   // [2026-07-14 02:30] LATCHED PER HIT below (mid-note count changes crackle)
             default:
                 if (r.tgt >= MT_GRID_BASE && r.tgt < MT_GRID_END)   // engine GRID knobs only (Sub/Formant sit above)
                 {
@@ -1998,7 +1998,7 @@ void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals, SlotVoice* lat
     if (! latch->envModLatched)
     {
         latch->envModLatched = true;
-        for (int k = 0; k < 4; ++k) latch->envModOfs[k] = 0.0f;
+        for (int k = 0; k < 5; ++k) latch->envModOfs[k] = 0.0f;
         for (int ri2 = 0; ri2 < MOD_ROUTES; ++ri2)
         {
             const auto& r = tmp.mod[ri2];
@@ -2007,6 +2007,7 @@ void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals, SlotVoice* lat
             const float m = r.amt * modRouteShape(r, srcV);
             switch (r.tgt) { case MTAtk: latch->envModOfs[0] += m; break; case MTDec: latch->envModOfs[1] += m; break;
                              case MTSus: latch->envModOfs[2] += m; break; case MTRel: latch->envModOfs[3] += m; break;
+                             case MTUniCount: latch->envModOfs[4] += m; break;
                              default: break; }
         }
     }
@@ -2014,6 +2015,8 @@ void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals, SlotVoice* lat
     tmp.dec     = juce::jlimit(0.0f, 6.0f, tmp.dec     + latch->envModOfs[1] * 2.0f);
     tmp.sustain = juce::jlimit(0.0f, 1.0f, tmp.sustain + latch->envModOfs[2] * 1.0f);
     tmp.release = juce::jlimit(0.0f, 4.0f, tmp.release + latch->envModOfs[3] * 2.0f);
+    if (latch->envModOfs[4] != 0.0f)   // Unison Count: the stack size is chosen AT the hit, then fixed
+        tmp.oscUnison = juce::jlimit(1, 16, tmp.oscUnison + juce::roundToInt(latch->envModOfs[4] * 15.0f));
 }
 
 #include "Adaa.h"   // [2026-07-13 22:10] ADAA shapers moved to their own module (user: group the code better)
@@ -2044,6 +2047,7 @@ void DrumChannel::applyHotBlock(Slot& tmp, const float* srcVals, const float* la
             case MTWavePos:  tmp.addPos = juce::jlimit(0.0f, 1.0f, tmp.addPos + m); break;
             case MTRingHz:   tmp.fxRingHz = juce::jlimit(25.0f, 4000.0f, tmp.fxRingHz * std::pow(2.0f, m * 3.0f)); break;
             case MTSlotPan:  add(tmp.pan, -1, 1); break;
+            case MTUniCount: tmp.oscUnison = juce::jlimit(1, 16, tmp.oscUnison + juce::roundToInt(m * 15.0f)); break;   // display: what a hit NOW would get
             default:
                 if (r.tgt >= MT_GRID_BASE && r.tgt < MT_GRID_END)
                 {

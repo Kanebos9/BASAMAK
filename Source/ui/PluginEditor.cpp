@@ -1121,7 +1121,7 @@ static juce::String modTgtTip(int t, int engine)
         case DC::MTSlotPan:  return "This layer's pan. Note -> Pan = keyboard spread, Random -> Pan = per-hit scatter, Velocity -> Pan = accent lean. (Whole-channel MOTION = Channel FX Auto-Pan.)";
         case DC::MTFilt1Env: return "Filter 1's ENVELOPE AMOUNT (the dashed sweep arrow). Velocity -> Env Amount = harder hits sweep further (the 303 accent, squared). Live-shown on the filter display.";
         case DC::MTFilt2Env: return "Filter 2's ENVELOPE AMOUNT (the dashed sweep arrow).";
-        case DC::MTUniCount: return "Unison VOICE COUNT (1..16, engine-capped). Inherently STEPPED - best from per-hit sources (Velocity / Random / Step Mod: harder hit = fatter stack). A continuous LFO here audibly steps.";
+        case DC::MTUniCount: return "Unison VOICE COUNT (1..16, engine-capped). Sampled ONCE PER HIT like the envelope targets (a stack can't resize mid-note without crackling) - use per-hit sources: Velocity / Random / Note / Step Mod. Harder hit = fatter stack.";
         case DC::MTChFxAAmt: return "Channel FX slot A's Amount fader (block-rate, smoothed).";
         case DC::MTChFxBAmt: return "Channel FX slot B's Amount fader (block-rate, smoothed).";
         case DC::MTChFxCAmt: return "Channel FX slot C's Amount fader (block-rate, smoothed).";

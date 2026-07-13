@@ -1183,7 +1183,8 @@ private:
         double   filtIc1[2][2] = {}, filtIc2[2][2] = {};   // TPT/ZDF SVF integrators [filter 0/1][stereo side]
         double   filtGm[2]  = { -1.0, -1.0 };              // per-sample smoothed cutoff coeff per filter (-1 = snap)
         double   filtKm[2]  = { -1.0, -1.0 };              // per-sample smoothed damping K (de-zippers block-rate RESO modulation)
-        float    envModOfs[4] {};                          // mod-matrix env offsets (Atk/Dec/Sus/Rel), LATCHED at the hit
+        float    envModOfs[5] {};                          // mod-matrix PER-HIT latches: Atk/Dec/Sus/Rel + [4] = Unison Count offset
+                                                           // [2026-07-14 02:30] count joined the latch: mid-note count changes stepped gain + popped stale-phase voices (user: "it crackles")
         bool     envModLatched = false;                    // env(t, params) is stateless - per-block env changes JUMP the level (crackle)
         float    lastEnv = 0.0f;                           // [2026-07-13 19:57] previous sample's amp env = the per-sample Amp Env mod SOURCE
         float    modLagV[MOD_ROUTES] = {};                 // [2026-07-14 01:33] per-route LAG states: block-bake path...
