@@ -27,6 +27,8 @@ public:
         bool  delaySync  = false;
         int   delayDivision = 4;        // index into the note-division table
         bool  delayPingPong = false;    // cross-feed L<->R so echoes bounce across the stereo field
+        int   delayMode = 0;            // [2026-07-15 00:50] loop character: 0 Tape (= the original
+                                        // voicing, default) / 1 Digital / 2 Dub / 3 Analog / 4 Shimmer
         float reverbPreDelay = 0.0f;    // 0..1 -> 0..120 ms gap before the reverb tail (drums love this)
         int   reverbMode = 1;           // 0 Room / 1 Hall (= the original voicing, default) / 2 Plate / 3 Shimmer
         float reverbWidth    = 1.0f;    // reverb stereo width (0 = mono/narrow tail, 1 = full wide)
@@ -38,6 +40,7 @@ public:
         float reverbWidthB = 1.0f;
         float delayTimeB = 0.375f, delayFeedbackB = 0.3f, delayWetB = 0.3f;
         bool  delaySyncB = false; int delayDivisionB = 4; bool delayPingPongB = false;
+        int   delayModeB = 0;
         float volume = 0.9f;
         bool  mono   = false;
         float limit  = 0.003f;          // 0 = limiter off; default ~-0.1 dB ceiling (light/transparent)

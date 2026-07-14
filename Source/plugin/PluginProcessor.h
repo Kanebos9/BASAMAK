@@ -313,6 +313,12 @@ private:
     juce::AudioBuffer<float> delayBufferB;  // BUS B delay line + state
     int delayWriteHeadB = 0;
     float delayFbLpB[2] = { 0.0f, 0.0f }, delayFbHpB[2] = { 0.0f, 0.0f };
+    // [2026-07-15 00:50] DELAY MODES per-bus state: Analog's wobble LFO phase + Shimmer's octave-up
+    // ring per channel (the FDN reverb's 2-tap crossfaded varispeed shifter, one per bus/channel).
+    float delayWobPh = 0.0f, delayWobPhB = 0.0f;
+    std::vector<float> delayShRing[2], delayShRingB[2];    // sized in prepareToPlay (~85 ms)
+    int    delayShW[2] = { 0, 0 },   delayShWB[2] = { 0, 0 };
+    double delayShPh[2] = { 0.0, 0.0 }, delayShPhB[2] = { 0.0, 0.0 };
 
     // True per-channel FX sends. Channels sum their post-fader signal x send into these at the
     // OVERSAMPLED rate (rendered alongside the engine); the processor averages them down to the

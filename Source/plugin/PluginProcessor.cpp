@@ -144,6 +144,12 @@ void DrumSequencerProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     delayBufferB.setSize(2, (int)(sampleRate * 2.0));
     delayBufferB.clear();
     delayFbLp[0] = delayFbLp[1] = delayFbHp[0] = delayFbHp[1] = 0.0f;
+    // [2026-07-15 00:50] Shimmer-mode octave-up rings (per bus/channel) + Analog wobble phases.
+    { const int shN = juce::jmax(1024, (int) (4096.0 * sampleRate / 48000.0));
+      for (int c = 0; c < 2; ++c)
+      { delayShRing[c].assign((size_t) shN, 0.0f);  delayShRingB[c].assign((size_t) shN, 0.0f);
+        delayShW[c] = 0; delayShWB[c] = 0; delayShPh[c] = 0.0; delayShPhB[c] = 0.0; } }
+    delayWobPh = delayWobPhB = 0.0f;
     for (auto& n : activeMidiNote) n = -1;   // no held MIDI-out notes yet
 
     reverbSendOS.setSize  (2, juce::jmax(1, samplesPerBlock * kEngineOS));
@@ -1532,12 +1538,53 @@ void DrumSequencerProcessor::processDelay(juce::AudioBuffer<float>& audio, juce:
     const int delaySamples = juce::jlimit(1, delayLen - 1, (int)(delaySecs * currentSampleRate));
     const float feedback = juce::jlimit(0.0f, 0.98f, pFb);
 
-    // Fixed musical feedback tone: each repeat is low-passed (~4 kHz, tape-style darkening) and
-    // high-passed (~180 Hz, stops low-end build-up). The wet RETURN stays full-band; only the
-    // signal fed back into the line is filtered, so the tail decays naturally instead of ringing.
+    // [2026-07-15 00:50] DELAY MODES: the loop CHARACTER (what happens to each repeat as it
+    // recirculates). Tape (0) = the original voicing = bit-identical default; the others re-voice
+    // the FEEDBACK path only - the wet return stays full-band, exactly like before:
+    //   Digital = no loop filtering (pristine repeats), Dub = dark + tanh-saturated smear,
+    //   Analog  = BBD: dark + a slow pitch wobble on the read head, Shimmer = octave-up per pass
+    //   (the FDN reverb's 2-tap crossfaded varispeed shifter, energy-neutral blend, +-8 clamps).
+    const int pMode = juce::jlimit(0, 4, busB ? mfx.delayModeB : mfx.delayMode);
+    float lpHz = 4000.0f, hpHz = 180.0f;                  // Tape: the original 4 kHz / 180 Hz
+    switch (pMode)
+    {
+        case 1: lpHz = 16000.0f; hpHz = 25.0f;  break;    // Digital: ~full-band repeats
+        case 2: lpHz = 1700.0f;  hpHz = 200.0f; break;    // Dub: dark smear (+ saturation below)
+        case 3: lpHz = 2800.0f;  hpHz = 120.0f; break;    // Analog/BBD: dark (+ wobble below)
+        case 4: lpHz = 6500.0f;  hpHz = 180.0f; break;    // Shimmer: brighter so the octaves survive
+        default: break;
+    }
     const float sr = (float) currentSampleRate;
-    const float lpCoef = 1.0f - std::exp(-2.0f * juce::MathConstants<float>::pi * 4000.0f / sr);
-    const float hpCoef = 1.0f - std::exp(-2.0f * juce::MathConstants<float>::pi * 180.0f  / sr);
+    const float lpCoef = 1.0f - std::exp(-2.0f * juce::MathConstants<float>::pi * lpHz / sr);
+    const float hpCoef = 1.0f - std::exp(-2.0f * juce::MathConstants<float>::pi * hpHz / sr);
+    // Analog wobble: ~0.9 Hz, up to ~0.8 ms extra delay = a gentle few-cents BBD wow.
+    float& wobPh = busB ? delayWobPhB : delayWobPh;
+    const float wobInc   = juce::MathConstants<float>::twoPi * 0.9f / sr;
+    const float wobDepth = 0.0008f * sr;
+    // Shimmer: one octave-up shifter per channel of this bus (state persists across blocks; the
+    // ring is only touched in Shimmer mode - it re-enters silent because the fed signal restarts it).
+    auto shimmerStep = [&](int c, float f) -> float
+    {
+        auto& ring = busB ? delayShRingB[c] : delayShRing[c];
+        int&  w    = busB ? delayShWB[c]    : delayShW[c];
+        double& ph = busB ? delayShPhB[c]   : delayShPh[c];
+        const int shN = (int) ring.size();
+        if (shN < 256) return f;
+        const float shWin = (float) (shN / 2);
+        ring[(size_t) w] = juce::jlimit(-8.0f, 8.0f, std::isfinite(f) ? f : 0.0f);
+        ph += 1.0 / (double) shWin; if (ph >= 1.0) ph -= 1.0;
+        float out = 0.0f;
+        for (int t = 0; t < 2; ++t)
+        {
+            const double fr2 = ph + (t == 0 ? 0.0 : 0.5);
+            const double d2  = (fr2 - std::floor(fr2)) * (double) shWin;
+            int rp2 = w - (int) d2; while (rp2 < 0) rp2 += shN;
+            const float win = std::sin((float) (fr2 - std::floor(fr2)) * juce::MathConstants<float>::pi);
+            out += ring[(size_t) rp2] * win * win;
+        }
+        w = (w + 1) % shN;
+        return f + 0.6f * (out - f);   // energy-neutral crossfade (the reverb-shimmer lesson: never ADD)
+    };
 
     // Process L+R together so Ping-Pong can cross-feed the feedback (L's tail feeds R's line
     // and vice-versa, so echoes bounce across the stereo field). Main only; aux outs stay dry.
@@ -1559,20 +1606,44 @@ void DrumSequencerProcessor::processDelay(juce::AudioBuffer<float>& audio, juce:
 
         const float dryL = inL[i];                            // delay INPUT = the send sum
         const float dryR = stereo ? inR[i] : inL[i];
-        const float delL = dL[readPos];
-        const float delR = dR[readPos];
+        float delL, delR;
+        if (pMode == 3)
+        {   // Analog/BBD: the read head drifts up to wobDepth samples LATER (linear-interp read)
+            wobPh += wobInc; if (wobPh > juce::MathConstants<float>::twoPi) wobPh -= juce::MathConstants<float>::twoPi;
+            const float wob = wobDepth * (0.5f + 0.5f * std::sin(wobPh));   // 0..depth = never reads the future
+            const int   wi  = (int) wob; const float wf = wob - (float) wi;
+            const int r0 = (readPos - wi + delayLen) % delayLen;
+            const int r1 = (r0 - 1 + delayLen) % delayLen;
+            delL = dL[r0] + (dL[r1] - dL[r0]) * wf;
+            delR = dR[r0] + (dR[r1] - dR[r0]) * wf;
+        }
+        else { delL = dL[readPos]; delR = dR[readPos]; }
 
         outL[i] += delL * wet;                                // echoes return to Main
         if (stereo) outR[i] += delR * wet;
 
         fbLp[0] += lpCoef * (delL - fbLp[0]);       // band-limit each feedback tap
         fbHp[0] += hpCoef * (fbLp[0] - fbHp[0]);
-        const float fbL = fbLp[0] - fbHp[0];
+        float fbL = fbLp[0] - fbHp[0];
         fbLp[1] += lpCoef * (delR - fbLp[1]);
         fbHp[1] += hpCoef * (fbLp[1] - fbHp[1]);
-        const float fbR = fbLp[1] - fbHp[1];
+        float fbR = fbLp[1] - fbHp[1];
+        if (pMode == 2)
+        {   // Dub: gentle tanh smear per pass (unity small-signal gain = the loop stays stable;
+            // the 1.6 curvature is the colour, not a level boost)
+            fbL = std::tanh(fbL * 1.6f) * (1.0f / 1.6f);
+            fbR = std::tanh(fbR * 1.6f) * (1.0f / 1.6f);
+        }
+        else if (pMode == 4) { fbL = shimmerStep(0, fbL); fbR = shimmerStep(1, fbR); }   // octave-up per pass
 
-        if (ping) { dL[writePos] = dryL + fbR * feedback; dR[writePos] = dryR + fbL * feedback; }
+        // [2026-07-15 00:40] REAL ping-pong: mono-sum the input into the LEFT line ONLY; the
+        // cross-feed then carries each repeat to the opposite side (echo 1 L, echo 2 R, ...).
+        // The old version fed BOTH lines the dry signal and only swapped the feedback - for a
+        // centred source (both lines identical) that was bit-identical to the normal delay =
+        // "ping doesn't sound stereo" (user, correct).
+        if (ping) { const float m = 0.5f * (dryL + dryR);
+                    dL[writePos] = m + fbR * feedback;
+                    dR[writePos] =     fbL * feedback; }
         else      { dL[writePos] = dryL + fbL * feedback; dR[writePos] = dryR + fbR * feedback; }
     }
     head = (head + numSamples) % delayLen;
@@ -2277,12 +2348,14 @@ juce::ValueTree DrumSequencerProcessor::captureStateTree()
         patState.setProperty("delFB",   m.delayFeedback, nullptr);
         patState.setProperty("delWet",  m.delayWet,      nullptr);
         patState.setProperty("revMode", m.reverbMode,     nullptr);
+        patState.setProperty("delMode", m.delayMode,      nullptr);   // [2026-07-15] delay loop character
         patState.setProperty("mRoomB",  m.reverbRoomB,   nullptr);   // BUS B reverb + delay params
         patState.setProperty("mDampB",  m.reverbDampB,   nullptr);
         patState.setProperty("mRWetB",  m.reverbWetB,    nullptr);
         patState.setProperty("mRPreB",  m.reverbPreDelayB, nullptr);
         patState.setProperty("mRWidB",  m.reverbWidthB,  nullptr);
         patState.setProperty("revModeB", m.reverbModeB,  nullptr);
+        patState.setProperty("dModeB",  m.delayModeB,    nullptr);
         patState.setProperty("dTimeB",  m.delayTimeB,    nullptr);
         patState.setProperty("dFbB",    m.delayFeedbackB, nullptr);
         patState.setProperty("dWetB",   m.delayWetB,     nullptr);
@@ -2434,12 +2507,14 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
             m.delayFeedback = (float)child.getProperty("delFB",   0.3f);
             m.delayWet      = (float)child.getProperty("delWet",  0.3f);   // 0.3 = the old fixed return level
             m.reverbMode    = juce::jlimit(0, 3, (int) child.getProperty("revMode", 1));   // default Hall = original
+            m.delayMode     = juce::jlimit(0, 4, (int) child.getProperty("delMode", 0));   // default Tape = original
             m.reverbRoomB     = (float)child.getProperty("mRoomB", 0.5f);   // BUS B (defaults = a tight Room)
             m.reverbDampB     = (float)child.getProperty("mDampB", 0.5f);
             m.reverbWetB      = (float)child.getProperty("mRWetB", 0.4f);
             m.reverbPreDelayB = (float)child.getProperty("mRPreB", 0.0f);
             m.reverbWidthB    = (float)child.getProperty("mRWidB", 1.0f);
             m.reverbModeB     = juce::jlimit(0, 3, (int) child.getProperty("revModeB", 0));
+            m.delayModeB      = juce::jlimit(0, 4, (int) child.getProperty("dModeB", 0));
             m.delayTimeB      = (float)child.getProperty("dTimeB", 0.375f);
             m.delayFeedbackB  = (float)child.getProperty("dFbB",   0.3f);
             m.delayWetB       = (float)child.getProperty("dWetB",  0.3f);

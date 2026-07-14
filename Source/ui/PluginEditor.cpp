@@ -6114,7 +6114,7 @@ juce::int64 DrumSequencerEditor::stateHash() const
         h = mix(h, f(m.reverbRoom)); h = mix(h, f(m.reverbDamp)); h = mix(h, f(m.reverbWet));
         h = mix(h, f(m.reverbPreDelay)); h = mix(h, f(m.reverbWidth));
         h = mix(h, f(m.delayTime)); h = mix(h, f(m.delayFeedback)); h = mix(h, f(m.delayWet)); h = mix(h, m.delaySync ? 1 : 0); h = mix(h, m.delayDivision); h = mix(h, m.delayPingPong ? 1 : 0);
-        h = mix(h, m.reverbMode);
+        h = mix(h, m.reverbMode); h = mix(h, m.delayMode); h = mix(h, m.delayModeB);   // [2026-07-15] delay loop character (undoable)
         h = mix(h, f(m.volume)); h = mix(h, m.mono ? 1 : 0); h = mix(h, f(m.limit)); h = mix(h, f(m.glue));
         for (int c = 0; c < Sequencer::NUM_CHANNELS; ++c)
         {
@@ -8432,10 +8432,27 @@ void DrumSequencerEditor::setupComponents()
     };
     hdrDelayG.setInterceptsMouseClicks(true, false);
     hdrDelayG.addMouseListener(&delayBusClick, false);
-    delayBusClick.fn = [this] { masterBusB = ! masterBusB; refreshReverbModeHeader(); refreshDetailPanel(); };
-    hdrDelayG.setTooltip("DELAY - the shared echo everything's Dly Send feeds. TWO BUSES exist (A and B, each "
-                         "with its own time/feedback/wet): CLICK this title to switch which one the faders below "
-                         "edit; each channel picks its bus by right-clicking its Dly send fader.");
+    // [2026-07-15 00:50] the DELAY header mirrors the REVERB header exactly: LEFT-click = cycle
+    // this bus's MODE (Tape/Digital/Dub/Analog/Shimmer, all patterns), RIGHT-click = switch A/B.
+    delayBusClick.fnE = [this](const juce::MouseEvent& e) {
+        if (e.mods.isPopupMenu() || e.mods.isRightButtonDown())
+        { masterBusB = ! masterBusB; refreshReverbModeHeader(); refreshDetailPanel(); return; }
+        auto& m0 = proc.masterFX();
+        const int next = (juce::jlimit(0, 4, masterBusB ? m0.delayModeB : m0.delayMode) + 1) % 5;
+        for (auto& p : proc.sequencer.patterns) (masterBusB ? p.master.delayModeB : p.master.delayMode) = next;   // flavour = all patterns
+        refreshReverbModeHeader();
+        if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel);   // hear the new mode
+    };
+    hdrDelayG.setTooltip(juce::String("DELAY (click the title = cycle the MODE; RIGHT-CLICK = switch bus A/B).\n\n"
+        "TWO delay buses exist - A and B, each with its own time/feedback/wet/mode. The faders below "
+        "edit the bus named in this title; each channel picks its bus by right-clicking its Dly send "
+        "fader. The MODE is the loop's character - what happens to each repeat as it recirculates:\n\n")
+        + "- Tape: repeats darken gently, low mud trimmed (the original sound - the default).\n"
+        + "- Digital: pristine full-band repeats, no colouring.\n"
+        + "- Dub: each repeat gets darker AND softly saturated - the reggae/lo-fi smear.\n"
+        + "- Analog: dark repeats with a slow BBD-style pitch wobble.\n"
+        + "- Shimmer: every repeat is pitched UP an octave - a climbing sparkle trail.\n\n"
+        + "One mode per bus for the whole preset; Ping-Pong bounces the repeats left/right in any mode.");
     hdrReverb.setTooltip(juce::String("REVERB (click the title = cycle the MODE; RIGHT-CLICK = switch bus A/B).\n\n"
         "TWO reverb buses exist - A and B, each with its own size/decay/mode (e.g. A = Hall for keys, "
         "B = tight Room for drums). The faders below edit the bus named in this title; each channel picks "
@@ -11393,10 +11410,12 @@ void DrumSequencerEditor::updateVisuals()
 void DrumSequencerEditor::refreshReverbModeHeader()
 {
     static const char* mn[4] = { "ROOM", "HALL", "PLATE", "SHIMMER" };
+    static const char* dn[5] = { "TAPE", "DIGITAL", "DUB", "ANALOG", "SHIMMER" };   // [2026-07-15] delay modes
     auto& m = proc.masterFX();
-    const int mode = juce::jlimit(0, 3, masterBusB ? m.reverbModeB : m.reverbMode);
+    const int mode  = juce::jlimit(0, 3, masterBusB ? m.reverbModeB : m.reverbMode);
+    const int dMode = juce::jlimit(0, 4, masterBusB ? m.delayModeB  : m.delayMode);
     hdrReverb.setText(juce::String("REVERB ") + (masterBusB ? "B" : "A") + " - " + mn[mode], juce::dontSendNotification);
-    hdrDelayG.setText(juce::String("DELAY ")  + (masterBusB ? "B" : "A"), juce::dontSendNotification);
+    hdrDelayG.setText(juce::String("DELAY ")  + (masterBusB ? "B" : "A") + " - " + dn[dMode], juce::dontSendNotification);
 }
 
 void DrumSequencerEditor::refreshEqTarget()
