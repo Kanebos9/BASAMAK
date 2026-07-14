@@ -1547,20 +1547,24 @@ void DrumSequencerProcessor::processDelay(juce::AudioBuffer<float>& audio, juce:
     const int pMode = juce::jlimit(0, 4, busB ? mfx.delayModeB : mfx.delayMode);
     float lpHz = 4000.0f, hpHz = 180.0f;                  // Tape: the original 4 kHz / 180 Hz
     switch (pMode)
-    {
+    {   // [2026-07-15 01:30 re-voice] round 1 was inaudible: everything but the wobble coloured
+        // only the FEEDBACK, which the FIRST repeat never passes - at feedback 0.3 the coloured
+        // repeats sat at 30%/9% level ("all modes sound same", user, correct). Modes 1-4 now
+        // voice EVERY repeat (character applied at the READ, feeding output + loop alike);
+        // TAPE alone keeps the original feedback-only topology = bit-identical.
         case 1: lpHz = 16000.0f; hpHz = 25.0f;  break;    // Digital: ~full-band repeats
-        case 2: lpHz = 1700.0f;  hpHz = 200.0f; break;    // Dub: dark smear (+ saturation below)
-        case 3: lpHz = 2800.0f;  hpHz = 120.0f; break;    // Analog/BBD: dark (+ wobble below)
+        case 2: lpHz = 1200.0f;  hpHz = 200.0f; break;    // Dub: instantly dark (+ saturation below)
+        case 3: lpHz = 2500.0f;  hpHz = 120.0f; break;    // Analog/BBD: dark (+ wobble below)
         case 4: lpHz = 6500.0f;  hpHz = 180.0f; break;    // Shimmer: brighter so the octaves survive
         default: break;
     }
     const float sr = (float) currentSampleRate;
     const float lpCoef = 1.0f - std::exp(-2.0f * juce::MathConstants<float>::pi * lpHz / sr);
     const float hpCoef = 1.0f - std::exp(-2.0f * juce::MathConstants<float>::pi * hpHz / sr);
-    // Analog wobble: ~0.9 Hz, up to ~0.8 ms extra delay = a gentle few-cents BBD wow.
+    // Analog wobble: ~1.3 Hz, up to ~1.8 ms extra delay = an audible (~15 cent) BBD wow.
     float& wobPh = busB ? delayWobPhB : delayWobPh;
-    const float wobInc   = juce::MathConstants<float>::twoPi * 0.9f / sr;
-    const float wobDepth = 0.0008f * sr;
+    const float wobInc   = juce::MathConstants<float>::twoPi * 1.3f / sr;
+    const float wobDepth = 0.0018f * sr;
     // Shimmer: one octave-up shifter per channel of this bus (state persists across blocks; the
     // ring is only touched in Shimmer mode - it re-enters silent because the fed signal restarts it).
     auto shimmerStep = [&](int c, float f) -> float
@@ -1619,22 +1623,25 @@ void DrumSequencerProcessor::processDelay(juce::AudioBuffer<float>& audio, juce:
         }
         else { delL = dL[readPos]; delR = dR[readPos]; }
 
-        outL[i] += delL * wet;                                // echoes return to Main
-        if (stereo) outR[i] += delR * wet;
-
-        fbLp[0] += lpCoef * (delL - fbLp[0]);       // band-limit each feedback tap
+        fbLp[0] += lpCoef * (delL - fbLp[0]);       // band-limit each repeat
         fbHp[0] += hpCoef * (fbLp[0] - fbHp[0]);
         float fbL = fbLp[0] - fbHp[0];
         fbLp[1] += lpCoef * (delR - fbLp[1]);
         fbHp[1] += hpCoef * (fbLp[1] - fbHp[1]);
         float fbR = fbLp[1] - fbHp[1];
         if (pMode == 2)
-        {   // Dub: gentle tanh smear per pass (unity small-signal gain = the loop stays stable;
-            // the 1.6 curvature is the colour, not a level boost)
-            fbL = std::tanh(fbL * 1.6f) * (1.0f / 1.6f);
-            fbR = std::tanh(fbR * 1.6f) * (1.0f / 1.6f);
+        {   // Dub: tanh smear per pass - x3 into the curve, /3 out = unity small-signal gain
+            // (the loop can't self-oscillate) but real audible compression at normal echo levels
+            fbL = std::tanh(fbL * 3.0f) * (1.0f / 3.0f);
+            fbR = std::tanh(fbR * 3.0f) * (1.0f / 3.0f);
         }
         else if (pMode == 4) { fbL = shimmerStep(0, fbL); fbR = shimmerStep(1, fbR); }   // octave-up per pass
+
+        // Echoes return to Main. TAPE = the original topology (full-band return, only the loop is
+        // filtered = bit-identical); every other mode returns the CHARACTER signal, so the FIRST
+        // repeat already carries the mode's voice. [2026-07-15 01:30]
+        outL[i] += (pMode == 0 ? delL : fbL) * wet;
+        if (stereo) outR[i] += (pMode == 0 ? delR : fbR) * wet;
 
         // [2026-07-15 00:40] REAL ping-pong: mono-sum the input into the LEFT line ONLY; the
         // cross-feed then carries each repeat to the opposite side (echo 1 L, echo 2 R, ...).
