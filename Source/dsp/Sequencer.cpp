@@ -140,7 +140,7 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
         for (int ch = 0; ch < NUM_CHANNELS; ++ch)
         {
             auto& fc = patterns[fadeOutPattern].channels[ch];
-            fc.lfoBarSeconds = (float) blockBarSeconds; fc.lfoGridDiv = uiGridDiv; fc.modWheel = modWheel;
+            fc.lfoBarSeconds = (float) blockBarSeconds; fc.lfoGridDiv = uiGridDiv; fc.modWheel = modWheel; fc.pitchWheel = pitchWheel;
             if (! fc.midiOut) { fc.lfoBarPos = -1.0; fc.modStepPos = -1.0f; fc.renderInto(audio, 0, numSamples, soloFade); }   // dry tail into Main
             if (fc.anyVoiceActive()) anyRinging = true;
         }
@@ -160,7 +160,7 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
             for (int ch = 0; ch < NUM_CHANNELS; ++ch)
             {
                 auto& gc = patterns[p].channels[ch];
-                gc.lfoBarSeconds = (float) blockBarSeconds; gc.lfoGridDiv = uiGridDiv; gc.modWheel = modWheel;
+                gc.lfoBarSeconds = (float) blockBarSeconds; gc.lfoGridDiv = uiGridDiv; gc.modWheel = modWheel; gc.pitchWheel = pitchWheel;
                 if (! gc.midiOut && gc.anyVoiceActive())
                 {   // ringing group members share the playing unit's timeline anchor
                     gc.lfoBarPos = juce::jmax(0.0, (double)(playPattern - groupHead(playPattern)) + barPosition
@@ -180,7 +180,7 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
         const bool soloView = anySoloIn(patterns[currentPattern]);
         for (int ch = 0; ch < NUM_CHANNELS; ++ch)
         {
-            patterns[currentPattern].channels[ch].modWheel = modWheel;
+            patterns[currentPattern].channels[ch].modWheel = modWheel; patterns[currentPattern].channels[ch].pitchWheel = pitchWheel;
             patterns[currentPattern].channels[ch].lfoBarSeconds = (float) blockBarSeconds;
             patterns[currentPattern].channels[ch].lfoGridDiv    = uiGridDiv;
             { auto& vc = patterns[currentPattern].channels[ch];

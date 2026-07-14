@@ -259,9 +259,10 @@ public:
     // 0..numSteps); -1 = not playing. The step-mod sources read the lane value at this position.
     float  modStepPos = -1.0f;
     float  modWheel   = 0.0f;   // live MIDI mod-wheel (CC1) 0..1, forwarded by the Sequencer (shared mod source)
+    float  pitchWheel = 0.0f;   // [2026-07-14 03:00] live pitch wheel -1..+1 (its own MIDI message type, not a CC; also learnable)
     // [2026-07-13 19:57] AUDIO-RATE steppy-source slew memory (block-linear ramps): last block-end
     // values of the Step Mod lanes + Mod Wheel; -1 = snap on the first block after reset.
-    float  arStepACur = -1.0f, arStepBCur = -1.0f, arWheelCur = -1.0f;
+    float  arStepACur = -1.0f, arStepBCur = -1.0f, arWheelCur = -1.0f, arPwCur = -2.0f;   // (-2 = snap; pitch wheel rests at 0)
     int    numSteps          = 8;
     int    midiNote          = 36; // default C2, overridden per channel
     int    ccRangeStart      = 1;  // first CC number for this channel
@@ -375,6 +376,7 @@ public:
     enum ModSrc { MSOff = 0, MSVel, MSNote, MSAmpEnv, MSLfoFilt, MSLfoPitch, MSLfoVol, MSLfoWave,
                   MSRandom, MSModEnv, MSModLfo, MSStepModA, MSStepModB, MSModWheel,
                   MSPressure, MSSlide,   // [2026-07-13 21:20] MPE/aftertouch + slide (CC74) - per-voice, per-sample
+                  MSPitchWheel,          // [2026-07-14 03:00] the pitch wheel as a MOD SOURCE (bipolar; the wheel still bends pitch normally)
                   MS_COUNT };
     // TARGETS (order persisted - APPEND-ONLY). 0..MT_GRID_BASE-1 = fixed targets; MT_GRID_BASE+i =
     // the engine's own knob i (0..7) via slotParamsFor - the dropdown shows its live name.
@@ -700,7 +702,7 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     // [2026-07-14 00:03] REMAP helpers. Bipolar sources (Note, LFOs, Mod LFO) map their full
     // -1..+1 sweep across the drawing's X axis and the output re-expands; unipolar read X directly.
     static bool modSrcBipolar(int s)
-    { return s == MSNote || (s >= MSLfoFilt && s <= MSLfoWave) || s == MSModLfo; }
+    { return s == MSNote || (s >= MSLfoFilt && s <= MSLfoWave) || s == MSModLfo || s == MSPitchWheel; }
     static float modCurveLut(const uint8_t* cv, float x)   // 64-point lerp lookup, x in 0..1
     {
         const float fp = juce::jlimit(0.0f, 1.0f, x) * (float)(Slot::MOD_CURVE_N - 1);
@@ -1183,8 +1185,10 @@ private:
         double   filtIc1[2][2] = {}, filtIc2[2][2] = {};   // TPT/ZDF SVF integrators [filter 0/1][stereo side]
         double   filtGm[2]  = { -1.0, -1.0 };              // per-sample smoothed cutoff coeff per filter (-1 = snap)
         double   filtKm[2]  = { -1.0, -1.0 };              // per-sample smoothed damping K (de-zippers block-rate RESO modulation)
-        float    envModOfs[5] {};                          // mod-matrix PER-HIT latches: Atk/Dec/Sus/Rel + [4] = Unison Count offset
-                                                           // [2026-07-14 02:30] count joined the latch: mid-note count changes stepped gain + popped stale-phase voices (user: "it crackles")
+        float    envModOfs[4] {};                          // mod-matrix env offsets (Atk/Dec/Sus/Rel), LATCHED at the hit
+        float    uniFade[UNI_MAX + 1] = {};                // [2026-07-14 02:50] CONTINUOUS count-morph: per-voice fades (join/leave
+                                                           // over ~3 ms; the stack gain follows the EFFECTIVE count) - supersedes the
+                                                           // brief per-hit count latch; nothing steps, nothing pops, nothing crippled
         bool     envModLatched = false;                    // env(t, params) is stateless - per-block env changes JUMP the level (crackle)
         float    lastEnv = 0.0f;                           // [2026-07-13 19:57] previous sample's amp env = the per-sample Amp Env mod SOURCE
         float    modLagV[MOD_ROUTES] = {};                 // [2026-07-14 01:33] per-route LAG states: block-bake path...

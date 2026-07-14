@@ -1523,6 +1523,8 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         sv.envModLatched = false;   // env-time mod targets re-latch at THIS hit
         sv.lastEnv = 0.0f; sv.fmtPosSm = -1.0f;    // per-sample Amp Env source + formant glide re-snap at THIS hit
         for (int r2 = 0; r2 < MOD_ROUTES; ++r2) { sv.modLagV[r2] = 0.0f; sv.arLag[r2] = 0.0f; }   // LAG swells from 0 at the hit
+        { const int n0 = juce::jlimit(1, UNI_MAX, sl.oscUnison);   // [2026-07-14 02:50] count-morph fades snap to the base stack
+          for (int u2 = 0; u2 <= UNI_MAX; ++u2) sv.uniFade[u2] = (u2 < n0 || u2 == UNI_MAX) ? 1.0f : 0.0f; }
         sv.adaaU[0] = sv.adaaU[1] = sv.adaaB1[0] = sv.adaaB1[1] = sv.adaaB2[0] = sv.adaaB2[1]
             = sv.warpU[0] = sv.warpU[1] = sv.warpU[2] = 1.0e9f;   // ADAA states re-prime at THIS hit
         for (int lr = 0; lr < 2; ++lr) {   // drive smoothing/DC + formant + punch state start clean each hit
@@ -1937,6 +1939,7 @@ void DrumChannel::computeModSources(int s, const Slot& sl, float* out, const Voi
         out[MSStepModB] = juce::jlimit(0.0f, 1.0f, stepModB[st]);
     }
     out[MSModWheel] = juce::jlimit(0.0f, 1.0f, modWheel);   // live MIDI mod wheel (CC1)
+    out[MSPitchWheel] = juce::jlimit(-1.0f, 1.0f, pitchWheel);   // [2026-07-14 03:00] bipolar wheel
     if (nv != nullptr) { out[MSPressure] = nv->pressCur; out[MSSlide] = nv->slideCur; }   // MPE (per-voice)
 }
 
@@ -1976,7 +1979,7 @@ void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals, SlotVoice* lat
             // per voice) - env-follow is itself block-rate, and a voice COUNT is inherently stepped.
             case MTFilt1Env: add(tmp.filterEnvAmt,  -1, 1); break;
             case MTFilt2Env: add(tmp.filterEnvAmt2, -1, 1); break;
-            case MTUniCount: break;   // [2026-07-14 02:30] LATCHED PER HIT below (mid-note count changes crackle)
+            case MTUniCount: tmp.oscUnison = juce::jlimit(1, 16, tmp.oscUnison + juce::roundToInt(m * 15.0f)); break;   // [2026-07-14 02:50] continuous again - per-voice FADES bridge the steps (Osc only)
             default:
                 if (r.tgt >= MT_GRID_BASE && r.tgt < MT_GRID_END)   // engine GRID knobs only (Sub/Formant sit above)
                 {
@@ -1998,7 +2001,7 @@ void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals, SlotVoice* lat
     if (! latch->envModLatched)
     {
         latch->envModLatched = true;
-        for (int k = 0; k < 5; ++k) latch->envModOfs[k] = 0.0f;
+        for (int k = 0; k < 4; ++k) latch->envModOfs[k] = 0.0f;
         for (int ri2 = 0; ri2 < MOD_ROUTES; ++ri2)
         {
             const auto& r = tmp.mod[ri2];
@@ -2007,7 +2010,6 @@ void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals, SlotVoice* lat
             const float m = r.amt * modRouteShape(r, srcV);
             switch (r.tgt) { case MTAtk: latch->envModOfs[0] += m; break; case MTDec: latch->envModOfs[1] += m; break;
                              case MTSus: latch->envModOfs[2] += m; break; case MTRel: latch->envModOfs[3] += m; break;
-                             case MTUniCount: latch->envModOfs[4] += m; break;
                              default: break; }
         }
     }
@@ -2015,8 +2017,7 @@ void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals, SlotVoice* lat
     tmp.dec     = juce::jlimit(0.0f, 6.0f, tmp.dec     + latch->envModOfs[1] * 2.0f);
     tmp.sustain = juce::jlimit(0.0f, 1.0f, tmp.sustain + latch->envModOfs[2] * 1.0f);
     tmp.release = juce::jlimit(0.0f, 4.0f, tmp.release + latch->envModOfs[3] * 2.0f);
-    if (latch->envModOfs[4] != 0.0f)   // Unison Count: the stack size is chosen AT the hit, then fixed
-        tmp.oscUnison = juce::jlimit(1, 16, tmp.oscUnison + juce::roundToInt(latch->envModOfs[4] * 15.0f));
+
 }
 
 #include "Adaa.h"   // [2026-07-13 22:10] ADAA shapers moved to their own module (user: group the code better)
@@ -2185,9 +2186,10 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         const uint8_t* arCv[MOD_ROUTES] = {};   // [2026-07-14 00:03] per-route REMAP curve (null = pass-through); points into slots[] (stable), never the bake copy
         uint8_t arBi[MOD_ROUTES] = {};          // source is bipolar -> curve X maps -1..+1
         float   arLagK[MOD_ROUTES] = {};        // [2026-07-14 01:33] per-sample LAG coefficient (0 = instant)
-        uint16_t arMask = 0;                                  // bit per ModSrc that needs a per-sample value
+        uint32_t arMask = 0;                                  // bit per ModSrc that needs a per-sample value
         float  mEA = 0.005f, mEH = 0, mED = 0.3f, mES = 0, mER = 0;   // Mod Env params (per-sample source eval)
         bool   arDrvOn = false;                               // a route targets DRIVE -> the dry-blend ease-in engages
+        bool   uniCntMod = false;                             // [2026-07-14 02:50] a route targets UNISON COUNT (Osc) -> per-voice fades engage
         double modLfoPh0 = 0, modLfoInc = 0; int8_t mLfoShape = 0;    // Mod LFO: block-start phase + per-sample inc
         float  lfoKeyRatio[4] = {};         // > 0 = KEY mode: LFO rate = the voice's pitch x ratio (per-sample inc)
         double lfoKeyBase = 0.0;            // the slot's base Hz for KEY-mode LFOs (x noteMul*pe3Mul per sample)
@@ -2245,7 +2247,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         // AUDIO-RATE ROUTE COMPILER [2026-07-13 19:57]: every route with a HOT target compiles into
         // the per-sample program (applyModMatrix skips those targets; the render evaluates them per
         // sample from any source). Also bakes the per-sample source constants (Mod Env / Mod LFO).
-        c.arN = 0; c.arMask = 0; c.arDrvOn = false;
+        c.arN = 0; c.arMask = 0; c.arDrvOn = false; c.uniCntMod = false;
         {
             auto hotIdx = [&](int tgt) -> int {
                 switch (tgt) {
@@ -2276,8 +2278,13 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                   c.arLagK[c.arN] = r.lagMs > 0.01f ? (float)(1.0 - std::exp(-1.0 / (sr * (double) r.lagMs * 0.001))) : 0.0f;
                   ++c.arN; }
                 if (h == 6) c.arDrvOn = true;   // drive routed -> ease the shaper in near zero
-                c.arMask |= (uint16_t)(1u << juce::jmin(15, (int) r.src));
+                c.arMask |= (1u << juce::jmin(31, (int) r.src));
                 if (r.src >= MSLfoFilt && r.src <= MSLfoWave) c.lfoSrcUsed[r.src - MSLfoFilt] = true;
+            }
+            for (auto& r : sl.mod)   // continuous COUNT-MORPH flag (block target; fades bridge it)
+            {
+                if (r.src != MSOff && r.tgt == MTUniCount && std::abs(r.amt) > 1.0e-4f && sl.engine == SrcOsc)
+                { c.uniCntMod = true; break; }
             }
             c.mEA = sl.modEnvA; c.mEH = sl.modEnvH; c.mED = sl.modEnvD; c.mES = sl.modEnvS; c.mER = sl.modEnvR;
             const double mlSec = (lfoBarPos >= 0.0 ? lfoBarPos * (double) lfoBarSeconds : lfoFreeSec);
@@ -2793,20 +2800,23 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
     // [2026-07-13 19:57] AUDIO-RATE steppy sources = block-linear RAMPS: Step Mod A/B jump at step
     // boundaries and the Mod Wheel arrives as quantised CCs - ramping them across the block gives the
     // per-sample route program a smooth signal with no per-voice state (every voice reads start+step*i).
-    float arA0, arAStep, arB0, arBStep, arW0, arWStep;
+    float arA0, arAStep, arB0, arBStep, arW0, arWStep, arP0, arPStep;
     {
         float tgtA = 0.0f, tgtB = 0.0f;
         if (modStepPos >= 0.0f && numSteps > 0)
         {   const int st = juce::jlimit(0, numSteps - 1, (int) modStepPos);
             tgtA = juce::jlimit(0.0f, 1.0f, stepModA[st]); tgtB = juce::jlimit(0.0f, 1.0f, stepModB[st]); }
         const float tgtW = juce::jlimit(0.0f, 1.0f, modWheel);
+        const float tgtP = juce::jlimit(-1.0f, 1.0f, pitchWheel);   // [2026-07-14 03:00]
         if (arStepACur < 0.0f) arStepACur = tgtA;   // first block = snap (no fade-in from silence)
         if (arStepBCur < 0.0f) arStepBCur = tgtB;
         if (arWheelCur < 0.0f) arWheelCur = tgtW;
+        if (arPwCur < -1.5f)   arPwCur = tgtP;
         const float inv = 1.0f / (float) juce::jmax(1, numSamples);
         arA0 = arStepACur; arAStep = (tgtA - arStepACur) * inv; arStepACur = tgtA;
         arB0 = arStepBCur; arBStep = (tgtB - arStepBCur) * inv; arStepBCur = tgtB;
         arW0 = arWheelCur; arWStep = (tgtW - arWheelCur) * inv; arWheelCur = tgtW;
+        arP0 = arPwCur;    arPStep = (tgtP - arPwCur) * inv;    arPwCur = tgtP;
     }
     // (The per-slot filter cutoff/G/K bake moved INTO bakeSlot so per-voice re-bakes compute it too.)
     // === PER-SLOT FILTER (end) ===
@@ -3012,9 +3022,9 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 if (c.arN > 0)
                 {
                     float sums[15] = {};
-                    float cache[16]; uint16_t got = 0;
+                    float cache[24]; uint32_t got = 0;
                     auto S = [&](int sid) -> float {
-                        sid = juce::jlimit(0, 15, sid);
+                        sid = juce::jlimit(0, 23, sid);
                         if (got & (1u << sid)) return cache[sid];
                         float val = 0.0f;
                         switch (sid) {
@@ -3033,6 +3043,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             case MSStepModA: val = arA0 + arAStep * (float) i; break;
                             case MSStepModB: val = arB0 + arBStep * (float) i; break;
                             case MSModWheel: val = arW0 + arWStep * (float) i; break;
+                            case MSPitchWheel: val = arP0 + arPStep * (float) i; break;
                             default:
                                 if (sid >= MSLfoFilt && sid <= MSLfoWave) {
                                     const int d3 = sid - MSLfoFilt;
@@ -3146,8 +3157,24 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         const bool sprd = c.uniSpread > 0.001f && c.uniVoices > 1;   // STEREO WIDTH active
                         const int totalV = c.uniVoices + (c.uniCenter ? 1 : 0);   // +1 dry/centre voice
                         const float strumFade = juce::jmax(1.0f, 0.002f * (float) sr);   // 2 ms click-free fade-in per strummed note
-                        for (int u = 0; u < totalV; ++u) {
-                            const bool centreVoice = (c.uniCenter && u == c.uniVoices);   // the extra undetuned voice
+                        // [2026-07-14 02:50] CONTINUOUS COUNT-MORPH: when a route targets Unison Count,
+                        // the loop covers ALL possible voices; each fades toward (u < N ? 1 : 0) over
+                        // ~3 ms and the makeup gain follows the EFFECTIVE count - joins/leaves cannot
+                        // step or pop. Unrouted = the exact old loop (bound totalV, fades untouched).
+                        const bool cm = c.uniCntMod;
+                        const int loopV = cm ? UNI_MAX + (c.uniCenter ? 1 : 0) : totalV;
+                        float effN2 = 0.0f;
+                        for (int u = 0; u < loopV; ++u) {
+                            const bool centreVoice = (c.uniCenter && u == (cm ? UNI_MAX : c.uniVoices));   // the extra undetuned voice
+                            float cmFade = 1.0f;
+                            if (cm)
+                            {
+                                float& fdr = sv.uniFade[juce::jmin(u, UNI_MAX)];
+                                const float tgtF = (centreVoice || u < c.uniVoices) ? 1.0f : 0.0f;
+                                fdr += wSmK * (tgtF - fdr);
+                                if (tgtF <= 0.0f && fdr < 1.0e-3f) continue;   // fully faded out: skip the maths
+                                cmFade = fdr; effN2 += fdr * fdr;
+                            }
                             // STRUM: chord voice u fades in from its own onset (uniDelay). uniDelay 0 => gate 1 => identical.
                             const float gU = (centreVoice || u >= UNI_MAX || sv.uniDelay[u] <= 0) ? 1.0f
                                             : juce::jlimit(0.0f, 1.0f, (float)(t - sv.uniDelay[u]) / strumFade);
@@ -3215,14 +3242,16 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             else
                                 vout = gU * (fmActive ? morphWave(wph + fmAdd, pos)
                                                       : morphWaveBL(wph, pos, dt));
+                            if (cm) vout *= cmFade;   // count-morph: this voice's fade
                             wsum += vout;
                             if (sprd) { const int pu = juce::jmin(u, UNI_MAX);
                                         wL += vout * c.uniPanL[pu]; wR += vout * c.uniPanR[pu]; }
                             sv.uniPhase[u] += 2.0 * kPi * freq * det / sr;
                             if (sv.uniPhase[u] > 2.0 * kPi) sv.uniPhase[u] -= 2.0 * kPi;
                         }
-                        float oo = wsum * c.uniGain;
-                        float ooL = sprd ? wL * c.uniGain : 0.0f, ooR = sprd ? wR * c.uniGain : 0.0f;
+                        const float ugain = cm ? 1.0f / std::sqrt(juce::jmax(1.0f, effN2)) : c.uniGain;   // gain follows the EFFECTIVE count
+                        float oo = wsum * ugain;
+                        float ooL = sprd ? wL * ugain : 0.0f, ooR = sprd ? wR * ugain : 0.0f;
                         if (mWarp > 0.001f) {                       // WARP = one-way wavefold (adds harmonics/grit)
                             // [2026-07-13 20:20] ADAA'd fold (the naked sin() fold aliased on bright waves).
                             oo = warpFoldAdaa(oo, mWarp, sv.warpU[0], sv.warpW[0]);

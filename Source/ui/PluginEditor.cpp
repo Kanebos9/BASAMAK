@@ -1039,7 +1039,8 @@ void LfoCurveEditor::mouseDrag(const juce::MouseEvent& e)
 static const char* kModSrcName[DrumChannel::MS_COUNT] =   // the LFOs are GENERIC now (index, not destination)
 { "Off", "Velocity", "Note", "Amp Env", "LFO 1", "LFO 2", "LFO 3", "LFO 4",
   "Random", "Mod Env", "Mod LFO", "Step Mod A", "Step Mod B", "Mod Wheel",
-  "Aftertouch", "Slide" };   // [2026-07-13 21:20] MPE/expression sources (renamed 23:20 - user)
+  "Aftertouch", "Slide",
+  "Pitch Wheel" };   // [2026-07-14 03:00] the wheel as a source (bipolar; still bends pitch normally)
 // "(Channel)" = a CHANNEL FX target: it acts on the whole instrument (both slots combined), not this slot.
 // "Tone (retired)" = the removed Tone knob's reserved index - never offered, old routes inert.
 // Sub/Formant sit ABOVE the grid block (MTSub/MTFormant) so their names come from kModTgtHiName.
@@ -1080,6 +1081,7 @@ static juce::String modSrcTip(int s)
         case DC::MSPressure: return "AFTERTOUCH: press INTO a held key. Per note on MPE controllers, whole-channel on normal keyboards. "
                                      "Reads 0 at the hit, so aim it at movement targets (Cutoff / Volume / Vibrato / Formant). "
                                      "Not moving? Your keyboard must SEND aftertouch (and have it enabled) - the top-bar MIDI monitor shows \"AT\" when it arrives.";
+        case DC::MSPitchWheel: return "PITCH WHEEL, as a mod source (bipolar: centre = 0, up = +, down = -). The wheel STILL does its normal pitch bend - this route lets it drive anything else at the same time. Wire any CC to it via the MIDI dropdown -> selection controls.";
         case DC::MSSlide:    return "SLIDE: the MPE timbre dimension (vertical finger position; CC74 by default). Per note on MPE controllers. "
                                      "Wire ANY other CC to it via the MIDI dropdown -> \"MIDI-learn: selection controls...\" -> Slide.";
         default:             return {};
@@ -1121,7 +1123,7 @@ static juce::String modTgtTip(int t, int engine)
         case DC::MTSlotPan:  return "This layer's pan. Note -> Pan = keyboard spread, Random -> Pan = per-hit scatter, Velocity -> Pan = accent lean. (Whole-channel MOTION = Channel FX Auto-Pan.)";
         case DC::MTFilt1Env: return "Filter 1's ENVELOPE AMOUNT (the dashed sweep arrow). Velocity -> Env Amount = harder hits sweep further (the 303 accent, squared). Live-shown on the filter display.";
         case DC::MTFilt2Env: return "Filter 2's ENVELOPE AMOUNT (the dashed sweep arrow).";
-        case DC::MTUniCount: return "Unison VOICE COUNT (1..16, engine-capped). Sampled ONCE PER HIT like the envelope targets (a stack can't resize mid-note without crackling) - use per-hit sources: Velocity / Random / Note / Step Mod. Harder hit = fatter stack.";
+        case DC::MTUniCount: return "Unison VOICE COUNT (1..16). Fully CONTINUOUS: voices FADE in/out (~3 ms) as the count moves, and the stack's gain follows the effective count - swell a pad from 2 to 16 voices mid-note. Oscillator slots only (a Karplus-Strong string or Modal strike only exists if it was plucked - physics).";
         case DC::MTChFxAAmt: return "Channel FX slot A's Amount fader (block-rate, smoothed).";
         case DC::MTChFxBAmt: return "Channel FX slot B's Amount fader (block-rate, smoothed).";
         case DC::MTChFxCAmt: return "Channel FX slot C's Amount fader (block-rate, smoothed).";
@@ -1326,6 +1328,7 @@ void RoutePicker::openFor(int cs, int ct, float amt, float lagMs)
         if (t == DrumChannel::MTTone) continue;                                       // RETIRED (Tone removed)
         if (t == DrumChannel::MTWarp    && engine != DrumChannel::SrcOsc) continue;   // wavefold = Oscillator only
         if (t == DrumChannel::MTWavePos && engine != DrumChannel::SrcOsc) continue;   // Osc wavetable frame only (granular position = the "Position" grid knob)
+        if (t == DrumChannel::MTUniCount && engine != DrumChannel::SrcOsc) continue;  // [2026-07-14 02:50] count-morph = Osc only (a KS string / Modal strike can't join mid-note; Grain/Noise/Sample have no unison)
         juce::String nm = kModTgtFixedName[t];
         if (t == DrumChannel::MTWarp || t == DrumChannel::MTWavePos) nm << " (Oscillator)";   // engine-specific fixed target = say which engine (user)
         tgtModel.rows.push_back({ t, nm });
@@ -6679,18 +6682,20 @@ void DrumSequencerEditor::handleMidiMenuChange()
         m.addItem(10, "Redo (pad)..."  + tag("ui_sel_redo"));
         m.addItem(12, "Mod Wheel (knob/CC)..." + tag("ui_sel_modWheel"));   // the MOD WHEEL modulation source (also CC1 by default)
         m.addItem(13, "Slide (knob/CC)..."     + tag("ui_sel_slide"));      // the SLIDE source (MPE CC74 by default)
+        m.addItem(14, "Pitch Wheel (knob/CC)..." + tag("ui_sel_pitchWheel"));  // the wheel source (the real wheel by default)
         m.addSeparator(); m.addItem(11, "Clear these assignments");
         m.showMenuAsync(juce::PopupMenu::Options{}.withTargetComponent(&comboMidi).withMinimumWidth(260),
             [L](int r) {
-                static const char* pids[12] = { "ui_sel_chNext", "ui_sel_chPrev",
+                static const char* pids[13] = { "ui_sel_chNext", "ui_sel_chPrev",
                                                 "ui_sel_patNext", "ui_sel_patPrev",
                                                 "ui_sel_slotSel", "ui_sel_test",
                                                 "ui_sel_bpm", "ui_sel_swing",
                                                 "ui_sel_undo", "ui_sel_redo", "ui_sel_modWheel",
-                                                "ui_sel_slide" };
+                                                "ui_sel_slide", "ui_sel_pitchWheel" };
                 if (r >= 1 && r <= 10) L->startLearning(pids[r - 1]);
                 else if (r == 12) L->startLearning(pids[10]);
                 else if (r == 13) L->startLearning(pids[11]);
+                else if (r == 14) L->startLearning(pids[12]);
                 else if (r == 11) for (auto* p : pids) L->clearParam(p);
             });
     }
@@ -10732,7 +10737,8 @@ void DrumSequencerEditor::onSlotEngineChange(int box)
             const bool gridTgt = (r.tgt >= DrumChannel::MT_GRID_BASE && r.tgt < DrumChannel::MT_GRID_END);   // engine knobs only (Sub/Formant sit above + survive)
             const bool warpTgt = (r.tgt == DrumChannel::MTWarp    && ne != DrumChannel::SrcOsc);
             const bool wposTgt = (r.tgt == DrumChannel::MTWavePos && ne != DrumChannel::SrcOsc);   // Wave Position = Osc-only now
-            if (gridTgt || warpTgt || wposTgt) { r.src = DrumChannel::MSOff; r.tgt = DrumChannel::MTOff; r.amt = 0.0f; }
+            const bool cntTgt  = (r.tgt == DrumChannel::MTUniCount && ne != DrumChannel::SrcOsc);   // [2026-07-14 02:50] count-morph = Osc only
+            if (gridTgt || warpTgt || wposTgt || cntTgt) { r.src = DrumChannel::MSOff; r.tgt = DrumChannel::MTOff; r.amt = 0.0f; }
         }
         // (layoutContent() -> refreshDetailPanel() below re-reads modFaders from the selected slot.)
     }

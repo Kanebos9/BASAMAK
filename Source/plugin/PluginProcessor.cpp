@@ -244,6 +244,10 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             const int mch = juce::jlimit(1, 16, msg.getChannel()) - 1;
             const float semis = ((float) msg.getPitchWheelValue() - 8192.0f) / 8192.0f * bendRange_[mch];
             expressionSweep(2, msg.getChannel(), semis);
+            // [2026-07-14 03:00] the wheel is ALSO a matrix source (bipolar) - the real wheel is the
+            // default wiring (pitch bend is its own MIDI message type, not a CC); any CC can be
+            // learned onto it via the MIDI dropdown's selection controls.
+            sequencer.pitchWheel = ((float) msg.getPitchWheelValue() - 8192.0f) / 8192.0f;
         }
         else if (msg.isController())
         {
@@ -1328,6 +1332,7 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
         for (auto& k : kSelKnobs) if (pid == k.first) { pushSelCC(k.second, norm); return; }
         if (pid == "ui_sel_modWheel") { sequencer.modWheel = norm; return; }   // learn ANY CC to the Mod Wheel source (not just CC1)
         if (pid == "ui_sel_slide")    { expressionSweep(1, msg.getChannel(), norm); return; }   // [2026-07-13 23:20] learn ANY CC to the Slide source (not just CC74)
+        if (pid == "ui_sel_pitchWheel") { sequencer.pitchWheel = norm * 2.0f - 1.0f; return; }   // [2026-07-14 03:00] learn ANY CC to the Pitch Wheel source (the real wheel is wired by default)
         static const std::pair<const char*, int> kSelBtns[] = {
             { "ui_sel_rec", SelRec }, { "ui_sel_mute", SelMute }, { "ui_sel_solo", SelSolo },
             { "ui_sel_overlap", SelOverlap }, { "ui_sel_slotSel", SelSlotSel },

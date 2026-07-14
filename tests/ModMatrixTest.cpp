@@ -457,6 +457,30 @@ int main()
         printf("[20] unison-16 detune-0: rms %.4f vs single %.4f (expect >0.3x, was ~0 = silent) -> %s\n",
                r16, r1, CHK(r16 > r1 * 0.3) ? "OK" : "FAIL");
     }
+    {   // [21] CONTINUOUS COUNT-MORPH (supersedes the brief per-hit latch): an LFO swelling the
+        //      unison count mid-note must be SMOOTH (per-voice fades - no gain steps/pops), audibly
+        //      different from unrouted, and a 2000 Hz LFO abuse case must stay finite + smooth
+        //      (block-rate sampling aliases it to flutter; the fades bound every transition).
+        auto mk21 = [](float lfoHz, float amt) { return [lfoHz, amt](DrumChannel& c){
+            for (auto& sl : c.slots) sl = Slot();
+            auto& s = c.slots[0];
+            s.engine = DrumChannel::SrcOsc; s.weight = 1.0f;
+            s.oscShape = s.oscShapeB = DrumChannel::WvSine; s.oscFreq = 110.0f;
+            s.atk = 0.005f; s.hold = 0.6f; s.dec = 0.3f;
+            s.oscUnison = 2; s.oscDetune = 0.25f;
+            if (amt > 0.0f) {
+                s.lfoRate[0] = lfoHz; s.lfoAmt[0] = 1.0f; s.lfoFree[0] = true;
+                s.mod[0].src = DrumChannel::MSLfoFilt; s.mod[0].tgt = DrumChannel::MTUniCount; s.mod[0].amt = amt; } }; };
+        auto delta = [](const std::vector<float>& x){ float m = 0;
+            for (size_t i = 1; i < x.size(); ++i) m = std::max(m, std::abs(x[i] - x[i - 1])); return m; };
+        auto plainR = render(mk21(0.0f, 0.0f), 0.9f, 0.7);
+        auto morph  = render(mk21(2.0f, 1.0f), 0.9f, 0.7);
+        auto abuse  = render(mk21(2000.0f, 1.0f), 0.9f, 0.7);
+        printf("[21] count-morph: audible diff=%.3f (>0.05), smooth delta=%.4f / abuse-2kHz delta=%.4f (both <0.06, no steps) -> %s\n",
+               maxdiff(plainR, morph), delta(morph), delta(abuse),
+               CHK(maxdiff(plainR, morph) > 0.05f && delta(morph) < 0.06f && delta(abuse) < 0.06f
+                   && finite(morph) && finite(abuse)) ? "OK" : "FAIL");
+    }
     printf(fails == 0 ? ">>> ModMatrixTest PASS\n" : ">>> ModMatrixTest FAIL (%d)\n", fails);
     return fails;
 }
