@@ -297,9 +297,10 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         int tc = testTriggerRequest.exchange(-1);
         if (tc >= 0 && tc < Sequencer::NUM_CHANNELS)
         {
-            // Cut this channel's previous voices first so every TEST is a clean, consistent single hit
-            // (otherwise overlapping/ringing tails sum and the level seems to vary between taps).
-            sequencer.channel(tc).silenceAllVoices();
+            // FADE this channel's previous voices first so every TEST is a clean, consistent single
+            // hit (tails would otherwise sum on Overlap-ON channels). Pitch-aware: the old hard cut
+            // clicked when tapping TEST on a ringing sub. [2026-07-14 10:40]
+            sequencer.channel(tc).stopVoicesFaded();
             // knobBase=true: TEST plays the Base Freq knob even on a piano-roll channel (whose
             // block config is C4-absolute). trigger() arms the spectrum capture at the attack.
             sequencer.channel(tc).trigger(1.0f, 0.0f, 0.0f, 0, 0.0f, 0, false, 0, false, true);
@@ -884,12 +885,13 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         }
     }
 
-    //-- Stop pressed: cut any ringing tails on every channel of every pattern.
+    //-- Stop pressed: FADE any ringing tails on every channel (pitch-aware, capped 20 ms - still
+    //   reads as instant; the old hard cut clicked on ringing subs). [2026-07-14 10:40]
     if (silenceRequest.exchange(false))
     {
         for (auto& pat : sequencer.patterns)
             for (auto& ch : pat.channels)
-                ch.silenceAllVoices();
+                ch.stopVoicesFaded(0.020f);
         if (arpRoot >= 0 && ! arpRootHeld)   // STOP ends a LATCHED (Hold) arp; a key physically held keeps playing
         {
             arpRoot = -1; arpChan = -1; arpSounding = -1;

@@ -1123,6 +1123,12 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
 
     // Immediately silence every voice - used by Stop so ringing tails are cut.
     void silenceAllVoices() { for (auto& v : voices) v.playHead = -1.0; for (auto& ss : slotSample) ss.sliceCounter = 0; }
+    // [2026-07-14 10:40] STOP/TEST cut = pitch-aware FADE (the hard silenceAllVoices clicked on
+    // ringing subs - same physics as the retrigger fix). capSec trims it for transport feel
+    // (Stop uses 20 ms; anything under ~50 ms still reads as instant). Slice counters reset like
+    // the hard cut did (consistent round-robin on the next start/tap).
+    void stopVoicesFaded(float capSec = 1.0f)
+    { fadeOutVoices(juce::jmin(capSec, retrigFadeSec())); for (auto& ss : slotSample) ss.sliceCounter = 0; }
     // CHOKE-group cut: fade every ringing voice out over ~3 ms instead of a hard cut
     // (a mid-sample discontinuity clicks when the choking hit is quieter than the tail).
     // Fade every active voice out. Chokes keep the default 3 ms; the KEYS mono handover uses
