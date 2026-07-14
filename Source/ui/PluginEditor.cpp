@@ -28,6 +28,17 @@ static float processRamMB()
     return (float)(info.resident_size / (1024.0 * 1024.0));
 }
 #elif JUCE_WINDOWS
+ // [2026-07-14 09:30] psapi.h needs windows.h FIRST (it uses BOOL/DWORD/WINAPI without defining
+ // them) - the first Windows release build failed right here with hundreds of "unknown type"
+ // errors. WIN32_LEAN_AND_MEAN + NOMINMAX keep windows.h from breaking the rest of this file
+ // (its min/max macros would wreck std::/juce:: calls below).
+ #ifndef WIN32_LEAN_AND_MEAN
+  #define WIN32_LEAN_AND_MEAN
+ #endif
+ #ifndef NOMINMAX
+  #define NOMINMAX
+ #endif
+ #include <windows.h>
  #include <psapi.h>
  #pragma comment(lib, "psapi.lib")
 static float systemCpuPercent()
