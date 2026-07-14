@@ -2,7 +2,7 @@
 
 <img width="1440" height="764" alt="Screenshot 2026-07-14 at 09 57 31" src="https://github.com/user-attachments/assets/fd13c511-bac5-48fc-9411-8eac4d3eecb0" />
 
-**BASAMAK** started as a **drum synth / step-sequencer / sampler** but then I added so much features on it and now it's more like a software groovebox with so much flexibility and ease of use. It's not drum specific anymore, you can synthesize regular keyboard sounds as well.
+**BASAMAK** started as a drum sequencer but then I added so much features on it and now it's more like a software groovebox with so much flexibility and ease of use. It's not drum specific anymore, you can synthesize regular keyboard sounds as well.
 
 <img width="1440" height="764" alt="Screenshot 2026-07-14 at 09 58 20" src="https://github.com/user-attachments/assets/bab7d80c-a6cb-47d0-9cfa-e1d312e60874" />
 
