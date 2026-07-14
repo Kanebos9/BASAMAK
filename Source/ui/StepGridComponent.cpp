@@ -1253,10 +1253,16 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
         if (onStep && midiLearn != nullptr)
         {
             int forced = getLearnChannel ? getLearnChannel() : -1;
-            // Alt target: the same step NUMBER on the SELECTED channel (follows selection).
+            // Alt targets: (4/5) the same step NUMBER on the SELECTED channel (follows selection);
+            // (6/7) [2026-07-14 11:10] THIS cell (channel + step pinned) in the SELECTED pattern -
+            // assign it once and it drives Ch N step M of whatever pattern you're viewing,
+            // regardless of which channel is selected there.
             showMidiLearnMenu(this, *midiLearn, stepParamId(ch, step), forced,
                               "ui_selstep_" + juce::String(step),
-                              "SELECTED-channel step " + juce::String(step + 1));
+                              "SELECTED-channel step " + juce::String(step + 1),
+                              "ui_patstep_" + juce::String(ch) + "_" + juce::String(step),
+                              "Ch " + juce::String(ch + 1) + " step " + juce::String(step + 1)
+                                  + " in the SELECTED pattern");
         }
         return;
     }

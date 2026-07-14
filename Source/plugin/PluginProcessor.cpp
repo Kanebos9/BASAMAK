@@ -1335,6 +1335,15 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
         if (pid == "ui_sel_modWheel") { sequencer.modWheel = norm; return; }   // learn ANY CC to the Mod Wheel source (not just CC1)
         if (pid == "ui_sel_slide")    { expressionSweep(1, msg.getChannel(), norm); return; }   // [2026-07-13 23:20] learn ANY CC to the Slide source (not just CC74)
         if (pid == "ui_sel_pitchWheel") { sequencer.pitchWheel = norm * 2.0f - 1.0f; return; }   // [2026-07-14 03:00] learn ANY CC to the Pitch Wheel source (the real wheel is wired by default)
+        // [2026-07-14 11:10] "ui_sel_modAmt{R}" = mod route R's AMOUNT on the SELECTED slot
+        // (assigned via the route picker's MIDI button). Bipolar: CC 64 = 0; the editor applies
+        // the same cubic response as the on-screen fader position.
+        if (pid.startsWith("ui_sel_modAmt"))
+        {
+            const int r = pid.substring(13).getIntValue();
+            if (r >= 0 && r < DrumChannel::MOD_ROUTES) pushSelCC(SelModAmtBase + r, norm);
+            return;
+        }
         static const std::pair<const char*, int> kSelBtns[] = {
             { "ui_sel_rec", SelRec }, { "ui_sel_mute", SelMute }, { "ui_sel_solo", SelSolo },
             { "ui_sel_overlap", SelOverlap }, { "ui_sel_slotSel", SelSlotSel },
@@ -1359,6 +1368,21 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
     {
         const int st = pid.substring(11).getIntValue();
         if (st >= 0 && st < DrumChannel::MAX_STEPS) pushSelCC(2000 + st, on ? 1.0f : 0.0f);
+        return;
+    }
+    // [2026-07-14 11:10] "ui_patstep_{C}_{N}" = step N of channel C in WHATEVER PATTERN IS
+    // SELECTED (the viewed pattern; channel + step stay pinned - assign it once on any pattern
+    // and it drives that same cell on every pattern you switch to, whatever channel is selected).
+    // Applied here directly (no editor needed), like the addressed p{P}_step ids.
+    if (pid.startsWith("ui_patstep_"))
+    {
+        juce::StringArray parts = juce::StringArray::fromTokens(pid.substring(11), "_", "");
+        if (parts.size() == 2)
+        {
+            const int c = parts[0].getIntValue(), st = parts[1].getIntValue();
+            if (c >= 0 && c < Sequencer::NUM_CHANNELS && st >= 0 && st < DrumChannel::MAX_STEPS)
+                sequencer.current().channels[c].steps[st] = on;
+        }
         return;
     }
 

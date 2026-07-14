@@ -171,7 +171,8 @@ public:
                        SelChFxAmtC, SelChFxChrC,                 // CHANNEL FX slot C
                        SelSlotPan,                               // static slot pan (selected slot)
                        SelSlotPBase = 1000,    // 1000 + N = the N-th knob of the selected slot's engine grid
-                       SelStepBase  = 2000 };  // 2000 + N = step N on the selected channel
+                       SelStepBase  = 2000,    // 2000 + N = step N on the selected channel
+                       SelModAmtBase = 3000 }; // [2026-07-14 11:10] 3000 + R = mod route R's AMOUNT (selected slot)
     struct SelCCEvt { int t; float v; };
     SelCCEvt selQ[64];
     std::atomic<int> selQHead { 0 }, selQTail { 0 };

@@ -1388,6 +1388,12 @@ juce::String RoutePicker::getTooltip()
                "- Presets inside: Linear = off (pass-through), Soft = late response (tame aftertouch), "
                "Hard = early, S-Curve = smooth switch.\n"
                "- Each route remembers its own curve - the same source can act differently per target.";
+    if (midiRect().contains(p))
+        return "MIDI: assign a CC (knob/fader) to THIS route's AMOUNT.\n\n"
+               "- Acts on the CURRENT selection (pattern / channel / slot) - it always drives this "
+               "route number on whatever slot is selected.\n"
+               "- Bipolar: the CC's centre = 0, above = positive, below = negative (same cubic "
+               "response as the on-screen fader).";
     if (amtRect().contains(p))
         return "Route AMOUNT: centre = 0, right = positive, left = negative (cubic response - fine control near zero). Double-click = 0.";
     return {};
@@ -1432,6 +1438,7 @@ void RoutePicker::setAmtFromX(float x)
 void RoutePicker::mouseDown(const juce::MouseEvent& e)
 {
     if (remapRect().contains(e.position)) { if (onRemap) onRemap(); return; }   // open the MOD AMOUNT MAP editor
+    if (midiRect().contains(e.position))  { if (onMidi)  onMidi();  return; }   // MIDI-assign this route's amount [2026-07-14 11:10]
     lagDrag = lagRect().contains(e.position); if (lagDrag) { setLagFromX(e.position.x); return; }
     amtDrag = amtRect().contains(e.position); if (amtDrag) setAmtFromX(e.position.x);
 }
@@ -1487,8 +1494,16 @@ void RoutePicker::paint(juce::Graphics& g)
       g.strokePath(curveGlyph, juce::PathStrokeType(1.4f)); }
     g.setFont(juce::Font(11.0f, remapOn ? juce::Font::bold : juce::Font::plain));
     g.setColour(remapOn ? juce::Colours::white : juce::Colour(0xffaebada));
-    g.drawText(remapOn ? "Modulation amount map: ON - click to edit" : "Modulation amount map: off - click to draw",
+    g.drawText(remapOn ? "Amount map: ON - click to edit" : "Amount map: off - click to draw",
                rr.withTrimmedLeft(22.0f), juce::Justification::centredLeft, false);
+    // MIDI-assign button [2026-07-14 11:10]: right of the map row - learn a CC to this route's AMOUNT.
+    const auto mr = midiRect();
+    const bool assigned = midiTag.length() > 4;   // "MIDI cc44" = assigned, plain "MIDI" = not
+    g.setColour(assigned ? juce::Colour(0xff223046) : juce::Colour(0xff181828)); g.fillRoundedRectangle(mr, 4.0f);
+    g.setColour(assigned ? juce::Colour(0xff9fd1ff) : juce::Colour(0xff777fa8)); g.drawRoundedRectangle(mr.reduced(0.5f), 4.0f, 1.0f);
+    g.setFont(juce::Font(11.0f, assigned ? juce::Font::bold : juce::Font::plain));
+    g.setColour(assigned ? juce::Colour(0xff9fd1ff) : juce::Colour(0xffaebada));
+    g.drawText(midiTag, mr, juce::Justification::centred, false);
 }
 
 //==============================================================================
@@ -2400,7 +2415,8 @@ void SlotEditor::paint(juce::Graphics& g)
 //==============================================================================
 void showMidiLearnMenu(juce::Component* target, MidiLearnManager& mlm,
                        const juce::String& paramId, int forcedChannel,
-                       const juce::String& altPid, const juce::String& altLabel)
+                       const juce::String& altPid, const juce::String& altLabel,
+                       const juce::String& alt2Pid, const juce::String& alt2Label)
 {
     juce::PopupMenu menu;
     int cc = mlm.getCCForParam(paramId);
@@ -2431,6 +2447,15 @@ void showMidiLearnMenu(juce::Component* target, MidiLearnManager& mlm,
                                            + " cc" + juce::String(acc) + "]" : juce::String()));
             if (acc >= 0) menu.addItem(5, "Clear the " + altLabel + " assignment");
         }
+        if (alt2Pid.isNotEmpty())  // [2026-07-14 11:10] a third variant (steps: pinned cell, SELECTED pattern)
+        {
+            const int acc = mlm.getCCForParam(alt2Pid);
+            menu.addSeparator();
+            menu.addItem(6, "Assign: " + alt2Label + "..."
+                            + (acc >= 0 ? "  [ch" + juce::String(mlm.getChannelForParam(alt2Pid))
+                                           + " cc" + juce::String(acc) + "]" : juce::String()));
+            if (acc >= 0) menu.addItem(7, "Clear the " + alt2Label + " assignment");
+        }
         if (learningOther)
             menu.addItem(3, "Cancel the pending MIDI learn");
     }
@@ -2442,12 +2467,14 @@ void showMidiLearnMenu(juce::Component* target, MidiLearnManager& mlm,
     menu.showMenuAsync(juce::PopupMenu::Options{}
                            .withTargetScreenArea({ mp.x, mp.y, 1, 1 })
                            .withMinimumWidth(240),
-        [mlmPtr, paramId, forcedChannel, altPid](int result) {
+        [mlmPtr, paramId, forcedChannel, altPid, alt2Pid](int result) {
             if      (result == 1) mlmPtr->clearParam(paramId);
             else if (result == 2) mlmPtr->startLearning(paramId, forcedChannel);
             else if (result == 3) mlmPtr->stopLearning();
             else if (result == 4) mlmPtr->startLearning(altPid);
             else if (result == 5) mlmPtr->clearParam(altPid);
+            else if (result == 6) mlmPtr->startLearning(alt2Pid);
+            else if (result == 7) mlmPtr->clearParam(alt2Pid);
         });
 }
 
@@ -6958,6 +6985,14 @@ void DrumSequencerEditor::applySelCC(int t, float v, bool& slotDirty, bool& keys
         ch.steps[t - P::SelStepBase] = v >= 0.5f;
         return;
     }
+    if (t >= P::SelModAmtBase && t < P::SelModAmtBase + DrumChannel::MOD_ROUTES)
+    {   // [2026-07-14 11:10] mod route R's AMOUNT on the SELECTED slot (the picker's MIDI button).
+        // Same cubic law as the on-screen fader position: CC centre = 0, fine control near zero.
+        const float p = v * 2.0f - 1.0f;
+        sl.mod[t - P::SelModAmtBase].amt = p * p * p;
+        ch.markDspDirty(); slotDirty = true;   // refreshDetailPanel pushes modFaders.setValues
+        return;
+    }
     if (t >= P::SelSlotPBase && t < P::SelSlotPBase + 8)
     {   // the N-th knob of the SELECTED slot's engine grid - mirrors the on-screen knob, so what
         // it controls follows the engine (FM Amount on Oscillator, Base Freq on Karplus-Strong...)
@@ -8974,6 +9009,12 @@ void DrumSequencerEditor::setupComponents()
         auto& ch = proc.sequencer.channel(selectedChannel);
         ch.slots[envTargetSlot()].mod[juce::jlimit(0, DrumChannel::MOD_ROUTES - 1, routePickRoute)].lagMs = ms;
         ch.markDspDirty();
+    };
+    // MIDI [2026-07-14 11:10]: the picker's MIDI button = learn a CC to THIS route's amount
+    // (ui_sel_modAmt{R} - selected-scope, so it drives route R on whatever slot is selected).
+    routePicker.onMidi = [this] {
+        const int r = juce::jlimit(0, DrumChannel::MOD_ROUTES - 1, routePickRoute);
+        showMidiLearnMenu(&routePicker, proc.midiLearn, "ui_sel_modAmt" + juce::String(r), -1);
     };
     // REMAP [2026-07-14]: the picker's remap row opens the curve overlay for the CURRENT route.
     content.addChildComponent(remapEd);
@@ -11045,6 +11086,9 @@ void DrumSequencerEditor::openRoutePicker(int route)
     routePicker.accent = (si == 0) ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8);
     routePicker.engine = proc.sequencer.channel(selectedChannel).slots[si].engine;   // gates Warp/WavePos targets
     routePicker.remapOn = proc.sequencer.channel(selectedChannel).slots[si].mod[juce::jlimit(0, DrumChannel::MOD_ROUTES - 1, route)].curveOn != 0;
+    { // [2026-07-14 11:10] the MIDI button shows this route's current assignment
+      const int mcc = proc.midiLearn.getCCForParam("ui_sel_modAmt" + juce::String(route));
+      routePicker.midiTag = mcc >= 0 ? "MIDI cc" + juce::String(mcc) : "MIDI"; }
     routePicker.openFor(modFaders.src[route], modFaders.tgt[route], modFaders.amt[route],
                         proc.sequencer.channel(selectedChannel).slots[si].mod[juce::jlimit(0, DrumChannel::MOD_ROUTES - 1, route)].lagMs);
     routePicker.toFront(false);

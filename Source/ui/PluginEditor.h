@@ -279,10 +279,12 @@ private:
 //==============================================================================
 // Shared helper: build a popup menu for a MIDI-learnable control and run it.
 // Shows the current assignment ("Assigned: ch6 cc44" / "Not assigned"). altPid/altLabel add an
-// optional SECOND target to the same menu (the "SELECTED channel" variants on M/S/OV).
+// optional SECOND target to the same menu (the "SELECTED channel" variants on M/S/OV);
+// alt2Pid/alt2Label a THIRD (steps' "this cell in the SELECTED pattern" variant [2026-07-14 11:10]).
 void showMidiLearnMenu(juce::Component* target, MidiLearnManager& mlm,
                        const juce::String& paramId, int forcedChannel,
-                       const juce::String& altPid = {}, const juce::String& altLabel = {});
+                       const juce::String& altPid = {}, const juce::String& altLabel = {},
+                       const juce::String& alt2Pid = {}, const juce::String& alt2Label = {});
 
 //==============================================================================
 // Knob with right-click MIDI-learn popup.
@@ -684,6 +686,8 @@ public:
     std::function<void(float ms)>  onLag;                   // [2026-07-14 01:33] route LAG edited (ms; 0 = instant)
     std::function<void()> onRemap;                          // [2026-07-14] open the MOD AMOUNT MAP editor for this route
     bool remapOn = false;                                   // drawn map active (shown on the map row)
+    std::function<void()> onMidi;                           // [2026-07-14 11:10] MIDI-assign this route's AMOUNT (learn menu)
+    juce::String midiTag { "MIDI" };                        // "MIDI" / "MIDI cc44" (set by the editor from the learn map)
     std::function<void()> onAmtDragEnd;                     // amount fader released (auto-audition)
     std::function<void()> onClose;
     std::function<juce::String(int gridIdx)> gridKnobName;  // live engine-knob names for grid targets
@@ -729,9 +733,12 @@ private:
     { const float pad = 6.0f, h = 26.0f;
       return { (float) getWidth() * 0.5f + pad * 0.5f, (float) getHeight() - h - pad,
                (float) getWidth() * 0.5f - pad * 1.5f, h }; }
-    juce::Rectangle<float> remapRect() const   // [2026-07-14] the REMAP row (above the amount fader)
+    juce::Rectangle<float> remapRect() const   // [2026-07-14] the MOD AMOUNT MAP row (left 2/3; MIDI button takes the right)
     { const float pad = 6.0f;
-      return { pad, (float) getHeight() - 26.0f - pad - 24.0f, (float) getWidth() - pad * 2.0f, 20.0f }; }
+      return { pad, (float) getHeight() - 26.0f - pad - 24.0f, (float) getWidth() * 0.68f - pad, 20.0f }; }
+    juce::Rectangle<float> midiRect() const    // [2026-07-14 11:10] MIDI-assign button, right of the map row
+    { const float pad = 6.0f; const auto rr = remapRect();
+      return { rr.getRight() + pad, rr.getY(), (float) getWidth() - rr.getRight() - pad * 2.0f, 20.0f }; }
     void setAmtFromX(float x);
     void selectCurrentRows();
     struct Closer : public juce::MouseListener
@@ -778,7 +785,8 @@ public:
     { return "12 modulation routes (this slot).\n\n"
              "- RIGHT-CLICK a fader: choose its SOURCE (left column) and TARGET (right column), set the "
              "amount + LAG on the two faders, and DRAW a per-route MODULATION AMOUNT MAP on the row "
-             "above them (a tiny blue curve mark on a fader = mapped).\n"
+             "above them (a tiny blue curve mark on a fader = mapped). The MIDI button beside the map "
+             "row assigns a CC (knob/fader) to that route's amount.\n"
              "- DRAG / click inside a fader: the amount - centre is 0, left negative, right positive "
              "(double-click = 0).\n"
              "- Yellow = slot 1, pink = slot 2. Per-voice on chords.\n"
