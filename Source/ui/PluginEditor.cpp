@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "FactoryMidiMaps.h"   // [2026-07-14 23:20] embedded "Launchpad + Launchkey" MIDI-learn map
 #include "../plugin/FactoryContent.h"
 #include "../plugin/UserPaths.h"
 #include <cstring>
@@ -2809,20 +2810,26 @@ void ADSRDisplay::paint(juce::Graphics& g)
         g.drawText("STRIKE / RING / REL", getLocalBounds().reduced(6), juce::Justification::topLeft, false);
     }
 
-    // Live read-out of the hovered / dragged handle (top-right, above the length).
-    if (active >= 0)
+    // [2026-07-14 23:20] ALWAYS-ON stage read-out (user): every A-H-D-S-R value stacked top-right,
+    // each row in its handle's colour; the hovered/dragged stage's row lights WHITE. (The old
+    // hover-only single line is gone - the times are readable without grabbing a handle.)
     {
-        juce::String t;
-        switch (active) {
-            case 0: t = (strikeRing ? "Strike " : "Attack ") + envTimeStr(atk); break;
-            case 1: t = "Hold " + envTimeStr(hld); break;
-            case 2: t = strikeRing ? ("Ring " + envTimeStr(dcy) + (srSus ? "  Sus " + juce::String(juce::roundToInt(sus * 100.0f)) + "%" : juce::String()))
-                                   : (noSusRel ? "Decay " + envTimeStr(dcy)
-                                               : "Decay " + envTimeStr(dcy) + "  Sus " + juce::String(juce::roundToInt(sus * 100.0f)) + "%"); break;
-            case 3: t = "Release " + envTimeStr(rel); break;
+        struct Row { juce::String txt; int handle; };
+        Row rows[5]; int n = 0;
+        rows[n++] = { (strikeRing ? "Strike " : "A ") + envTimeStr(atk), 0 };
+        if (! strikeRing) rows[n++] = { "H " + envTimeStr(hld), 1 };
+        rows[n++] = { (strikeRing ? "Ring " : "D ") + envTimeStr(dcy), 2 };
+        if (! noSusRel && (! strikeRing || srSus))
+            rows[n++] = { (strikeRing ? "Sus " : "S ") + juce::String(juce::roundToInt(sus * 100.0f)) + "%", 2 };
+        if (! noSusRel) rows[n++] = { (strikeRing ? "Rel " : "R ") + envTimeStr(rel), 3 };
+        auto tr = getLocalBounds().reduced(5).withTrimmedTop(26);
+        g.setFont(juce::Font(10.0f, juce::Font::bold));
+        for (int i = 0; i < n; ++i)
+        {
+            g.setColour(rows[i].handle == active ? juce::Colours::white
+                                                 : kEnvCols[rows[i].handle].withAlpha(0.92f));
+            g.drawText(rows[i].txt, tr.removeFromTop(12), juce::Justification::topRight, false);
         }
-        g.setColour(kEnvCols[active]); g.setFont(juce::Font(10.5f, juce::Font::bold));
-        g.drawText(t, getLocalBounds().reduced(5), juce::Justification::topRight, false);
     }
 }
 
@@ -6643,6 +6650,7 @@ void DrumSequencerEditor::rebuildMidiMenu()
     comboMidi.addItem("Save MIDI pattern...", 9101);           // saves the CURRENT pattern's note grid
     comboMidi.addSectionHeading("Factory MIDI patterns");
     comboMidi.addItem("Ch1 8x8 + M/S/OV + Play", 9105);        // MIDI-learn map: steps CC1-64, M/S/OV 65-88, Play/Stop 89/90 (MIDI ch 1)
+    comboMidi.addItem("Launchpad + Launchkey", 9107);          // [2026-07-14 23:20] pairs with the shipped custom controller modes (.syx)
     comboMidi.addSectionHeading("Saved MIDI patterns");
     if (midiPatternFiles.isEmpty())
         comboMidi.addItem("(none saved yet)", -1);
@@ -6696,6 +6704,16 @@ void DrumSequencerEditor::handleMidiMenuChange()
         proc.midiLearn.assign("global_play", 89, 1);   // transport (global, pattern-independent)
         proc.midiLearn.assign("global_stop", 90, 1);
         stepGrid.repaint(); content.repaint();   // the grid draws each step's assigned CC
+    }
+    else if (id == 9107)     // [2026-07-14 23:20] Factory "Launchpad + Launchkey" map (embedded bytes).
+    {                        //   Pairs with the download's "launchpad+launchkey custom midi modes" .syx files.
+        juce::MemoryInputStream in(kLaunchMapBytes, (size_t) kLaunchMapSize, false);
+        auto tree = juce::ValueTree::readFromStream(in);
+        if (tree.isValid())
+        {
+            proc.midiLearn.loadState(tree);   // replaces the current assignments, like loading a file
+            stepGrid.repaint(); content.repaint();
+        }
     }
     else if (id == 9106)     // MIDI-learn: SELECTION controls (they act on whatever is selected)
     {
@@ -7058,9 +7076,12 @@ void DrumSequencerEditor::applySelCC(int t, float v, bool& slotDirty, bool& keys
         case P::SelGlide:   ch.keysGlide = v; keysDirty = true; break;
         case P::SelSlotOfs: ch.humanizeAmt = v; keysDirty = true; break;
         case P::SelRec:     keysPanel.btnRec.triggerClick(); return;
-        case P::SelMute:    strips[selectedChannel].btnMute->triggerClick(); return;
-        case P::SelSolo:    strips[selectedChannel].btnSolo->triggerClick(); return;
-        case P::SelOverlap: strips[selectedChannel].btnPoly.triggerClick(); return;
+        // [2026-07-14 23:20] M/S/OV SET directly from the pad value (127 = on, 0 = off) - the old
+        // triggerClick() only toggled on press (dead every other press on a toggle pad) and its
+        // async button flash drew a faint half-state. The tick refresh syncs the button faces.
+        case P::SelMute:    ch.mute = v >= 0.5f;         ch.markDspDirty(); return;
+        case P::SelSolo:    ch.solo = v >= 0.5f;         ch.markDspDirty(); return;
+        case P::SelOverlap: ch.allowOverlap = v >= 0.5f; return;
         case P::SelSlotSel: setShapeSlot(envTargetSlot() == 0 ? 1 : 0); return;
         case P::SelChNext:  selectChannel((selectedChannel + 1) % Sequencer::NUM_CHANNELS); return;
         case P::SelChPrev:  selectChannel((selectedChannel + Sequencer::NUM_CHANNELS - 1) % Sequencer::NUM_CHANNELS); return;
@@ -7211,7 +7232,10 @@ void DrumSequencerEditor::setupComponents()
     comboMidi.setTooltip("MIDI: save/load a MIDI-LEARN MAP - which CC controls which parameter (never their values).\n\n"
                          "- Saved as *.basamakpattern in your MIDI Patterns folder (refresh/open it here too).\n"
                          "- 'Clear MIDI' wipes all assignments.\n"
-                         "- The 'Ch1 8x8 + M/S/OV + Play' factory map matches the TouchOSC file in your download.");
+                         "- The 'Ch1 8x8 + M/S/OV + Play' factory map matches the TouchOSC file in your download.\n"
+                         "- The 'Launchpad + Launchkey' factory map matches the custom controller modes included "
+                         "in your download (the 'launchpad+launchkey custom midi modes' folder - load those .syx "
+                         "modes onto a Launchkey MK4 / Launchpad Mini via Novation Components first).");
     rebuildMidiMenu();
     comboMidi.onChange = [this] { handleMidiMenuChange(); };
 

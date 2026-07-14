@@ -1344,9 +1344,15 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
             if (r >= 0 && r < DrumChannel::MOD_ROUTES) pushSelCC(SelModAmtBase + r, norm);
             return;
         }
+        // [2026-07-14 23:20] SELECTED-channel Mute/Solo/Overlap SET from the pad's VALUE (127 = on,
+        // 0 = off - the same convention as the addressed p{P}_ch ids, so toggle-mode pads work).
+        // They used to triggerClick() on press only: a toggle pad's off-press (value 0) did nothing
+        // = every other press was dead, and the async button flash read as a "faint" half-state.
+        if (pid == "ui_sel_mute")    { pushSelCC(SelMute,    on ? 1.0f : 0.0f); return; }
+        if (pid == "ui_sel_solo")    { pushSelCC(SelSolo,    on ? 1.0f : 0.0f); return; }
+        if (pid == "ui_sel_overlap") { pushSelCC(SelOverlap, on ? 1.0f : 0.0f); return; }
         static const std::pair<const char*, int> kSelBtns[] = {
-            { "ui_sel_rec", SelRec }, { "ui_sel_mute", SelMute }, { "ui_sel_solo", SelSolo },
-            { "ui_sel_overlap", SelOverlap }, { "ui_sel_slotSel", SelSlotSel },
+            { "ui_sel_rec", SelRec }, { "ui_sel_slotSel", SelSlotSel },
             { "ui_sel_chNext", SelChNext }, { "ui_sel_chPrev", SelChPrev },
             { "ui_sel_patNext", SelPatNext }, { "ui_sel_patPrev", SelPatPrev },
             { "ui_sel_follow", SelFollow }, { "ui_sel_test", SelTest },

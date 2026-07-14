@@ -60,6 +60,7 @@ jobs:
           find build -path "*Standalone/BASAMAK" -type f -maxdepth 8 -exec cp {} "$OUT/" \;   # Standalone (Linux)
           cp -R Resources/Samples "$OUT/Samples"                                        # bundled CC0 sample library
           cp -R Resources/TouchOSC "$OUT/TouchOSC"                                       # TouchOSC control-surface template
+          cp -R "Resources/launchpad+launchkey custom midi modes" "$OUT/launchpad+launchkey custom midi modes"   # Novation custom modes (.syx) pairing with the factory MIDI map
           echo "$VER" > "$OUT/VERSION"
           cp Distribution/INSTALL.txt "$OUT/" 2>/dev/null || true
           if [ "${{ matrix.name }}" = "macOS" ]; then
@@ -84,6 +85,7 @@ jobs:
           if ($exe) { Copy-Item $exe.FullName "$out\BASAMAK.exe" }   # Standalone (Windows)
           Copy-Item Resources/Samples "$out\Samples" -Recurse        # bundled CC0 sample library
           Copy-Item Resources/TouchOSC "$out\TouchOSC" -Recurse      # TouchOSC control-surface template
+          Copy-Item "Resources/launchpad+launchkey custom midi modes" "$out\launchpad+launchkey custom midi modes" -Recurse   # Novation custom modes (.syx) pairing with the factory MIDI map
           Copy-Item Distribution/scripts/install-windows.bat "$out\"
           Copy-Item Distribution/INSTALL.txt "$out\" -ErrorAction SilentlyContinue
           Compress-Archive -Path $out -DestinationPath "$out.zip" -Force
