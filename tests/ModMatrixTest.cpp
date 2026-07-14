@@ -481,6 +481,58 @@ int main()
                CHK(maxdiff(plainR, morph) > 0.05f && delta(morph) < 0.06f && delta(abuse) < 0.06f
                    && finite(morph) && finite(abuse)) ? "OK" : "FAIL");
     }
+    {   // [22] MONO RETRIGGER HANDOVER (the user's bass-roll crackle, DT770-verified): a 45 Hz
+        //      long-decay sine retriggered every step while its tail is still LOUD. The old path
+        //      hard-reused voice 0 mid-ring = a discontinuity (~1.4 peak delta); the pitch-aware
+        //      handover must keep every sample step waveform-sized.
+        auto* q = new Sequencer();
+        q->setStandaloneBpm(120.0f);
+        auto& c = q->patterns[0].channels[0];
+        for (auto& sl : c.slots) sl = Slot();
+        auto& s = c.slots[0];
+        s.engine = DrumChannel::SrcOsc; s.weight = 1.0f;
+        s.oscShape = s.oscShapeB = DrumChannel::WvSine; s.oscFreq = 45.0f;
+        s.atk = 0.003f; s.hold = 0.0f; s.dec = 2.0f;
+        c.numSteps = 8;
+        for (int st = 0; st < 8; ++st) { c.steps[st] = true; c.stepVel[st] = 0.9f; }
+        for (auto& p2 : q->patterns) for (auto& c2 : p2.channels) c2.prepareToPlay(SR, BS);
+        q->startStandalone();
+        std::vector<float> out;
+        juce::AudioBuffer<float> buf(2, BS);
+        for (int b = 0; b < (int)(2.0 * SR / BS); ++b)
+        { buf.clear(); q->processBlock(buf, SR, BS, nullptr); for (int i2 = 0; i2 < BS; ++i2) out.push_back(buf.getSample(0, i2)); }
+        delete q;
+        float md = 0; for (size_t i2 = 1; i2 < out.size(); ++i2) md = std::max(md, std::abs(out[i2] - out[i2 - 1]));
+        // CROSS-CHANNEL CHOKE (user: "make sure it works when another channel chokes too"): a loud
+        // ringing 45 Hz sub on ch 0 is choked mid-ring by a soft hit on ch 1 (same choke group via
+        // the Routing option) - the pitch-aware fade must keep that cut click-free as well.
+        auto* q2 = new Sequencer();
+        q2->setStandaloneBpm(120.0f);
+        auto& ca = q2->patterns[0].channels[0];
+        auto& cb = q2->patterns[0].channels[1];
+        for (auto& sl : ca.slots) sl = Slot();
+        for (auto& sl : cb.slots) sl = Slot();
+        auto& sa = ca.slots[0];
+        sa.engine = DrumChannel::SrcOsc; sa.weight = 1.0f;
+        sa.oscShape = sa.oscShapeB = DrumChannel::WvSine; sa.oscFreq = 45.0f;
+        sa.atk = 0.003f; sa.hold = 0.0f; sa.dec = 2.0f;
+        auto& sb = cb.slots[0];
+        sb.engine = DrumChannel::SrcOsc; sb.weight = 1.0f;
+        sb.oscShape = sb.oscShapeB = DrumChannel::WvSine; sb.oscFreq = 200.0f;
+        sb.atk = 0.003f; sb.hold = 0.0f; sb.dec = 0.2f;
+        ca.chokeGroup = 1; cb.chokeGroup = 1;
+        ca.numSteps = 8; ca.steps[0] = true; ca.stepVel[0] = 0.9f;
+        cb.numSteps = 8; cb.steps[4] = true; cb.stepVel[4] = 0.3f;   // chokes the sub at 1.0 s, mid-ring
+        for (auto& p2 : q2->patterns) for (auto& c2 : p2.channels) c2.prepareToPlay(SR, BS);
+        q2->startStandalone();
+        std::vector<float> out2;
+        for (int b = 0; b < (int)(1.6 * SR / BS); ++b)
+        { buf.clear(); q2->processBlock(buf, SR, BS, nullptr); for (int i2 = 0; i2 < BS; ++i2) out2.push_back(buf.getSample(0, i2)); }
+        delete q2;
+        float md2 = 0; for (size_t i2 = 1; i2 < out2.size(); ++i2) md2 = std::max(md2, std::abs(out2[i2] - out2[i2 - 1]));
+        printf("[22] bass retrigger: max delta=%.4f / cross-channel choke delta=%.4f (both <0.03; hard cuts were ~1+), rms=%.3f -> %s\n",
+               md, md2, rms(out), CHK(md < 0.03f && md2 < 0.03f && rms(out) > 0.1 && finite(out) && finite(out2)) ? "OK" : "FAIL");
+    }
     printf(fails == 0 ? ">>> ModMatrixTest PASS\n" : ">>> ModMatrixTest FAIL (%d)\n", fails);
     return fails;
 }

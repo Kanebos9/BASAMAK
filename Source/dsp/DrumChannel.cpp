@@ -1437,9 +1437,20 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
     }
     else
     {
-        for (int i = 1; i < POLY; ++i) voices[i].playHead = -1.0;
-        for (auto& b : eqHP) b.reset();  for (auto& b : eqBell) b.reset();  for (auto& b : eqLP) b.reset();
-        for (auto& b : formantBP) b.reset();
+        // [2026-07-14 10:05] MONO RETRIGGER = PITCH-AWARE HANDOVER (the user's bass-roll crackle,
+        // verified on DT 770s): this branch used to HARD-REUSE voice 0 mid-ring (playHead reset,
+        // phases restarted) and even zeroed the channel EQ/formant states - a 40 Hz tail still at
+        // +-0.8 jumped straight to the new hit's first sample = a discontinuity on EVERY fast
+        // retrigger of subby sounds (bright drums hide it: their tails are quiet by the next hit).
+        // Now the old voice FADES on its own slot for >= ~1.2 cycles of the sound's bass while the
+        // new hit starts clean on a free voice - the exact keys mono-handover precedent. The
+        // filter-state resets are gone too (the overlap path never reset them; zeroing a biquad
+        // mid-tail was its own step).
+        fadeOutVoices(retrigFadeSec());
+        vi = -1;
+        for (int i = 0; i < POLY; ++i) if (!voices[i].active()) { vi = i; break; }
+        if (vi < 0) { long best = -1; for (int i = 0; i < POLY; ++i)
+                        if (voices[i].voiceSamples > best) { best = voices[i].voiceSamples; vi = i; } }
     }
 
     // Reset the free-running modulation LFOs so every hit starts at the same phase - otherwise non-zero Drift

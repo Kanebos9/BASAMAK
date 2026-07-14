@@ -1129,6 +1129,29 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     // ~15 ms (a loud sustained tone cut in 3 ms reads as a CRACKLE when sliding across keys).
     void fadeOutVoices(float sec = 0.0f)
     { for (auto& v : voices) if (v.active()) { v.killing = true; if (sec > 0.0f) v.killStep = 1.0f / juce::jmax(1.0f, sec * (float) sr); } }
+    // [2026-07-14 10:05] PITCH-AWARE fade time for retriggers/chokes: >= ~1.2 cycles of the sound's
+    // lowest pitched base (3..30 ms). A fixed 3 ms is 1/8th of a 40 Hz cycle - cutting a still-loud
+    // sub tail that fast IS a click (the user's bass-roll crackle, DT770-verified). Bright sounds
+    // stay tight automatically; unpitched (noise/sample) sounds use a 5 ms middle ground.
+    float retrigFadeSec() const
+    {
+        double f = 0.0;
+        for (int s2 = 0; s2 < NUM_SLOTS; ++s2)
+        {
+            const auto& sl = slots[s2];
+            if (sl.engine < 0 || sl.weight <= 0.001f) continue;
+            double b = 0.0;
+            switch (sl.engine)
+            {
+                case SrcOsc: case SrcFM: case SrcModal: case SrcGrain: b = sl.oscFreq;  break;
+                case SrcPhys:                                          b = sl.physFreq; break;
+                default: break;   // Noise / Sample: no known pitch
+            }
+            if (b > 10.0 && (f <= 0.0 || b < f)) f = b;
+        }
+        if (f <= 0.0) return 0.005f;
+        return juce::jlimit(0.003f, 0.030f, (float)(1.2 / f));
+    }
     bool anyVoiceActive() const { for (auto& v : voices) if (v.active()) return true; return false; }
 
 private:

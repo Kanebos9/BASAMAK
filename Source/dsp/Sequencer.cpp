@@ -81,7 +81,11 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
         if (c.chokeGroup > 0)
             for (int o = 0; o < NUM_CHANNELS; ++o)
                 if (o != e.channel && patterns[playPattern].channels[o].chokeGroup == c.chokeGroup)
-                    patterns[playPattern].channels[o].fadeOutVoices();
+                {   // [2026-07-14 10:05] choke fade is PITCH-AWARE now (3 ms on a sub tail = a click;
+                    // hats keep their tight ~3-5 ms feel automatically via their higher base).
+                    auto& oc = patterns[playPattern].channels[o];
+                    oc.fadeOutVoices(oc.retrigFadeSec());
+                }
         // SLIDE = glide TOWARD THE NEXT STEP: the slid step plays its own attack at its own pitch,
         // then bends across the WHOLE step to land exactly on the next active step's pitch at the
         // boundary (which then takes over seamlessly). Needs different Pitch values on the steps -
