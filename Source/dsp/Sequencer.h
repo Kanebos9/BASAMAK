@@ -21,26 +21,44 @@ public:
     // so switching pattern (or loading a preset) shows that pattern's settings.
     struct MasterFX
     {
-        float reverbRoom = 0.5f, reverbDamp = 0.5f, reverbWet = 0.4f;
+        float reverbRoom = 0.5f, reverbDamp = 0.5f, reverbWet = 0.5f;   // wet default 0.4 -> 0.5 [2026-07-15]
         float delayTime  = 0.375f, delayFeedback = 0.3f;
-        float delayWet   = 0.3f;        // delay return level (was a fixed hidden 0.3; now a MASTER knob like reverb Wet)
+        float delayWet   = 0.5f;        // delay return level (default 0.3 -> 0.5 [2026-07-15], user)
         bool  delaySync  = false;
-        int   delayDivision = 4;        // index into the note-division table
+        int   delayDivision = 4;        // RETIRED index into the old note-division table (kept for old-file migration)
         bool  delayPingPong = false;    // cross-feed L<->R so echoes bounce across the stereo field
         int   delayMode = 0;            // [2026-07-15 00:50] loop character: 0 Tape (= the original
                                         // voicing, default) / 1 Digital / 2 Dub / 3 Analog / 4 Shimmer
+        // [2026-07-15 02:30] the SYNC/TRAIL/DUCK/CHARACTER batch (user-designed):
+        float delayBarN  = 8.0f;        // synced Time = one bar / N (echoes-per-bar; fader stops 1..21,
+                                        // float so old beat-division projects migrate EXACTLY)
+        int   delayTrail = 0;           // MAX TRAIL: 0 = unlimited (default = old behaviour); 1..21 =
+                                        // hard echo-count cap (independent of Feedback - loud abrupt trails)
+        float delayDuck  = 0.0f;        // DUCK: echoes tuck under the dry mix, bloom in the gaps (0 = off)
+        float delayChar  = 0.5f;        // CHARACTER: depth of the mode's flavour; 0.5 = the original
+                                        // constants = bit-identical (Tape darkening / Dub drive / Analog
+                                        // wobble / Shimmer octave blend; Digital = inert)
         float reverbPreDelay = 0.0f;    // 0..1 -> 0..120 ms gap before the reverb tail (drums love this)
         int   reverbMode = 1;           // 0 Room / 1 Hall (= the original voicing, default) / 2 Plate / 3 Shimmer
         float reverbWidth    = 1.0f;    // reverb stereo width (0 = mono/narrow tail, 1 = full wide)
         // BUS B (v1.3.9): a SECOND shared reverb + delay - e.g. A = Hall for keys, B = tight Room
         // for drums. Channels pick their bus per channel (revBus/delBus, right-click the send fader).
         // Same param set as A; edited via the A/B selector in MASTER.
-        float reverbRoomB = 0.5f, reverbDampB = 0.5f, reverbWetB = 0.4f;
+        float reverbRoomB = 0.5f, reverbDampB = 0.5f, reverbWetB = 0.5f;
         float reverbPreDelayB = 0.0f; int reverbModeB = 0;   // B defaults to ROOM (the drum bus)
         float reverbWidthB = 1.0f;
-        float delayTimeB = 0.375f, delayFeedbackB = 0.3f, delayWetB = 0.3f;
+        float delayTimeB = 0.375f, delayFeedbackB = 0.3f, delayWetB = 0.5f;
         bool  delaySyncB = false; int delayDivisionB = 4; bool delayPingPongB = false;
         int   delayModeB = 0;
+        float delayBarNB = 8.0f; int delayTrailB = 0; float delayDuckB = 0.0f; float delayCharB = 0.5f;
+        // [2026-07-15 02:30] REVERB sync + gate (user-designed): Sync ON = the Decay fader is a
+        // musical TAIL LENGTH in bars (feedback computed live from size/mode/tempo) and Pre is a
+        // bar fraction. GATE = the 80s gated-verb chop: the wet return cuts dead a bar-fraction
+        // after each hit (0 = off; loudness stays decoupled from length, like the delay Trail).
+        bool  reverbSync = false;  float reverbDecBars = 1.0f;  float reverbPreBars = 0.03125f;
+        float reverbGate = 0.0f;   // 0 = off, else the gate time as a fraction of a bar (1/32..1)
+        bool  reverbSyncB = false; float reverbDecBarsB = 1.0f; float reverbPreBarsB = 0.03125f;
+        float reverbGateB = 0.0f;
         float volume = 0.9f;
         bool  mono   = false;
         float limit  = 0.003f;          // 0 = limiter off; default ~-0.1 dB ceiling (light/transparent)

@@ -39,6 +39,43 @@ public:
         std::fill(shBuf.begin(), shBuf.end(), 0.0f);
     }
 
+    // [2026-07-15 02:30] TAIL-LENGTH MATHS, shared by the UI's "~2.1 s" read-out and the synced
+    // Decay inverse (Decay-in-bars). Broadband estimate: the tank's mean loop time x how many
+    // passes until -60 dB at the mode-adjusted feedback gain. Damping makes highs die sooner, so
+    // real tails read slightly shorter - always display with a "~" (honest estimate, not a lie).
+    static float modeGain(float decay, int mode)
+    {
+        float g = 0.5f + 0.43f * juce::jlimit(0.0f, 1.0f, decay);
+        if (mode == 0) g *= 0.90f;
+        else if (mode == 2) g = juce::jmin(0.95f, g * 1.02f);
+        else if (mode == 3) g = juce::jmin(0.95f, g * 1.04f);
+        return g;
+    }
+    static float modeScale(float roomSize, int mode)
+    {
+        float s = 0.6f + 0.9f * juce::jlimit(0.0f, 1.0f, roomSize);
+        if (mode == 0) s *= 0.32f; else if (mode == 2) s *= 0.7f;
+        return s;
+    }
+    static float meanLoopSec(float roomSize, int mode, double sampleRate)
+    {   // mean of the 8 base primes (48 kHz domain) = 2162 samples; scaled like the process() read
+        return 2162.25f / 48000.0f * modeScale(roomSize, mode) * (float) (sampleRate > 0 ? 1.0 : 1.0);
+    }   // (base[] already tracks sr, so the SECONDS figure is sr-independent)
+    static float estimateT60(float decay, float roomSize, int mode)
+    {
+        const float g = juce::jlimit(0.01f, 0.98f, modeGain(decay, mode));
+        return meanLoopSec(roomSize, mode, 48000.0) * (-3.0f / std::log10(g));   // -60 dB = 3 decades
+    }
+    static float decayForT60(float t60, float roomSize, int mode)
+    {   // inverse of estimateT60: the DECAY value whose tail lasts ~t60 seconds in this room/mode
+        const float loop = meanLoopSec(roomSize, mode, 48000.0);
+        float g = std::pow(10.0f, -3.0f * loop / juce::jmax(0.05f, t60));
+        if (mode == 0) g /= 0.90f;                       // undo the mode multiplier (caps make the
+        else if (mode == 2) g /= 1.02f;                  //  inverse approximate near the top - fine,
+        else if (mode == 3) g /= 1.04f;                  //  the whole figure is a ~)
+        return juce::jlimit(0.0f, 1.0f, (g - 0.5f) / 0.43f);
+    }
+
     // Processes `n` samples IN-PLACE allowed (in==out). roomSize/decay/damp/width are 0..1.
     // mode: 0 Room / 1 Hall (= the ORIGINAL voicing, bit-identical) / 2 Plate / 3 Shimmer
     // (Hall + an octave-up pitch shifter in the feedback = the glowing ambient halo).

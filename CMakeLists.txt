@@ -1,7 +1,7 @@
 # BASAMAK - a free, open-source drum & sample step-sequencer plugin (VST3 / AU / Standalone).
 # Copyright (C) 2026 Oguzhan Yazici. Licensed under the GNU AGPL v3 (see LICENSE).
 cmake_minimum_required(VERSION 3.22)
-project(BASAMAK VERSION 1.4.3)   # [2026-07-15 01:15] 1.4.3 = delay modes + real ping-pong, M/S/OV value-set, AHDSR readout, Launchkey/Launchpad factory map
+project(BASAMAK VERSION 1.4.4)   # [2026-07-15 02:30] 1.4.4 = delay sync per-bar + Trail/Duck/Character, reverb sync + Gate, wet pills, master tooltips
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

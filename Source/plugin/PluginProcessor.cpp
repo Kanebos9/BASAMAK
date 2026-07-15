@@ -162,10 +162,19 @@ void DrumSequencerProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     reverbSendBaseB.setSize(2, juce::jmax(1, samplesPerBlock));
     delaySendBaseB.setSize (2, juce::jmax(1, samplesPerBlock));
     reverbSendOSB.clear(); delaySendOSB.clear(); reverbSendBaseB.clear(); delaySendBaseB.clear();
-    reverbPreBuffer.setSize(2, (int)(sampleRate * 0.130) + 2);   // up to ~120 ms pre-delay
+    // [2026-07-15 02:30] pre-delay line grew 130 ms -> 1.25 s: synced Pre reaches 1/8 bar, which is
+    // 750 ms at 40 BPM. Free (unsynced) Pre stays capped at 120 ms as before.
+    reverbPreBuffer.setSize(2, (int)(sampleRate * 1.25) + 2);
     reverbPreBuffer.clear(); reverbPreHead = 0;
-    reverbPreBufferB.setSize(2, (int)(sampleRate * 0.130) + 2);
+    reverbPreBufferB.setSize(2, (int)(sampleRate * 1.25) + 2);
     reverbPreBufferB.clear(); reverbPreHeadB = 0;
+    // Gate / Duck / Trail state [2026-07-15 02:30]
+    revGateTrig.assign((size_t) juce::jmax(8192, samplesPerBlock), 0);
+    revGateHold = revGateHoldB = 0; revGateSm = revGateSmB = 0.0f;
+    duckKeyEnv.assign((size_t) juce::jmax(8192, samplesPerBlock), 0.0f);
+    duckKeyState = 0.0f;
+    delayAgeBuf.setSize(2, delayBuffer.getNumSamples());  delayAgeBuf.clear();
+    delayAgeBufB.setSize(2, delayBufferB.getNumSamples()); delayAgeBufB.clear();
     delayWriteHead = 0;
     limiterGain = 1.0f;
     masterGlueEnv = 0.0f;
@@ -1067,6 +1076,25 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                 d[i] = std::isfinite(d[i]) ? juce::jlimit(-64.0f, 64.0f, d[i]) : 0.0f;  // only block NaN/absurd into the FX
         }
 
+    //-- [2026-07-15 02:30] DUCK KEY: the DRY mix level, captured BEFORE any wet return is added
+    //   (audio holds only the channels here). Audio-driven on purpose: steps, piano roll, live
+    //   keys, arp - anything audible ducks the echoes, no per-trigger wiring. ~10 ms attack /
+    //   ~200 ms release; both delay buses read the same key.
+    {
+        const float aK = 1.0f - std::exp(-1.0f / (0.010f * (float) currentSampleRate));
+        const float rK = 1.0f - std::exp(-1.0f / (0.200f * (float) currentSampleRate));
+        const float* kL = audio.getReadPointer(0);
+        const float* kR = audio.getNumChannels() > 1 ? audio.getReadPointer(1) : kL;
+        const int n = juce::jmin(numSamples, (int) duckKeyEnv.size());
+        for (int i = 0; i < n; ++i)
+        {
+            const float v = 0.5f * (std::abs(kL[i]) + std::abs(kR[i]));
+            duckKeyState += (v > duckKeyState ? aK : rK) * (v - duckKeyState);
+            if (! std::isfinite(duckKeyState)) duckKeyState = 0.0f;
+            duckKeyEnv[(size_t) i] = juce::jlimit(0.0f, 1.0f, duckKeyState * 2.5f);
+        }
+    }
+
     //-- Process shared reverb + delay (bus A, then bus B - each with its own params + state)
     processDelay (audio, delaySendBase,   numSamples, false);
     processDelay (audio, delaySendBaseB,  numSamples, true);
@@ -1475,10 +1503,28 @@ void DrumSequencerProcessor::processReverb(juce::AudioBuffer<float>& audio, juce
     float* sL = send.getWritePointer(0);
     float* sR = send.getWritePointer(1);
 
-    // Pre-delay: push a gap (0..120 ms) before the tail so the dry transient is heard first (drums).
+    // [2026-07-15 02:30] REVERB SYNC: when on, Decay = a musical tail length in BARS (the feedback
+    // is computed live from size/mode/tempo via the shared T60 estimate - it auto-adapts when any
+    // of them change) and Pre = a fraction of a bar. GATE (independent of Sync): the wet return
+    // cuts dead a bar-fraction after each hit - the 80s gated verb; loudness stays decoupled.
+    const bool  pSyncR = busB ? mfx.reverbSyncB : mfx.reverbSync;
+    const float pGate  = busB ? mfx.reverbGateB : mfx.reverbGate;
+    const double barS  = barSeconds();
+    double preSec = pPre * 0.120;                                        // free: 0..120 ms as always
+    float  decay01 = 1.0f - juce::jlimit(0.0f, 1.0f, pDamp);             // free: the classic knob
+    if (pSyncR)
+    {
+        preSec  = juce::jlimit(0.0, 1.2, (double) (busB ? mfx.reverbPreBarsB : mfx.reverbPreBars) * barS);
+        decay01 = FDNReverb::decayForT60((float) ((busB ? mfx.reverbDecBarsB : mfx.reverbDecBars) * barS),
+                                         pRoom, juce::jlimit(0, 3, pMode));
+    }
+
+    // Pre-delay gap before the tail (the dry transient is heard first - drums love it), and the
+    // GATE TRIGGER capture: a hit entering the reverb (post-pre-delay = when its tail starts).
+    const int gateSamps = pGate > 0.001f ? (int) (juce::jlimit(0.0f, 1.0f, pGate) * barS * currentSampleRate) : 0;
     {
         const int preMax   = preB.getNumSamples();
-        const int preSamps = juce::jlimit(0, preMax - 1, (int)(pPre * 0.120 * currentSampleRate));
+        const int preSamps = juce::jlimit(0, preMax - 1, (int)(preSec * currentSampleRate));
         float* pbL = preB.getWritePointer(0);
         float* pbR = preB.getWritePointer(1);
         for (int i = 0; i < numSamples; ++i)
@@ -1488,23 +1534,45 @@ void DrumSequencerProcessor::processReverb(juce::AudioBuffer<float>& audio, juce
             const float inL = sL[i], inR = sR[i];
             if (preSamps > 0) { sL[i] = pbL[rd]; sR[i] = pbR[rd]; }
             pbL[wr] = inL; pbR[wr] = inR;
+            if (gateSamps > 0 && i < (int) revGateTrig.size())
+                revGateTrig[(size_t) i] = (std::abs(sL[i]) + std::abs(sR[i]) > 0.008f) ? 1 : 0;
         }
         preHead = (preHead + numSamples) % preMax;
     }
 
-    // Modulated FDN reverb (in place: send -> wet tail). "Decay" knob = 1 - damp (more = longer).
-    const float decay01 = 1.0f - juce::jlimit(0.0f, 1.0f, pDamp);
+    // Modulated FDN reverb (in place: send -> wet tail). Free mode: "Decay" knob = 1 - damp.
     f.process(sL, sR, sL, sR, numSamples,
               juce::jlimit(0.0f, 1.0f, pRoom),     // Size -> room
-              decay01,                             // Decay -> feedback time
+              decay01,                             // Decay -> feedback time (knob or bars-derived)
               0.35f,                               // damping LP (smooth, musical)
               juce::jlimit(0.0f, 1.0f, pWidth),    // Width
               juce::jlimit(0, 3, pMode));          // Room/Hall/Plate/Shimmer voicing
 
     // MAKE-UP: the FDN attenuates ~12 dB internally - bring the wet up to a usable range.
     const float wet = juce::jlimit(0.0f, 1.0f, pWet) * 5.0f;
-    audio.addFrom(0, 0, sL, numSamples, wet);   // add the wet tail to Main (scaled by Wet)
-    audio.addFrom(1, 0, sR, numSamples, wet);
+    if (gateSamps > 0)
+    {   // GATED return: each hit re-opens the gate for gateSamps; it closes with a ~5 ms fade
+        // (a hard sample-cut clicks - the anti-click ethos). Sustained sends just hold it open.
+        int&   hold = busB ? revGateHoldB : revGateHold;
+        float& gSm  = busB ? revGateSmB   : revGateSm;
+        const float fadeK = 1.0f - std::exp(-1.0f / (0.005f * (float) currentSampleRate));
+        float* outL = audio.getWritePointer(0);
+        float* outR = audio.getWritePointer(1);
+        for (int i = 0; i < numSamples; ++i)
+        {
+            if (i < (int) revGateTrig.size() && revGateTrig[(size_t) i]) hold = gateSamps;
+            const float target = hold > 0 ? 1.0f : 0.0f;
+            if (hold > 0) --hold;
+            gSm += (target - gSm) * fadeK;
+            outL[i] += sL[i] * wet * gSm;
+            outR[i] += sR[i] * wet * gSm;
+        }
+    }
+    else
+    {
+        audio.addFrom(0, 0, sL, numSamples, wet);   // add the wet tail to Main (scaled by Wet)
+        audio.addFrom(1, 0, sR, numSamples, wet);
+    }
 }
 
 void DrumSequencerProcessor::processDelay(juce::AudioBuffer<float>& audio, juce::AudioBuffer<float>& send, int numSamples, bool busB)
@@ -1525,16 +1593,18 @@ void DrumSequencerProcessor::processDelay(juce::AudioBuffer<float>& audio, juce:
     float* fbHp = busB ? delayFbHpB : delayFbHp;
     const int delayLen = dBuf.getNumSamples();
 
-    // Sync mode: Time selects a note division (in beats) relative to host tempo.
-    double delaySecs = pTime;
-    if (pSync)
-    {
-        static const double divBeats[] = { 0.25, 1.0/3.0, 0.5, 0.75, 1.0, 1.5, 2.0 }; // 1/16,1/8T,1/8,1/8.,1/4,1/4.,1/2
-        const int n = (int) (sizeof(divBeats) / sizeof(divBeats[0]));
-        const double beats = divBeats[juce::jlimit(0, n - 1, pDiv)];
-        const double bpm = currentBpm > 1.0 ? currentBpm : 120.0;
-        delaySecs = beats * 60.0 / bpm;
-    }
+    // [2026-07-15 02:30] Sync = ECHOES PER BAR now: delay time = one bar / N (fader stops 1..21,
+    // N kept float so old beat-division projects migrate exactly). Bar length comes from the
+    // active clock - host tempo+signature when DAW-synced, the toolbar values standalone - so odd
+    // grids (7/11/13 steps) finally have matching echoes. The old beat-division table is GONE
+    // (delayDivision persists only to migrate old files); this also killed the "first half of the
+    // fader stays 1/16" bug - that was the seconds-curve being crushed into 7 uneven buckets.
+    juce::ignoreUnused(pDiv);
+    const float pBarN  = juce::jlimit(1.0f, 21.0f, busB ? mfx.delayBarNB : mfx.delayBarN);
+    const int   pTrail = juce::jlimit(0, 21, busB ? mfx.delayTrailB : mfx.delayTrail);
+    const float pDuck  = juce::jlimit(0.0f, 1.0f, busB ? mfx.delayDuckB : mfx.delayDuck);
+    const float pChar  = juce::jlimit(0.0f, 1.0f, busB ? mfx.delayCharB : mfx.delayChar);
+    double delaySecs = pSync ? barSeconds() / (double) pBarN : pTime;
     const int delaySamples = juce::jlimit(1, delayLen - 1, (int)(delaySecs * currentSampleRate));
     const float feedback = juce::jlimit(0.0f, 0.98f, pFb);
 
@@ -1552,19 +1622,25 @@ void DrumSequencerProcessor::processDelay(juce::AudioBuffer<float>& audio, juce:
         // repeats sat at 30%/9% level ("all modes sound same", user, correct). Modes 1-4 now
         // voice EVERY repeat (character applied at the READ, feeding output + loop alike);
         // TAPE alone keeps the original feedback-only topology = bit-identical.
+        // [2026-07-15 02:30] CHARACTER fader = the depth of each mode's flavour; 0.5 = the
+        // constants below unchanged = bit-identical (Tape darkening / Dub drive / Analog wobble /
+        // Shimmer octave blend; Digital has no flavour = the fader is inert/dimmed).
         case 1: lpHz = 16000.0f; hpHz = 25.0f;  break;    // Digital: ~full-band repeats
         case 2: lpHz = 1200.0f;  hpHz = 200.0f; break;    // Dub: instantly dark (+ saturation below)
         case 3: lpHz = 2500.0f;  hpHz = 120.0f; break;    // Analog/BBD: dark (+ wobble below)
         case 4: lpHz = 6500.0f;  hpHz = 180.0f; break;    // Shimmer: brighter so the octaves survive
         default: break;
     }
+    if (pMode == 0) lpHz = 4000.0f * std::pow(2.0f, (0.5f - pChar) * 2.0f);   // Tape char: repeat darkening (8k..2k)
     const float sr = (float) currentSampleRate;
     const float lpCoef = 1.0f - std::exp(-2.0f * juce::MathConstants<float>::pi * lpHz / sr);
     const float hpCoef = 1.0f - std::exp(-2.0f * juce::MathConstants<float>::pi * hpHz / sr);
-    // Analog wobble: ~1.3 Hz, up to ~1.8 ms extra delay = an audible (~15 cent) BBD wow.
+    const float dubK   = pChar * 6.0f;                                        // Dub char: drive (0.5 -> 3 = original)
+    const float shBlend = juce::jmin(0.95f, 1.2f * pChar);                    // Shimmer char: octave blend (0.5 -> 0.6)
+    // Analog wobble: ~1.3 Hz; char scales the depth (0.5 -> ~1.8 ms = ~15 cents = original).
     float& wobPh = busB ? delayWobPhB : delayWobPh;
     const float wobInc   = juce::MathConstants<float>::twoPi * 1.3f / sr;
-    const float wobDepth = 0.0018f * sr;
+    const float wobDepth = 0.0036f * sr * pChar;
     // Shimmer: one octave-up shifter per channel of this bus (state persists across blocks; the
     // ring is only touched in Shimmer mode - it re-enters silent because the fed signal restarts it).
     auto shimmerStep = [&](int c, float f) -> float
@@ -1587,7 +1663,7 @@ void DrumSequencerProcessor::processDelay(juce::AudioBuffer<float>& audio, juce:
             out += ring[(size_t) rp2] * win * win;
         }
         w = (w + 1) % shN;
-        return f + 0.6f * (out - f);   // energy-neutral crossfade (the reverb-shimmer lesson: never ADD)
+        return f + shBlend * (out - f);   // energy-neutral crossfade (the reverb-shimmer lesson: never ADD)
     };
 
     // Process L+R together so Ping-Pong can cross-feed the feedback (L's tail feeds R's line
@@ -1601,7 +1677,17 @@ void DrumSequencerProcessor::processDelay(juce::AudioBuffer<float>& audio, juce:
     const float* inR = send.getReadPointer(stereo ? 1 : 0);
     float* dL   = dBuf.getWritePointer(0);
     float* dR   = dBuf.getWritePointer(juce::jmin(1, nDly - 1));
-    const float wet = juce::jlimit(0.0f, 1.0f, pWet2);   // delay return level (MASTER "Wet" knob)
+    const float wet = juce::jlimit(0.0f, 1.0f, pWet2);   // delay return level (the header Wet pill)
+    // [2026-07-15 02:30] MAX TRAIL: a parallel AGE line remembers which echo number each sample of
+    // the delay line is (dry = 1, each feedback pass +1). An echo at the cap still SOUNDS but is
+    // never fed back = a hard echo count, independent of Feedback (loud trails that end abruptly).
+    // When new dry overlaps an old echo, the LOUDER one names the age (a fresh hit deserves a
+    // fresh trail). Ages are written even at Trail = unlimited so engaging the cap is seamless.
+    juce::AudioBuffer<float>& aBuf = busB ? delayAgeBufB : delayAgeBuf;
+    float* aL = aBuf.getWritePointer(0);
+    float* aR = aBuf.getWritePointer(juce::jmin(1, aBuf.getNumChannels() - 1));
+    const float* duckKey = duckKeyEnv.data();
+    const int    duckN   = (int) duckKeyEnv.size();
 
     for (int i = 0; i < numSamples; ++i)
     {
@@ -1629,19 +1715,26 @@ void DrumSequencerProcessor::processDelay(juce::AudioBuffer<float>& audio, juce:
         fbLp[1] += lpCoef * (delR - fbLp[1]);
         fbHp[1] += hpCoef * (fbLp[1] - fbHp[1]);
         float fbR = fbLp[1] - fbHp[1];
-        if (pMode == 2)
-        {   // Dub: tanh smear per pass - x3 into the curve, /3 out = unity small-signal gain
+        if (pMode == 2 && dubK > 0.05f)
+        {   // Dub: tanh smear per pass - xK into the curve, /K out = unity small-signal gain
             // (the loop can't self-oscillate) but real audible compression at normal echo levels
-            fbL = std::tanh(fbL * 3.0f) * (1.0f / 3.0f);
-            fbR = std::tanh(fbR * 3.0f) * (1.0f / 3.0f);
+            fbL = std::tanh(fbL * dubK) * (1.0f / dubK);
+            fbR = std::tanh(fbR * dubK) * (1.0f / dubK);
         }
         else if (pMode == 4) { fbL = shimmerStep(0, fbL); fbR = shimmerStep(1, fbR); }   // octave-up per pass
+
+        // MAX TRAIL: an echo at the cap still sounds below, but its feedback is muted.
+        const float ageL = aL[readPos], ageR = aR[readPos];
+        const float fbLW = (pTrail > 0 && ageL >= (float) pTrail) ? 0.0f : fbL;
+        const float fbRW = (pTrail > 0 && ageR >= (float) pTrail) ? 0.0f : fbR;
 
         // Echoes return to Main. TAPE = the original topology (full-band return, only the loop is
         // filtered = bit-identical); every other mode returns the CHARACTER signal, so the FIRST
         // repeat already carries the mode's voice. [2026-07-15 01:30]
-        outL[i] += (pMode == 0 ? delL : fbL) * wet;
-        if (stereo) outR[i] += (pMode == 0 ? delR : fbR) * wet;
+        // DUCK [2026-07-15 02:30]: the return tucks under the dry mix (key captured pre-returns).
+        const float dg = 1.0f - pDuck * (i < duckN ? duckKey[i] : 0.0f);
+        outL[i] += (pMode == 0 ? delL : fbL) * wet * dg;
+        if (stereo) outR[i] += (pMode == 0 ? delR : fbR) * wet * dg;
 
         // [2026-07-15 00:40] REAL ping-pong: mono-sum the input into the LEFT line ONLY; the
         // cross-feed then carries each repeat to the opposite side (echo 1 L, echo 2 R, ...).
@@ -1649,9 +1742,16 @@ void DrumSequencerProcessor::processDelay(juce::AudioBuffer<float>& audio, juce:
         // centred source (both lines identical) that was bit-identical to the normal delay =
         // "ping doesn't sound stereo" (user, correct).
         if (ping) { const float m = 0.5f * (dryL + dryR);
-                    dL[writePos] = m + fbR * feedback;
-                    dR[writePos] =     fbL * feedback; }
-        else      { dL[writePos] = dryL + fbL * feedback; dR[writePos] = dryR + fbR * feedback; }
+                    dL[writePos] = m + fbRW * feedback;
+                    dR[writePos] =     fbLW * feedback;
+                    aL[writePos] = std::abs(m) > std::abs(fbRW * feedback)
+                                       ? 1.0f : juce::jmin(999.0f, ageR + 1.0f);
+                    aR[writePos] = juce::jmin(999.0f, ageL + 1.0f); }
+        else      { dL[writePos] = dryL + fbLW * feedback; dR[writePos] = dryR + fbRW * feedback;
+                    aL[writePos] = std::abs(dryL) > std::abs(fbLW * feedback)
+                                       ? 1.0f : juce::jmin(999.0f, ageL + 1.0f);
+                    aR[writePos] = std::abs(dryR) > std::abs(fbRW * feedback)
+                                       ? 1.0f : juce::jmin(999.0f, ageR + 1.0f); }
     }
     head = (head + numSamples) % delayLen;
 }
@@ -2372,6 +2472,23 @@ juce::ValueTree DrumSequencerProcessor::captureStateTree()
         patState.setProperty("delSync", m.delaySync,     nullptr);
         patState.setProperty("delDiv",  m.delayDivision, nullptr);
         patState.setProperty("delPP",   m.delayPingPong, nullptr);
+        // [2026-07-15 02:30] sync/trail/duck/character + reverb sync/gate batch
+        patState.setProperty("delBarN",  m.delayBarN,   nullptr);
+        patState.setProperty("delTrail", m.delayTrail,  nullptr);
+        patState.setProperty("delDuck",  m.delayDuck,   nullptr);
+        patState.setProperty("delChar",  m.delayChar,   nullptr);
+        patState.setProperty("dBarNB",   m.delayBarNB,  nullptr);
+        patState.setProperty("dTrailB",  m.delayTrailB, nullptr);
+        patState.setProperty("dDuckB",   m.delayDuckB,  nullptr);
+        patState.setProperty("dCharB",   m.delayCharB,  nullptr);
+        patState.setProperty("revSync",  m.reverbSync,     nullptr);
+        patState.setProperty("revDecBar", m.reverbDecBars, nullptr);
+        patState.setProperty("revPreBar", m.reverbPreBars, nullptr);
+        patState.setProperty("revGate",  m.reverbGate,     nullptr);
+        patState.setProperty("rSyncB",   m.reverbSyncB,    nullptr);
+        patState.setProperty("rDecBarB", m.reverbDecBarsB, nullptr);
+        patState.setProperty("rPreBarB", m.reverbPreBarsB, nullptr);
+        patState.setProperty("rGateB",   m.reverbGateB,    nullptr);
         patState.setProperty("mVol",    m.volume,        nullptr);
         patState.setProperty("mMono",   m.mono,          nullptr);
         patState.setProperty("mLimit",  m.limit,         nullptr);
@@ -2531,6 +2648,29 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
             m.delaySync     = (bool) child.getProperty("delSync", false);
             m.delayDivision = (int)  child.getProperty("delDiv",  4);
             m.delayPingPong = (bool) child.getProperty("delPP",   false);
+            {   // [2026-07-15 02:30] per-bar sync MIGRATION: old files stored a beat-division
+                // index - convert to echoes-per-bar (4/4 beats) EXACTLY, so an old synced
+                // project keeps its timing (1/16 -> 16/bar, 1/8T -> 12, dotted -> 5.33...).
+                static const double divB[] = { 0.25, 1.0/3.0, 0.5, 0.75, 1.0, 1.5, 2.0 };
+                const float defN  = (float) (4.0 / divB[juce::jlimit(0, 6, m.delayDivision)]);
+                const float defNB = (float) (4.0 / divB[juce::jlimit(0, 6, m.delayDivisionB)]);
+                m.delayBarN  = juce::jlimit(1.0f, 21.0f, (float) child.getProperty("delBarN", defN));
+                m.delayBarNB = juce::jlimit(1.0f, 21.0f, (float) child.getProperty("dBarNB", defNB));
+            }
+            m.delayTrail  = juce::jlimit(0, 21, (int) child.getProperty("delTrail", 0));
+            m.delayDuck   = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("delDuck", 0.0f));
+            m.delayChar   = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("delChar", 0.5f));
+            m.delayTrailB = juce::jlimit(0, 21, (int) child.getProperty("dTrailB", 0));
+            m.delayDuckB  = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("dDuckB", 0.0f));
+            m.delayCharB  = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("dCharB", 0.5f));
+            m.reverbSync     = (bool) child.getProperty("revSync", false);
+            m.reverbDecBars  = juce::jlimit(0.25f, 8.0f, (float) child.getProperty("revDecBar", 1.0f));
+            m.reverbPreBars  = juce::jlimit(0.0f, 0.125f, (float) child.getProperty("revPreBar", 0.03125f));
+            m.reverbGate     = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("revGate", 0.0f));
+            m.reverbSyncB    = (bool) child.getProperty("rSyncB", false);
+            m.reverbDecBarsB = juce::jlimit(0.25f, 8.0f, (float) child.getProperty("rDecBarB", 1.0f));
+            m.reverbPreBarsB = juce::jlimit(0.0f, 0.125f, (float) child.getProperty("rPreBarB", 0.03125f));
+            m.reverbGateB    = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("rGateB", 0.0f));
             m.volume        = (float)child.getProperty("mVol",    0.9f);
             m.mono          = (bool) child.getProperty("mMono",   false);
             m.limit         = (float)child.getProperty("mLimit",  0.003f);

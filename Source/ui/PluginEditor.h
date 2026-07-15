@@ -2868,6 +2868,20 @@ private:
     // knobs above - they reuse each knob's range/skew/format/default/MIDI, so no master logic changed.
     static constexpr int NMVF = 12;
     SlotDragFader    masterVF[NMVF];
+    // [2026-07-15 02:30] the SYNC/TRAIL/DUCK/CHARACTER batch (user-designed): DIRECT faders (no
+    // hidden-knob proxy) writing MasterFX bus-aware, all patterns. The three "synced variant"
+    // faders share bounds with their free proxies; refreshMasterSyncFaders() picks which shows.
+    SlotDragFader    delayBarNF;            // synced Time = echoes-per-bar 1..21 (replaces masterVF[9] while Sync)
+    SlotDragFader    delayTrailF;           // MAX TRAIL: hard echo-count cap (top = unlimited = default)
+    SlotDragFader    delayDuckF;            // DUCK: echoes tuck under the dry mix, bloom in gaps
+    SlotDragFader    delayCharF;            // CHARACTER: depth of the delay mode's flavour (inert on Digital)
+    SlotDragFader    revDecBarsF;           // synced Decay = tail length in bars (replaces masterVF[5] while Sync)
+    SlotDragFader    revPreBarsF;           // synced Pre = bar fraction (replaces masterVF[7] while Sync)
+    SlotDragFader    revGateF;              // GATE: the 80s gated-verb chop (bottom = off)
+    juce::Label      lblDelTrail, lblDelDuck, lblDelChar, lblRevGate, lblRevSyncT;
+    ToggleSwitch     swReverbSync;          // reverb Sync: Decay-in-bars + Pre-in-fractions
+    int              masterEstTick = 0;     // throttle for the live "~2.1 s" decay estimate repaint
+    void refreshMasterSyncFaders();
     juce::Label      hdrModulation;         // "MODULATION" group header (holds the MOD/LFO visual for now)
 
     // (EQ knobs removed - the EQ is drawn/dragged on freqDisplay now.)

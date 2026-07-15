@@ -327,7 +327,26 @@ private:
     juce::AudioBuffer<float> reverbSendBase, delaySendBase; // down-sampled to host rate
     juce::AudioBuffer<float> reverbSendOSB, delaySendOSB;   // BUS B accumulation (OS rate)
     juce::AudioBuffer<float> reverbSendBaseB, delaySendBaseB;
-    juce::AudioBuffer<float> reverbPreBuffer;               // reverb pre-delay line (0..120 ms)
+    // [2026-07-15 02:30] one bar in seconds from the CURRENT clock (host tempo+sig when DAW-synced,
+    // the toolbar values standalone) - the sync reference for delay Per-bar / reverb bars / gate.
+    double barSeconds() const
+    {
+        const double bpm   = currentBpm > 1.0 ? (double) currentBpm : 120.0;
+        const double beats = (double) juce::jmax(1, currentTimeSigNum) * 4.0 / (double) juce::jmax(1, currentTimeSigDen);
+        return beats * 60.0 / bpm;
+    }
+    // Reverb GATE (per bus): samples the gate stays open after a hit + the smoothed gain (5 ms fades).
+    int   revGateHold = 0,  revGateHoldB = 0;
+    float revGateSm   = 0.0f, revGateSmB  = 0.0f;
+    std::vector<uint8_t> revGateTrig;                       // per-sample "a hit fed the reverb" scratch
+    // Delay DUCK: the dry-mix key envelope (captured in processBlock BEFORE any wet returns) + the
+    // per-bus smoothed duck gain.
+    std::vector<float> duckKeyEnv;                          // per-sample key level (attack ~10 ms / release ~200 ms)
+    float duckKeyState = 0.0f;
+    // Delay TRAIL: a parallel "echo age" line per bus (age 1 = first repeat; the feedback write
+    // stores age+1, and a repeat older than the cap is not fed back = hard echo count).
+    juce::AudioBuffer<float> delayAgeBuf, delayAgeBufB;
+    juce::AudioBuffer<float> reverbPreBuffer;               // reverb pre-delay line (0..120 ms free / up to 1/8 bar synced)
     int reverbPreHead = 0;
     juce::AudioBuffer<float> reverbPreBufferB;              // bus B pre-delay line
     int reverbPreHeadB = 0;
