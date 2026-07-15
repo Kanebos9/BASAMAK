@@ -1542,7 +1542,7 @@ static void nNeonPad(DC& c) {       // a glowing WALL: every quiet harmonic + th
     s.filterType = DC::LowPass; s.filterCutoff = 1400.0f; s.filterReso = 1.1f;
     s.lfoRate[0] = 0.15f; s.lfoAmt[0] = 0.45f; s.lfoFree[0] = true;   // slow free filter breath...
     lfoRoute(s, 0, DC::MTFilt1Cut);                                   // ...which the OTT then INFLATES:
-    chFx(c, DC::ChFxOtt, 0.9f, 0.5f);                                 // the dark half of the sweep comes back UP
+    chFx(c, DC::ChFxOtt, 0.75f, 0.5f);                                // the dark half of the sweep comes back UP (0.75 after the 16:00 re-tune)
     c.reverbSend = 0.25f; c.volume = 0.5f;
 }
 static void nNeonClap(DC& c) {      // the crack ducks, then the QUIET room tail is sucked up = the OTT bloom
@@ -1553,7 +1553,7 @@ static void nNeonClap(DC& c) {      // the crack ducks, then the QUIET room tail
     auto& r = mkSlot2(c, DC::SrcNoise, 0.82f);                // slot 2 = a LONG, very quiet pink room
     r.noiseType = 1; r.atk = 0.004f; r.dec = 1.1f;
     r.filterType = DC::HighPass; r.filterCutoff = 300.0f;
-    chFx(c, DC::ChFxOtt, 0.95f, 0.35f);                       // fast upward bands resurrect the tail
+    chFx(c, DC::ChFxOtt, 0.85f, 0.6f);                        // fast upward bands resurrect the tail (re-balanced after the 16:00 re-tune)
     c.volume = 0.8f;
 }
 static void nPhaseKeys(DC& c) {     // swirling electric piano: slow LFO -> Phaser (Channel), a touch of chorus

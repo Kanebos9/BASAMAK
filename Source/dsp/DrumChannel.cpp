@@ -3990,7 +3990,12 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     // and ~2.5 kHz (phase-coherent one-pole splits); each band's level is dragged toward
                     // a target from BOTH directions (quiet up, loud down), gains capped +-14 dB, and the
                     // whole effect is blended by Amount (the classic OTT "Depth"). CHARACTER = speed.
-                    const float spd  = std::pow(4.0f, 1.0f - 2.0f * ch1);                 // 0.25x..4x time scale
+                    // [2026-07-15 16:00] RE-TUNED (user: "no difference at all" - round 1 was far
+                    // too polite): the pull toward the target is near-TOTAL now (exponents 0.7/0.9,
+                    // was 0.55/0.45), the gain window is +-20 dB (was +-14) and the follower works
+                    // 40 dB deeper into the quiet - the Xfer-style "everything equals the target"
+                    // wall. ModMatrixTest [23] locks the audibility (tail x4+ at full depth).
+                    const float spd  = std::pow(4.0f, 1.0f - 2.0f * ch1);                 // time scale (fader up = faster)
                     const float att  = 1.0f - std::exp(-1.0f / (0.004f * spd * (float) sr));
                     const float rel  = 1.0f - std::exp(-1.0f / (0.090f * spd * (float) sr));
                     const float kLo  = 1.0f - std::exp(-2.0f * (float) kPi * 120.0f  / (float) sr);
@@ -4016,9 +4021,9 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             const float lvl = juce::jmax(std::abs(bl[b2]), std::abs(br[b2]));
                             env += (lvl > env ? att : rel) * (lvl - env);
                             float g = 1.0f;
-                            if (env > 1.0e-4f)
-                                g = std::pow(tgt3[b2] / env, env > tgt3[b2] ? 0.55f : 0.45f);   // down / UP compression
-                            g = juce::jlimit(0.2f, 5.0f, g);                               // +-14 dB cap
+                            if (env > 1.0e-6f)
+                                g = std::pow(tgt3[b2] / env, env > tgt3[b2] ? 0.7f : 0.9f);    // down / UP: near-total pull
+                            g = juce::jlimit(0.1f, 10.0f, g);                              // +-20 dB window
                             g = 1.0f + (g - 1.0f) * amt;                                   // Depth blend
                             oL += bl[b2] * g; oR += br[b2] * g;
                         }

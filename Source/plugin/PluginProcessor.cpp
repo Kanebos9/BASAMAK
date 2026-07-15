@@ -909,6 +909,12 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         for (auto& pat : sequencer.patterns)
             for (auto& ch : pat.channels)
                 ch.stopVoicesFaded(0.020f);
+        // [2026-07-15 16:30] Stop kills the REVERB/DELAY tails too (user: one press = silence):
+        // the whole Main output ramps to zero over ~100 ms (clickless - by then only wet tails
+        // remain, the voices fade in 20 ms), then the bus states are wiped while silent and the
+        // gain restores. A Play inside the window just dips its first hits briefly (rare, benign).
+        busKillRemain = (int) (0.1 * currentSampleRate);
+        busKillTotal  = busKillRemain;
         if (arpRoot >= 0 && ! arpRootHeld)   // STOP ends a LATCHED (Hold) arp; a key physically held keeps playing
         {
             arpRoot = -1; arpChan = -1; arpSounding = -1;
@@ -1264,6 +1270,24 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             for (int i = 0; i < numSamples; ++i) d[i] = softclip(d[i]);
         }
 
+        // [2026-07-15 16:30] STOP BUS KILL: ramp the Main output to zero over the ~100 ms window
+        // (voices are already fading in 20 ms - what this really silences is the reverb/delay
+        // tails), then WIPE the bus states while inaudible so the next Play starts clean.
+        if (busKillRemain > 0 && sequencer.playing) busKillRemain = 0;   // Play cancels the kill (don't mute fresh hits)
+        if (busKillRemain > 0)
+        {
+            const int n = juce::jmin(numSamples, busKillRemain);
+            for (int ch = 0; ch < audio.getNumChannels(); ++ch)
+            {
+                float* d = audio.getWritePointer(ch);
+                for (int i = 0; i < n; ++i)
+                    d[i] *= (float) (busKillRemain - 1 - i) / (float) busKillTotal;
+                for (int i = n; i < numSamples; ++i) d[i] = 0.0f;
+            }
+            busKillRemain -= n;
+            if (busKillRemain <= 0) wipeFxBuses();
+        }
+
         //-- Master output meter (post everything): peak per channel for the UI master meter.
         if (audio.getNumChannels() >= 2)
         {
@@ -1497,6 +1521,25 @@ void DrumSequencerProcessor::updateAnySolo()
     anySolo = false;
     for (auto& ch : sequencer.current().channels)
         if (ch.solo) { anySolo = true; break; }
+}
+
+// [2026-07-15 16:30] Stop's bus kill: wipe every reverb/delay state while the output is silent
+// (the ramp above just finished) so nothing rings back in and the next Play starts clean.
+void DrumSequencerProcessor::wipeFxBuses()
+{
+    fdn.reset(); fdnB.reset();
+    delayBuffer.clear();  delayBufferB.clear();
+    delayAgeBuf.clear();  delayAgeBufB.clear();
+    delayFbLp[0] = delayFbLp[1] = delayFbHp[0] = delayFbHp[1] = 0.0f;
+    delayFbLpB[0] = delayFbLpB[1] = delayFbHpB[0] = delayFbHpB[1] = 0.0f;
+    for (int c = 0; c < 2; ++c)
+    {
+        std::fill(delayShRing[c].begin(),  delayShRing[c].end(),  0.0f);
+        std::fill(delayShRingB[c].begin(), delayShRingB[c].end(), 0.0f);
+    }
+    reverbPreBuffer.clear(); reverbPreBufferB.clear();
+    revGateHold = revGateHoldB = 0; revGateSm = revGateSmB = 0.0f;
+    duckKeyState = 0.0f;
 }
 
 void DrumSequencerProcessor::processReverb(juce::AudioBuffer<float>& audio, juce::AudioBuffer<float>& send, int numSamples, bool busB)

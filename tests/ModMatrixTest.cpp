@@ -533,6 +533,29 @@ int main()
         printf("[22] bass retrigger: max delta=%.4f / cross-channel choke delta=%.4f (both <0.03; hard cuts were ~1+), rms=%.3f -> %s\n",
                md, md2, rms(out), CHK(md < 0.03f && md2 < 0.03f && rms(out) > 0.1 && finite(out) && finite(out2)) ? "OK" : "FAIL");
     }
+    {   // [23] OTT AUDIBILITY (round-1 shipped inaudibly polite - user: "no difference at all"):
+        //      a decaying tone's LATE TAIL must come UP hard at full depth (upward compression =
+        //      the thing a downward comp can't do), and the overall tone must clearly change.
+        auto mkDecay = [&](bool ott) {
+            return render([ott](DrumChannel& c){
+                for (auto& sl : c.slots) sl = Slot();
+                auto& s = c.slots[0];
+                s.engine = DrumChannel::SrcOsc; s.weight = 1.0f;
+                s.oscShape = s.oscShapeB = DrumChannel::WvSaw; s.oscFreq = 220.0f;
+                s.atk = 0.002f; s.dec = 0.5f;                       // fast natural fade = a quiet tail
+                if (ott) { c.chFxType[0] = DrumChannel::ChFxOtt; c.chFxAmt[0] = 1.0f; c.chFxChar[0] = 0.5f; }
+            }, 0.9f, 1.2); };
+        auto dry3 = mkDecay(false), wet3 = mkDecay(true);
+        auto tailRms = [&](const std::vector<float>& x) {           // 0.6..1.1 s = deep into the decay
+            double e = 0; size_t n = 0;
+            for (size_t i2 = (size_t)(0.6 * SR); i2 < x.size() && i2 < (size_t)(1.1 * SR); ++i2) { e += (double) x[i2] * x[i2]; ++n; }
+            return std::sqrt(e / (double) juce::jmax((size_t) 1, n)); };
+        const double tDry = tailRms(dry3), tWet = tailRms(wet3);
+        const double lift = tWet / juce::jmax(1.0e-9, tDry);
+        printf("[23] OTT: tail lift x%.1f (expect >4 = the upward-compression resurrection), tone maxdiff=%.3f -> %s\n",
+               lift, maxdiff(dry3, wet3),
+               CHK(lift > 4.0 && maxdiff(dry3, wet3) > 0.05f && finite(wet3)) ? "OK" : "FAIL");
+    }
     printf(fails == 0 ? ">>> ModMatrixTest PASS\n" : ">>> ModMatrixTest FAIL (%d)\n", fails);
     return fails;
 }

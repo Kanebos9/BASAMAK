@@ -8299,7 +8299,7 @@ void DrumSequencerEditor::setupComponents()
         strip.btnMute->setLookAndFeel(&tinyBtnLNF);
         strip.btnSolo->setLookAndFeel(&tinyBtnLNF);
         strip.btnPoly.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff35b56a));
-        strip.btnPoly.setTooltip("Overlap: lets a sound keep ringing into the next step instead of being cut off - but only if the sound is actually long enough to ring (a short sound still ends on its own). Off = each trigger restarts the sound.\n\nThis is a STEP-mode control - it fades out in Piano Roll, where each note has its own length and Poly is the keyboard's Poly toggle.\n\nRight-click to assign a MIDI control.");
+        strip.btnPoly.setTooltip("Overlap: lets a sound keep ringing into the next step instead of being cut off - but only if the sound is actually long enough to ring (a short sound still ends on its own). Off = each trigger restarts the sound.\n\nThis is a STEP-mode control - it fades out in Piano Roll, where each note has its own length and Poly is the keyboard's Poly toggle.\n\nNOTE: cutting a sound never cuts its already-sent REVERB/DELAY - those tails live on the master bus and finish on their own (use the reverb Gate / delay Trail for tight wet).\n\nRight-click to assign a MIDI control.");
         strip.btnPoly.midiLearn = &proc.midiLearn;   // paramId set per-pattern in updateStripParamIds()
         strip.btnPoly.onClick = [this, ci] {
             selectChannel(ci);
@@ -8698,6 +8698,7 @@ void DrumSequencerEditor::setupComponents()
             juce::PopupMenu choke;
             choke.addSectionHeader("Channels sharing a group cut each other off");
             choke.addSectionHeader("(e.g. open-hat channel + closed-hat channel)");
+            choke.addSectionHeader("(excluding reverb/delay tails - already-sent wet finishes on the master bus)");
             choke.addItem(300000 + ch * 100 + 0, "Off (no choke)", true, c.chokeGroup == 0);
             for (int g = 1; g <= 8; ++g)
                 choke.addItem(300000 + ch * 100 + g, "Group " + juce::String(g), true, c.chokeGroup == g);
@@ -8830,15 +8831,15 @@ void DrumSequencerEditor::setupComponents()
                 { 13, "Flanger (sync)", "Flanger locked to the tempo: Character = sweeps per bar. Feedback stays at the classic voicing." },
                 { 4,  "Phaser",    "6-stage all-pass swirl - softer and hollower than the flanger.\n\nCharacter = sweep speed + resonance." },
                 { 14, "Phaser (sync)",  "Phaser locked to the tempo: Character = sweeps per bar. Resonance stays at the classic voicing." },
-                { 5,  "Comp",      "Glue compressor across the whole instrument (both slots together).\n\nCharacter = attack: below 50% = faster / smashier, above = slower / punchier." },
+                { 5,  "Comp",      "Glue compressor across the whole instrument (both slots together) - transparent: the tone stays, the dynamics tighten.\n\nCharacter = attack in ms: short = smashed flat, long = the transient punches through first (4 ms = the classic)." },
                 { 6,  "Tape",      "Tape wobble: wow + flutter pitch drift + softened highs. Adds ~3 ms latency while on.\n\nCharacter = wobble speed." },
                 { 15, "Tape (sync)",    "Tape wobble locked to the tempo: Character = wobbles per bar." },
                 { 7,  "Auto-Pan",  "Moves the WHOLE instrument left-right. It drives itself (internal LFO) - no matrix routing needed.\n\nCharacter = pan speed." },
                 { 16, "Auto-Pan (sync)","Auto-Pan locked to the tempo: Character = sweeps per bar - \"1 /bar\" = exactly one left-right swing per bar, forever in the pocket." },
-                { 8,  "Widener",   "Mid/Side width boost with a bass-mono floor - needs STEREO content first (Chorus, unison Width, slot pans).\n\nCharacter = the bass-mono crossover (higher % = more of the low end stays centred)." },
-                { 9,  "OTT",       "3-band up + down compression - the modern \"dense and bright\" sheen. High amounts get aggressive.\n\nCharacter = compression speed." },
-                { 10, "FreqShift", "Single-sideband frequency shifter - moves every harmonic by the SAME Hz, so the sound turns inharmonic.\n\nCharacter = the shift: 50% = zero, above 50% = shift UP, below 50% = shift DOWN. Near 50% = barber-pole detune, extremes = alien metal." },
-                { 11, "Rotary",    "Leslie speaker: horn doppler + tremolo + rotor pan.\n\nCharacter = rotor speed (low % = slow chorale, high % = fast tremolo)." },
+                { 8,  "Widener",   "Mid/Side width boost with a bass-mono floor - needs STEREO content first (Chorus, unison Width, slot pans).\n\nCharacter = the bass-mono crossover in Hz (60..600: higher = more of the low end stays centred)." },
+                { 9,  "OTT",       "3-band UP + DOWN compression: quiet details and tails are dragged UP per band = the hyped modern wall (tone-changing, unlike Comp). Amount = depth.\n\nCharacter = compression speed (0.25x..4x; 1x = the classic)." },
+                { 10, "FreqShift", "Single-sideband frequency shifter - moves every harmonic by the SAME Hz, so the sound turns inharmonic.\n\nCharacter = the shift in Hz: centre = 0 Hz, right = up, left = down. A few Hz = barber-pole detune, hundreds = alien metal." },
+                { 11, "Rotary",    "Leslie speaker: horn doppler + tremolo + rotor pan.\n\nCharacter = rotor speed in Hz (0.7 = slow chorale, 7 = fast tremolo)." },
                 { 17, "Rotary (sync)",  "Leslie locked to the tempo: Character = rotations per bar." } };
         };
         for (int i = 0; i < 3; ++i)
@@ -8859,7 +8860,8 @@ void DrumSequencerEditor::setupComponents()
             cb.setTooltip(juce::String("CHANNEL FX slot ") + (i == 0 ? "A" : i == 1 ? "B" : "C") + ": pick an effect for the WHOLE instrument "
                           "(both sound slots combined; runs A -> B -> C in series).\n\n"
                           "- Hover each entry in the open list for what it does.\n"
-                          "- AMOUNT = how much. CHARACTER = the effect's second dimension (speed / attack / crossover / shift); 50% = the classic voicing.\n"
+                          "- AMOUNT = how much. CHARACTER = the effect's second dimension, shown in its REAL unit "
+                          "(sweep Hz or /bar, attack ms, speed x, shift Hz, crossover Hz - see each entry's tooltip).\n"
                           "- Both faders are matrix targets: \"FX " + juce::String(i == 0 ? "A" : i == 1 ? "B" : "C") + " Amount/Character (Channel)\".");
             cb.onChange = [this, i] {
                 if (ignoreKnobCallbacks) return;
@@ -8888,7 +8890,7 @@ void DrumSequencerEditor::setupComponents()
             };
             const juce::String sl9 = i == 0 ? "A" : i == 1 ? "B" : "C";
             setupF(chFxAmtF[i], "Amt", "FX " + sl9 + " AMOUNT: how much of the effect (0 = bypass). Matrix target \"FX " + sl9 + " Amount (Channel)\".");
-            setupF(chFxChrF[i], "Chr", "FX " + sl9 + " CHARACTER: the effect's second dimension (speed / attack / crossover / shift - see the type dropdown's tooltip). 50% = the classic voicing. Matrix target \"FX " + sl9 + " Character (Channel)\".");
+            setupF(chFxChrF[i], "Chr", "FX " + sl9 + " CHARACTER: the effect's second dimension, shown in its real unit - sweep speed (Hz or /bar), Comp attack (ms), OTT speed (x), FreqShift (+-Hz), Widener crossover (Hz). See the type dropdown's per-entry tooltips. Matrix target \"FX " + sl9 + " Character (Channel)\".");
             chFxAmtF[i].learnPid = i == 0 ? "ui_sel_cfxAmtA" : i == 1 ? "ui_sel_cfxAmtB" : "ui_sel_cfxAmtC";
             chFxChrF[i].learnPid = i == 0 ? "ui_sel_cfxChrA" : i == 1 ? "ui_sel_cfxChrB" : "ui_sel_cfxChrC";
             chFxAmtF[i].setDefault(0.0f);
@@ -8919,9 +8921,10 @@ void DrumSequencerEditor::setupComponents()
                     case DC::ChFxComp:                                                       // attack time
                     { const float ms = 4.0f * std::pow(4.0f, 1.0f - 2.0f * v);
                       return juce::String(ms, ms < 3.0f ? 1 : 0) + " ms"; }
-                    case DC::ChFxOtt:                                                        // envelope speed
-                    { const float x = std::pow(4.0f, 1.0f - 2.0f * v);
-                      return juce::String(x, x < 1.0f ? 2 : 1) + "x"; }
+                    case DC::ChFxOtt:                                                        // envelope SPEED
+                    { const float x = std::pow(4.0f, 2.0f * v - 1.0f);   // rises with the fader (the DSP's
+                      return juce::String(x, x < 1.0f ? 2 : 1) + "x"; }  //  time scale is its inverse - user
+                                                                         //  caught the backwards number)
                     case DC::ChFxFreqShift:                                                  // +-Hz shift
                     { const float d = 2.0f * v - 1.0f;
                       const int s9 = juce::roundToInt((d >= 0.0f ? 1.0 : -1.0) * (std::pow(1500.0, (double) std::abs(d)) - 1.0));
@@ -9458,12 +9461,12 @@ void DrumSequencerEditor::setupComponents()
                                                    juce::jlimit(0, 3, masterBusB ? m.reverbModeB : m.reverbMode));
             return "~" + (t < 9.95f ? juce::String(t, 1) : juce::String(juce::roundToInt(t))) + " s";
         };
-        masterVF[10].format = [this](float v01) {
+        masterVF[10].format = [this](float v01) {   // [2026-07-15 16:00] % + the EXACT dB step per echo
             const float g = juce::jlimit(0.0f, 0.98f, (float) knobDelayFB.proportionOfLengthToValue((double) v01));
             juce::String pct = juce::String(juce::roundToInt(g * 100.0f)) + "%";
             if (g <= 0.005f) return pct;
-            if (g >= 0.955f) return pct + " ~inf";
-            return pct + " ~" + juce::String((int) std::ceil(-60.0 / (20.0 * std::log10((double) g)))) + "e";
+            const float db = 20.0f * std::log10(g);
+            return pct + " " + juce::String(db, std::abs(db) < 9.95f ? 1 : 0) + "dB";
         };
         // [2026-07-15 02:30] TOOLTIPS on the 12 proxy faders (user: "master faders have no tooltips" -
         // the proxy loop copied each knob's tooltip BEFORE the knob tooltips were assigned = empty).
@@ -9508,10 +9511,12 @@ void DrumSequencerEditor::setupComponents()
             "instead (locks to any step grid, incl. 7/11/13).\n"
             "- Same job as the reverb's Size: this is the delay's 'room', measured in echo spacing.");
         masterVF[10].setTooltip("Feedback: how much of each echo survives into the next.\n\n"
-            "- Every echo is a fixed number of dB quieter than the last: 50% = -6 dB per echo (~10 audible), "
-            "70% = -3 dB (~19), 90% = -1 dB (long trail). ~-60 dB counts as gone.\n"
-            "- The loop filters (and Dub's saturation) shave a little extra, so real trails run slightly "
-            "shorter than the ~figure.\n- Want a LOUD trail that ends abruptly? That's the Trail fader.\n"
+            "- The dB figure is EXACT: every echo is that many dB quieter than the one before "
+            "(50% = -6.0 dB per echo, always - a constant ratio IS a constant dB step).\n"
+            "- Echo counts are a CEILING, not a promise: 50% ~ 10 echoes down to -60 dB, soloed in "
+            "silence. In a busy mix you HEAR fewer (masking), the Wet level lowers the whole trail, "
+            "and Tape/Dub modes shave extra energy per pass.\n"
+            "- Want a LOUD trail that ends abruptly? That's the Trail fader.\n"
             "- Plays the role DECAY plays on the reverb (how long until silence).");
         masterVF[11].setTooltip("Delay Wet: the return level of the whole delay bus.\n\n- Per-sound amounts "
             "live on each channel's Dly send fader; this scales what comes back.\n- Right-click = MIDI-learn.");
@@ -10048,6 +10053,8 @@ void DrumSequencerEditor::setupComponents()
 
     freqDisplay.setTooltip("Live spectrum (the frequencies of what's playing) + this slot's filter curve.\n\n"
                            "- The spectrum refreshes once per step (more steps = higher refresh).\n"
+                           "- REVERB/DELAY tails never appear here: they live on the shared MASTER bus, and this "
+                           "shows only THIS channel's own output (measured before the sends leave).\n"
                            "- Boosting makes the channel louder, and channels add up - if the mix gets too hot "
                            "some DAWs clip or auto-mute. Lower Volume or use the master Limit knob.");
     soundPad.setTooltip("Drag the yellow dot to blend the enabled sound sources. Closer to a corner = more of that source.");

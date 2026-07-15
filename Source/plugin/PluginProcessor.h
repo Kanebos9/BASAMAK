@@ -314,6 +314,11 @@ private:
     juce::AudioBuffer<float> delayBufferB;  // BUS B delay line + state
     int delayWriteHeadB = 0;
     float delayFbLpB[2] = { 0.0f, 0.0f }, delayFbHpB[2] = { 0.0f, 0.0f };
+    // [2026-07-15 16:30] STOP BUS KILL: Stop ramps the Main output to zero over ~100 ms (only wet
+    // tails remain by then) and wipes the reverb/delay states while silent - one press = clickless
+    // full silence (user; supersedes the ring-out-on-stop behaviour).
+    int busKillRemain = 0, busKillTotal = 0;
+    void wipeFxBuses();
     // [2026-07-15 13:30] SMOOTHED time/size: the delay read-offset GLIDES to a changed target
     // (fader drag or live tempo change) = tape-style pitch swoop instead of a crackling jump;
     // the reverb size slews ~50 ms. -1 = snap on first block. Converged = bit-identical paths.
