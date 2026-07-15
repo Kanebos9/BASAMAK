@@ -8897,12 +8897,41 @@ void DrumSequencerEditor::setupComponents()
                 auto& ch = proc.sequencer.channel(selectedChannel);
                 ch.chFxAmt[i] = juce::jlimit(0.0f, 1.0f, v); ch.markDspDirty();
             };
-            chFxChrF[i].format = [this, i](float v) {   // [2026-07-15] sync types read in /bar (kChFxCpb mirror)
+            // [2026-07-15 15:00] Character reads in each type's HONEST unit (user: "%" said nothing).
+            // Display-only - the formulas MIRROR the DSP constants in DrumChannel.cpp's chFx cases
+            // (mirror rule: change one = change both). Value-only (no "Chr" prefix - it truncated).
+            chFxChrF[i].format = [this, i](float v) {
+                using DC = DrumChannel;
                 const int t = proc.sequencer.channel(selectedChannel).chFxType[i];
-                if (t >= DrumChannel::ChFxChorusS)
-                { const float c = DrumChannel::kChFxCpb[juce::jlimit(0, DrumChannel::kChFxCpbN - 1, (int) std::lround(v * (float)(DrumChannel::kChFxCpbN - 1)))];
-                  return (c < 1.0f ? juce::String(c, 2) : juce::String(juce::roundToInt(c))) + " /bar"; }
-                return juce::String(juce::roundToInt(v * 100.0f)) + "%"; };
+                auto hz = [](double h) { return h < 9.95 ? juce::String(h, 2) + " Hz" : juce::String(juce::roundToInt(h)) + " Hz"; };
+                switch (t)
+                {
+                    case DC::ChFxChorusS: case DC::ChFxFlangerS: case DC::ChFxPhaserS:
+                    case DC::ChFxTapeS:   case DC::ChFxAutoPanS: case DC::ChFxRotaryS:
+                    { const float c = DC::kChFxCpb[juce::jlimit(0, DC::kChFxCpbN - 1, (int) std::lround(v * (float)(DC::kChFxCpbN - 1)))];
+                      return (c < 1.0f ? juce::String(c, 2) : juce::String(juce::roundToInt(c))) + " /bar"; }
+                    case DC::ChFxChorus:  return hz(0.36 * std::pow(4.0, 2.0 * v - 1.0));   // sweep speed
+                    case DC::ChFxFlanger: return hz(0.20 * std::pow(4.0, 2.0 * v - 1.0));
+                    case DC::ChFxPhaser:  return hz(0.30 * std::pow(4.0, 2.0 * v - 1.0));
+                    case DC::ChFxTape:    return hz(0.80 * std::pow(4.0, 2.0 * v - 1.0));
+                    case DC::ChFxAutoPan: return hz(1.40 * std::pow(4.0, 2.0 * v - 1.0));
+                    case DC::ChFxRotary:  return hz(0.70 * std::pow(10.0, (double) v));
+                    case DC::ChFxComp:                                                       // attack time
+                    { const float ms = 4.0f * std::pow(4.0f, 1.0f - 2.0f * v);
+                      return juce::String(ms, ms < 3.0f ? 1 : 0) + " ms"; }
+                    case DC::ChFxOtt:                                                        // envelope speed
+                    { const float x = std::pow(4.0f, 1.0f - 2.0f * v);
+                      return juce::String(x, x < 1.0f ? 2 : 1) + "x"; }
+                    case DC::ChFxFreqShift:                                                  // +-Hz shift
+                    { const float d = 2.0f * v - 1.0f;
+                      const int s9 = juce::roundToInt((d >= 0.0f ? 1.0 : -1.0) * (std::pow(1500.0, (double) std::abs(d)) - 1.0));
+                      return s9 == 0 ? juce::String("0 Hz") : (s9 > 0 ? "+" : "") + juce::String(s9) + " Hz"; }
+                    case DC::ChFxWiden:                                                      // bass-mono crossover
+                      return juce::String(juce::roundToInt(60.0 * std::pow(10.0, (double) v))) + " Hz";
+                    default: return juce::String(juce::roundToInt(v * 100.0f)) + "%";
+                }
+            };
+            chFxChrF[i].setLabel({});   // value-only: "Chr 2 /bar" didn't fit (user); the tooltip names it
             chFxChrF[i].onChange = [this, i](float v) {
                 if (ignoreKnobCallbacks) return;
                 auto& ch = proc.sequencer.channel(selectedChannel);
@@ -11344,6 +11373,7 @@ void DrumSequencerEditor::updateFxFaders(const DrumChannel::Slot& sl)
     { const auto& ch = proc.sequencer.channel(selectedChannel);
       for (int i = 0; i < 3; ++i)
       { comboChFx[i].setSelectedId(juce::jlimit(0, 16, ch.chFxType[i]) + 1, juce::dontSendNotification);
+        chFxChrF[i].repaint();   // the Character read-out depends on the TYPE - repaint even when the value didn't move [2026-07-15 15:00]
         chFxAmtF[i].setValue01(ch.chFxAmt[i]);
         chFxChrF[i].setValue01(ch.chFxChar[i]);
         const bool on = ch.chFxType[i] != DrumChannel::ChFxOff;

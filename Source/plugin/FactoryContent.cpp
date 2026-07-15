@@ -1531,6 +1531,31 @@ static void nJetPad(DC& c) {        // wide saw pad through a slow-breathing FLA
     chFx(c, DC::ChFxFlanger, 0.4f);                                               // base sweep; the LFO breathes it
     c.reverbSend = 0.3f; c.volume = 0.56f;
 }
+// [2026-07-15 15:00] OTT showcases (user order): what UPWARD compression uniquely does - quiet
+// content is dragged UP, so tails and buried harmonics come to the surface. A downward comp
+// (Comp / Glue) can only push loud things down; these two sounds are impossible without OTT.
+static void nNeonPad(DC& c) {       // a glowing WALL: every quiet harmonic + the whole release tail inflated
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
+    s.oscUnison = 7; s.oscDetune = 0.28f; s.uniSpread = 0.6f;
+    s.atk = 0.15f; s.dec = 1.8f; s.sustain = 0.75f; s.release = 1.6f;
+    s.filterType = DC::LowPass; s.filterCutoff = 1400.0f; s.filterReso = 1.1f;
+    s.lfoRate[0] = 0.15f; s.lfoAmt[0] = 0.45f; s.lfoFree[0] = true;   // slow free filter breath...
+    lfoRoute(s, 0, DC::MTFilt1Cut);                                   // ...which the OTT then INFLATES:
+    chFx(c, DC::ChFxOtt, 0.9f, 0.5f);                                 // the dark half of the sweep comes back UP
+    c.reverbSend = 0.25f; c.volume = 0.5f;
+}
+static void nNeonClap(DC& c) {      // the crack ducks, then the QUIET room tail is sucked up = the OTT bloom
+    auto& s = mkSlot(c, DC::SrcNoise);                        // slot 1 = a bright dry crack
+    s.noiseType = 0; s.noiseCenter = 2200.0f; s.noiseRes = 0.5f;
+    s.atk = 0.0008f; s.dec = 0.09f;
+    s.filterType = DC::HighPass; s.filterCutoff = 450.0f;
+    auto& r = mkSlot2(c, DC::SrcNoise, 0.82f);                // slot 2 = a LONG, very quiet pink room
+    r.noiseType = 1; r.atk = 0.004f; r.dec = 1.1f;
+    r.filterType = DC::HighPass; r.filterCutoff = 300.0f;
+    chFx(c, DC::ChFxOtt, 0.95f, 0.35f);                       // fast upward bands resurrect the tail
+    c.volume = 0.8f;
+}
 static void nPhaseKeys(DC& c) {     // swirling electric piano: slow LFO -> Phaser (Channel), a touch of chorus
     auto& s = mkSlot(c, DC::SrcOsc);
     s.oscShape = s.oscShapeB = DC::WvSine; s.oscFreq = 261.63f;
@@ -2182,6 +2207,8 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Clap", mClap, "Claps" },
     { "808 Clap", m808Clap, "Claps" },
     { "Snap Clap", mSnapClap, "Claps" },
+    { "Neon Clap", nNeonClap, "Claps" },              // OTT showcase: the quiet room tail sucked UP after the crack
+
     { "Big Clap", mBigClap, "Claps" },
     { "Squash Clap", xSquashClap, "Claps" },
     // ---- Hi-Hats ----
@@ -2307,6 +2334,8 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Brass Pad", kBrassPad, "Pads & Choirs" },
     { "Chorus Pad", nChorusPad, "Pads & Choirs" },
     { "Jet Pad", nJetPad, "Pads & Choirs" },          // CHANNEL FX showcase: LFO -> Flanger (Channel)
+    { "Neon Pad", nNeonPad, "Pads & Choirs" },        // OTT showcase: upward compression = glowing inflated wall
+
     { "Vowel Pad", nVowelPad, "Pads & Choirs" },      // FORMANT showcase: slow LFO -> vowel morph
     { "AM Shimmer", nAmShimmer, "Pads & Choirs" },    // AUDIO-RATE AM at the octave (KEY x2 -> Volume)
     { "Sideband Pad", nSidebandPad, "Pads & Choirs" },// AUDIO-RATE: fixed 150 Hz -> Pitch = inharmonic fog
