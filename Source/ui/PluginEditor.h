@@ -2503,16 +2503,17 @@ private:
     LearnableButton  btnInfluenceTop { "Infl" };  // arm step-influence for the SELECTED channel (moved off the strips)
     // All 16 channels + 32 patterns are ALWAYS active now (the old 8/16 + 16/32 count toggles are gone).
     // This button (next to HIDE SOUND EDITOR/KEYS) switches the VIEW between 8 rows (default) and all 16.
-    juce::TextButton btn16View { "16 CHANNELS VIEW" };
+    LearnableButton btn16View { "16 CHANNELS VIEW" };  // MIDI = "ui_sel_view16" [2026-07-15 22:30]
     // [2026-07-15 19:45] OTHERS trim (user design): a spring-back +-6 dB fader that scales EVERY
     // channel's volume EXCEPT the selected one (current pattern) by EDITING their handles - you
     // watch them move; undo covers it. Each drag is relative to the volumes at grab time; the
     // pill re-centres on release (a gesture, not a stored setting). + a momentary full reset.
     SlotDragFader    othersVolF;
-    juce::TextButton btnVolReset { "VOL RESET" };
+    LearnableButton btnVolReset { "VOL RESET" };       // MIDI = "ui_sel_volReset" [2026-07-15 22:30]
     float othersVolBase[Sequencer::NUM_CHANNELS] = {};
     bool  othersVolActive = false;
     bool  keepPickerOnLayout = false;   // [2026-07-15 22:10] a sound pick relayouts WITHOUT closing the picker
+    juce::uint32 othersCcLastMs = 0;    // [2026-07-15 22:30] Others via CC: re-capture the base after a ~0.5 s pause
     juce::TextButton btnTooltips { "Tooltips" };  // top bar: global hover-tooltips ON/OFF (default ON)
     bool             tooltipsOn = true;
     void refreshCountButtons();
@@ -2525,13 +2526,13 @@ private:
     int   lastPlayPattern = -1;
     void  refreshFollowButton();
     juce::TextButton btnAudition { "Auto" };   // global toggle: knob edits auto-play a TEST hit (proc.auditionOnEdit)
-    juce::TextButton btnToggleDetail { "HIDE SOUND EDITOR/KEYS" };   // collapse/expand the sound-editing panel
+    LearnableButton btnToggleDetail { "HIDE SOUND EDITOR/KEYS" };   // collapse/expand; MIDI = "ui_sel_editor" [2026-07-15 22:30]
     bool detailShown = true;                   // when false, only the sequencer is shown (window shrinks)
     void  refreshAuditionButton();
     // ==== KEYS view (on-screen piano). Radio with the sound editor: the KEYS button shows the
     // OTHER view's name. The panel covers everything right of the slot boxes. =================
     KeysPanel        keysPanel { proc.midiLearn };
-    juce::TextButton btnKeysView { "KEYS" };
+    LearnableButton btnKeysView { "KEYS" };            // MIDI = "ui_sel_keysView" [2026-07-15 22:30]
     bool keysView = false;                     // session-only; the sound editor is the default view
     // Takes live on the PROCESSOR (proc.keysTakes - persisted with the state/preset). The editor
     // ASSEMBLES them from the audio thread's event log: a 0xFF marker = loop boundary = the take

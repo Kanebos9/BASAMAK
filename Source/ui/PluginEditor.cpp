@@ -7137,6 +7137,33 @@ void DrumSequencerEditor::applySelCC(int t, float v, bool& slotDirty, bool& keys
         case P::SelGlide:   ch.keysGlide = v; keysDirty = true; break;
         case P::SelSlotOfs: ch.humanizeAmt = v; keysDirty = true; break;
         case P::SelRec:     keysPanel.btnRec.triggerClick(); return;
+        // Title-strip controls [2026-07-15 22:30] - the real buttons fire so all side-effects run.
+        case P::SelVolReset:     btnVolReset.triggerClick(); return;
+        case P::SelKeysView:     btnKeysView.triggerClick(); return;
+        case P::SelView16:       btn16View.triggerClick(); return;
+        case P::SelEditorToggle: btnToggleDetail.triggerClick(); return;
+        case P::SelOthersVol:
+        {   // Others trim via CC: same relative gesture as the fader, but a CC has no "release" -
+            // a >0.5 s pause in messages re-captures the base volumes (so a new sweep starts fresh).
+            const juce::uint32 now = juce::Time::getMillisecondCounter();
+            if (! othersVolActive || now - othersCcLastMs > 500)
+            {
+                othersVolActive = true;
+                for (int i = 0; i < Sequencer::NUM_CHANNELS; ++i)
+                    othersVolBase[i] = proc.sequencer.channel(i).volume;
+            }
+            othersCcLastMs = now;
+            const float g = std::pow(10.0f, (v - 0.5f) * 12.0f / 20.0f);   // +-6 dB
+            for (int i = 0; i < Sequencer::NUM_CHANNELS; ++i)
+                if (i != selectedChannel)
+                {
+                    auto& c2 = proc.sequencer.channel(i);
+                    c2.volume = juce::jlimit(0.0f, LevelMeter::VOL_MAX, othersVolBase[i] * g);
+                    c2.markDspDirty();
+                }
+            othersVolF.setValue01(v);   // the pill mirrors the CC while it moves
+            return;
+        }
         // [2026-07-14 23:20] M/S/OV SET directly from the pad value (127 = on, 0 = off) - the old
         // triggerClick() only toggled on press (dead every other press on a toggle pad) and its
         // async button flash drew a faint half-state. The tick refresh syncs the button faces.
@@ -7679,6 +7706,7 @@ void DrumSequencerEditor::setupComponents()
     // (placed next to HIDE SOUND EDITOR/KEYS) switches the VIEW between 8 rows (default) and all 16.
     // [2026-07-15 19:45] OTHERS trim + VOL RESET (user design), left of the view toggle.
     content.addAndMakeVisible(othersVolF);
+    othersVolF.mlm = &proc.midiLearn; othersVolF.learnPid = "ui_sel_others";   // right-click = learn [2026-07-15 22:30]
     othersVolF.setAccent(juce::Colour(0xff35c0ff));
     othersVolF.setLabel({}); othersVolF.setDefault(0.5f); othersVolF.setValue01(0.5f);
     othersVolF.format = [](float v) { const float db = (v - 0.5f) * 12.0f;
@@ -7708,17 +7736,20 @@ void DrumSequencerEditor::setupComponents()
         "re-centres on release (it's a gesture, not a stored setting).\n"
         "- The quick way to make the selected sound stand out, or to pull it back into the mix.\n"
         "- Trimming UP can push the mix over full scale = clipping; the master LIMITER is the "
-        "safeguard (it catches only the peaks that cross its ceiling).");
+        "safeguard (it catches only the peaks that cross its ceiling).\n"
+        "- Right-click = assign a MIDI knob (a >0.5 s pause in CC messages starts a fresh grab).");
     content.addAndMakeVisible(btnVolReset);
+    btnVolReset.paramId = "ui_sel_volReset"; btnVolReset.midiLearn = &proc.midiLearn;   // right-click = learn
     btnVolReset.setLookAndFeel(&tinyBtnLNF);
     btnVolReset.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
     btnVolReset.onClick = [this] {
         for (int i = 0; i < Sequencer::NUM_CHANNELS; ++i)
         { auto& c = proc.sequencer.channel(i); c.volume = 1.0f; c.markDspDirty(); }
     };
-    btnVolReset.setTooltip("Set every channel's volume handle in this pattern back to 100% (0 dB). Undoable.");
+    btnVolReset.setTooltip("Set every channel's volume handle in this pattern back to 100% (0 dB). Undoable.\n\nRight-click = assign a MIDI pad.");
 
     content.addAndMakeVisible(btn16View);
+    btn16View.paramId = "ui_sel_view16"; btn16View.midiLearn = &proc.midiLearn;         // right-click = learn
     btn16View.setLookAndFeel(&tinyBtnLNF);
     btn16View.setClickingTogglesState(false);
     btn16View.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
@@ -7750,6 +7781,7 @@ void DrumSequencerEditor::setupComponents()
     patternBar.addListener(this);
 
     content.addAndMakeVisible(btnToggleDetail);
+    btnToggleDetail.paramId = "ui_sel_editor"; btnToggleDetail.midiLearn = &proc.midiLearn;   // right-click = learn [2026-07-15 22:30]
     btnToggleDetail.setLookAndFeel(&tinyBtnLNF);   // smaller font so the text fits + reads
     btnToggleDetail.setClickingTogglesState(false);
     btnToggleDetail.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
@@ -7778,6 +7810,7 @@ void DrumSequencerEditor::setupComponents()
 
     // ==== KEYS view: the on-screen piano (radio with the sound editor) =======================
     content.addAndMakeVisible(btnKeysView);
+    btnKeysView.paramId = "ui_sel_keysView"; btnKeysView.midiLearn = &proc.midiLearn;         // right-click = learn
     btnKeysView.setLookAndFeel(&tinyBtnLNF);
     btnKeysView.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
     btnKeysView.setTooltip("Switch between the SOUND EDITOR and the on-screen KEYS piano.\n\n"

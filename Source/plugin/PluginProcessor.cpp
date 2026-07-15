@@ -1406,7 +1406,8 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
             { "ui_sel_glide", SelGlide }, { "ui_sel_slotOfs", SelSlotOfs },
             { "ui_sel_chVol", SelChVol }, { "ui_sel_swing", SelSwing }, { "ui_sel_bpm", SelBpm },
             { "ui_sel_slotFreq", SelSlotFreq }, { "ui_sel_slotFmAmt", SelSlotFmAmt },
-            { "ui_sel_slotWarp", SelSlotWarp } };
+            { "ui_sel_slotWarp", SelSlotWarp },
+            { "ui_sel_others", SelOthersVol } };   // Others trim (+-6 dB on unselected channels) [2026-07-15 22:30]
         for (auto& k : kSelKnobs) if (pid == k.first) { pushSelCC(k.second, norm); return; }
         if (pid == "ui_sel_modWheel") { sequencer.modWheel = norm; return; }   // learn ANY CC to the Mod Wheel source (not just CC1)
         if (pid == "ui_sel_slide")    { expressionSweep(1, msg.getChannel(), norm); return; }   // [2026-07-13 23:20] learn ANY CC to the Slide source (not just CC74)
@@ -1432,7 +1433,9 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
             { "ui_sel_chNext", SelChNext }, { "ui_sel_chPrev", SelChPrev },
             { "ui_sel_patNext", SelPatNext }, { "ui_sel_patPrev", SelPatPrev },
             { "ui_sel_follow", SelFollow }, { "ui_sel_test", SelTest },
-            { "ui_sel_undo", SelUndo }, { "ui_sel_redo", SelRedo } };
+            { "ui_sel_undo", SelUndo }, { "ui_sel_redo", SelRedo },
+            { "ui_sel_volReset", SelVolReset }, { "ui_sel_keysView", SelKeysView },       // title strip [2026-07-15 22:30]
+            { "ui_sel_view16", SelView16 }, { "ui_sel_editor", SelEditorToggle } };
         for (auto& k : kSelBtns) if (pid == k.first) { if (on) pushSelCC(k.second, 1.0f); return; }
         return;
     }
