@@ -2851,9 +2851,9 @@ private:
     LearnableKnob    knobReverbPre   { "global_reverbPre",   proc.midiLearn };
     LearnableKnob    knobReverbWidth { "global_reverbWidth", proc.midiLearn };
     juce::Label      lblRevWet, lblRevPre, lblRevWidth;
-    ToggleSwitch     swDelaySync;
-    juce::Label      lblDelaySync;
-    ToggleSwitch     swDelayPingPong;
+    juce::TextButton swDelaySync;       // [2026-07-15 12:10] single-row lit buttons (user - the
+    juce::Label      lblDelaySync;      //  label+switch pairs cost 4 rows; the labels are now unused)
+    juce::TextButton swDelayPingPong;
     juce::Label      lblDelayPingPong;
     LearnableKnob    knobMasterVol   { "global_masterVol",   proc.midiLearn };
     LearnableKnob    knobMasterLimit { "global_masterLimit", proc.midiLearn };
@@ -2875,11 +2875,12 @@ private:
     SlotDragFader    delayTrailF;           // MAX TRAIL: hard echo-count cap (top = unlimited = default)
     SlotDragFader    delayDuckF;            // DUCK: echoes tuck under the dry mix, bloom in gaps
     SlotDragFader    delayCharF;            // CHARACTER: depth of the delay mode's flavour (inert on Digital)
-    SlotDragFader    revDecBarsF;           // synced Decay = tail length in bars (replaces masterVF[5] while Sync)
-    SlotDragFader    revPreBarsF;           // synced Pre = bar fraction (replaces masterVF[7] while Sync)
-    SlotDragFader    revGateF;              // GATE: the 80s gated-verb chop (bottom = off)
-    juce::Label      lblDelTrail, lblDelDuck, lblDelChar, lblRevGate, lblRevSyncT;
-    ToggleSwitch     swReverbSync;          // reverb Sync: Decay-in-bars + Pre-in-fractions
+    SlotDragFader    revDecBarsF;           // synced Decay = COUNTED quarter-bars (replaces masterVF[5] while Sync)
+    SlotDragFader    revPreBarsF;           // synced Pre = COUNTED 64ths of a bar (replaces masterVF[7] while Sync)
+    SlotDragFader    revGateF;              // GATE: counted 16ths synced / free ms unsynced (bottom = off)
+    SlotDragFader    masterWidthF;          // [2026-07-15 12:10] master stereo width (bass-safe M/S)
+    juce::Label      lblDelTrail, lblDelDuck, lblDelChar, lblRevGate, lblRevSyncT, lblMasterWidth;
+    juce::TextButton swReverbSync;          // reverb Sync: single-row lit button (user) - bars/fractions vs free
     int              masterEstTick = 0;     // throttle for the live "~2.1 s" decay estimate repaint
     void refreshMasterSyncFaders();
     juce::Label      hdrModulation;         // "MODULATION" group header (holds the MOD/LFO visual for now)

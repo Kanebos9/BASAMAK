@@ -178,6 +178,7 @@ void DrumSequencerProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     delayWriteHead = 0;
     limiterGain = 1.0f;
     masterGlueEnv = 0.0f;
+    masterWidthLp = 0.0f;
 }
 
 void DrumSequencerProcessor::releaseResources() {}
@@ -1152,6 +1153,11 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             }
         };
 
+        // Master WIDTH [2026-07-15 12:10]: M/S, engaged only away from 100% (and not in mono).
+        const float pWidth   = juce::jlimit(0.0f, 1.5f, mfx.masterWidth);
+        const bool  widthOn  = std::abs(pWidth - 1.0f) > 0.001f && ! mono;
+        const float widthLpK = 1.0f - std::exp(-2.0f * juce::MathConstants<float>::pi * 120.0f / (float) currentSampleRate);
+
         const bool  glueOn    = mfx.glue > 0.0001f;
         const float gThr      = std::pow(10.0f, (-8.0f - mfx.glue * 16.0f) / 20.0f);   // -8 dB .. -24 dB
         const float gRatio    = 1.0f + mfx.glue * 3.0f;                                // 1:1 .. 4:1
@@ -1185,6 +1191,17 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                 l *= gL; r *= gR;
 
                 tiltSat(l, 0); tiltSat(r, 1);   // master tone + saturation (pre-glue)
+                if (widthOn)
+                {   // [2026-07-15 12:10] master WIDTH (bass-safe M/S): narrowing scales the whole
+                    // side signal; widening boosts only the side ABOVE ~120 Hz, so lows stay
+                    // centred (club-safe). 100% = skipped = bit-identical.
+                    const float mM = 0.5f * (l + r), sS = 0.5f * (l - r);
+                    masterWidthLp += widthLpK * (sS - masterWidthLp);
+                    if (! std::isfinite(masterWidthLp)) masterWidthLp = 0.0f;
+                    const float s2 = pWidth <= 1.0f ? sS * pWidth
+                                                    : masterWidthLp + (sS - masterWidthLp) * pWidth;
+                    l = mM + s2; r = mM - s2;
+                }
                 if (glueOn) { const float gg = glueGain(l, r); l *= gg; r *= gg; }   // bus glue (pre-limiter)
 
                 // Lookahead: output the DELAYED sample while the gain envelope tracks the INCOMING
@@ -1508,7 +1525,10 @@ void DrumSequencerProcessor::processReverb(juce::AudioBuffer<float>& audio, juce
     // of them change) and Pre = a fraction of a bar. GATE (independent of Sync): the wet return
     // cuts dead a bar-fraction after each hit - the 80s gated verb; loudness stays decoupled.
     const bool  pSyncR = busB ? mfx.reverbSyncB : mfx.reverbSync;
-    const float pGate  = busB ? mfx.reverbGateB : mfx.reverbGate;
+    // GATE time source follows the row's Sync [2026-07-15 12:10]: bars when synced, free ms when
+    // not - each mode keeps its OWN stored value, so toggling Sync never mangles a setting.
+    const float pGate   = busB ? mfx.reverbGateB   : mfx.reverbGate;
+    const float pGateMs = busB ? mfx.reverbGateMsB : mfx.reverbGateMs;
     const double barS  = barSeconds();
     double preSec = pPre * 0.120;                                        // free: 0..120 ms as always
     float  decay01 = 1.0f - juce::jlimit(0.0f, 1.0f, pDamp);             // free: the classic knob
@@ -1521,7 +1541,9 @@ void DrumSequencerProcessor::processReverb(juce::AudioBuffer<float>& audio, juce
 
     // Pre-delay gap before the tail (the dry transient is heard first - drums love it), and the
     // GATE TRIGGER capture: a hit entering the reverb (post-pre-delay = when its tail starts).
-    const int gateSamps = pGate > 0.001f ? (int) (juce::jlimit(0.0f, 1.0f, pGate) * barS * currentSampleRate) : 0;
+    const double gateSec = pSyncR ? juce::jlimit(0.0f, 1.0f, pGate) * barS
+                                  : juce::jlimit(0.0f, 1000.0f, pGateMs) * 0.001;
+    const int gateSamps = gateSec > 0.0005 ? (int) (gateSec * currentSampleRate) : 0;
     {
         const int preMax   = preB.getNumSamples();
         const int preSamps = juce::jlimit(0, preMax - 1, (int)(preSec * currentSampleRate));
@@ -2489,6 +2511,9 @@ juce::ValueTree DrumSequencerProcessor::captureStateTree()
         patState.setProperty("rDecBarB", m.reverbDecBarsB, nullptr);
         patState.setProperty("rPreBarB", m.reverbPreBarsB, nullptr);
         patState.setProperty("rGateB",   m.reverbGateB,    nullptr);
+        patState.setProperty("revGateMs", m.reverbGateMs,  nullptr);   // [2026-07-15 12:10]
+        patState.setProperty("rGateMsB", m.reverbGateMsB,  nullptr);
+        patState.setProperty("mWidth",   m.masterWidth,    nullptr);
         patState.setProperty("mVol",    m.volume,        nullptr);
         patState.setProperty("mMono",   m.mono,          nullptr);
         patState.setProperty("mLimit",  m.limit,         nullptr);
@@ -2671,6 +2696,9 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
             m.reverbDecBarsB = juce::jlimit(0.25f, 8.0f, (float) child.getProperty("rDecBarB", 1.0f));
             m.reverbPreBarsB = juce::jlimit(0.0f, 0.125f, (float) child.getProperty("rPreBarB", 0.03125f));
             m.reverbGateB    = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("rGateB", 0.0f));
+            m.reverbGateMs   = juce::jlimit(0.0f, 1000.0f, (float) child.getProperty("revGateMs", 0.0f));
+            m.reverbGateMsB  = juce::jlimit(0.0f, 1000.0f, (float) child.getProperty("rGateMsB", 0.0f));
+            m.masterWidth    = juce::jlimit(0.0f, 1.5f, (float) child.getProperty("mWidth", 1.0f));
             m.volume        = (float)child.getProperty("mVol",    0.9f);
             m.mono          = (bool) child.getProperty("mMono",   false);
             m.limit         = (float)child.getProperty("mLimit",  0.003f);

@@ -5677,6 +5677,8 @@ DrumSequencerEditor::~DrumSequencerEditor()
     comboSampleSel.setLookAndFeel(nullptr);
     for (auto& c : slotCombo) c.setLookAndFeel(nullptr);
     for (auto& c : comboChFx) c.setLookAndFeel(nullptr);   // TinyComboLNF
+    swDelaySync.setLookAndFeel(nullptr); swDelayPingPong.setLookAndFeel(nullptr);   // [2026-07-15] lit buttons (tinyBtnLNF)
+    swReverbSync.setLookAndFeel(nullptr);
     for (auto* k : allKnobs) k->setLookAndFeel(nullptr);
     blendFader.setLookAndFeel(nullptr);   // had a custom two-tone LNF
     patModeBtn.setLookAndFeel(nullptr);
@@ -6119,6 +6121,7 @@ juce::int64 DrumSequencerEditor::stateHash() const
         h = mix(h, f(m.delayBarNB)); h = mix(h, m.delayTrailB); h = mix(h, f(m.delayDuckB)); h = mix(h, f(m.delayCharB));
         h = mix(h, m.reverbSync ? 1 : 0); h = mix(h, f(m.reverbDecBars)); h = mix(h, f(m.reverbPreBars)); h = mix(h, f(m.reverbGate));
         h = mix(h, m.reverbSyncB ? 1 : 0); h = mix(h, f(m.reverbDecBarsB)); h = mix(h, f(m.reverbPreBarsB)); h = mix(h, f(m.reverbGateB));
+        h = mix(h, f(m.reverbGateMs)); h = mix(h, f(m.reverbGateMsB)); h = mix(h, f(m.masterWidth));   // [2026-07-15 12:10]
         h = mix(h, f(m.volume)); h = mix(h, m.mono ? 1 : 0); h = mix(h, f(m.limit)); h = mix(h, f(m.glue));
         for (int c = 0; c < Sequencer::NUM_CHANNELS; ++c)
         {
@@ -9145,7 +9148,7 @@ void DrumSequencerEditor::setupComponents()
     // Master VOLUME is a horizontal FADER now (lives in the SOUND BLEND box; Pattern Output group removed).
     knobMasterVol.setSliderStyle(juce::Slider::LinearHorizontal);
     knobMasterVol.setTextBoxStyle(juce::Slider::TextBoxRight, true, 38, 16);
-    knobMasterVol.setColour(juce::Slider::trackColourId,      juce::Colour(0xffffc24a)); // filled (left of thumb) = amber
+    knobMasterVol.setColour(juce::Slider::trackColourId,      juce::Colour(0xffe8947a)); // filled = BLEND orange (slot1+slot2 mix = "everything") [2026-07-15]
     knobMasterVol.setColour(juce::Slider::backgroundColourId, juce::Colour(0xff2a2a44)); // empty (right) = dark
     // Limiter read-out = the output CEILING in dB (concrete) instead of a meaningless %. "Off" at 0.
     setupKnob(knobMasterLimit, lblMasterLimit, "Limit",  0.0, 1.0,  0.003, 1.0,
@@ -9239,7 +9242,7 @@ void DrumSequencerEditor::setupComponents()
         {
             auto* k = mv[i].k;  auto& f = masterVF[i];
             f.setVertical(true);
-            f.setAccent(juce::Colour(0xffffc24a));   // amber = master
+            f.setAccent(juce::Colour(0xffe8947a));   // BLEND orange = master ("both slots" colour, not slot-1 yellow) [2026-07-15]
             f.setLabel({});                          // name goes in the Label BELOW; the fader shows only the value
             f.format    = [k](float v01) { return k->getTextFromValue(k->proportionOfLengthToValue((double) v01)); };
             f.onChange  = [this, k](float v01) { if (! ignoreKnobCallbacks) k->setValue(k->proportionOfLengthToValue((double) v01), juce::sendNotificationSync); };
@@ -9255,19 +9258,29 @@ void DrumSequencerEditor::setupComponents()
     {
         auto masterAud = [this] { if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel); };
         auto initF = [&](SlotDragFader& f, float def) {
-            f.setVertical(true); f.setAccent(juce::Colour(0xffffc24a)); f.setLabel({});
+            f.setVertical(true); f.setAccent(juce::Colour(0xffe8947a)); f.setLabel({});
             f.setDefault(def); f.onDragEnd = masterAud; content.addAndMakeVisible(f); f.setVisible(false);
         };
-        // Delay: synced Time = ECHOES PER BAR (1..21, equal stops - the old seconds-curve crushed
-        // into 7 buckets was the "first half stays 1/16" bug, gone by construction).
+        // [2026-07-15 12:10] COUNTED UNITS (user design): every synced fader = a whole number of a
+        // FIXED unit (the delay-Time model - the denominator never moves). Normal drag counts the
+        // unit; SHIFT-drag = free (the FM-Ratio convention), displayed as an honest DECIMAL.
+        // Formats read the STORED field (not the drag position) so snap vs free displays truthfully.
+        const auto shiftHeld = [] { return juce::ModifierKeys::getCurrentModifiers().isShiftDown(); };
+        // Delay: synced Time = ECHOES PER BAR (count 1..21; Shift = fractional, e.g. "5.3 /bar").
         initF(delayBarNF, 7.0f / 20.0f);
-        delayBarNF.format   = [](float v) { return juce::String(1 + juce::roundToInt(v * 20.0f)) + " /bar"; };
-        delayBarNF.onChange = [this](float v) { if (ignoreKnobCallbacks) return;
-            const float N = (float) (1 + juce::roundToInt(v * 20.0f));
+        delayBarNF.format   = [this](float) { auto& m = proc.masterFX();
+            const float N = masterBusB ? m.delayBarNB : m.delayBarN;
+            return (std::abs(N - std::round(N)) < 0.02f ? juce::String(juce::roundToInt(N))
+                                                        : juce::String(N, 1)) + " /bar"; };
+        delayBarNF.onChange = [this, shiftHeld](float v) { if (ignoreKnobCallbacks) return;
+            float N = 1.0f + v * 20.0f;
+            if (! shiftHeld()) N = std::round(N);
             for (auto& p : proc.sequencer.patterns) (masterBusB ? p.master.delayBarNB : p.master.delayBarN) = N; };
         delayBarNF.setTooltip("Echoes per bar (Sync is on).\n\n"
             "- The delay time = one bar divided by this number - 7 lands every echo on a 7-step grid, "
             "14 on a 14-step grid, and so on up to 21.\n"
+            "- This is the delay's 'room size': the reverb's Size fader plays the same role in meters.\n"
+            "- SHIFT-drag = free values in between (shown as a decimal).\n"
             "- Follows the tempo AND time signature (the host's when DAW Sync is on, the toolbar's otherwise).\n"
             "- Turn Sync off for free milliseconds instead.");
         // MAX TRAIL: hard echo count (top = unlimited = the classic endless-fade delay).
@@ -9281,7 +9294,8 @@ void DrumSequencerEditor::setupComponents()
             "- Independent of Feedback: crank Feedback for LOUD near-equal echoes, cap the trail at 4 = "
             "a fat trail that just STOPS (impossible with feedback alone, which only fades gradually).\n"
             "- Set it to your echoes-per-bar and the trail ends exactly at the bar line.\n"
-            "- Top = no limit (the classic delay, default).");
+            "- Top = no limit (the classic delay, default).\n"
+            "- The reverb's GATE does the same job for the wash - length capped, loudness untouched.");
         // DUCK: echoes tuck under the dry mix, bloom in the gaps.
         initF(delayDuckF, 0.0f);
         delayDuckF.format   = [](float v) { return v < 0.005f ? juce::String("Off") : juce::String(juce::roundToInt(v * 100.0f)) + "%"; };
@@ -9303,53 +9317,94 @@ void DrumSequencerEditor::setupComponents()
             "- Tape: how fast repeats darken.\n- Dub: how hard each repeat saturates.\n"
             "- Analog: how deep the pitch wobble.\n- Shimmer: how much octave-up per pass.\n"
             "- Digital has no flavour - this fader is inert there.\n- 50% = the mode's standard voicing.");
-        // Reverb synced variants: Decay in BARS + Pre in bar fractions.
-        initF(revDecBarsF, 0.5f);
-        revDecBarsF.format   = [](float v) { static const char* n[5] = { "1/4 bar", "1/2 bar", "1 bar", "2 bars", "4 bars" };
-                                             return juce::String(n[juce::jlimit(0, 4, juce::roundToInt(v * 4.0f))]); };
-        revDecBarsF.onChange = [this](float v) { if (ignoreKnobCallbacks) return;
-            static const float bars[5] = { 0.25f, 0.5f, 1.0f, 2.0f, 4.0f };
-            const float b = bars[juce::jlimit(0, 4, juce::roundToInt(v * 4.0f))];
+        // Reverb synced variants [2026-07-15 12:10 counted units]: Decay counts QUARTER-BARS
+        // (1.5-bar tails exist now), Pre counts 64THS. Shift = free decimal.
+        initF(revDecBarsF, (1.0f * 4.0f - 1.0f) / 31.0f);
+        revDecBarsF.format   = [this](float) { auto& m = proc.masterFX();
+            const float b = masterBusB ? m.reverbDecBarsB : m.reverbDecBars;
+            const float q = b * 4.0f;
+            if (std::abs(q - std::round(q)) < 0.02f)
+            { const float br = std::round(q) / 4.0f;
+              return juce::String(br, (std::abs(br - std::round(br)) < 0.01f) ? 0 : 2) + (br > 1.01f ? " bars" : " bar"); }
+            return juce::String(b, 2) + " bars"; };
+        revDecBarsF.onChange = [this, shiftHeld](float v) { if (ignoreKnobCallbacks) return;
+            float b = (1.0f + v * 31.0f) / 4.0f;                     // 1..32 quarter-bars = 0.25..8 bars
+            if (! shiftHeld()) b = std::round(b * 4.0f) / 4.0f;
+            b = juce::jlimit(0.25f, 8.0f, b);
             for (auto& p : proc.sequencer.patterns) (masterBusB ? p.master.reverbDecBarsB : p.master.reverbDecBars) = b; };
         revDecBarsF.setTooltip("Decay, synced: the tail dies (~-60 dB) this many bars after a hit.\n\n"
+            "- Counts QUARTER-bars: 0.25, 0.5 ... 1.5, 2 ... up to 8 bars. SHIFT-drag = free decimal.\n"
             "- The reverb feedback is recomputed LIVE from Size, Mode and the tempo, so the tail keeps "
             "landing on the bar line when any of them change.\n"
+            "- Plays the role FEEDBACK plays on the delay (how long until silence).\n"
             "- Approximate by nature (~): damping makes highs die a little sooner.");
-        initF(revPreBarsF, 0.5f);
-        revPreBarsF.format   = [](float v) { static const char* n[5] = { "Off", "1/64", "1/32", "1/16", "1/8" };
-                                             return juce::String(n[juce::jlimit(0, 4, juce::roundToInt(v * 4.0f))]); };
-        revPreBarsF.onChange = [this](float v) { if (ignoreKnobCallbacks) return;
-            static const float fr[5] = { 0.0f, 1.0f/64.0f, 1.0f/32.0f, 1.0f/16.0f, 1.0f/8.0f };
-            const float b = fr[juce::jlimit(0, 4, juce::roundToInt(v * 4.0f))];
+        initF(revPreBarsF, 2.0f / 8.0f);
+        revPreBarsF.format   = [this](float) { auto& m = proc.masterFX();
+            const float b = masterBusB ? m.reverbPreBarsB : m.reverbPreBars;
+            const float n = b * 64.0f;
+            if (std::abs(n - std::round(n)) < 0.02f)
+            { const int ni = juce::roundToInt(n);
+              return ni == 0 ? juce::String("Off") : juce::String(ni) + "/64 bar"; }
+            return juce::String(b, 3) + " bar"; };
+        revPreBarsF.onChange = [this, shiftHeld](float v) { if (ignoreKnobCallbacks) return;
+            float b = v * 0.125f;                                    // 0..8 sixty-fourths of a bar
+            if (! shiftHeld()) b = std::round(b * 64.0f) / 64.0f;
             for (auto& p : proc.sequencer.patterns) (masterBusB ? p.master.reverbPreBarsB : p.master.reverbPreBars) = b; };
-        revPreBarsF.setTooltip("Pre-delay, synced: the gap before the tail blooms, as a bar fraction.\n\n"
+        revPreBarsF.setTooltip("Pre-delay, synced: the gap before the tail blooms, counted in 64THS of a bar "
+            "(1/64 = ~30 ms at 120 BPM - classic drum pre-delay).\n\n"
+            "- SHIFT-drag = free decimal in between.\n"
             "- A synced gap keeps the dry transient punchy and the reverb 'in the pocket' at any tempo.");
-        // GATE: the 80s gated-verb chop (independent of Sync - the bar length is always known).
+        // GATE [2026-07-15 12:10]: follows the row's Sync - counted 16THS of a bar when synced,
+        // free MILLISECONDS when not. Each mode keeps its OWN stored value.
         initF(revGateF, 0.0f);
-        revGateF.format   = [](float v) { static const char* n[7] = { "Off", "1/32", "1/16", "1/8", "1/4", "1/2", "1 bar" };
-                                          return juce::String(n[juce::jlimit(0, 6, juce::roundToInt(v * 6.0f))]); };
-        revGateF.onChange = [this](float v) { if (ignoreKnobCallbacks) return;
-            static const float fr[7] = { 0.0f, 1.0f/32.0f, 1.0f/16.0f, 1.0f/8.0f, 0.25f, 0.5f, 1.0f };
-            const float b = fr[juce::jlimit(0, 6, juce::roundToInt(v * 6.0f))];
-            for (auto& p : proc.sequencer.patterns) (masterBusB ? p.master.reverbGateB : p.master.reverbGate) = b; };
+        revGateF.format   = [this](float) { auto& m = proc.masterFX();
+            if (masterBusB ? m.reverbSyncB : m.reverbSync)
+            { const float b = masterBusB ? m.reverbGateB : m.reverbGate;
+              const float n = b * 16.0f;
+              if (std::abs(n - std::round(n)) < 0.02f)
+              { const int ni = juce::roundToInt(n);
+                return ni == 0 ? juce::String("Off") : ni == 16 ? juce::String("1 bar") : juce::String(ni) + "/16 bar"; }
+              return juce::String(b, 2) + " bar"; }
+            const float ms = masterBusB ? m.reverbGateMsB : m.reverbGateMs;
+            return ms < 1.0f ? juce::String("Off") : juce::String(juce::roundToInt(ms)) + " ms"; };
+        revGateF.onChange = [this, shiftHeld](float v) { if (ignoreKnobCallbacks) return;
+            if (masterBusB ? proc.masterFX().reverbSyncB : proc.masterFX().reverbSync)
+            { float b = v;                                           // 0..16 sixteenths = 0..1 bar
+              if (! shiftHeld()) b = std::round(b * 16.0f) / 16.0f;
+              for (auto& p : proc.sequencer.patterns) (masterBusB ? p.master.reverbGateB : p.master.reverbGate) = b; }
+            else
+            { const float ms = v < 0.005f ? 0.0f : v * 1000.0f;      // free 0..1000 ms
+              for (auto& p : proc.sequencer.patterns) (masterBusB ? p.master.reverbGateMsB : p.master.reverbGateMs) = ms; } };
         revGateF.setTooltip("Gate: the wet tail is CUT DEAD this long after each hit - the 80s gated-reverb "
             "chop (think huge 'In the Air Tonight' snares).\n\n"
-            "- Loudness stays yours: crank Decay for a dense loud wash, gate it at 1/8 bar = thick burst, "
-            "then silence.\n"
-            "- Tempo-locked always (bar length comes from the active clock); closes with a ~5 ms fade so "
-            "it never clicks.\n- Bottom = off.");
-        // Reverb SYNC toggle (Decay-in-bars + Pre-in-fractions).
-        content.addAndMakeVisible(lblRevSyncT);
-        lblRevSyncT.setText("Sync", juce::dontSendNotification);
-        lblRevSyncT.setFont(juce::Font(8.5f)); lblRevSyncT.setJustificationType(juce::Justification::centred);
-        lblRevSyncT.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
-        content.addAndMakeVisible(swReverbSync);
-        swReverbSync.setTooltip("Sync the reverb to the tempo: Decay becomes a tail length in BARS and "
-            "Pre-delay a bar fraction.\n\n- Off = the classic free knobs (percent / milliseconds).");
+            "- The reverb's version of the delay's MAX TRAIL: length capped, loudness untouched - crank "
+            "Decay for a dense loud wash, gate it at 2/16 = thick burst, then silence.\n"
+            "- Sync on = counted 16THS of a bar (SHIFT = free decimal); Sync off = free milliseconds. "
+            "Each mode remembers its own setting.\n"
+            "- Closes with a ~5 ms fade so it never clicks.\n- Bottom = off.");
+        // Reverb SYNC = a single-row lit button [2026-07-15 12:10] (styled at the Sync/Ping site).
+        swReverbSync.setTooltip("Sync the reverb to the tempo: Decay becomes a tail length in BARS, "
+            "Pre-delay a bar fraction, and Gate counts 16ths.\n\n- Off = the classic free knobs "
+            "(percent / milliseconds).");
         swReverbSync.onClick = [this] { if (ignoreKnobCallbacks) return;
             const bool on = swReverbSync.getToggleState();
             for (auto& p : proc.sequencer.patterns) (masterBusB ? p.master.reverbSyncB : p.master.reverbSync) = on;
             refreshMasterSyncFaders(); refreshDetailPanel(); };
+        // Master WIDTH [2026-07-15 12:10] (the 5th top-row fader): bass-safe M/S stereo width.
+        initF(masterWidthF, 1.0f / 1.5f);
+        masterWidthF.format   = [](float v) { return juce::String(juce::roundToInt(v * 150.0f)) + "%"; };
+        masterWidthF.onChange = [this](float v) { if (ignoreKnobCallbacks) return;
+            for (auto& p : proc.sequencer.patterns) p.master.masterWidth = v * 1.5f; };
+        masterWidthF.setTooltip("Master stereo width.\n\n"
+            "- 100% = natural (off). Below = narrower (0% = mono); above = wider, up to 150%.\n"
+            "- Widening is BASS-SAFE: side content below ~120 Hz stays centred, so kick and sub "
+            "keep their mono punch (club-safe).\n"
+            "- The reverb row's Width is the same idea applied to the reverb tail only.");
+        content.addAndMakeVisible(lblMasterWidth);
+        // attach the new faders' name labels [2026-07-15 12:10] - they were styled+positioned but
+        // never PARENTED, so they didn't draw (the user's "some faders have no text" report)
+        content.addAndMakeVisible(lblDelTrail); content.addAndMakeVisible(lblDelDuck);
+        content.addAndMakeVisible(lblDelChar);  content.addAndMakeVisible(lblRevGate);
         // The proxy Wet faders become header PILLS (same objects, horizontal, placed in layoutContent).
         masterVF[6].setLabel("Wet");  masterVF[11].setLabel("Wet");
         // Live read-outs on the proxies: Decay shows the ESTIMATED tail (~seconds, follows Size/Mode/
@@ -9378,8 +9433,22 @@ void DrumSequencerEditor::setupComponents()
             "kit sounds like ONE instrument (the classic bus-glue trick).\n- Adds no harmonics - that's Sat's job.\n- 0 = off.");
         masterVF[3].setTooltip("Limiter ceiling.\n\n- The final safety: nothing passes this level.\n"
             "- -0.1 dB = transparent protection (default); lower = audible squash for loudness.");
-        masterVF[4].setTooltip("Size: how big the reverb's room is.\n\n- Small = tight and boxy, large = long "
-            "smooth wash.\n- The Decay fader's ~seconds estimate follows this live.");
+        // Size shows an honest ROOM DIMENSION (~meters, from the tank's loop time) instead of a
+        // meaningless % [2026-07-15 12:10] - the delay's Time ("N /bar") and this are the same
+        // knob in two kinds of space.
+        masterVF[4].format = [this](float) {
+            auto& m = proc.masterFX();
+            const float mtr = FDNReverb::meanLoopSec(masterBusB ? m.reverbRoomB : m.reverbRoom,
+                                                     juce::jlimit(0, 3, masterBusB ? m.reverbModeB : m.reverbMode),
+                                                     48000.0) * 343.0f;
+            return "~" + juce::String(juce::roundToInt(mtr)) + " m";
+        };
+        masterVF[4].setTooltip("Size: how big the reverb's room is - shown as an approximate room "
+            "dimension in meters.\n\n- ~4 m = a booth, ~12 m = a club, ~20 m+ = a hall.\n"
+            "- Small = tight and boxy, large = long smooth wash; the Decay fader's ~seconds "
+            "estimate follows this live.\n"
+            "- Same job as the delay's Time fader: that one measures its 'room' in echoes-per-bar, "
+            "this one in meters.");
         masterVF[5].setTooltip("Decay: how long the tail rings.\n\n- The value shows the ESTIMATED tail length "
             "(~seconds, to about -60 dB) - it updates live when Size, Mode or the tempo change.\n"
             "- Approximate by nature (~): damping makes highs die a little sooner.\n"
@@ -9391,12 +9460,14 @@ void DrumSequencerEditor::setupComponents()
         masterVF[8].setTooltip("Width: the reverb's stereo spread.\n\n- 100% = full wide tail, 0 = mono/narrow "
             "(tight, centred).");
         masterVF[9].setTooltip("Delay time in milliseconds (free).\n\n- Turn Sync on to set it as ECHOES PER BAR "
-            "instead (locks to any step grid, incl. 7/11/13).");
+            "instead (locks to any step grid, incl. 7/11/13).\n"
+            "- Same job as the reverb's Size: this is the delay's 'room', measured in echo spacing.");
         masterVF[10].setTooltip("Feedback: how much of each echo survives into the next.\n\n"
             "- Every echo is a fixed number of dB quieter than the last: 50% = -6 dB per echo (~10 audible), "
             "70% = -3 dB (~19), 90% = -1 dB (long trail). ~-60 dB counts as gone.\n"
             "- The loop filters (and Dub's saturation) shave a little extra, so real trails run slightly "
-            "shorter than the ~figure.\n- Want a LOUD trail that ends abruptly? That's the Trail fader.");
+            "shorter than the ~figure.\n- Want a LOUD trail that ends abruptly? That's the Trail fader.\n"
+            "- Plays the role DECAY plays on the reverb (how long until silence).");
         masterVF[11].setTooltip("Delay Wet: the return level of the whole delay bus.\n\n- Per-sound amounts "
             "live on each channel's Dly send fader; this scales what comes back.\n- Right-click = MIDI-learn.");
     }
@@ -9410,7 +9481,7 @@ void DrumSequencerEditor::setupComponents()
 
     //-- Sounds section: 4 source toggle-switches + 2D blend pad + per-source knobs
     setupGroupHeader(hdrSounds, "MASTER");
-    hdrSounds.setColour(juce::Label::textColourId, juce::Colour(0xffffc24a));   // amber = this box is global (master), not per-channel
+    hdrSounds.setColour(juce::Label::textColourId, juce::Colour(0xffe8947a));   // BLEND orange = global/master (the "both slots" mix colour) [2026-07-15]
     for (auto& e : boxEngine) e = -1;
     for (int b = 0; b < DrumChannel::NUM_SLOTS; ++b)
     {
@@ -9882,22 +9953,22 @@ void DrumSequencerEditor::setupComponents()
     lblBlendBot.setColour(juce::Label::textColourId, juce::Colour(0xffff5fa6));
     // (Blend-character knobs Bloom/Drift/Spread/Punch/Glue removed - the DSP was dead.)
 
-    // Master FX: Delay Sync toggle + Save Mix (header) + Master Output Mono toggle
-    content.addAndMakeVisible(lblDelaySync);
-    lblDelaySync.setText("Sync", juce::dontSendNotification);
-    lblDelaySync.setFont(juce::Font(8.5f)); lblDelaySync.setJustificationType(juce::Justification::centred);
-    lblDelaySync.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
-    content.addAndMakeVisible(swDelaySync);
+    // Master FX: Delay Sync/Ping = SINGLE-ROW lit buttons now [2026-07-15 12:10] (user: the old
+    // label + tiny switch pairs cost four rows and shrank the text; a lit button carries its own
+    // word). The old labels stay as members but are never placed.
+    auto setupLitBtn = [this](juce::TextButton& b, const char* txt) {
+        b.setButtonText(txt); b.setClickingTogglesState(true);
+        b.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff35b56a));
+        b.setLookAndFeel(&tinyBtnLNF);
+        content.addAndMakeVisible(b);
+    };
+    setupLitBtn(swDelaySync, "Sync");
     swDelaySync.onClick = [this] { if (!ignoreKnobCallbacks) { const bool on = swDelaySync.getToggleState();
         for (auto& p : proc.sequencer.patterns) (masterBusB ? p.master.delaySyncB : p.master.delaySync) = on; knobDelayTime.updateText();
-        refreshMasterSyncFaders(); } };   // [2026-07-15] Time fader <-> echoes-per-bar fader swap
-
-    content.addAndMakeVisible(lblDelayPingPong);
-    lblDelayPingPong.setText("Ping", juce::dontSendNotification);
-    lblDelayPingPong.setFont(juce::Font(8.5f)); lblDelayPingPong.setJustificationType(juce::Justification::centred);
-    lblDelayPingPong.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
-    content.addAndMakeVisible(swDelayPingPong);
-    swDelayPingPong.setTooltip("Ping-Pong: echoes bounce L<->R across the stereo field instead of repeating in place. "
+        refreshMasterSyncFaders(); refreshDetailPanel(); } };   // Time fader <-> echoes-per-bar fader swap
+    setupLitBtn(swReverbSync, "Sync");   // reverb row (onClick + tooltip set at the fader block)
+    setupLitBtn(swDelayPingPong, "Ping");
+    swDelayPingPong.setTooltip("Ping-Pong: each echo bounces to the opposite side (echo 1 left, echo 2 right...). "
                                "Great for width on hats/percussion. Needs the channel's Delay send up.");
     swDelayPingPong.onClick = [this] { if (!ignoreKnobCallbacks) { const bool on = swDelayPingPong.getToggleState();
         for (auto& p : proc.sequencer.patterns) (masterBusB ? p.master.delayPingPongB : p.master.delayPingPong) = on; } };
@@ -11360,18 +11431,13 @@ void DrumSequencerEditor::refreshDetailPanel()
         delayTrailF.setValue01(t <= 0 ? 1.0f : (float) (t - 1) / 21.0f); }
       delayDuckF.setValue01(masterBusB ? m.delayDuckB : m.delayDuck);
       delayCharF.setValue01(masterBusB ? m.delayCharB : m.delayChar);
-      { static const float bars[5] = { 0.25f, 0.5f, 1.0f, 2.0f, 4.0f };
-        const float db = masterBusB ? m.reverbDecBarsB : m.reverbDecBars; int di = 0;
-        for (int k2 = 1; k2 < 5; ++k2) if (std::abs(db - bars[k2]) < std::abs(db - bars[di])) di = k2;
-        revDecBarsF.setValue01((float) di / 4.0f); }
-      { static const float fr[5] = { 0.0f, 1.0f/64.0f, 1.0f/32.0f, 1.0f/16.0f, 1.0f/8.0f };
-        const float pb = masterBusB ? m.reverbPreBarsB : m.reverbPreBars; int pi = 0;
-        for (int k2 = 1; k2 < 5; ++k2) if (std::abs(pb - fr[k2]) < std::abs(pb - fr[pi])) pi = k2;
-        revPreBarsF.setValue01((float) pi / 4.0f); }
-      { static const float fr[7] = { 0.0f, 1.0f/32.0f, 1.0f/16.0f, 1.0f/8.0f, 0.25f, 0.5f, 1.0f };
-        const float gt = masterBusB ? m.reverbGateB : m.reverbGate; int gi = 0;
-        for (int k2 = 1; k2 < 7; ++k2) if (std::abs(gt - fr[k2]) < std::abs(gt - fr[gi])) gi = k2;
-        revGateF.setValue01((float) gi / 6.0f); }
+      // counted-unit inverses [2026-07-15 12:10]
+      revDecBarsF.setValue01(((masterBusB ? m.reverbDecBarsB : m.reverbDecBars) * 4.0f - 1.0f) / 31.0f);
+      revPreBarsF.setValue01((masterBusB ? m.reverbPreBarsB : m.reverbPreBars) / 0.125f);
+      revGateF.setValue01((masterBusB ? m.reverbSyncB : m.reverbSync)
+                              ? (masterBusB ? m.reverbGateB : m.reverbGate)
+                              : (masterBusB ? m.reverbGateMsB : m.reverbGateMs) / 1000.0f);
+      masterWidthF.setValue01(m.masterWidth / 1.5f);
       refreshMasterSyncFaders(); }
     knobDelayTime.updateText();
     knobMasterVol.setValue  (proc.masterFX().volume,            juce::dontSendNotification);
@@ -12335,7 +12401,7 @@ void DrumSequencerEditor::paintContent(juce::Graphics& g)
         auto b = hdrSounds.getBounds().toFloat();
         juce::Rectangle<float> mb(b.getX() - 3.0f, b.getY() - 3.0f, b.getWidth() + 6.0f, (float) colH);
         g.setColour(juce::Colour(0x18ffc24a)); g.fillRoundedRectangle(mb, 4.0f);
-        g.setColour(juce::Colour(0xffffc24a)); g.drawRoundedRectangle(mb.reduced(0.5f), 4.0f, 1.8f);
+        g.setColour(juce::Colour(0xffe8947a)); g.drawRoundedRectangle(mb.reduced(0.5f), 4.0f, 1.8f);   // blend orange [2026-07-15]
         g.setColour(juce::Colour(0xff353560));
     }
 }
@@ -12664,12 +12730,22 @@ void DrumSequencerEditor::layoutContent()
             lbl.setFont(juce::Font(9.5f, juce::Font::bold)); lbl.setMinimumHorizontalScale(0.7f);
             lbl.setBounds(fx - 5, fy + FH + 1, FW + 10, 11);
         };
-        // Row 1: Tilt / Sat / Glue / Limit + Mono toggle (col 5)
+        // Row 1: Tilt / Sat / Glue / Limit / Width + Mono toggle (col 5) - six slots like the
+        // other rows [2026-07-15 12:10]; Width = the new bass-safe master stereo width.
         { const int fy = colTop + 44;
-          vf(0, lblMasterTilt, 0, fy); vf(1, lblMasterSat, 1, fy);
-          vf(2, lblMasterGlue, 2, fy); vf(3, lblMasterLimit, 3, fy);
-          const int mx = sx + 8 + 4 * FPITCH;
-          monoToggle.setVisible(true); monoToggle.setBounds(mx - 7, fy + 4, FW + 14, 38); }
+          const int FP6a = (masterW - 16) / 6, FW6a = FP6a - 6;
+          auto vfa = [&](juce::Component& c, juce::Label& lbl, int col) {
+              const int fx = sx + 8 + col * FP6a;
+              c.setVisible(true); c.setBounds(fx, fy, FW6a, FH);
+              lbl.setVisible(true); lbl.setJustificationType(juce::Justification::centred);
+              lbl.setFont(juce::Font(9.5f, juce::Font::bold)); lbl.setMinimumHorizontalScale(0.62f);
+              lbl.setBounds(fx - 4, fy + FH + 1, FW6a + 8, 11);
+          };
+          vfa(masterVF[0], lblMasterTilt, 0); vfa(masterVF[1], lblMasterSat, 1);
+          vfa(masterVF[2], lblMasterGlue, 2); vfa(masterVF[3], lblMasterLimit, 3);
+          vfa(masterWidthF, lblMasterWidth, 4); lblMasterWidth.setText("Width", juce::dontSendNotification);
+          const int mx = sx + 8 + 5 * FP6a;
+          monoToggle.setVisible(true); monoToggle.setBounds(mx - 5, fy + 4, FW6a + 10, 38); }
         // [2026-07-15 02:30] Rows 2+3 = SIX slots each now (user layout): Wet moved to a PILL on the
         // title line, freeing slots for Gate (reverb) and Trail/Duck/Character (delay). The synced
         // variants (Decay/Pre in bars, Time in echoes-per-bar) share bounds with their free proxies;
@@ -12688,15 +12764,18 @@ void DrumSequencerEditor::layoutContent()
           masterVF[6].setVertical(false); masterVF[6].setVisible(true);            // the Wet PILL (same proxy)
           masterVF[6].setBounds(sx + masterW - 78, colTop + 127, 70, 15);
           lblRevWet.setVisible(false); lblRevWet.setBounds(0, 0, 0, 0);
+          // Order pairs the delay row's jobs by COLUMN [2026-07-15 12:10]: col1 = the space
+          // (Size ~m | Time /bar), col2 = the length (Decay | Feedback), col3 = the hard stop
+          // (Gate | Trail). Cols 4-5 = each effect's own personality (Pre/Width | Duck/Char).
           const int fy = colTop + 144;
           vf6(masterVF[4], lblRevRoom,  0, fy);
           vf6(masterVF[5], lblRevDecay, 1, fy); revDecBarsF.setBounds(masterVF[5].getBounds());
-          vf6(masterVF[7], lblRevPre,   2, fy); revPreBarsF.setBounds(masterVF[7].getBounds());
-          vf6(masterVF[8], lblRevWidth, 3, fy);
-          vf6(revGateF,    lblRevGate,  4, fy); lblRevGate.setText("Gate", juce::dontSendNotification);
+          vf6(revGateF,    lblRevGate,  2, fy); lblRevGate.setText("Gate", juce::dontSendNotification);
+          vf6(masterVF[7], lblRevPre,   3, fy); revPreBarsF.setBounds(masterVF[7].getBounds());
+          vf6(masterVF[8], lblRevWidth, 4, fy);
+          lblRevSyncT.setVisible(false); lblRevSyncT.setBounds(0, 0, 0, 0);   // the lit button carries its own word now
           const int cx5 = sx + 8 + 5 * FP6;
-          lblRevSyncT.setVisible(true); lblRevSyncT.setBounds(cx5 - 4, fy + 12, FW6 + 8, 11);
-          swReverbSync.setVisible(true); swReverbSync.setBounds(cx5 + juce::jmax(0, (FW6 - 30) / 2), fy + 26, 30, 16); }
+          swReverbSync.setVisible(true); swReverbSync.setBounds(cx5, fy + 20, FW6 + 2, 20); }
         // Row 3: DELAY - Time(ms | /bar) / Trail / Feedback / Duck / Character + [Sync over Ping]; Wet = pill
         { hdrDelayG.setVisible(true);   // text ("DELAY A - TAPE") comes from refreshReverbModeHeader - never overwrite it here
           hdrDelayG.setBounds(sx + 6, colTop + 230, masterW - 86, hdrH);
@@ -12705,17 +12784,16 @@ void DrumSequencerEditor::layoutContent()
           lblDelWet.setVisible(false); lblDelWet.setBounds(0, 0, 0, 0);
           const int fy = colTop + 248;
           vf6(masterVF[9],  lblDelTime,  0, fy); delayBarNF.setBounds(masterVF[9].getBounds());
-          vf6(delayTrailF,  lblDelTrail, 1, fy); lblDelTrail.setText("Trail", juce::dontSendNotification);
-          vf6(masterVF[10], lblDelFB,    2, fy);
+          vf6(masterVF[10], lblDelFB,    1, fy); lblDelFB.setText("F.back", juce::dontSendNotification);
+          vf6(delayTrailF,  lblDelTrail, 2, fy); lblDelTrail.setText("Trail", juce::dontSendNotification);
           vf6(delayDuckF,   lblDelDuck,  3, fy); lblDelDuck.setText("Duck", juce::dontSendNotification);
           vf6(delayCharF,   lblDelChar,  4, fy); lblDelChar.setText("Char", juce::dontSendNotification);
-          const int cx5 = sx + 8 + 5 * FP6, swx = cx5 + juce::jmax(0, (FW6 - 30) / 2);
-          lblDelaySync.setVisible(true); lblDelaySync.setJustificationType(juce::Justification::centred);
-          lblDelaySync.setFont(juce::Font(8.5f));
-          lblDelaySync.setBounds(cx5 - 4, fy - 2, FW6 + 8, 10); swDelaySync.setBounds(swx, fy + 9, 30, 14);
-          lblDelayPingPong.setVisible(true); lblDelayPingPong.setJustificationType(juce::Justification::centred);
-          lblDelayPingPong.setFont(juce::Font(8.5f)); lblDelayPingPong.setMinimumHorizontalScale(0.7f);
-          lblDelayPingPong.setBounds(cx5 - 4, fy + 30, FW6 + 8, 10); swDelayPingPong.setBounds(swx, fy + 41, 30, 14); }
+          // Sync + Ping = two single-row lit buttons stacked in col 5 (the words live INSIDE) [2026-07-15 12:10]
+          lblDelaySync.setVisible(false);    lblDelaySync.setBounds(0, 0, 0, 0);
+          lblDelayPingPong.setVisible(false); lblDelayPingPong.setBounds(0, 0, 0, 0);
+          const int cx5 = sx + 8 + 5 * FP6;
+          swDelaySync.setBounds(cx5, fy + 8, FW6 + 2, 20);
+          swDelayPingPong.setBounds(cx5, fy + 34, FW6 + 2, 20); }
         refreshMasterSyncFaders();   // free proxy vs synced variant + Character dim (Digital)
 
         // -- AMP ENVELOPE + EQ column. The amp-env graph top is GRAPH_Y so it aligns with the pitch-env graph. --

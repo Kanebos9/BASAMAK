@@ -56,9 +56,14 @@ public:
         // bar fraction. GATE = the 80s gated-verb chop: the wet return cuts dead a bar-fraction
         // after each hit (0 = off; loudness stays decoupled from length, like the delay Trail).
         bool  reverbSync = false;  float reverbDecBars = 1.0f;  float reverbPreBars = 0.03125f;
-        float reverbGate = 0.0f;   // 0 = off, else the gate time as a fraction of a bar (1/32..1)
+        float reverbGate = 0.0f;   // 0 = off, else the gate time as a fraction of a bar (synced mode)
+        float reverbGateMs = 0.0f; // [2026-07-15 12:10] the FREE gate time in ms (Sync off; 0 = off) -
+                                   // each mode remembers its own value, toggling Sync never mangles it
         bool  reverbSyncB = false; float reverbDecBarsB = 1.0f; float reverbPreBarsB = 0.03125f;
-        float reverbGateB = 0.0f;
+        float reverbGateB = 0.0f;  float reverbGateMsB = 0.0f;
+        float masterWidth = 1.0f;  // [2026-07-15 12:10] master stereo width (0 mono .. 1 natural =
+                                   // bit-identical .. 1.5 wide; widening is BASS-SAFE: side lows
+                                   // below ~120 Hz stay centred). Flavour = written to all patterns.
         float volume = 0.9f;
         bool  mono   = false;
         float limit  = 0.003f;          // 0 = limiter off; default ~-0.1 dB ceiling (light/transparent)

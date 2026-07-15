@@ -112,6 +112,7 @@ public:
     FDNReverb fdnB;                      // bus B (its own mode/size/decay - e.g. Hall keys / Room drums)
     float limiterGain    = 1.0f;        // limiter gain-reduction envelope (audio thread state)
     float masterGlueEnv  = 0.0f;        // master "glue" compressor detector envelope (audio thread state)
+    float masterWidthLp  = 0.0f;        // [2026-07-15 12:10] master WIDTH: side-signal ~120 Hz LP (bass-safe widening)
     float masterTiltL    = 0.0f;        // master tilt-EQ one-pole low-band state (L/R)
     float masterTiltR    = 0.0f;
     float satDcX[2]      = { 0.0f, 0.0f };  // master saturation DC-blocker state (last in, per channel)
