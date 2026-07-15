@@ -2512,6 +2512,7 @@ private:
     juce::TextButton btnVolReset { "VOL RESET" };
     float othersVolBase[Sequencer::NUM_CHANNELS] = {};
     bool  othersVolActive = false;
+    bool  keepPickerOnLayout = false;   // [2026-07-15 22:10] a sound pick relayouts WITHOUT closing the picker
     juce::TextButton btnTooltips { "Tooltips" };  // top bar: global hover-tooltips ON/OFF (default ON)
     bool             tooltipsOn = true;
     void refreshCountButtons();

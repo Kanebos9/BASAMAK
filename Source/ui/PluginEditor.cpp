@@ -5991,6 +5991,13 @@ void DrumSequencerEditor::applySoundPickId(int ch, int id)
     // "why is it deciding itself"). Sound picks now PRESERVE the channel volume; presets (whole
     // kits) still set it - kit balance is a preset-level decision.
     const float keepVol = c.volume;
+    const bool mutating = id == ID_INIT_MIX
+                       || (id >= FACTORY_MIX_BASE && id < FACTORY_MIX_BASE + Factory::mixNames().size())
+                       || (id >= 1 && id <= soundMixFiles.size());
+    // [2026-07-15 22:10] FADE any ringing/stuck voice BEFORE the slots change under it: a live
+    // voice rendering brand-new slot data (new engine, stale phases) screamed continuously when
+    // a sound was picked mid-playback (user report). Pitch-aware fade = clickless.
+    if (mutating) c.stopVoicesFaded();
     if (id == ID_REFRESH_BANK)      // re-scan so sounds saved on disk appear in every channel's dropdown
     {
         rescanSoundMixes();
@@ -6021,8 +6028,23 @@ void DrumSequencerEditor::applySoundPickId(int ch, int id)
         c.mixModified = false; c.mixHash = channelSoundHash(c);
         updateStripMixLabel(ch);
     }
-    // A visible picker for this channel follows the pick (MIDI knob browsing highlights live).
     c.volume = keepVol;   // the user's mixer level survives every pick (incl. Initialize)
+    // [2026-07-15 22:10] FULL slot-box resync on every pick (user: "the sound slot doesn't
+    // update... especially via MIDI next/prev"). refreshDetailPanel alone never re-synced the
+    // boxEngine[] mirror or re-placed the boxes (the drag-copy round-2 disease) - only
+    // selectChannel did, which is why combo picks "sometimes" looked right and MIDI browsing
+    // (no channel switch, no picker close) almost never did.
+    if (mutating && ch == selectedChannel)
+    {
+        syncBoxesFromSrcOn();                          // boxEngine[] <- the new slots' engines
+        keepPickerOnLayout = true;                     // browsing must not close the picker
+        layoutContent();                               // re-place the slot boxes for the new engines
+        keepPickerOnLayout = false;
+        refreshDetailPanel(); refreshSampleSel();
+        cacheWaveform(ch); syncPadFromSlots(false);
+        updateVisuals();
+    }
+    // A visible picker for this channel follows the pick (MIDI knob browsing highlights live).
     if (soundPicker != nullptr && soundPicker->isVisible())
     {
         auto& pp = static_cast<SoundPickerPanel&>(*soundPicker);
@@ -12633,7 +12655,9 @@ void DrumSequencerEditor::layoutContent()
 {
     // A view change (KEYS toggle, 8/16 rows, hide editor, resize) must never leave the sound
     // picker floating over the NEW layout (user screenshot: "it all just scrambled").
-    if (soundPicker != nullptr && soundPicker->isVisible())
+    // [2026-07-15 22:10] EXCEPT when the relayout was caused by a SOUND PICK - browsing (MIDI
+    // next/prev or the picker itself) must keep the picker open while the slot boxes re-place.
+    if (! keepPickerOnLayout && soundPicker != nullptr && soundPicker->isVisible())
         static_cast<SoundPickerPanel&>(*soundPicker).close();
     harmEd.setVisible(false);   // same rule for the DRAW HARMONICS overlay
     lfoCurveEd.setVisible(false);   // and the LFO SHAPER overlay
