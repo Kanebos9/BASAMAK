@@ -579,7 +579,7 @@ public:
     void mouseUp(const juce::MouseEvent&) override { lastI = -1; }
     juce::String getTooltip() override
     { return "Draw ONE cycle of this LFO's movement (left-drag). It plays at the LFO's speed and is "
-             "scaled by its Amount; Sync / Grid / Retrig / Free all apply. Click outside to close."; }
+             "scaled by its Amount; Sync / Retrig / Free all apply. Click outside to close."; }
 private:
     struct Closer : juce::MouseListener
     {
@@ -1023,12 +1023,11 @@ public:
       { modEnvA_ = a; modEnvH_ = h; modEnvD_ = d; modEnvS_ = s; modEnvR_ = r; if (dest_ == 3) repaint(); } }
     void setFreeClockSec(double s) { if (std::abs(s - freeSec_) > 1.0e-4) { freeSec_ = s;
         if (free_[dest_] && amt_[dest_] > 0.001f) repaint(); } }   // dot keeps moving between notes
-    // Live tempo/grid info so the drawn wave + read-out show the TRUE synced speed (never the ignored
-    // free-Hz value - the honesty rule). gridCpb = the channel's grid cells per bar (for Grid mode).
-    void setTempoInfo(float barSec, float gridCpb)
-    { barSec = juce::jmax(0.05f, barSec); gridCpb = juce::jmax(1.0f, gridCpb);
-      if (std::abs(barSec - barSec_) > 1e-4f || std::abs(gridCpb - gridCpb_) > 1e-4f)
-      { barSec_ = barSec; gridCpb_ = gridCpb; repaint(); } }
+    // Live tempo so the drawn wave + read-out show the TRUE synced speed (never the ignored
+    // free-Hz value - the honesty rule). (Grid mode + its gridCpb are GONE [2026-07-15 14:20].)
+    void setTempoInfo(float barSec)
+    { barSec = juce::jmax(0.05f, barSec);
+      if (std::abs(barSec - barSec_) > 1e-4f) { barSec_ = barSec; repaint(); } }
     int  selDest() const { return dest_; }   // the tab being edited (the timer feeds ITS phase)
     void setFilterOn(bool on) { if (on != filtOn_) { filtOn_ = on; repaint(); } }   // live update of the FILT-off warning
     void setPhase(double ph) { if (std::abs(ph - phase_) > 1.0e-3) { phase_ = ph; repaint(); } }
@@ -1055,7 +1054,7 @@ private:
     bool  dnMoved_ = false;                        // click vs drag (a plain click in Custom opens the editor)
     double freeSec_ = 0.0;                         // live free-run clock (editor timer)
     uint32_t liveCyc_ = 0;                         // the playing note's S&H cycle base (Random draws ITS pattern)
-    float barSec_ = 2.0f, gridCpb_ = 16.0f;    // live tempo + grid density (setTempoInfo)
+    float barSec_ = 2.0f;                      // live tempo (setTempoInfo)
     int dest_ = 0; bool filtOn_ = false, waveOn_ = false;   // waveOn_ = the slot's Wave is Custom (WAVE dest audible)
     double phase_ = -1.0;
     juce::Colour accent_ { 0xffe8bf4d };
@@ -1066,8 +1065,8 @@ private:
     // The wave's true speed in Hz for dest d (what the DSP actually plays - synced rates included).
     float effHz(int d) const { const float s = sync_[d];
         return s == 0.0f ? rate_[d]
-             : s <= -1.5f ? 261.63f * rate_[d]                       // KEY: drawn at middle C x ratio (per-voice in the DSP)
-             : (s < 0.0f ? gridCpb_ : s) / barSec_; }
+             : s < 0.0f  ? 261.63f * rate_[d]                        // KEY: drawn at middle C x ratio (per-voice in the DSP)
+             : s / barSec_; }                                        // Bar sync (GRID mode deleted [2026-07-15 14:20])
     // GENERIC LFO: the hue follows what the LFO AFFECTS (its assigned destination), so the wave
     // colour tells you its effect at a glance; Off = neutral grey.
     juce::Colour destCol(int lfoIdx) const;   // fixed per-LFO identity hue (impl in .cpp - needs kLfoDestCol)

@@ -957,6 +957,8 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
             s.lfoRate[d2] = (float)st.getProperty("lfR" + juce::String(d2), d.lfoRate[d2]);
             s.lfoAmt[d2]  = (float)st.getProperty("lfA" + juce::String(d2), d.lfoAmt[d2]);
             s.lfoSync[d2] = (float)st.getProperty("lfS" + juce::String(d2), d.lfoSync[d2]);
+            if (s.lfoSync[d2] > -1.5f && s.lfoSync[d2] < 0.0f)   // retired GRID (-1) -> the equivalent bar value [2026-07-15 14:20]
+                s.lfoSync[d2] = (float) juce::jmax(1, drawMode ? 16 : numSteps);
             s.lfoShape[d2] = juce::jlimit(0, 7, (int) st.getProperty("lfSh" + juce::String(d2), d.lfoShape[d2]));
             s.lfoFree[d2]  = (bool) st.getProperty("lfFr" + juce::String(d2), d.lfoFree[d2]);
             s.lfoLegato[d2] = (bool) st.getProperty("lfLg" + juce::String(d2), d.lfoLegato[d2]);
@@ -1917,8 +1919,7 @@ void DrumChannel::computeModSources(int s, const Slot& sl, float* out, const Voi
     // free phase. Value = the LFO Amount (depth) x shape; the matrix route amount scales it further.
     for (int d = 0; d < 4; ++d)
     {
-        float cpb = sl.lfoSync[d];
-        if (cpb < 0.0f) cpb = (float) juce::jmax(1, drawMode ? lfoGridDiv : numSteps);
+        const float cpb = sl.lfoSync[d];   // GRID mode (-1) is GONE [2026-07-15 14:20] - old files migrate in readSlots
         const float hz = (cpb > 0.0f) ? juce::jlimit(0.005f, 40.0f, cpb / juce::jmax(0.05f, lfoBarSeconds))
                                       : juce::jlimit(0.05f, 30.0f, sl.lfoRate[d]);
         double ph; uint32_t cyc;
@@ -2225,9 +2226,10 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         c.fxDriveType = sl.fxDriveType; c.fxDrive = sl.fxDrive;   // per-slot FX (sends are CHANNEL-level now)
         c.lfoKeyBase = 0.0;
         for (int d2 = 0; d2 < 4; ++d2) {   // per-slot LFOs (free-Hz / tempo-synced / KEY-tracked)
-            // lfoSync: 0 = OFF (free Hz), > 0 = cycles per bar, -1 = LOCK TO GRID (draw = Grid 1/N,
-            // else step count), -2 = KEY (rate follows the played PITCH x ratio; lfoRate = the ratio -
-            // the audio-rate FM mode).
+            // lfoSync: 0 = OFF (free Hz), > 0 = cycles per bar, -2 = KEY (rate follows the played
+            // PITCH x ratio; lfoRate = the ratio - the audio-rate FM mode). GRID (-1) was DELETED
+            // [2026-07-15 14:20] (user: bar-sync covers it, grid just locked the number) - old
+            // files migrate to the equivalent bar value in readSlots.
             c.lfoKeyRatio[d2] = 0.0f;
             float cpb = sl.lfoSync[d2];
             if (cpb <= -1.5f)                                   // KEY mode: per-voice, per-sample rate
@@ -2238,7 +2240,6 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             }
             else
             {
-                if (cpb < 0.0f) cpb = (float) juce::jmax(1, drawMode ? lfoGridDiv : numSteps);   // grid: one cycle per cell
                 c.lfoRate[d2] = (cpb > 0.0f)
                     ? juce::jlimit(0.005f, 40.0f, cpb / juce::jmax(0.05f, lfoBarSeconds))          // cycles/bar -> Hz
                     : juce::jlimit(0.05f, 2000.0f, sl.lfoRate[d2]);   // free Hz - now reaches AUDIO rates (FM/AM)
@@ -3907,7 +3908,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                                 : type == ChFxAutoPanS ? ChFxAutoPan : (int) ChFxRotary;
             double syncHz = 0.0;
             if (typeSync)
-                syncHz = kChFxCpb[juce::jlimit(0, 13, (int) std::lround(ch1 * 13.0f))]
+                syncHz = kChFxCpb[juce::jlimit(0, kChFxCpbN - 1, (int) std::lround(ch1 * (float)(kChFxCpbN - 1)))]
                          / juce::jmax(0.1f, lfoBarSeconds);
             const float chDepth = typeSync ? 0.5f : ch1;         // synced: rate only, depth = the 0.5 default
             switch (baseType)

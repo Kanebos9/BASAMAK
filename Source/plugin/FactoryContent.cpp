@@ -1715,7 +1715,7 @@ static void nSyncSweep(DC& c) {     // rhythmic band-pass sweep pad: LFO LOCKED 
     s.oscUnison = 3; s.oscDetune = 0.2f;
     s.atk = 0.12f; s.dec = 1.4f; s.sustain = 0.85f; s.release = 0.8f;
     s.filterType = DC::BandPass; s.filterCutoff = 800.0f; s.filterReso = 2.2f;
-    s.lfoAmt[0] = 0.85f; s.lfoSync[0] = -1.0f; lfoRoute(s, 0, DC::MTFilt1Cut);   // LOCK TO GRID: one sweep per grid cell (step count / piano-roll grid)
+    s.lfoAmt[0] = 0.85f; s.lfoSync[0] = 16.0f; lfoRoute(s, 0, DC::MTFilt1Cut);   // 16 sweeps/bar (was lock-to-grid; GRID mode deleted 2026-07-15 - 16 = its value at the default grid)
     c.reverbSend = 0.35f; c.volume = 0.6f;
 }
 static void nChorusBells(DC& c) {   // shimmering tuned bells: modal body + chorus, long reverb + delay tail

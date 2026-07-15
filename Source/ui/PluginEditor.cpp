@@ -4022,9 +4022,10 @@ static inline float uiLfoShapeVal(int shape, double ph, uint32_t cyc, const floa
 // Tempo-sync detents in CYCLES PER BAR, stepped through by DRAGGING THE WAVE while Sync is on
 // (the wave is the ONE rate control - the old Sync/Rate faders duplicated it and were removed).
 // Spans slow sweeps (0.25 = one cycle per 4 bars) to 16th wobble, incl. ODD values for odd meters.
-static const float kLfoSyncCPB[18] = { 0.25f, 0.5f, 0.75f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f,
-                                       7.0f, 8.0f, 9.0f, 10.0f, 11.0f, 12.0f, 13.0f, 16.0f };
-static constexpr int kLfoSyncN = 18;
+// [2026-07-15 14:20] the LFO Bar-sync detents = THE shared cycles-per-bar ladder (every whole
+// number to 21; the old hand-picked list jumped 13 -> 16 - user). One source: DrumChannel.
+static const float* kLfoSyncCPB = DrumChannel::kChFxCpb;
+static constexpr int kLfoSyncN  = DrumChannel::kChFxCpbN;
 static int lfoSyncNearestIdx(float cpb)
 { int b = 0; float bd = 1.0e9f;
   for (int i = 0; i < kLfoSyncN; ++i) { const float d = std::abs(kLfoSyncCPB[i] - cpb); if (d < bd) { bd = d; b = i; } }
@@ -4126,9 +4127,8 @@ void LfoDisplay::paint(juce::Graphics& g)
         g.drawText("not routed - use the MATRIX faders below", a.reduced(3.0f, 1.0f),
                    juce::Justification::bottomLeft, false);
     }
-    // Bottom row: the SYNC button (click = Off -> Sync -> Grid) + the honest speed read-out.
-    // Off = drag the wave for free Hz; Sync = dragging SNAPS through musical cycles/bar; Grid =
-    // the rate follows the channel's grid automatically.
+    // Bottom row: the SYNC button (click = Off -> Sync -> Key) + the honest speed read-out.
+    // Off = drag the wave for free Hz; Sync = dragging SNAPS through cycles/bar (the shared ladder).
     {
         auto shb = shapeBtnRect();   // SHAPE: cycles Sine -> Tri -> Saw -> Square -> Random
         const bool shOn = shape_[dest_] > 0;
@@ -4148,12 +4148,12 @@ void LfoDisplay::paint(juce::Graphics& g)
         const bool on = s != 0.0f;
         g.setColour(on ? destCol(dest_) : juce::Colour(0xff2a2a4a)); g.fillRoundedRectangle(sb, 3.0f);
         g.setColour(on ? juce::Colours::black : juce::Colour(0xff9aa6c0)); g.setFont(juce::Font(9.5f, juce::Font::bold));
-        g.drawText(s == 0.0f ? "Sync: Off" : (s <= -1.5f ? "Sync: Key" : s < 0.0f ? "Sync: Grid" : "Sync: Bar"), sb, juce::Justification::centred, false);
+        g.drawText(s == 0.0f ? "Sync: Off" : (s < 0.0f ? "Sync: Key" : "Sync: Bar"), sb, juce::Justification::centred, false);
         g.setColour(juce::Colour(0xffaeb8d4)); g.setFont(juce::Font(9.5f, juce::Font::bold));
         const juce::String rd = s == 0.0f
             ? "Speed: " + juce::String(rate_[dest_], rate_[dest_] < 3.0f ? 1 : (rate_[dest_] > 99.0f ? 0 : 0)) + " Hz"
             : (s <= -1.5f ? "Speed: Key x" + juce::String(rate_[dest_], rate_[dest_] < 3.0f ? 2 : 1)   // rate = the RATIO in Key mode
-               : s < 0.0f ? "Speed: Grid " + lfoCpbText(gridCpb_) : "Speed: " + lfoCpbText(s));
+               : "Speed: " + lfoCpbText(s));
         g.drawText(rd, 6, getHeight() - 15, getWidth() - 12, 12, juce::Justification::centredLeft, false);
     }
 }
@@ -4223,7 +4223,7 @@ void LfoDisplay::mouseDown(const juce::MouseEvent& e)
         repaint(); return;
     }
     if (syncBtnRect().contains(e.position))
-    {   // cycle the selected LFO's sync mode: Off -> Sync (bar) -> Grid -> KEY -> Off.
+    {   // cycle the selected LFO's sync mode: Off -> Sync (bar) -> KEY -> Off (Grid deleted).
         // KEY = the rate FOLLOWS THE PLAYED PITCH x a ratio (the audio-rate FM mode: the timbre stays
         // consistent across the keyboard). While in Key, dragging the wave sets the RATIO.
         // NO reference here + the MODE commits BEFORE the Key ratio's onChange: onChange's handler
@@ -4232,8 +4232,7 @@ void LfoDisplay::mouseDown(const juce::MouseEvent& e)
         const float cur = sync_[dest_];
         float ns;
         if (cur == 0.0f)       ns = kLfoSyncCPB[lfoSyncNearestIdx(rate_[dest_] * barSec_)];   // keep ~the same speed
-        else if (cur > 0.0f)   ns = -1.0f;    // grid
-        else if (cur > -1.5f)  ns = -2.0f;    // key
+        else if (cur > 0.0f)   ns = -2.0f;    // key (GRID was deleted [2026-07-15 14:20] - bar sync covers it)
         else                   ns = 0.0f;     // back to free Hz
         sync_[dest_] = ns;
         if (onSyncChange) onSyncChange(dest_, ns);
@@ -4329,11 +4328,10 @@ juce::String LfoDisplay::getTooltip()
                "- Legato: a note that starts while another is still SOUNDING inherits its wave mid-flight; "
                "detached notes restart. The mono-lead feel: the wobble survives a legato line.";
     if (syncBtnRect().contains(getMouseXYRelative().toFloat()))
-        return "SYNC (click to cycle): Off -> Sync -> Grid -> KEY, for the selected LFO tab.\n\n"
+        return "SYNC (click to cycle): Off -> Sync -> KEY, for the selected LFO tab.\n\n"
                "- Off = free speed in Hz (drag the wave left/right - now reaches AUDIO rates, 2 kHz: route a "
                "fast LFO to Pitch = real FM growl, to Volume = ring-mod textures).\n"
-               "- Sync = tempo-synced: dragging the wave SNAPS through musical cycles-per-bar values.\n"
-               "- Grid = follows the channel's grid automatically (one cycle per grid cell).\n"
+               "- Sync = tempo-synced: dragging the wave SNAPS through cycles-per-bar (every value to 21).\n"
                "- KEY = the speed FOLLOWS THE PLAYED PITCH x a ratio (drag the wave = the ratio, snaps to "
                "musical ratios, SHIFT = free). THE FM mode: the timbre stays consistent across the keyboard.\n"
                "The wave always draws the TRUE speed; the read-out beside this button shows it.";
@@ -8902,7 +8900,7 @@ void DrumSequencerEditor::setupComponents()
             chFxChrF[i].format = [this, i](float v) {   // [2026-07-15] sync types read in /bar (kChFxCpb mirror)
                 const int t = proc.sequencer.channel(selectedChannel).chFxType[i];
                 if (t >= DrumChannel::ChFxChorusS)
-                { const float c = DrumChannel::kChFxCpb[juce::jlimit(0, 13, (int) std::lround(v * 13.0f))];
+                { const float c = DrumChannel::kChFxCpb[juce::jlimit(0, DrumChannel::kChFxCpbN - 1, (int) std::lround(v * (float)(DrumChannel::kChFxCpbN - 1)))];
                   return (c < 1.0f ? juce::String(c, 2) : juce::String(juce::roundToInt(c))) + " /bar"; }
                 return juce::String(juce::roundToInt(v * 100.0f)) + "%"; };
             chFxChrF[i].onChange = [this, i](float v) {
@@ -12150,11 +12148,8 @@ void DrumSequencerEditor::timerCallback()
             else if (mv.grainN >= 0) mv.setGrainLive(nullptr, -1, {});
         }
     }
-    { // live tempo + grid info so the wave/read-out always show the TRUE synced speed (change-gated)
-        auto& lch = proc.sequencer.channel(selectedChannel);
-        lfoDisplay.setTempoInfo((float) proc.sequencer.blockBarSeconds,
-                                (float) juce::jmax(1, lch.drawMode ? stepGrid.gridDiv() : lch.numSteps));
-    }
+    // live tempo so the wave/read-out always show the TRUE synced speed (change-gated)
+    lfoDisplay.setTempoInfo((float) proc.sequencer.blockBarSeconds);
     { // keep the LFO's "filter is off" warning correct regardless of how the filter was toggled (change-gated = cheap)
         auto& lsl = proc.sequencer.channel(selectedChannel).slots[envTargetSlot()];
         auto fOn = [](int t){ return (t >= DrumChannel::LowPass && t <= DrumChannel::Notch) || t == DrumChannel::Bell; };

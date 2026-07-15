@@ -781,7 +781,6 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
                                 // unit (group bar index + fraction); -1 = not playing (free clock)
     double lfoFreeSec = 0.0;    // free-run LFO clock while NOT playing (accumulated seconds)
     float  lfoBarSeconds = 2.0f;   // seconds per bar (set by the Sequencer each block) for tempo-synced per-slot LFOs
-    int    lfoGridDiv    = 16;      // piano-roll Grid 1/N (set by the Sequencer) - for LFO/arp "Lock to grid" in draw mode
     // Legacy-authoring bridge: factory sounds built via buildSlotsFromLegacy can't set slot fields
     // directly (applyPreset re-runs the build and would wipe them) - this channel-level flag is
     // copied onto the built FM slot instead, so FM sounds keep env-follow inside presets too.
@@ -943,9 +942,15 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
                     // sibling, but CHARACTER = counted CYCLES PER BAR (follows tempo live) instead
                     // of free Hz; the free types stay byte-identical. APPEND-ONLY as always.
                     ChFxChorusS, ChFxFlangerS, ChFxPhaserS, ChFxTapeS, ChFxAutoPanS, ChFxRotaryS };
-    // The synced Character's counted stops (shared by the DSP + the fader read-out - mirror rule).
-    static constexpr float kChFxCpb[14] = { 0.25f, 0.33f, 0.5f, 0.66f, 0.75f, 1.0f, 1.5f, 2.0f,
-                                            3.0f, 4.0f, 6.0f, 8.0f, 12.0f, 16.0f };
+    // [2026-07-15 14:20] THE cycles-per-bar ladder: sub-1 fractions for slow sweeps, then EVERY
+    // whole number to 21 (user: "it should include every number" - no more 12->16 jumps). ONE
+    // source shared by the synced channel-FX Character, the LFO Bar-sync detents and any future
+    // synced rate (mirror rule: DSP + read-outs index the same table).
+    static constexpr float kChFxCpb[27] = { 0.25f, 0.33f, 0.5f, 0.66f, 0.75f, 1.0f, 1.5f,
+                                            2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f, 10.0f,
+                                            11.0f, 12.0f, 13.0f, 14.0f, 15.0f, 16.0f, 17.0f, 18.0f,
+                                            19.0f, 20.0f, 21.0f };
+    static constexpr int kChFxCpbN = 27;
     int   chFxType[3] = { 0, 0, 0 };            // THREE slots now (A -> B -> C in series)
     float chFxAmt [3] = { 0.0f, 0.0f, 0.0f };
     float chFxChar[3] = { 0.5f, 0.5f, 0.5f };
