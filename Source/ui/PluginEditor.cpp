@@ -6993,6 +6993,19 @@ void DrumSequencerEditor::applyUndoState(const UndoEntry& e)
 
 // Cmd+Z (mac) / Ctrl+Z (win) = undo; Cmd+Shift+Z or Ctrl+Y = redo. commandModifier abstracts the
 // platform key. Best-effort: some hosts eat plugin key events before we see them.
+// [2026-07-15 19:45] STANDALONE: advertise the window as MAXIMIZABLE so the OS gestures work
+// (Windows: double-click the title bar / the square button; macOS: the green zoom; Linux: WM
+// maximize). JUCE's standalone wrapper ships without the maximise style flag; adding the button
+// requirement here recreates the native title bar with it. Free resizing is untouched.
+void DrumSequencerEditor::parentHierarchyChanged()
+{
+    if (proc.wrapperType != juce::AudioProcessor::wrapperType_Standalone) return;
+    static bool applied = false;   // once per process is plenty (no getter exists to check)
+    if (applied) return;
+    if (auto* dw = dynamic_cast<juce::DocumentWindow*>(getTopLevelComponent()))
+    { dw->setTitleBarButtonsRequired(juce::DocumentWindow::allButtons, false); applied = true; }
+}
+
 bool DrumSequencerEditor::keyPressed(const juce::KeyPress& k)
 {
     using MK = juce::ModifierKeys;
@@ -7642,6 +7655,47 @@ void DrumSequencerEditor::setupComponents()
 
     // All 16 channels + 32 patterns are ALWAYS active (the old count toggles are gone). This button
     // (placed next to HIDE SOUND EDITOR/KEYS) switches the VIEW between 8 rows (default) and all 16.
+    // [2026-07-15 19:45] OTHERS trim + VOL RESET (user design), left of the view toggle.
+    content.addAndMakeVisible(othersVolF);
+    othersVolF.setAccent(juce::Colour(0xff35c0ff));
+    othersVolF.setLabel({}); othersVolF.setDefault(0.5f); othersVolF.setValue01(0.5f);
+    othersVolF.format = [](float v) { const float db = (v - 0.5f) * 12.0f;
+        return juce::String("Others ") + (db >= 0.0f ? "+" : "") + juce::String(db, 1) + " dB"; };
+    othersVolF.onChange = [this](float v) {
+        if (ignoreKnobCallbacks) return;
+        if (! othersVolActive)
+        {   // capture the volumes at grab time - the whole drag is relative to THESE
+            othersVolActive = true;
+            for (int i = 0; i < Sequencer::NUM_CHANNELS; ++i)
+                othersVolBase[i] = proc.sequencer.channel(i).volume;
+        }
+        const float g = std::pow(10.0f, (v - 0.5f) * 12.0f / 20.0f);   // +-6 dB
+        for (int i = 0; i < Sequencer::NUM_CHANNELS; ++i)
+            if (i != selectedChannel)
+            {
+                auto& c = proc.sequencer.channel(i);
+                c.volume = juce::jlimit(0.0f, LevelMeter::VOL_MAX, othersVolBase[i] * g);
+                c.markDspDirty();
+            }
+    };
+    othersVolF.onDragEnd = [this] { othersVolActive = false; othersVolF.setValue01(0.5f); };   // spring back
+    othersVolF.setTooltip("Others: trim EVERY channel except the SELECTED one by up to +-6 dB "
+        "(this pattern).\n\n"
+        "- It EDITS their volume handles - watch them slide as you drag. Undo restores them.\n"
+        "- Each drag is relative to where the volumes were when you grabbed it; the pill "
+        "re-centres on release (it's a gesture, not a stored setting).\n"
+        "- The quick way to make the selected sound stand out, or to pull it back into the mix.\n"
+        "- Trimming UP can push the mix over full scale = clipping; the master LIMITER is the "
+        "safeguard (it catches only the peaks that cross its ceiling).");
+    content.addAndMakeVisible(btnVolReset);
+    btnVolReset.setLookAndFeel(&tinyBtnLNF);
+    btnVolReset.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
+    btnVolReset.onClick = [this] {
+        for (int i = 0; i < Sequencer::NUM_CHANNELS; ++i)
+        { auto& c = proc.sequencer.channel(i); c.volume = 1.0f; c.markDspDirty(); }
+    };
+    btnVolReset.setTooltip("Set every channel's volume handle in this pattern back to 100% (0 dB). Undoable.");
+
     content.addAndMakeVisible(btn16View);
     btn16View.setLookAndFeel(&tinyBtnLNF);
     btn16View.setClickingTogglesState(false);
@@ -8257,7 +8311,8 @@ void DrumSequencerEditor::setupComponents()
         };
         stripMeter[i].setTooltip("Channel meter + VOLUME: the cyan handle is this channel's volume, and it is "
                                  "also the level bar's CEILING - the bar fills up to the handle, never past it.\n\n"
-                                 "- Drag left/right to set it - MIXER-STYLE dB travel (most of the fader = -54..0 dB, so quiet settings are actually reachable); the white tick at 3/4 = 100%/0 dB, right of it = boost up to +2 dB (125%).\n"
+                                 "- Drag left/right to set it - MIXER-STYLE dB travel (most of the fader = -54..0 dB, so quiet settings are actually reachable); the white tick at 3/4 = 100%/0 dB, right of it = BOOST up to +6 dB (200%).\n"
+                                 "- Boosting past the tick can push the MIX over full scale = clipping; the master LIMITER is the safeguard (it catches only the peaks that cross its ceiling).\n"
                                  "- Double-click = back to 100%.\n"
                                  "- Right-click = MIDI-learn (this exact channel, or the SELECTED channel).");
         content.addAndMakeVisible(stripMeter[i]);
@@ -8533,7 +8588,7 @@ void DrumSequencerEditor::setupComponents()
         }
     }
     setupKnob(knobPitch,   lblPit, "Crush", 0.0, 1.0, 0.0, 1.0, fmtPct);  // sample bit-crush (was Pitch)
-    setupKnob(knobVolume,  lblVol, "Volume",  0.0,   1.25,  1.0,   1.0, fmtPct);  // up to 125%, default 100%
+    setupKnob(knobVolume,  lblVol, "Volume",  0.0,   2.0,   1.0,   1.0, fmtPct);  // up to 200% (+6 dB) [2026-07-15], default 100%
     setupKnob(knobPan,     lblPan, "Pan",    -1.0,   1.0,   0.0,   1.0, fmtPan);
     setupKnob(knobSlices,  lblSlices, "Slices", 1.0, 16.0, 1.0, 1.0,
               [](double v){ int n=(int)v; return n<=1 ? juce::String("Off") : juce::String(n); });
@@ -9499,8 +9554,14 @@ void DrumSequencerEditor::setupComponents()
             "louder-feeling mix without clipping.\n- Distinct from Glue (a compressor - dynamics, no harmonics).\n- 0 = off.");
         masterVF[2].setTooltip("Glue: master bus compressor.\n\n- Gently squeezes the loudest moments so the "
             "kit sounds like ONE instrument (the classic bus-glue trick).\n- Adds no harmonics - that's Sat's job.\n- 0 = off.");
-        masterVF[3].setTooltip("Limiter ceiling.\n\n- The final safety: nothing passes this level.\n"
-            "- -0.1 dB = transparent protection (default); lower = audible squash for loudness.");
+        masterVF[3].setTooltip("Limiter: a brick-wall PEAK ceiling on the whole mix.\n\n"
+            "- Below the ceiling it does NOTHING (unity gain) - it is not a volume cut.\n"
+            "- The instant a peak would cross, the WHOLE mix ducks just enough for that peak to land "
+            "exactly at the ceiling (~1 ms lookahead attack), then recovers in ~60 ms. Ceiling -5 dB "
+            "+ a peak at +1 dB = that moment plays at -5; quiet parts stay untouched.\n"
+            "- A mix CONSTANTLY above the ceiling = constant reduction = audible squash/pump.\n"
+            "- This is the safeguard for channel-volume boosts above 0 dB.\n"
+            "- -0.1 dB = transparent protection (default); lower = deliberate loudness squash.");
         // Size shows an honest ROOM DIMENSION (~meters, from the tank's loop time) instead of a
         // meaningless % [2026-07-15 12:10] - the delay's Time ("N /bar") and this are the same
         // knob in two kinds of space.
@@ -10374,10 +10435,10 @@ void DrumSequencerEditor::setShapeSlot(int s)
 void DrumSequencerEditor::applyKeysView()
 {
     btnKeysView.setButtonText(keysView ? "SOUND EDITOR" : "KEYS");
-    btnKeysView.setColour(juce::TextButton::buttonColourId,
-                          keysView ? juce::Colour(0xffe8bf4d) : juce::Colour(0xff20203a));
-    btnKeysView.setColour(juce::TextButton::textColourOffId,
-                          keysView ? juce::Colours::black : juce::Colours::lightgrey);
+    // [2026-07-15 19:45] no highlight in either state (user: the yellow "SOUND EDITOR" while the
+    // keys were open meant nothing - the button is a plain view switch, like its neighbours).
+    btnKeysView.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
+    btnKeysView.setColour(juce::TextButton::textColourOffId, juce::Colours::lightgrey);
     // Opening KEYS no longer touches the channel's step/roll mode (user: "clicking Keys alone
     // shouldn't switch to Piano Roll" - the old force flipped a STEP channel onto its empty
     // roll, silencing its pattern). RECORDING still forces Piano Roll (keysStartRecord + the
@@ -12735,6 +12796,9 @@ void DrumSequencerEditor::layoutContent()
     btnToggleDetail.setBounds(DESIGN_W - 200, detailY - 2, 190, 18);   // collapse/expand (always visible)
     btnKeysView.setBounds(DESIGN_W - 200 - 116, detailY - 2, 110, 18); // KEYS <-> SOUND EDITOR (radio)
     btn16View.setBounds(DESIGN_W - 200 - 116 - 146, detailY - 2, 140, 18);   // 8 <-> 16 channel-row VIEW
+    // [2026-07-15 19:45] OTHERS trim + VOL RESET, left of the view toggle (user placement)
+    othersVolF.setBounds(DESIGN_W - 200 - 116 - 146 - 150, detailY - 2, 144, 18);
+    btnVolReset.setBounds(DESIGN_W - 200 - 116 - 146 - 150 - 92, detailY - 2, 86, 18);
     btnKeysView.setVisible(detailShown);
     lblSelected.setVisible(detailShown); btnSaveMix.setVisible(detailShown);
     lblSelected.setBounds(12, detailY - 2, 200, 18);

@@ -1,7 +1,7 @@
 # BASAMAK - a free, open-source drum & sample step-sequencer plugin (VST3 / AU / Standalone).
 # Copyright (C) 2026 Oguzhan Yazici. Licensed under the GNU AGPL v3 (see LICENSE).
 cmake_minimum_required(VERSION 3.22)
-project(BASAMAK VERSION 1.4.4)   # [2026-07-15 02:30] 1.4.4 = delay sync per-bar + Trail/Duck/Character, reverb sync + Gate, wet pills, master tooltips
+project(BASAMAK VERSION 1.4.5)   # [2026-07-15 19:45] 1.4.5 = app icon, installer hardening, +6dB volume boost, window maximize, Others fader, OTT teeth
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -46,6 +46,10 @@ else()
 endif()
 
 juce_add_plugin(BASAMAK
+    # [2026-07-15 19:45] app icon (the wordmark's "B" glyph, white on the plugin's canvas navy):
+    # embedded into the Windows .exe, the macOS .app/.component/.vst3 icns, and the Linux window icon.
+    ICON_BIG   "Resources/Icon/basamak-icon-512.png"
+    ICON_SMALL "Resources/Icon/basamak-icon-128.png"
     COMPANY_NAME "OZ"
     VERSION ${PROJECT_VERSION}
     IS_SYNTH TRUE

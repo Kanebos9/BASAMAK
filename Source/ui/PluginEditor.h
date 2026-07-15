@@ -1594,17 +1594,19 @@ public:
     // CHANNEL VOLUME lives ON the strip meter (user design): a white drag HANDLE (0..125%,
     // unity notch at 100%), so the channel level finally has a visible control.
     // Drag = set - double-click = 100% - right-click = MIDI learn (addressed + selected).
-    static constexpr float VOL_MAX = 1.25f;
+    static constexpr float VOL_MAX = 2.0f;   // +6 dB boost ceiling [2026-07-15 19:45] (was 1.25 = +1.9 dB)
     // [2026-07-14 00:50] MIXER dB TAPER (user: "max volume for a huge range" - the old handle was
     // LINEAR IN AMPLITUDE, so its whole top half spanned ~6 dB). Now the travel is linear in dB:
-    // 0 = off, 0..75% = -54..0 dB, 75% (the unity notch) ..100% = 0..+1.9 dB (gain 1.25). Every
-    // consumer maps through these two functions (drag, paint, fill cap, CC).
+    // 0 = off, 0..75% = -54..0 dB, 75% (the unity notch) ..100% = 0..+6 dB (gain 2.0).
+    // [2026-07-15 19:45] boost quarter re-tuned +1.9 -> +6 dB (user option 2: the old headroom was
+    // "a quarter of the fader that does nothing"). Every consumer maps through these two functions
+    // (drag, paint, fill cap, CC), so all faces of the control agree.
     static float posToGain(float p)
     {
         p = juce::jlimit(0.0f, 1.0f, p);
         if (p <= 0.0001f) return 0.0f;
         const float dB = p <= 0.75f ? -54.0f + (p / 0.75f) * 54.0f
-                                    : (p - 0.75f) / 0.25f * 1.9382f;
+                                    : (p - 0.75f) / 0.25f * 6.0206f;
         return juce::jlimit(0.0f, VOL_MAX, std::pow(10.0f, dB / 20.0f));
     }
     static float gainToPos(float g)
@@ -1612,7 +1614,7 @@ public:
         if (g <= 0.0021f) return g <= 0.0001f ? 0.0f : 0.0021f;   // ~-54 dB floor
         const float dB = 20.0f * std::log10(juce::jlimit(0.0021f, VOL_MAX, g));
         return dB <= 0.0f ? (dB + 54.0f) / 54.0f * 0.75f
-                          : 0.75f + dB / 1.9382f * 0.25f;
+                          : 0.75f + dB / 6.0206f * 0.25f;
     }
     std::function<void(float)> onVolume;    // user dragged the handle (value 0..VOL_MAX)
     std::function<void()>      onVolLearn;  // right-click (the editor shows the learn menu)
@@ -2350,6 +2352,7 @@ public:
     void paintContent(juce::Graphics&);
     void contentWheel(juce::Point<int> pos, float deltaY);   // wheel over the channel strips / pattern row scrolls them
     bool keyPressed(const juce::KeyPress&) override;         // Cmd/Ctrl+Z = undo, Cmd+Shift+Z / Ctrl+Y = redo
+    void parentHierarchyChanged() override;                  // standalone: enable the OS maximize [2026-07-15 19:45]
     void setChannelMerge(int a, int b);   // MERGE&SPLIT toggle for two adjacent channels (channel-wide)
     double lastContentWheelMs = 0.0;   // rate-limit so a fast wheel/trackpad flood doesn't rocket the scroll
     void paintStripOutline(juce::Graphics&);   // selected strip's red outline, ABOVE children (the meters)
@@ -2501,6 +2504,14 @@ private:
     // All 16 channels + 32 patterns are ALWAYS active now (the old 8/16 + 16/32 count toggles are gone).
     // This button (next to HIDE SOUND EDITOR/KEYS) switches the VIEW between 8 rows (default) and all 16.
     juce::TextButton btn16View { "16 CHANNELS VIEW" };
+    // [2026-07-15 19:45] OTHERS trim (user design): a spring-back +-6 dB fader that scales EVERY
+    // channel's volume EXCEPT the selected one (current pattern) by EDITING their handles - you
+    // watch them move; undo covers it. Each drag is relative to the volumes at grab time; the
+    // pill re-centres on release (a gesture, not a stored setting). + a momentary full reset.
+    SlotDragFader    othersVolF;
+    juce::TextButton btnVolReset { "VOL RESET" };
+    float othersVolBase[Sequencer::NUM_CHANNELS] = {};
+    bool  othersVolActive = false;
     juce::TextButton btnTooltips { "Tooltips" };  // top bar: global hover-tooltips ON/OFF (default ON)
     bool             tooltipsOn = true;
     void refreshCountButtons();

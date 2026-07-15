@@ -37,9 +37,30 @@ mkdir "%SAMPLES_DST%"        2>nul
 mkdir "%DATA%\Sound Bank"    2>nul
 mkdir "%DATA%\Presets"       2>nul
 
-REM Replace any previous plugin binary (user data is elsewhere, left intact).
-if exist "%VST3_DST%\BASAMAK.vst3" rmdir /s /q "%VST3_DST%\BASAMAK.vst3"
+REM [2026-07-15 19:45] Replace any previous plugin binary - and FAIL LOUDLY if it is locked.
+REM A DAW that is open (or just closed - Reaper can linger) holds BASAMAK.vst3's DLL open;
+REM the old script printed "Access is denied" yet still said "Done" = the user's 1.4.3-forever bug.
+if exist "%VST3_DST%\BASAMAK.vst3" (
+  rmdir /s /q "%VST3_DST%\BASAMAK.vst3" 2>nul
+  if exist "%VST3_DST%\BASAMAK.vst3" (
+    echo.
+    echo !!! INSTALL FAILED: the existing BASAMAK.vst3 is IN USE and cannot be replaced.
+    echo !!! Close your DAW ^(check Task Manager for a leftover reaper.exe / DAW process^),
+    echo !!! then run this installer again.
+    echo.
+    pause
+    exit /b 1
+  )
+)
 xcopy /e /i /y "%HERE%BASAMAK.vst3" "%VST3_DST%\BASAMAK.vst3" >nul
+if errorlevel 1 (
+  echo.
+  echo !!! INSTALL FAILED while copying the new BASAMAK.vst3 ^(see the error above^).
+  echo !!! Close your DAW and run this installer again. Nothing was updated.
+  echo.
+  pause
+  exit /b 1
+)
 
 REM Seed factory samples - /d copies only files that are newer/missing, so your
 REM own additions are preserved.
