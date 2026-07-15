@@ -686,7 +686,7 @@ void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle
                                bar.toNearestInt(), juce::Justification::centred, false);
                 }
             }
-            if (prSel[i])   // part of the multi-selection -> amber outline
+            if (prSel[i] || (ch == rollMenuNoteCh && i == rollMenuNoteIdx))   // selection OR open right-click menu -> amber outline
             { g.setColour(juce::Colour(0xffffc23a)); g.drawRoundedRectangle(bar.expanded(1.0f), 3.0f, 1.6f); }
             if (! n.oneShot && bar.getWidth() > 14.0f)   // resize tab on the right edge (gated notes)
             { g.setColour(juce::Colours::white.withAlpha(0.55f));
@@ -913,7 +913,14 @@ void StepGridComponent::paint(juce::Graphics& g)
         g.setColour(juce::Colour(0xf01a1a30)); g.fillRoundedRectangle(r, 6.0f);
         g.setColour(juce::Colour(0xffc77dff)); g.drawRoundedRectangle(r.reduced(0.5f), 6.0f, 1.4f);
         g.setColour(juce::Colours::white); g.setFont(juce::Font(11.0f, juce::Font::bold));
-        g.drawText("LOOP CONDITION", r.removeFromTop(16.0f), juce::Justification::centred, false);
+        auto ttl = r.removeFromTop(16.0f);
+        g.drawText("LOOP CONDITION", ttl, juce::Justification::centred, false);
+        {   // close X (top-right) - clicking outside also closes [2026-07-15 23:40]
+            auto xr = juce::Rectangle<float>(r.getRight() - 16.0f, ttl.getY() + 3.0f, 11.0f, 11.0f);
+            g.setColour(juce::Colour(0xffaebada));
+            g.drawLine(xr.getX(), xr.getY(), xr.getRight(), xr.getBottom(), 1.6f);
+            g.drawLine(xr.getX(), xr.getBottom(), xr.getRight(), xr.getY(), 1.6f);
+        }
         g.setFont(juce::Font(9.0f)); g.setColour(juce::Colour(0xffaebada));
         g.drawText("drag = cycle - click a bar = on/off", r.removeFromBottom(13.0f), juce::Justification::centred, false);
         auto bars = r.reduced(8.0f, 3.0f);
@@ -1176,6 +1183,8 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
     {
         if (condEdRect.contains(p) && condEdIdx < drawNoteCount[condEdCh])
         {
+            if (p.x >= condEdRect.getRight() - 20 && p.y <= condEdRect.getY() + 18)   // the close X
+            { condEdCh = -1; condEdIdx = -1; repaint(); return; }
             const auto& n = drawNotes[condEdCh][condEdIdx];
             auto bars = condEdRect.toFloat().withTrimmedTop(16.0f).withTrimmedBottom(13.0f).reduced(8.0f, 3.0f);
             const int N = juce::jlimit(1, 5, (int) n.condLen);
@@ -1600,6 +1609,7 @@ void StepGridComponent::showRollNoteMenu(int ch2, int idx)
         prClearSel(); pushNotes(ch2); repaint();
     };
     const bool sel = prSel[idx];
+    rollMenuNoteCh = ch2; rollMenuNoteIdx = idx; repaint();   // outline the note while its menu is open [2026-07-15 23:40]
     const auto& nn = drawNotes[ch2][idx];
     // STRUM only does something on stacked chord VOICES that share a time span. It's
     // available when either (user spec):
@@ -1678,6 +1688,7 @@ void StepGridComponent::showRollNoteMenu(int ch2, int idx)
     m.showMenuAsync(juce::PopupMenu::Options(),
         [this, ch2, idx, sel, deleteSelected](int r)
         {
+            rollMenuNoteCh = -1; rollMenuNoteIdx = -1; repaint();   // the menu is gone - drop the outline
             if (r == 0 || idx >= drawNoteCount[ch2]) return;
             auto apply = [&](void (*f)(DrumChannel::DrawNote&, int), int arg)
             {

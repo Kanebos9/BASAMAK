@@ -95,6 +95,7 @@ private:
     bool condEdSel = false;                  // apply edits to the whole selection
     juce::Rectangle<int> condEdRect;
     int  condEdDownBar = -1, condEdDownX = 0; bool condEdDragged = false, condEdDragging = false;
+    int  rollMenuNoteCh = -1, rollMenuNoteIdx = -1;   // note whose right-click MENU is open (amber outline) [2026-07-15 23:40]
     bool  condDragged = false;
     int   curLoop = 0;          // the playing pattern's loop counter (highlights the current bar in Prob mode)
     bool  midiOutCh[NCH] = {};                         // is this channel routed to MIDI Out? (enables 2D Vel/Len)

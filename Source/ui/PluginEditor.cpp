@@ -8311,7 +8311,11 @@ void DrumSequencerEditor::setupComponents()
         {
             const auto& nt = notes[i];
             const int b = juce::jlimit(0, bars - 1, (int) nt.start / RES);
-            sq.patterns[head + b].channels[ch].addDrawNote((int) nt.start - b * RES, nt.len, nt.semi, nt.vel, nt.slot, nt.glide, nt.oneShot, nt.strumUp, nt.strumPct == 255 ? -1 : nt.strumPct, nt.pan);
+            // [2026-07-15 23:40] push the WHOLE STRUCT (the parameter-list overload silently DROPPED
+            // any field it didn't name - the brand-new loop condition reverted on every push).
+            DrumChannel::DrawNote nn = nt;
+            nn.start = (int16_t) juce::jlimit(0, RES - 1, (int) nt.start - b * RES);
+            sq.patterns[head + b].channels[ch].addDrawNote(nn);
         }
     };
     stepGrid.onDrawTuneChanged = [this](int ch, float cents) {   // the roll's TUNE fader: whole-bar
