@@ -58,6 +58,14 @@ jobs:
           find build -name "BASAMAK.component" -maxdepth 8 -exec cp -R {} "$OUT/" \;   # AU (macOS)
           find build -name "BASAMAK.app"       -maxdepth 8 -exec cp -R {} "$OUT/" \;   # Standalone (macOS)
           find build -path "*Standalone/BASAMAK" -type f -maxdepth 8 -exec cp {} "$OUT/" \;   # Standalone (Linux)
+          # [2026-07-15 21:30] HARD-VERIFY the plugin actually staged (the Windows leg shipped an
+          # empty bundle once - never trust a copy silently again).
+          if [ "${{ matrix.name }}" = "macOS" ] && [ ! -d "$OUT/BASAMAK.vst3/Contents" ]; then
+            echo "STAGING FAILED: BASAMAK.vst3 missing/empty"; exit 1
+          fi
+          if [ "${{ matrix.name }}" = "Linux" ] && [ ! -e "$OUT/BASAMAK.vst3/Contents/x86_64-linux/BASAMAK.so" ]; then
+            echo "STAGING FAILED: BASAMAK.vst3 missing/empty"; exit 1
+          fi
           cp -R Resources/Samples "$OUT/Samples"                                        # bundled CC0 sample library
           cp -R Resources/TouchOSC "$OUT/TouchOSC"                                       # TouchOSC control-surface template
           cp -R "Resources/launchpad+launchkey custom midi modes" "$OUT/launchpad+launchkey custom midi modes"   # Novation custom modes (.syx) pairing with the factory MIDI map
@@ -79,8 +87,18 @@ jobs:
           $ver = (Select-String -Path CMakeLists.txt -Pattern 'project\(BASAMAK VERSION ([0-9.]+)').Matches[0].Groups[1].Value
           $out = "BASAMAK-$ver-Windows"
           New-Item -ItemType Directory -Force $out | Out-Null
-          $vst3 = Get-ChildItem -Recurse -Directory build -Filter BASAMAK.vst3 | Select-Object -First 1
-          Copy-Item $vst3.FullName "$out\BASAMAK.vst3" -Recurse
+          # [2026-07-15 21:30] the app ICON made JUCE mark the VST3 bundle's contents HIDDEN/SYSTEM
+          # (folder-icon decoration) - PowerShell's Copy-Item/Compress-Archive silently SKIP such
+          # files, which shipped a v1.4.5 zip whose BASAMAK.vst3 held only desktop.ini (user-caught).
+          # Strip the attributes first, copy from the KNOWN artefact path, and HARD-VERIFY the
+          # plugin binary is actually staged - a green run must never again mean an empty zip.
+          $vst3src = "build/BASAMAK_artefacts/Release/VST3/BASAMAK.vst3"
+          if (!(Test-Path $vst3src)) { throw "VST3 bundle not found at $vst3src" }
+          attrib -S -H "$vst3src" /S /D
+          Copy-Item $vst3src "$out\BASAMAK.vst3" -Recurse -Force
+          if (!(Test-Path "$out\BASAMAK.vst3\Contents\x86_64-win\BASAMAK.vst3")) {
+            throw "STAGING FAILED: the plugin binary is missing from the staged BASAMAK.vst3"
+          }
           $exe = Get-ChildItem -Recurse -File build -Filter BASAMAK.exe | Select-Object -First 1
           if ($exe) { Copy-Item $exe.FullName "$out\BASAMAK.exe" }   # Standalone (Windows)
           Copy-Item Resources/Samples "$out\Samples" -Recurse        # bundled CC0 sample library
