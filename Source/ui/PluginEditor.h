@@ -948,8 +948,24 @@ public:
       { if (onRightClick && onRightClick()) return;
         if (mlm != nullptr && learnPid.isNotEmpty()) showMidiLearnMenu(this, *mlm, learnPid, -1);
         return; }
-      drag_ = true; apply(e); }
-    void mouseDrag(const juce::MouseEvent& e) override { apply(e); }
+      drag_ = true; lastDragPos_ = vertical_ ? e.position.y : e.position.x;
+      if (! e.mods.isShiftDown()) apply(e); }             // SHIFT-press = fine mode arms without jumping
+    void mouseDrag(const juce::MouseEvent& e) override
+    {   // [2026-07-15 13:30] SHIFT = FINE DRAG (user): the value moves at 1/5 speed RELATIVE to the
+        // press point instead of jumping to the absolute position - precision, not a snap toggle.
+        const float pos = vertical_ ? e.position.y : e.position.x;
+        if (e.mods.isShiftDown())
+        {
+            const float extent = juce::jmax(1.0f, (float) (vertical_ ? getHeight() : getWidth()));
+            const float d01 = (pos - lastDragPos_) / extent * (vertical_ ? -1.0f : 1.0f);
+            lastDragPos_ = pos;
+            const float v = juce::jlimit(0.0f, 1.0f, val_ + d01 * 0.2f);
+            if (std::abs(v - val_) > 1.0e-5f) { val_ = v; repaint(); if (onChange) onChange(val_); }
+            return;
+        }
+        lastDragPos_ = pos;
+        apply(e);
+    }
     void mouseUp  (const juce::MouseEvent&)   override { if (drag_ && onDragEnd) onDragEnd(); drag_ = false; }
     void mouseDoubleClick(const juce::MouseEvent&) override
     { setValue01(dflt_); if (onChange) onChange(val_); if (onDragEnd) onDragEnd(); }
@@ -963,7 +979,7 @@ private:
     }
     bool vertical_ = false;
     juce::String name_;
-    float val_ = 0.0f, dflt_ = 0.0f;
+    float val_ = 0.0f, dflt_ = 0.0f, lastDragPos_ = 0.0f;
     juce::Colour accent_ { 0xff35c0ff };
     bool drag_ = false;
 };

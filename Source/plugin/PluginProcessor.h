@@ -314,6 +314,11 @@ private:
     juce::AudioBuffer<float> delayBufferB;  // BUS B delay line + state
     int delayWriteHeadB = 0;
     float delayFbLpB[2] = { 0.0f, 0.0f }, delayFbHpB[2] = { 0.0f, 0.0f };
+    // [2026-07-15 13:30] SMOOTHED time/size: the delay read-offset GLIDES to a changed target
+    // (fader drag or live tempo change) = tape-style pitch swoop instead of a crackling jump;
+    // the reverb size slews ~50 ms. -1 = snap on first block. Converged = bit-identical paths.
+    float delayTimeSm = -1.0f, delayTimeSmB = -1.0f;   // in samples
+    float revSizeSm   = -1.0f, revSizeSmB   = -1.0f;   // 0..1 room size
     // [2026-07-15 00:50] DELAY MODES per-bus state: Analog's wobble LFO phase + Shimmer's octave-up
     // ring per channel (the FDN reverb's 2-tap crossfaded varispeed shifter, one per bus/channel).
     float delayWobPh = 0.0f, delayWobPhB = 0.0f;

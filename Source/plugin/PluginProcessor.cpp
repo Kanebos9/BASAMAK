@@ -150,6 +150,7 @@ void DrumSequencerProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
       { delayShRing[c].assign((size_t) shN, 0.0f);  delayShRingB[c].assign((size_t) shN, 0.0f);
         delayShW[c] = 0; delayShWB[c] = 0; delayShPh[c] = 0.0; delayShPhB[c] = 0.0; } }
     delayWobPh = delayWobPhB = 0.0f;
+    delayTimeSm = delayTimeSmB = -1.0f; revSizeSm = revSizeSmB = -1.0f;   // snap on the first block
     for (auto& n : activeMidiNote) n = -1;   // no held MIDI-out notes yet
 
     reverbSendOS.setSize  (2, juce::jmax(1, samplesPerBlock * kEngineOS));
@@ -1562,9 +1563,17 @@ void DrumSequencerProcessor::processReverb(juce::AudioBuffer<float>& audio, juce
         preHead = (preHead + numSamples) % preMax;
     }
 
+    // [2026-07-15 13:30] SIZE SMOOTHING: slew ~50 ms toward the fader - a dragged Size used to
+    // jump the tank's read offsets = crackle. Converged = exact target = bit-identical.
+    float& szSm = busB ? revSizeSmB : revSizeSm;
+    { const float szT = juce::jlimit(0.0f, 1.0f, pRoom);
+      if (szSm < 0.0f) szSm = szT;
+      szSm += (szT - szSm) * (1.0f - std::exp(-(float) numSamples / ((float) currentSampleRate * 0.05f)));
+      if (std::abs(szSm - szT) < 1.0e-4f) szSm = szT; }
+
     // Modulated FDN reverb (in place: send -> wet tail). Free mode: "Decay" knob = 1 - damp.
     f.process(sL, sR, sL, sR, numSamples,
-              juce::jlimit(0.0f, 1.0f, pRoom),     // Size -> room
+              szSm,                                // Size -> room (smoothed)
               decay01,                             // Decay -> feedback time (knob or bars-derived)
               0.35f,                               // damping LP (smooth, musical)
               juce::jlimit(0.0f, 1.0f, pWidth),    // Width
@@ -1711,23 +1720,35 @@ void DrumSequencerProcessor::processDelay(juce::AudioBuffer<float>& audio, juce:
     const float* duckKey = duckKeyEnv.data();
     const int    duckN   = (int) duckKeyEnv.size();
 
+    // [2026-07-15 13:30] TIME SMOOTHING: the read offset GLIDES toward the target at <= 0.5
+    // samples/sample - a dragged Time (or a live tempo change in sync mode) produces the classic
+    // tape-delay pitch swoop instead of the old crackling jump. Converged = integer offset =
+    // the exact old read path (bit-identical when Time is static).
+    float& tSm = busB ? delayTimeSmB : delayTimeSm;
+    if (tSm < 0.0f) tSm = (float) delaySamples;
+
     for (int i = 0; i < numSamples; ++i)
     {
-        const int readPos  = (head + i - delaySamples + delayLen) % delayLen;
+        if (tSm != (float) delaySamples)
+            tSm += juce::jlimit(-0.5f, 0.5f, (float) delaySamples - tSm);
+        float off = tSm;                                      // read offset (samples back from write)
+        if (pMode == 3)
+        {   // Analog/BBD: the read head drifts up to wobDepth samples LATER (linear-interp read)
+            wobPh += wobInc; if (wobPh > juce::MathConstants<float>::twoPi) wobPh -= juce::MathConstants<float>::twoPi;
+            off += wobDepth * (0.5f + 0.5f * std::sin(wobPh));   // 0..depth = never reads the future
+        }
+        const int   oi  = (int) off; const float ofr = off - (float) oi;
+        const int readPos  = ((head + i - oi) % delayLen + delayLen) % delayLen;
         const int writePos = (head + i) % delayLen;
 
         const float dryL = inL[i];                            // delay INPUT = the send sum
         const float dryR = stereo ? inR[i] : inL[i];
         float delL, delR;
-        if (pMode == 3)
-        {   // Analog/BBD: the read head drifts up to wobDepth samples LATER (linear-interp read)
-            wobPh += wobInc; if (wobPh > juce::MathConstants<float>::twoPi) wobPh -= juce::MathConstants<float>::twoPi;
-            const float wob = wobDepth * (0.5f + 0.5f * std::sin(wobPh));   // 0..depth = never reads the future
-            const int   wi  = (int) wob; const float wf = wob - (float) wi;
-            const int r0 = (readPos - wi + delayLen) % delayLen;
-            const int r1 = (r0 - 1 + delayLen) % delayLen;
-            delL = dL[r0] + (dL[r1] - dL[r0]) * wf;
-            delR = dR[r0] + (dR[r1] - dR[r0]) * wf;
+        if (ofr > 1.0e-6f)
+        {   // fractional read while gliding / wobbling (linear interp, one sample EARLIER = longer delay)
+            const int r1 = (readPos - 1 + delayLen) % delayLen;
+            delL = dL[readPos] + (dL[r1] - dL[readPos]) * ofr;
+            delR = dR[readPos] + (dR[r1] - dR[readPos]) * ofr;
         }
         else { delL = dL[readPos]; delR = dR[readPos]; }
 
@@ -2191,7 +2212,7 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
     ch.strumAmt    = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("strum",    0.0f));   // STRUM
     for (int f = 0; f < 3; ++f)   // CHANNEL FX slots (readSlots migrates a pre-slot-system file after this)
     { const juce::String k(f);
-      ch.chFxType[f] = juce::jlimit(0, 10, (int) child.getProperty("cfxT" + k, 0));
+      ch.chFxType[f] = juce::jlimit(0, 16, (int) child.getProperty("cfxT" + k, 0));   // 16 = the "(sync)" variants [2026-07-15]
       ch.chFxAmt[f]  = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("cfxA" + k, 0.0f));
       ch.chFxChar[f] = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("cfxC" + k, 0.5f)); }
     {   // MIGRATION: last week's 4-fixed-effect files ("chFxCho"...) -> the strongest two FX slots

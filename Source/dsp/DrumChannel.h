@@ -938,7 +938,14 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     // FreqShift = single-sideband Hilbert shifter (Character = bipolar shift, barber-pole to metal);
     // Rotary = Leslie: crossover horn/rotor doppler + AM + pan (Character = rotor speed).
     enum ChFxType { ChFxOff = 0, ChFxChorus, ChFxFlanger, ChFxPhaser, ChFxComp, ChFxTape, ChFxAutoPan, ChFxWiden,
-                    ChFxOtt, ChFxFreqShift, ChFxRotary };
+                    ChFxOtt, ChFxFreqShift, ChFxRotary,
+                    // [2026-07-15 13:30] "(sync)" VARIANTS (user design): same DSP as the free
+                    // sibling, but CHARACTER = counted CYCLES PER BAR (follows tempo live) instead
+                    // of free Hz; the free types stay byte-identical. APPEND-ONLY as always.
+                    ChFxChorusS, ChFxFlangerS, ChFxPhaserS, ChFxTapeS, ChFxAutoPanS, ChFxRotaryS };
+    // The synced Character's counted stops (shared by the DSP + the fader read-out - mirror rule).
+    static constexpr float kChFxCpb[14] = { 0.25f, 0.33f, 0.5f, 0.66f, 0.75f, 1.0f, 1.5f, 2.0f,
+                                            3.0f, 4.0f, 6.0f, 8.0f, 12.0f, 16.0f };
     int   chFxType[3] = { 0, 0, 0 };            // THREE slots now (A -> B -> C in series)
     float chFxAmt [3] = { 0.0f, 0.0f, 0.0f };
     float chFxChar[3] = { 0.5f, 0.5f, 0.5f };

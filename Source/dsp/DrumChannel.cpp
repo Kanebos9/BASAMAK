@@ -3895,7 +3895,22 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             chFxRun[fx] = runNow;
             if (! runNow) { sm = juce::jmax(0.0f, sm - 0.05f); continue; }
             const float ch1 = cTgt[fx];                          // character (rates re-bake per block)
-            switch (type)
+            // [2026-07-15 13:30] "(sync)" variants: Character = counted CYCLES PER BAR via the
+            // shared kChFxCpb stops (rate follows lfoBarSeconds = live tempo); the free Character's
+            // depth/feedback half is pinned at its 0.5 default. Free types = the exact old code.
+            const bool typeSync = type >= ChFxChorusS;
+            const int  baseType = ! typeSync ? type
+                                : type == ChFxChorusS  ? ChFxChorus
+                                : type == ChFxFlangerS ? ChFxFlanger
+                                : type == ChFxPhaserS  ? ChFxPhaser
+                                : type == ChFxTapeS    ? ChFxTape
+                                : type == ChFxAutoPanS ? ChFxAutoPan : (int) ChFxRotary;
+            double syncHz = 0.0;
+            if (typeSync)
+                syncHz = kChFxCpb[juce::jlimit(0, 13, (int) std::lround(ch1 * 13.0f))]
+                         / juce::jmax(0.1f, lfoBarSeconds);
+            const float chDepth = typeSync ? 0.5f : ch1;         // synced: rate only, depth = the 0.5 default
+            switch (baseType)
             {
                 case ChFxComp:
                 {   // GLUE compressor across both layers; CHARACTER = attack (0.5 = the old 4 ms)
@@ -3921,9 +3936,9 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     const int flen = juce::jmax(64, (int) (0.012 * sr));
                     if ((int) chFxDL[fx].size() != flen) { chFxDL[fx].assign((size_t) flen, 0.0f); chFxDR[fx].assign((size_t) flen, 0.0f); chFxW[fx] = 0; chFxPhs[fx] = 0.0; }
                     int w = chFxW[fx]; double ph = chFxPhs[fx];
-                    const double dPh   = 2.0 * kPi * (0.20 * std::pow(4.0, 2.0 * (double) ch1 - 1.0)) / sr;   // 0.05..0.8 Hz
+                    const double dPh   = 2.0 * kPi * (typeSync ? syncHz : 0.20 * std::pow(4.0, 2.0 * (double) ch1 - 1.0)) / sr;   // free: 0.05..0.8 Hz
                     const float  baseS = (float) (0.0010 * sr), depthS = (float) (0.0040 * sr);   // 1..5 ms sweep
-                    const float  fbC   = juce::jlimit(0.0f, 0.92f, 0.2f + 1.0f * ch1);            // 0.5 -> the old 0.7
+                    const float  fbC   = juce::jlimit(0.0f, 0.92f, 0.2f + 1.0f * chDepth);        // 0.5 -> the old 0.7
                     float amt = sm;
                     auto rd = [&](const std::vector<float>& buf, float delay) -> float {
                         float rp = (float) w - delay; while (rp < 0.0f) rp += (float) flen;
@@ -3948,8 +3963,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 case ChFxPhaser:
                 {   // 6 swept allpasses + feedback (swirl); CHARACTER = speed + resonance (0.5 = old 0.30 Hz / 0.6 fb)
                     double ph = chFxPhs[fx];
-                    const double dPh = 2.0 * kPi * (0.30 * std::pow(4.0, 2.0 * (double) ch1 - 1.0)) / sr;   // 0.075..1.2 Hz
-                    const float fbC = juce::jlimit(0.0f, 0.9f, 0.1f + 1.0f * ch1);                          // 0.5 -> the old 0.6
+                    const double dPh = 2.0 * kPi * (typeSync ? syncHz : 0.30 * std::pow(4.0, 2.0 * (double) ch1 - 1.0)) / sr;   // free: 0.075..1.2 Hz
+                    const float fbC = juce::jlimit(0.0f, 0.9f, 0.1f + 1.0f * chDepth);                      // 0.5 -> the old 0.6
                     float* zL = chFxPzL[fx]; float* zR = chFxPzR[fx];
                     float fbL = chFxFbL[fx], fbR = chFxFbR[fx];
                     float amt = sm;
@@ -4054,7 +4069,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     const int flen = juce::jmax(64, (int) (0.006 * sr));
                     if ((int) chFxDL[fx].size() != flen) { chFxDL[fx].assign((size_t) flen, 0.0f); chFxDR[fx].assign((size_t) flen, 0.0f); chFxW[fx] = 0; chFxPhs[fx] = 0.0; }
                     int w = chFxW[fx]; double ph = chFxPhs[fx];
-                    const double hornHz = 0.7 * std::pow(10.0, (double) ch1);   // 0.7..7 Hz
+                    const double hornHz = typeSync ? syncHz : 0.7 * std::pow(10.0, (double) ch1);   // free: 0.7..7 Hz
                     const double dPh = 2.0 * kPi * hornHz / sr;
                     const float  kX  = 1.0f - std::exp(-2.0f * (float) kPi * 800.0f / (float) sr);
                     const float  baseS = (float) (0.0022 * sr);
@@ -4098,7 +4113,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     const int flen = juce::jmax(64, (int) (0.008 * sr));
                     if ((int) chFxDL[fx].size() != flen) { chFxDL[fx].assign((size_t) flen, 0.0f); chFxDR[fx].assign((size_t) flen, 0.0f); chFxW[fx] = 0; chFxPhs[fx] = 0.0; }
                     int w = chFxW[fx]; double ph = chFxPhs[fx];
-                    const double rate = 0.8 * std::pow(4.0, 2.0 * (double) ch1 - 1.0);   // 0.2..3.2 Hz wow
+                    const double rate = typeSync ? syncHz : 0.8 * std::pow(4.0, 2.0 * (double) ch1 - 1.0);   // free: 0.2..3.2 Hz wow
                     const double dPh  = 2.0 * kPi * rate / sr;
                     const float  baseS = (float) (0.003 * sr);
                     const float  hfK   = 1.0f - std::exp(-2.0f * (float) kPi * 6000.0f / (float) sr);
@@ -4128,7 +4143,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 {   // AUTO-PAN: equal-power stereo movement (gL = sqrt(1-p), gR = sqrt(1+p), p = amt*sin).
                     // CHARACTER = speed. Unity at amount 0; nothing else in the plugin MOVES the field.
                     double ph = chFxPhs[fx];
-                    const double dPh = 2.0 * kPi * (1.4 * std::pow(4.0, 2.0 * (double) ch1 - 1.0)) / sr;   // 0.35..5.6 Hz
+                    const double dPh = 2.0 * kPi * (typeSync ? syncHz : 1.4 * std::pow(4.0, 2.0 * (double) ch1 - 1.0)) / sr;   // free: 0.35..5.6 Hz
                     float amt = sm;
                     for (int i = 0; i < numSamples; ++i)
                     {
@@ -4165,9 +4180,9 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     const int dlen = juce::jmax(64, (int) (0.06 * sr));
                     if ((int) chFxDL[fx].size() != dlen) { chFxDL[fx].assign((size_t) dlen, 0.0f); chFxDR[fx].assign((size_t) dlen, 0.0f); chFxW[fx] = 0; chFxPhs[fx] = 0.0; }
                     int w = chFxW[fx]; double ph = chFxPhs[fx];
-                    const double dPh    = 2.0 * kPi * (0.36 * std::pow(4.0, 2.0 * (double) ch1 - 1.0)) / sr;   // 0.09..1.44 Hz
+                    const double dPh    = 2.0 * kPi * (typeSync ? syncHz : 0.36 * std::pow(4.0, 2.0 * (double) ch1 - 1.0)) / sr;   // free: 0.09..1.44 Hz
                     const float  baseS  = (float) (0.011 * sr);
-                    const float  depthS = (float) (0.0035 * sr) * (0.3f + 1.4f * ch1);   // 0.5 -> x1.0 = the old depth
+                    const float  depthS = (float) (0.0035 * sr) * (0.3f + 1.4f * chDepth);   // 0.5 -> x1.0 = the old depth
                     float mix = sm;
                     auto rd = [&](const std::vector<float>& buf, float delay) -> float {
                         float rp = (float) w - delay; while (rp < 0.0f) rp += (float) dlen;

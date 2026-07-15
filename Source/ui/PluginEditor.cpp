@@ -6364,7 +6364,7 @@ void DrumSequencerEditor::readChannelMix(const juce::ValueTree& t, DrumChannel& 
     ch.strumAmt = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("strum", 0.0f));   // per-sound strum (0 for old files)
     for (int fx = 0; fx < 3; ++fx)   // CHANNEL FX slots (readSlots migrates pre-slot-system files after this)
     { const juce::String k(fx);
-      ch.chFxType[fx] = juce::jlimit(0, 10, (int) t.getProperty("cfxT" + k, 0));
+      ch.chFxType[fx] = juce::jlimit(0, 16, (int) t.getProperty("cfxT" + k, 0));
       ch.chFxAmt[fx]  = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("cfxA" + k, 0.0f));
       ch.chFxChar[fx] = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("cfxC" + k, 0.5f)); }
     {   // MIGRATION: last week's 4-fixed-effect mix files -> the strongest two FX slots
@@ -8465,9 +8465,10 @@ void DrumSequencerEditor::setupComponents()
         "TWO reverb buses exist - A and B, each with its own size/decay/mode (e.g. A = Hall for keys, "
         "B = tight Room for drums). The faders below edit the bus named in this title; each channel picks "
         "its bus by right-clicking its Rev send fader.\n\n")
-        + "- Room: small, tight, darker - drums.\n"
-        + "- Hall: big and smooth (the original sound - the default).\n"
-        + "- Plate: dense and bright, vintage-studio - keys, snares, vocals-style shine.\n"
+        + "SIZE says how BIG the room is; the MODE says what the WALLS are made of:\n"
+        + "- Room: boxy and fluttery, dark walls (it also naturally plays smaller - part of the character) - drums.\n"
+        + "- Hall: smooth and balanced, the neutral one (the original sound - the default).\n"
+        + "- Plate: dense, bright, metallic sheen (vintage studios used literal steel plates) - snares, keys.\n"
         + "- Shimmer: every echo pass is pitched UP an octave - a glowing halo for pads and ambient.\n\n"
         + "One mode for the whole preset (all sends share one reverb engine); each sound picks how much "
         + "goes in with its Rev Send knob.");
@@ -8826,15 +8827,21 @@ void DrumSequencerEditor::setupComponents()
             return std::vector<TipList::Item> {
                 { 1,  "Off",       "No effect in this slot." },
                 { 2,  "Chorus",    "3-voice stereo thickener / widener - the classic detuned shimmer.\n\nCharacter = sweep speed + depth." },
+                { 12, "Chorus (sync)",  "Chorus locked to the tempo: Character = sweeps per bar (1/4 /bar ... 16 /bar), follows tempo changes live. Depth stays at the classic voicing." },
                 { 3,  "Flanger",   "Swept comb filter - the metallic \"jet\" whoosh.\n\nCharacter = sweep speed + feedback bite." },
+                { 13, "Flanger (sync)", "Flanger locked to the tempo: Character = sweeps per bar. Feedback stays at the classic voicing." },
                 { 4,  "Phaser",    "6-stage all-pass swirl - softer and hollower than the flanger.\n\nCharacter = sweep speed + resonance." },
+                { 14, "Phaser (sync)",  "Phaser locked to the tempo: Character = sweeps per bar. Resonance stays at the classic voicing." },
                 { 5,  "Comp",      "Glue compressor across the whole instrument (both slots together).\n\nCharacter = attack: below 50% = faster / smashier, above = slower / punchier." },
                 { 6,  "Tape",      "Tape wobble: wow + flutter pitch drift + softened highs. Adds ~3 ms latency while on.\n\nCharacter = wobble speed." },
+                { 15, "Tape (sync)",    "Tape wobble locked to the tempo: Character = wobbles per bar." },
                 { 7,  "Auto-Pan",  "Moves the WHOLE instrument left-right. It drives itself (internal LFO) - no matrix routing needed.\n\nCharacter = pan speed." },
+                { 16, "Auto-Pan (sync)","Auto-Pan locked to the tempo: Character = sweeps per bar - \"1 /bar\" = exactly one left-right swing per bar, forever in the pocket." },
                 { 8,  "Widener",   "Mid/Side width boost with a bass-mono floor - needs STEREO content first (Chorus, unison Width, slot pans).\n\nCharacter = the bass-mono crossover (higher % = more of the low end stays centred)." },
                 { 9,  "OTT",       "3-band up + down compression - the modern \"dense and bright\" sheen. High amounts get aggressive.\n\nCharacter = compression speed." },
                 { 10, "FreqShift", "Single-sideband frequency shifter - moves every harmonic by the SAME Hz, so the sound turns inharmonic.\n\nCharacter = the shift: 50% = zero, above 50% = shift UP, below 50% = shift DOWN. Near 50% = barber-pole detune, extremes = alien metal." },
-                { 11, "Rotary",    "Leslie speaker: horn doppler + tremolo + rotor pan.\n\nCharacter = rotor speed (low % = slow chorale, high % = fast tremolo)." } };
+                { 11, "Rotary",    "Leslie speaker: horn doppler + tremolo + rotor pan.\n\nCharacter = rotor speed (low % = slow chorale, high % = fast tremolo)." },
+                { 17, "Rotary (sync)",  "Leslie locked to the tempo: Character = rotations per bar." } };
         };
         for (int i = 0; i < 3; ++i)
         {
@@ -8842,9 +8849,14 @@ void DrumSequencerEditor::setupComponents()
             content.addAndMakeVisible(cb);
             cb.setLookAndFeel(&tinyComboLNF);   // compact skin: tiny chevron + squeezed text (no "...")
             cb.addItem("Off", 1);   // SHORT names: the 66px combo must read without "..." (user)
-            cb.addItem("Chorus", 2); cb.addItem("Flanger", 3); cb.addItem("Phaser", 4); cb.addItem("Comp", 5);
-            cb.addItem("Tape", 6); cb.addItem("Auto-Pan", 7); cb.addItem("Widener", 8);
-            cb.addItem("OTT", 9); cb.addItem("FreqShift", 10); cb.addItem("Rotary", 11);
+            cb.addItem("Chorus", 2); cb.addItem("Chorus (sync)", 12);      // [2026-07-15] each "(sync)"
+            cb.addItem("Flanger", 3); cb.addItem("Flanger (sync)", 13);   // sits under its free sibling
+            cb.addItem("Phaser", 4); cb.addItem("Phaser (sync)", 14);
+            cb.addItem("Comp", 5);
+            cb.addItem("Tape", 6); cb.addItem("Tape (sync)", 15);
+            cb.addItem("Auto-Pan", 7); cb.addItem("Auto-Pan (sync)", 16);
+            cb.addItem("Widener", 8); cb.addItem("OTT", 9); cb.addItem("FreqShift", 10);
+            cb.addItem("Rotary", 11); cb.addItem("Rotary (sync)", 17);
             cb.setSelectedId(1, juce::dontSendNotification);
             cb.setTooltip(juce::String("CHANNEL FX slot ") + (i == 0 ? "A" : i == 1 ? "B" : "C") + ": pick an effect for the WHOLE instrument "
                           "(both sound slots combined; runs A -> B -> C in series).\n\n"
@@ -8854,7 +8866,7 @@ void DrumSequencerEditor::setupComponents()
             cb.onChange = [this, i] {
                 if (ignoreKnobCallbacks) return;
                 auto& ch = proc.sequencer.channel(selectedChannel);
-                ch.chFxType[i] = juce::jlimit(0, 10, comboChFx[i].getSelectedId() - 1);
+                ch.chFxType[i] = juce::jlimit(0, 16, comboChFx[i].getSelectedId() - 1);
                 if (ch.chFxType[i] != DrumChannel::ChFxOff && ch.chFxAmt[i] <= 0.001f)
                     ch.chFxAmt[i] = 0.5f;   // picking an effect with amount 0 would be silent - start audible (disclosed)
                 ch.markDspDirty(); refreshDetailPanel();
@@ -8887,6 +8899,12 @@ void DrumSequencerEditor::setupComponents()
                 auto& ch = proc.sequencer.channel(selectedChannel);
                 ch.chFxAmt[i] = juce::jlimit(0.0f, 1.0f, v); ch.markDspDirty();
             };
+            chFxChrF[i].format = [this, i](float v) {   // [2026-07-15] sync types read in /bar (kChFxCpb mirror)
+                const int t = proc.sequencer.channel(selectedChannel).chFxType[i];
+                if (t >= DrumChannel::ChFxChorusS)
+                { const float c = DrumChannel::kChFxCpb[juce::jlimit(0, 13, (int) std::lround(v * 13.0f))];
+                  return (c < 1.0f ? juce::String(c, 2) : juce::String(juce::roundToInt(c))) + " /bar"; }
+                return juce::String(juce::roundToInt(v * 100.0f)) + "%"; };
             chFxChrF[i].onChange = [this, i](float v) {
                 if (ignoreKnobCallbacks) return;
                 auto& ch = proc.sequencer.channel(selectedChannel);
@@ -9265,22 +9283,20 @@ void DrumSequencerEditor::setupComponents()
         // FIXED unit (the delay-Time model - the denominator never moves). Normal drag counts the
         // unit; SHIFT-drag = free (the FM-Ratio convention), displayed as an honest DECIMAL.
         // Formats read the STORED field (not the drag position) so snap vs free displays truthfully.
-        const auto shiftHeld = [] { return juce::ModifierKeys::getCurrentModifiers().isShiftDown(); };
         // Delay: synced Time = ECHOES PER BAR (count 1..21; Shift = fractional, e.g. "5.3 /bar").
         initF(delayBarNF, 7.0f / 20.0f);
         delayBarNF.format   = [this](float) { auto& m = proc.masterFX();
             const float N = masterBusB ? m.delayBarNB : m.delayBarN;
             return (std::abs(N - std::round(N)) < 0.02f ? juce::String(juce::roundToInt(N))
                                                         : juce::String(N, 1)) + " /bar"; };
-        delayBarNF.onChange = [this, shiftHeld](float v) { if (ignoreKnobCallbacks) return;
-            float N = 1.0f + v * 20.0f;
-            if (! shiftHeld()) N = std::round(N);
+        delayBarNF.onChange = [this](float v) { if (ignoreKnobCallbacks) return;
+            const float N = std::round(1.0f + v * 20.0f);   // whole echoes-per-bar (SHIFT = fine drag, still counted)
             for (auto& p : proc.sequencer.patterns) (masterBusB ? p.master.delayBarNB : p.master.delayBarN) = N; };
         delayBarNF.setTooltip("Echoes per bar (Sync is on).\n\n"
             "- The delay time = one bar divided by this number - 7 lands every echo on a 7-step grid, "
             "14 on a 14-step grid, and so on up to 21.\n"
             "- This is the delay's 'room size': the reverb's Size fader plays the same role in meters.\n"
-            "- SHIFT-drag = free values in between (shown as a decimal).\n"
+            "- SHIFT-drag = fine control.\n"
             "- Follows the tempo AND time signature (the host's when DAW Sync is on, the toolbar's otherwise).\n"
             "- Turn Sync off for free milliseconds instead.");
         // MAX TRAIL: hard echo count (top = unlimited = the classic endless-fade delay).
@@ -9319,21 +9335,24 @@ void DrumSequencerEditor::setupComponents()
             "- Digital has no flavour - this fader is inert there.\n- 50% = the mode's standard voicing.");
         // Reverb synced variants [2026-07-15 12:10 counted units]: Decay counts QUARTER-BARS
         // (1.5-bar tails exist now), Pre counts 64THS. Shift = free decimal.
-        initF(revDecBarsF, (1.0f * 4.0f - 1.0f) / 31.0f);
+        initF(revDecBarsF, (12.0f - 3.0f) / 45.0f);   // default 1 bar = 12 twelfths
         revDecBarsF.format   = [this](float) { auto& m = proc.masterFX();
             const float b = masterBusB ? m.reverbDecBarsB : m.reverbDecBars;
-            const float q = b * 4.0f;
+            const float q = b * 4.0f;   // quarters display clean ("1.5 bars"); thirds as decimals ("0.33 bars")
             if (std::abs(q - std::round(q)) < 0.02f)
             { const float br = std::round(q) / 4.0f;
-              return juce::String(br, (std::abs(br - std::round(br)) < 0.01f) ? 0 : 2) + (br > 1.01f ? " bars" : " bar"); }
-            return juce::String(b, 2) + " bars"; };
-        revDecBarsF.onChange = [this, shiftHeld](float v) { if (ignoreKnobCallbacks) return;
-            float b = (1.0f + v * 31.0f) / 4.0f;                     // 1..32 quarter-bars = 0.25..8 bars
-            if (! shiftHeld()) b = std::round(b * 4.0f) / 4.0f;
-            b = juce::jlimit(0.25f, 8.0f, b);
+              return juce::String(br, (std::abs(br - std::round(br)) < 0.01f) ? 0 : (std::abs(br * 2.0f - std::round(br * 2.0f)) < 0.01f ? 1 : 2)) + (br > 1.01f ? " bars" : " bar"); }
+            return juce::String(b, 2) + (b > 1.01f ? " bars" : " bar"); };
+        revDecBarsF.onChange = [this](float v) { if (ignoreKnobCallbacks) return;
+            // [2026-07-15 13:30] counts TWELFTHS of a bar, 3..48 = 0.25..4 bars (twelfths express BOTH
+            // the quarter family and the 0.33/0.66 triplet family the user asked for; 8 bars was
+            // ambient overkill + made the stops twitchy). SHIFT = fine drag, still counted.
+            const float t = std::round(3.0f + v * 45.0f);
+            const float b = juce::jlimit(0.25f, 4.0f, t / 12.0f);
             for (auto& p : proc.sequencer.patterns) (masterBusB ? p.master.reverbDecBarsB : p.master.reverbDecBars) = b; };
         revDecBarsF.setTooltip("Decay, synced: the tail dies (~-60 dB) this many bars after a hit.\n\n"
-            "- Counts QUARTER-bars: 0.25, 0.5 ... 1.5, 2 ... up to 8 bars. SHIFT-drag = free decimal.\n"
+            "- Counts 12ths of a bar: quarters (0.25, 0.5, 1.5...) AND thirds (0.33, 0.66...) up to 4 bars. "
+            "SHIFT-drag = fine control.\n"
             "- The reverb feedback is recomputed LIVE from Size, Mode and the tempo, so the tail keeps "
             "landing on the bar line when any of them change.\n"
             "- Plays the role FEEDBACK plays on the delay (how long until silence).\n"
@@ -9346,31 +9365,27 @@ void DrumSequencerEditor::setupComponents()
             { const int ni = juce::roundToInt(n);
               return ni == 0 ? juce::String("Off") : juce::String(ni) + "/64 bar"; }
             return juce::String(b, 3) + " bar"; };
-        revPreBarsF.onChange = [this, shiftHeld](float v) { if (ignoreKnobCallbacks) return;
-            float b = v * 0.125f;                                    // 0..8 sixty-fourths of a bar
-            if (! shiftHeld()) b = std::round(b * 64.0f) / 64.0f;
+        revPreBarsF.onChange = [this](float v) { if (ignoreKnobCallbacks) return;
+            const float b = std::round(v * 0.125f * 64.0f) / 64.0f;  // 0..8 sixty-fourths (SHIFT = fine drag)
             for (auto& p : proc.sequencer.patterns) (masterBusB ? p.master.reverbPreBarsB : p.master.reverbPreBars) = b; };
-        revPreBarsF.setTooltip("Pre-delay, synced: the gap before the tail blooms, counted in 64THS of a bar "
-            "(1/64 = ~30 ms at 120 BPM - classic drum pre-delay).\n\n"
-            "- SHIFT-drag = free decimal in between.\n"
-            "- A synced gap keeps the dry transient punchy and the reverb 'in the pocket' at any tempo.");
+        revPreBarsF.setTooltip("Pre-delay, synced: the silence between a sound's TRIGGER (not its end) and "
+            "the moment its reverb tail STARTS, counted in 64THS of a bar (1/64 = ~30 ms at 120 BPM - "
+            "classic drum pre-delay).\n\n"
+            "- Hit -> gap -> wash: the transient stays punchy and the reverb sits BEHIND the sound "
+            "like a room, instead of on top of it.\n- SHIFT-drag = fine control.");
         // GATE [2026-07-15 12:10]: follows the row's Sync - counted 16THS of a bar when synced,
         // free MILLISECONDS when not. Each mode keeps its OWN stored value.
         initF(revGateF, 0.0f);
         revGateF.format   = [this](float) { auto& m = proc.masterFX();
             if (masterBusB ? m.reverbSyncB : m.reverbSync)
             { const float b = masterBusB ? m.reverbGateB : m.reverbGate;
-              const float n = b * 16.0f;
-              if (std::abs(n - std::round(n)) < 0.02f)
-              { const int ni = juce::roundToInt(n);
-                return ni == 0 ? juce::String("Off") : ni == 16 ? juce::String("1 bar") : juce::String(ni) + "/16 bar"; }
-              return juce::String(b, 2) + " bar"; }
+              return b < 0.005f ? juce::String("Off") : juce::String(b, 2) + " bar"; }
             const float ms = masterBusB ? m.reverbGateMsB : m.reverbGateMs;
             return ms < 1.0f ? juce::String("Off") : juce::String(juce::roundToInt(ms)) + " ms"; };
-        revGateF.onChange = [this, shiftHeld](float v) { if (ignoreKnobCallbacks) return;
+        revGateF.onChange = [this](float v) { if (ignoreKnobCallbacks) return;
+            // [2026-07-15 13:30] plain DECIMAL bar fraction (user: no /16 counting; SHIFT = fine drag)
             if (masterBusB ? proc.masterFX().reverbSyncB : proc.masterFX().reverbSync)
-            { float b = v;                                           // 0..16 sixteenths = 0..1 bar
-              if (! shiftHeld()) b = std::round(b * 16.0f) / 16.0f;
+            { const float b = v < 0.005f ? 0.0f : v;
               for (auto& p : proc.sequencer.patterns) (masterBusB ? p.master.reverbGateB : p.master.reverbGate) = b; }
             else
             { const float ms = v < 0.005f ? 0.0f : v * 1000.0f;      // free 0..1000 ms
@@ -9379,8 +9394,8 @@ void DrumSequencerEditor::setupComponents()
             "chop (think huge 'In the Air Tonight' snares).\n\n"
             "- The reverb's version of the delay's MAX TRAIL: length capped, loudness untouched - crank "
             "Decay for a dense loud wash, gate it at 2/16 = thick burst, then silence.\n"
-            "- Sync on = counted 16THS of a bar (SHIFT = free decimal); Sync off = free milliseconds. "
-            "Each mode remembers its own setting.\n"
+            "- Sync on = a bar fraction (\"0.25 bar\"); Sync off = free milliseconds. Each mode "
+            "remembers its own setting. SHIFT-drag = fine control.\n"
             "- Closes with a ~5 ms fade so it never clicks.\n- Bottom = off.");
         // Reverb SYNC = a single-row lit button [2026-07-15 12:10] (styled at the Sync/Ping site).
         swReverbSync.setTooltip("Sync the reverb to the tempo: Decay becomes a tail length in BARS, "
@@ -9443,10 +9458,11 @@ void DrumSequencerEditor::setupComponents()
                                                      48000.0) * 343.0f;
             return "~" + juce::String(juce::roundToInt(mtr)) + " m";
         };
-        masterVF[4].setTooltip("Size: how big the reverb's room is - shown as an approximate room "
+        masterVF[4].setTooltip("Size: how BIG the reverb's room is - shown as an approximate room "
             "dimension in meters.\n\n- ~4 m = a booth, ~12 m = a club, ~20 m+ = a hall.\n"
-            "- Small = tight and boxy, large = long smooth wash; the Decay fader's ~seconds "
-            "estimate follows this live.\n"
+            "- Size = the room's dimensions; the MODE (title click) = what its walls are made of - "
+            "two different things.\n"
+            "- The Decay fader's ~seconds estimate follows Size live.\n"
             "- Same job as the delay's Time fader: that one measures its 'room' in echoes-per-bar, "
             "this one in meters.");
         masterVF[5].setTooltip("Decay: how long the tail rings.\n\n- The value shows the ESTIMATED tail length "
@@ -9455,8 +9471,10 @@ void DrumSequencerEditor::setupComponents()
             "- Turn the row's Sync on to set it in BARS instead.");
         masterVF[6].setTooltip("Reverb Wet: the return level of the whole reverb bus.\n\n- Per-sound amounts "
             "live on each channel's Rev send fader; this scales what comes back.\n- Right-click = MIDI-learn.");
-        masterVF[7].setTooltip("Pre-delay: a gap (0-120 ms) before the tail blooms.\n\n- Keeps the dry transient "
-            "punchy - drums love 10-40 ms.\n- Turn the row's Sync on to set it as a bar fraction instead.");
+        masterVF[7].setTooltip("Pre-delay: the silence between a sound's TRIGGER (not its end) and the moment "
+            "its reverb tail STARTS (0-120 ms).\n\n- Hit -> gap -> wash: the transient stays punchy and the "
+            "reverb sits BEHIND the sound like a room, instead of on top of it. Drums love 10-40 ms.\n"
+            "- Turn the row's Sync on to set it as a bar fraction instead.");
         masterVF[8].setTooltip("Width: the reverb's stereo spread.\n\n- 100% = full wide tail, 0 = mono/narrow "
             "(tight, centred).");
         masterVF[9].setTooltip("Delay time in milliseconds (free).\n\n- Turn Sync on to set it as ECHOES PER BAR "
@@ -11327,7 +11345,7 @@ void DrumSequencerEditor::updateFxFaders(const DrumChannel::Slot& sl)
     // CHANNEL FX + sends read the CHANNEL (both slots combined) - they never follow the slot selector.
     { const auto& ch = proc.sequencer.channel(selectedChannel);
       for (int i = 0; i < 3; ++i)
-      { comboChFx[i].setSelectedId(juce::jlimit(0, 10, ch.chFxType[i]) + 1, juce::dontSendNotification);
+      { comboChFx[i].setSelectedId(juce::jlimit(0, 16, ch.chFxType[i]) + 1, juce::dontSendNotification);
         chFxAmtF[i].setValue01(ch.chFxAmt[i]);
         chFxChrF[i].setValue01(ch.chFxChar[i]);
         const bool on = ch.chFxType[i] != DrumChannel::ChFxOff;
@@ -11432,7 +11450,7 @@ void DrumSequencerEditor::refreshDetailPanel()
       delayDuckF.setValue01(masterBusB ? m.delayDuckB : m.delayDuck);
       delayCharF.setValue01(masterBusB ? m.delayCharB : m.delayChar);
       // counted-unit inverses [2026-07-15 12:10]
-      revDecBarsF.setValue01(((masterBusB ? m.reverbDecBarsB : m.reverbDecBars) * 4.0f - 1.0f) / 31.0f);
+      revDecBarsF.setValue01(((masterBusB ? m.reverbDecBarsB : m.reverbDecBars) * 12.0f - 3.0f) / 45.0f);
       revPreBarsF.setValue01((masterBusB ? m.reverbPreBarsB : m.reverbPreBars) / 0.125f);
       revGateF.setValue01((masterBusB ? m.reverbSyncB : m.reverbSync)
                               ? (masterBusB ? m.reverbGateB : m.reverbGate)
@@ -12775,7 +12793,8 @@ void DrumSequencerEditor::layoutContent()
           vf6(masterVF[8], lblRevWidth, 4, fy);
           lblRevSyncT.setVisible(false); lblRevSyncT.setBounds(0, 0, 0, 0);   // the lit button carries its own word now
           const int cx5 = sx + 8 + 5 * FP6;
-          swReverbSync.setVisible(true); swReverbSync.setBounds(cx5, fy + 20, FW6 + 2, 20); }
+          // full remaining width so "Sync" never truncates [2026-07-15 13:30]
+          swReverbSync.setVisible(true); swReverbSync.setBounds(cx5, fy + 20, sx + masterW - 8 - cx5, 22); }
         // Row 3: DELAY - Time(ms | /bar) / Trail / Feedback / Duck / Character + [Sync over Ping]; Wet = pill
         { hdrDelayG.setVisible(true);   // text ("DELAY A - TAPE") comes from refreshReverbModeHeader - never overwrite it here
           hdrDelayG.setBounds(sx + 6, colTop + 230, masterW - 86, hdrH);
@@ -12791,9 +12810,9 @@ void DrumSequencerEditor::layoutContent()
           // Sync + Ping = two single-row lit buttons stacked in col 5 (the words live INSIDE) [2026-07-15 12:10]
           lblDelaySync.setVisible(false);    lblDelaySync.setBounds(0, 0, 0, 0);
           lblDelayPingPong.setVisible(false); lblDelayPingPong.setBounds(0, 0, 0, 0);
-          const int cx5 = sx + 8 + 5 * FP6;
-          swDelaySync.setBounds(cx5, fy + 8, FW6 + 2, 20);
-          swDelayPingPong.setBounds(cx5, fy + 34, FW6 + 2, 20); }
+          const int cx5 = sx + 8 + 5 * FP6, bw = sx + masterW - 8 - cx5;   // full remaining width = readable words
+          swDelaySync.setBounds(cx5, fy + 6, bw, 22);
+          swDelayPingPong.setBounds(cx5, fy + 34, bw, 22); }
         refreshMasterSyncFaders();   // free proxy vs synced variant + Character dim (Digital)
 
         // -- AMP ENVELOPE + EQ column. The amp-env graph top is GRAPH_Y so it aligns with the pitch-env graph. --
