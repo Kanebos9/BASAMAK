@@ -128,7 +128,7 @@ void StepGridComponent::update(const Sequencer& seq, bool hasSolo)
             }
         }
         else if (drawMagCh == ch || drawDragCh == ch)   // channel left piano-roll mode -> tidy overlay/stroke state
-        { if (drawMagCh == ch) drawMagCh = -1; if (drawDragCh == ch) drawDragCh = -1; drawReadSemi = -128; condEdCh = -1; condEdIdx = -1; }
+        { if (drawMagCh == ch) drawMagCh = -1; if (drawDragCh == ch) drawDragCh = -1; drawReadSemi = -128; condEdCh = -1; condEdIdx = -1; rollMenuNoteCh = -1; rollMenuNoteIdx = -1; }
     }
     anySolo = hasSolo;
     curLoop = seq.loopCount;   // for the Prob-mode current-loop indicator
@@ -669,13 +669,17 @@ void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle
             {
                 const int N = juce::jlimit(2, 5, (int) n.condLen);
                 if (bar.getWidth() / (float) N >= 6.0f)
-                {
+                {   // [2026-07-15 round-3] the note KEEPS its slot colour; DISABLED passes = a faded
+                    // version of that same colour (works for all 3 note colours - user spec).
                     const float sw = bar.getWidth() / (float) N;
                     for (int k = 0; k < N; ++k)
                     {
                         juce::Rectangle<float> seg(bar.getX() + k * sw, bar.getY(), sw, bar.getHeight());
-                        if (((n.condMask >> k) & 1) != 0)
-                        { g.setColour(juce::Colour(0xffc77dff).withAlpha(0.55f)); g.fillRect(seg.reduced(0.5f)); }
+                        if (((n.condMask >> k) & 1) == 0)
+                        {   // silent pass: dim the note's own colour way down
+                            g.setColour(juce::Colour(0xff161626)); g.fillRect(seg.reduced(0.5f));
+                            g.setColour(col.withAlpha(0.25f));     g.fillRect(seg.reduced(0.5f));
+                        }
                         if (k > 0) { g.setColour(juce::Colour(0xff101018)); g.fillRect(seg.getX(), bar.getY(), 1.2f, bar.getHeight()); }
                     }
                 }
@@ -1184,7 +1188,7 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
         if (condEdRect.contains(p) && condEdIdx < drawNoteCount[condEdCh])
         {
             if (p.x >= condEdRect.getRight() - 20 && p.y <= condEdRect.getY() + 18)   // the close X
-            { condEdCh = -1; condEdIdx = -1; repaint(); return; }
+            { condEdCh = -1; condEdIdx = -1; rollMenuNoteCh = -1; rollMenuNoteIdx = -1; repaint(); return; }
             const auto& n = drawNotes[condEdCh][condEdIdx];
             auto bars = condEdRect.toFloat().withTrimmedTop(16.0f).withTrimmedBottom(13.0f).reduced(8.0f, 3.0f);
             const int N = juce::jlimit(1, 5, (int) n.condLen);
@@ -1192,7 +1196,7 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
             condEdDownBar = juce::jlimit(0, N - 1, (int)(xn * (float) N));
             condEdDownX = p.x; condEdDragged = false; condEdDragging = true;
         }
-        else { condEdCh = -1; condEdIdx = -1; repaint(); }
+        else { condEdCh = -1; condEdIdx = -1; rollMenuNoteCh = -1; rollMenuNoteIdx = -1; repaint(); }
         return;
     }
     // PIANO ROLL: the ROW keeps the quick line-draw gesture (left-drag draws, right-drag erases);
@@ -1204,7 +1208,7 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
         if (ov.contains(p))
         {
             const int hy = ov.getY();
-            if (prHdrClose(ov).contains(p)) { drawMagCh = -1; drawReadSemi = -128; prMode = 0; condEdCh = -1; condEdIdx = -1; repaint(); return; }  // close
+            if (prHdrClose(ov).contains(p)) { drawMagCh = -1; drawReadSemi = -128; prMode = 0; condEdCh = -1; condEdIdx = -1; rollMenuNoteCh = -1; rollMenuNoteIdx = -1; repaint(); return; }  // close
             static const int ranges[4] = { 6, 12, 24, 48 };
             for (int i = 0; i < 4; ++i)
                 if (prHdrRange(ov, i).contains(p))
@@ -1298,7 +1302,7 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
             repaint();
             return;
         }
-        drawMagCh = -1; drawReadSemi = -128; prMode = 0; condEdCh = -1; condEdIdx = -1; repaint();   // click outside closes
+        drawMagCh = -1; drawReadSemi = -128; prMode = 0; condEdCh = -1; condEdIdx = -1; rollMenuNoteCh = -1; rollMenuNoteIdx = -1; repaint();   // click outside closes
         return;
     }
     {
@@ -1688,7 +1692,9 @@ void StepGridComponent::showRollNoteMenu(int ch2, int idx)
     m.showMenuAsync(juce::PopupMenu::Options(),
         [this, ch2, idx, sel, deleteSelected](int r)
         {
-            rollMenuNoteCh = -1; rollMenuNoteIdx = -1; repaint();   // the menu is gone - drop the outline
+            // the outline stays while the LOOP-CONDITION editor is open for this note (user:
+            // "i forget which note's loop i was editing") - every other result drops it.
+            if (r != 40) { rollMenuNoteCh = -1; rollMenuNoteIdx = -1; repaint(); }
             if (r == 0 || idx >= drawNoteCount[ch2]) return;
             auto apply = [&](void (*f)(DrumChannel::DrawNote&, int), int arg)
             {
