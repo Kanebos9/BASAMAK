@@ -158,15 +158,19 @@ public:
                                                // sound's Strum knob (default). Right-click note menu.
                       int8_t  pan = PAN_INHERIT;   // per-note PAN: -100 (L) .. 0 (true centre) .. +100 (R), or
                                                    // PAN_INHERIT (127) = follow the whole-channel pan (the default).
+                      uint8_t condLen = 1;     // [2026-07-15 23:00] per-note LOOP CONDITION (the step Loop
+                      uint8_t condMask = 0;    //  system, per note): fire only on chosen loops of an N-loop
+                                               //  cycle. condLen 1 OR mask 0 = every loop (default).
 
         // ONE serialization format (was smeared across 4 sites; adding a field used to mean editing
-        // all of them by hand). "start:len:semi:vel:slot:glide:oneShot:strumUp:strumPct:pan" - the
-        // caller appends the ',' separator. unpack() is old-string tolerant (short files fill defaults).
+        // all of them by hand). "start:len:semi:vel:slot:glide:oneShot:strumUp:strumPct:pan:condLen:
+        // condMask" - the caller appends the ',' separator. unpack() is old-string tolerant.
         juce::String pack() const {
             return juce::String((int) start) + ":" + juce::String((int) len) + ":" + juce::String((int) semi)
                  + ":" + juce::String((int) vel) + ":" + juce::String((int) slot) + ":" + juce::String((int) glide)
                  + ":" + juce::String((int) oneShot) + ":" + juce::String((int) strumUp)
-                 + ":" + juce::String((int) strumPct) + ":" + juce::String((int) pan);
+                 + ":" + juce::String((int) strumPct) + ":" + juce::String((int) pan)
+                 + ":" + juce::String((int) condLen) + ":" + juce::String((int) condMask);
         }
         static DrawNote unpack(const juce::StringArray& f) {
             DrawNote n;
@@ -181,6 +185,8 @@ public:
             n.strumUp = (uint8_t) (f.size() > 7 && f[7].getIntValue() ? 1 : 0);
             n.strumPct= (uint8_t) juce::jlimit(0, 255, f.size() > 8 ? f[8].getIntValue() : 255);
             n.pan     = (int8_t)  (f.size() > 9 ? juce::jlimit(-128, 127, f[9].getIntValue()) : PAN_INHERIT);
+            n.condLen = (uint8_t) juce::jlimit(1, 10, f.size() > 10 ? f[10].getIntValue() : 1);
+            n.condMask= (uint8_t) juce::jlimit(0, 255, f.size() > 11 ? f[11].getIntValue() : 0);
             return n;
         }
     };

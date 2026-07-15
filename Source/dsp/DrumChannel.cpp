@@ -2090,7 +2090,15 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             for (int i = 0; i < numSamples; ++i) analysisTap->push(0.0f);
     };
 
-    if (mute || (anySolo && !solo)) { feedSilence(); return; }
+    if (mute || (anySolo && !solo))
+    {
+        // [2026-07-15 23:00] KILL any live voices while gated: the output is already silent, so
+        // this is click-free - and it guarantees nothing "from the past" survives to play on
+        // unmute (belt + braces with the fireEvent skip; also covers voices started BEFORE the
+        // mute was toggled, and live-keys voices).
+        for (auto& v : voices) v.playHead = -1.0;
+        feedSilence(); return;
+    }
 
     // Don't block the audio thread: if a sample swap is in progress, skip this block.
     const juce::ScopedTryLock stl(sampleLock);

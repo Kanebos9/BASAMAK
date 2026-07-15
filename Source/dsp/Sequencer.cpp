@@ -49,6 +49,13 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
     auto fireEvent = [this, sampleRate](const TriggerEvent& e)
     {
         auto& c = patterns[playPattern].channels[e.channel];   // steps fire from the PLAYING pattern
+        // [2026-07-15 23:00] MUTED (or solo-excluded) channels DON'T FIRE AT ALL. They used to
+        // trigger silently (renderInto only gated the OUTPUT), so voices accumulated frozen while
+        // muted and all became audible at once on unmute ("really loud suddenly" + the roll note
+        // the playhead had already passed playing after unmute - both user reports, same root).
+        // Skipping here also stops a muted channel's duck pulses, chokes and MIDI-out notes -
+        // a silent channel shouldn't push the mix around.
+        if (c.mute || (anySoloIn(patterns[playPattern]) && ! c.solo)) return;
         // SIDECHAIN DUCK: this hit pushes down every channel set to "Duck by" this channel
         // (Routing popup). Level-only - the ducked sound recovers; nothing is cut like choke.
         for (int o = 0; o < NUM_CHANNELS; ++o)
@@ -438,6 +445,13 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
                 if (! atZero && ! (colPos > oldPos && colPos <= newPos)) continue;
                 if (prevTick == 100000 + (int) nt.start && prevTickLoop == loopCount) continue;   // seam re-crossing
                 firedCol = nt.start;
+                // [2026-07-15 23:00] per-NOTE loop condition (the step Loop system, per note):
+                // fire only on the chosen loops of an N-loop cycle. Len 1 / mask 0 = every loop.
+                if (nt.condLen > 1 && nt.condMask != 0)
+                {
+                    const int bar = ((loopCount % (int) nt.condLen) + (int) nt.condLen) % (int) nt.condLen;
+                    if (((nt.condMask >> bar) & 1) == 0) continue;
+                }
                 if (auto* tap = c.analysisTap) tap->arm();
                 // overlap = ANY other note is sounding at this note's start (equal starts: earlier
                 // list entries count as already sounding, so chord tone #2+ overlap tone #1)

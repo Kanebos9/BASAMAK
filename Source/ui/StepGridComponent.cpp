@@ -128,7 +128,7 @@ void StepGridComponent::update(const Sequencer& seq, bool hasSolo)
             }
         }
         else if (drawMagCh == ch || drawDragCh == ch)   // channel left piano-roll mode -> tidy overlay/stroke state
-        { if (drawMagCh == ch) drawMagCh = -1; if (drawDragCh == ch) drawDragCh = -1; drawReadSemi = -128; }
+        { if (drawMagCh == ch) drawMagCh = -1; if (drawDragCh == ch) drawDragCh = -1; drawReadSemi = -128; condEdCh = -1; condEdIdx = -1; }
     }
     anySolo = hasSolo;
     curLoop = seq.loopCount;   // for the Prob-mode current-loop indicator
@@ -662,6 +662,30 @@ void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle
                 g.setColour(col.withAlpha(0.9f)); g.fillRoundedRectangle(bar, 2.0f);
                 g.setColour(juce::Colour(0xff101018)); g.drawRoundedRectangle(bar, 2.0f, 1.0f);
             }
+            // [2026-07-15 23:00] per-note LOOP CONDITION: the bar splits into N segments (vertical
+            // dividers), firing passes highlighted violet - the user's design, matching the step
+            // Loop cell. Too narrow for honest segments = a compact "x/N" watermark instead.
+            if (n.condLen > 1 && n.condMask != 0)
+            {
+                const int N = juce::jlimit(2, 5, (int) n.condLen);
+                if (bar.getWidth() / (float) N >= 6.0f)
+                {
+                    const float sw = bar.getWidth() / (float) N;
+                    for (int k = 0; k < N; ++k)
+                    {
+                        juce::Rectangle<float> seg(bar.getX() + k * sw, bar.getY(), sw, bar.getHeight());
+                        if (((n.condMask >> k) & 1) != 0)
+                        { g.setColour(juce::Colour(0xffc77dff).withAlpha(0.55f)); g.fillRect(seg.reduced(0.5f)); }
+                        if (k > 0) { g.setColour(juce::Colour(0xff101018)); g.fillRect(seg.getX(), bar.getY(), 1.2f, bar.getHeight()); }
+                    }
+                }
+                else if (bar.getHeight() >= 7.0f)
+                {
+                    g.setColour(juce::Colour(0xffc77dff)); g.setFont(juce::Font(juce::jmin(9.0f, bar.getHeight() - 1.0f), juce::Font::bold));
+                    g.drawText(juce::String(juce::countNumberOfBits((uint32_t)(n.condMask & ((1 << N) - 1)))) + "/" + juce::String(N),
+                               bar.toNearestInt(), juce::Justification::centred, false);
+                }
+            }
             if (prSel[i])   // part of the multi-selection -> amber outline
             { g.setColour(juce::Colour(0xffffc23a)); g.drawRoundedRectangle(bar.expanded(1.0f), 3.0f, 1.6f); }
             if (! n.oneShot && bar.getWidth() > 14.0f)   // resize tab on the right edge (gated notes)
@@ -880,6 +904,32 @@ void StepGridComponent::paint(juce::Graphics& g)
     // ON TOP so the pitch is placeable (the base row is only ~44 px for +/-36 semitones).
     if (drawMagCh >= 0)
         paintDrawLane(g, drawMagCh, drawOverlayRect(), true);
+
+    // [2026-07-15 23:00] per-NOTE loop-condition editor: a floating step-Loop-style cell.
+    if (condEdCh >= 0 && condEdIdx >= 0 && condEdIdx < drawNoteCount[condEdCh])
+    {
+        const auto& n = drawNotes[condEdCh][condEdIdx];
+        auto r = condEdRect.toFloat();
+        g.setColour(juce::Colour(0xf01a1a30)); g.fillRoundedRectangle(r, 6.0f);
+        g.setColour(juce::Colour(0xffc77dff)); g.drawRoundedRectangle(r.reduced(0.5f), 6.0f, 1.4f);
+        g.setColour(juce::Colours::white); g.setFont(juce::Font(11.0f, juce::Font::bold));
+        g.drawText("LOOP CONDITION", r.removeFromTop(16.0f), juce::Justification::centred, false);
+        g.setFont(juce::Font(9.0f)); g.setColour(juce::Colour(0xffaebada));
+        g.drawText("drag = cycle - click a bar = on/off", r.removeFromBottom(13.0f), juce::Justification::centred, false);
+        auto bars = r.reduced(8.0f, 3.0f);
+        const int N = juce::jlimit(1, 5, (int) n.condLen);
+        const float bw = bars.getWidth() / (float) N;
+        for (int k = 0; k < N; ++k)
+        {
+            juce::Rectangle<float> bar(bars.getX() + k * bw + 2.0f, bars.getY(), bw - 4.0f, bars.getHeight());
+            const bool on = ((n.condMask >> k) & 1) != 0;
+            g.setColour(juce::Colour(0xff1a1530)); g.fillRect(bar);
+            if (on) { g.setColour(juce::Colour(0xffc77dff)); g.fillRect(bar); }
+            const bool playing = (N > 1 && (curLoop % N) == k);
+            g.setColour(playing ? juce::Colour(0xffffcc33) : juce::Colour(0xddffffff));
+            g.drawRect(bar, playing ? 1.6f : 1.0f);
+        }
+    }
 }
 
 juce::String StepGridComponent::getTooltip()
@@ -1120,6 +1170,22 @@ void StepGridComponent::mouseMove(const juce::MouseEvent& e)
 void StepGridComponent::mouseDown(const juce::MouseEvent& e)
 {
     const auto p = e.getPosition();
+    // [2026-07-15 23:00] floating LOOP-CONDITION cell: clicks inside edit it, outside close it
+    // (the click is swallowed either way so nothing underneath reacts).
+    if (condEdCh >= 0)
+    {
+        if (condEdRect.contains(p) && condEdIdx < drawNoteCount[condEdCh])
+        {
+            const auto& n = drawNotes[condEdCh][condEdIdx];
+            auto bars = condEdRect.toFloat().withTrimmedTop(16.0f).withTrimmedBottom(13.0f).reduced(8.0f, 3.0f);
+            const int N = juce::jlimit(1, 5, (int) n.condLen);
+            const float xn = juce::jlimit(0.0f, 0.999f, (p.x - bars.getX()) / juce::jmax(1.0f, bars.getWidth()));
+            condEdDownBar = juce::jlimit(0, N - 1, (int)(xn * (float) N));
+            condEdDownX = p.x; condEdDragged = false; condEdDragging = true;
+        }
+        else { condEdCh = -1; condEdIdx = -1; repaint(); }
+        return;
+    }
     // PIANO ROLL: the ROW keeps the quick line-draw gesture (left-drag draws, right-drag erases);
     // the LENS opens the BIG piano-roll EDITOR (pointer gestures: drag empty = create, drag note =
     // move, drag its right edge = resize, double-click = delete; snap grid + range in the header).
@@ -1129,7 +1195,7 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
         if (ov.contains(p))
         {
             const int hy = ov.getY();
-            if (prHdrClose(ov).contains(p)) { drawMagCh = -1; drawReadSemi = -128; prMode = 0; repaint(); return; }  // close
+            if (prHdrClose(ov).contains(p)) { drawMagCh = -1; drawReadSemi = -128; prMode = 0; condEdCh = -1; condEdIdx = -1; repaint(); return; }  // close
             static const int ranges[4] = { 6, 12, 24, 48 };
             for (int i = 0; i < 4; ++i)
                 if (prHdrRange(ov, i).contains(p))
@@ -1223,7 +1289,7 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
             repaint();
             return;
         }
-        drawMagCh = -1; drawReadSemi = -128; prMode = 0; repaint();   // click outside closes
+        drawMagCh = -1; drawReadSemi = -128; prMode = 0; condEdCh = -1; condEdIdx = -1; repaint();   // click outside closes
         return;
     }
     {
@@ -1333,6 +1399,23 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
 
 void StepGridComponent::mouseDrag(const juce::MouseEvent& e)
 {
+    if (condEdDragging && condEdCh >= 0 && condEdIdx < drawNoteCount[condEdCh])
+    {   // horizontal drag across the floating cell = cycle length 1..5 (the step Loop law)
+        if (std::abs(e.getPosition().x - condEdDownX) > 4) condEdDragged = true;
+        if (condEdDragged)
+        {
+            auto bars = condEdRect.toFloat().withTrimmedTop(16.0f).withTrimmedBottom(13.0f).reduced(8.0f, 3.0f);
+            const float xn = juce::jlimit(0.0f, 0.999f, (e.getPosition().x - bars.getX()) / juce::jmax(1.0f, bars.getWidth()));
+            const uint8_t N = (uint8_t) juce::jlimit(1, 5, 1 + (int)(xn * 5.0f));
+            if (N != drawNotes[condEdCh][condEdIdx].condLen)
+            {
+                for (int i = 0; i < drawNoteCount[condEdCh]; ++i)
+                    if (i == condEdIdx || (condEdSel && prSel[i])) drawNotes[condEdCh][i].condLen = N;
+                pushNotes(condEdCh); repaint();
+            }
+        }
+        return;
+    }
     // PIANO-ROLL editor: SCROLL the pitch view by dragging the note-name column.
     if (drawMagCh >= 0 && prMode == 7)   // TUNE fader drag
     {
@@ -1435,6 +1518,19 @@ void StepGridComponent::mouseDrag(const juce::MouseEvent& e)
 
 void StepGridComponent::mouseUp(const juce::MouseEvent&)
 {
+    if (condEdDragging)
+    {
+        if (! condEdDragged && condEdDownBar >= 0 && condEdCh >= 0 && condEdIdx < drawNoteCount[condEdCh])
+        {
+            const uint8_t bit = (uint8_t)(1 << condEdDownBar);
+            const uint8_t nm = drawNotes[condEdCh][condEdIdx].condMask ^ bit;
+            for (int i = 0; i < drawNoteCount[condEdCh]; ++i)
+                if (i == condEdIdx || (condEdSel && prSel[i])) drawNotes[condEdCh][i].condMask = nm;
+            pushNotes(condEdCh); repaint();
+        }
+        condEdDragging = false; condEdDragged = false; condEdDownBar = -1;
+        return;
+    }
     if (onRollPreviewEnd) onRollPreviewEnd();   // any gesture end releases the drawing-audition note
     if (drawDragCh >= 0 && strokeCreatedNew && strokeNoteIdx >= 0)
     { tapNoteCh = drawDragCh; tapNoteIdx = strokeNoteIdx; }   // a click just created this note
@@ -1573,6 +1669,11 @@ void StepGridComponent::showRollNoteMenu(int ch2, int idx)
     sm.addItem(12, "Slot 2",     true, nn.slot == 2);
     m.addSubMenu("Play on", sm);
     m.addSeparator();
+    { const juce::String cd = nn.condLen > 1 && nn.condMask != 0
+          ? juce::String(juce::countNumberOfBits((uint32_t)(nn.condMask & ((1 << nn.condLen) - 1)))) + "/" + juce::String((int) nn.condLen)
+          : juce::String("every loop");
+      m.addItem(40, "Loop condition (" + cd + ")..."); }   // [2026-07-15 23:00] the step Loop system, per note
+    m.addSeparator();
     m.addItem(4, sel ? "Delete selected notes" : "Delete note");
     m.showMenuAsync(juce::PopupMenu::Options(),
         [this, ch2, idx, sel, deleteSelected](int r)
@@ -1584,6 +1685,14 @@ void StepGridComponent::showRollNoteMenu(int ch2, int idx)
                     if (i == idx || (sel && prSel[i])) f(drawNotes[ch2][i], arg);
                 pushNotes(ch2); repaint();
             };
+            if (r == 40)     // open the floating loop-condition cell near the note
+            {
+                condEdCh = ch2; condEdIdx = idx; condEdSel = sel;
+                auto mp = getMouseXYRelative();
+                condEdRect = juce::Rectangle<int>(mp.x - 95, mp.y - 40, 190, 84)
+                                 .constrainedWithin(getLocalBounds().reduced(4));
+                repaint(); return;
+            }
             if (r == 1)      apply(+[](DrumChannel::DrawNote& n, int){ n.oneShot = 1; }, 0);
             else if (r == 2) apply(+[](DrumChannel::DrawNote& n, int){ n.oneShot = 0; }, 0);
             else if (r == 3) apply(+[](DrumChannel::DrawNote& n, int){ n.glide = n.glide ? 0 : 1; }, 0);

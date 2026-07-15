@@ -89,6 +89,12 @@ private:
     int   condLen[NCH][DrumChannel::MAX_STEPS]  = {};   // per-step loop-condition cycle length (Prob mode)
     int   condMask[NCH][DrumChannel::MAX_STEPS] = {};   // per-step loop-condition bitmask (0 = every loop)
     int   condDragCh = -1, condDragStep = -1, condDownBar = -1, condDownX = 0;   // Prob-mode gesture state
+    // [2026-07-15 23:00] per-NOTE loop-condition editor: a floating step-Loop-style cell opened
+    // from the note menu. Drag = cycle length (1..5), click a segment = toggle that pass.
+    int  condEdCh = -1, condEdIdx = -1;      // open when >= 0 (channel + note index)
+    bool condEdSel = false;                  // apply edits to the whole selection
+    juce::Rectangle<int> condEdRect;
+    int  condEdDownBar = -1, condEdDownX = 0; bool condEdDragged = false, condEdDragging = false;
     bool  condDragged = false;
     int   curLoop = 0;          // the playing pattern's loop counter (highlights the current bar in Prob mode)
     bool  midiOutCh[NCH] = {};                         // is this channel routed to MIDI Out? (enables 2D Vel/Len)
@@ -183,8 +189,10 @@ public:
         const float fx = (float)(pos.x - r.getX()) / (float) juce::jmax(1, r.getWidth());
         const float fy = (float)(pos.y - r.getY()) / (float) juce::jmax(1, r.getHeight());
         const bool few = numSteps[ch] <= 15;    // big cells need less magnification
+        // [2026-07-15 23:00] the VERTICAL scale is one factor bigger than the horizontal (user):
+        // <= 15 steps = 2x wide / 3x tall; 16+ = 3.5x wide / 4.5x tall.
         const int mw = few ? r.getWidth()  * 2 : (r.getWidth()  * 7) / 2;
-        const int mh = few ? r.getHeight() * 2 : (r.getHeight() * 7) / 2;
+        const int mh = few ? r.getHeight() * 3 : (r.getHeight() * 9) / 2;
         magCh = ch; magStep = step;
         magRect = { pos.x - juce::roundToInt(fx * (float) mw), pos.y - juce::roundToInt(fy * (float) mh), mw, mh };
         if (auto* p = getParentComponent())   // keep it fully inside the editor (content) bounds
