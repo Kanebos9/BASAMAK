@@ -8941,7 +8941,7 @@ void DrumSequencerEditor::setupComponents()
                     case DC::ChFxRotary:  return hz(0.70 * std::pow(10.0, (double) v));
                     case DC::ChFxComp:                                                       // attack time
                     { const float ms = 4.0f * std::pow(4.0f, 1.0f - 2.0f * v);
-                      return juce::String(ms, ms < 3.0f ? 1 : 0) + " ms"; }
+                      return (ms < 3.0f ? juce::String(ms, 1) : juce::String(juce::roundToInt(ms))) + " ms"; }
                     case DC::ChFxOtt:                                                        // envelope SPEED
                     { const float x = std::pow(4.0f, 2.0f * v - 1.0f);   // rises with the fader (the DSP's
                       return juce::String(x, x < 1.0f ? 2 : 1) + "x"; }  //  time scale is its inverse - user
@@ -9392,7 +9392,9 @@ void DrumSequencerEditor::setupComponents()
             const float q = b * 4.0f;   // quarters display clean ("1.5 bars"); thirds as decimals ("0.33 bars")
             if (std::abs(q - std::round(q)) < 0.02f)
             { const float br = std::round(q) / 4.0f;
-              return juce::String(br, (std::abs(br - std::round(br)) < 0.01f) ? 0 : (std::abs(br * 2.0f - std::round(br * 2.0f)) < 0.01f ? 1 : 2)) + (br > 1.01f ? " bars" : " bar"); }
+              const juce::String num = std::abs(br - std::round(br)) < 0.01f ? juce::String(juce::roundToInt(br))
+                                     : juce::String(br, std::abs(br * 2.0f - std::round(br * 2.0f)) < 0.01f ? 1 : 2);
+              return num + (br > 1.01f ? " bars" : " bar"); }
             return juce::String(b, 2) + (b > 1.01f ? " bars" : " bar"); };
         revDecBarsF.onChange = [this](float v) { if (ignoreKnobCallbacks) return;
             // [2026-07-15 13:30] counts TWELFTHS of a bar, 3..48 = 0.25..4 bars (twelfths express BOTH
@@ -9486,8 +9488,8 @@ void DrumSequencerEditor::setupComponents()
             const float g = juce::jlimit(0.0f, 0.98f, (float) knobDelayFB.proportionOfLengthToValue((double) v01));
             juce::String pct = juce::String(juce::roundToInt(g * 100.0f)) + "%";
             if (g <= 0.005f) return pct;
-            const float db = 20.0f * std::log10(g);
-            return pct + " " + juce::String(db, std::abs(db) < 9.95f ? 1 : 0) + "dB";
+            const float db = 20.0f * std::log10(g);   // >= 10 dB -> whole number (JUCE String(x, 0) prints RAW floats - the 4-decimals bug)
+            return pct + " " + (std::abs(db) < 9.95f ? juce::String(db, 1) : juce::String(juce::roundToInt(db))) + "dB";
         };
         // [2026-07-15 02:30] TOOLTIPS on the 12 proxy faders (user: "master faders have no tooltips" -
         // the proxy loop copied each knob's tooltip BEFORE the knob tooltips were assigned = empty).
