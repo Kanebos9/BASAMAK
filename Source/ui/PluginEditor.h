@@ -927,9 +927,17 @@ public:
                            g.fillRect(r.getX() + 1.0f, my - 1.0f, r.getWidth() - 2.0f, 2.0f); }
           else           { const float mx = r.getX() + p * r.getWidth();
                            g.fillRect(mx - 1.0f, r.getY() + 1.0f, 2.0f, r.getHeight() - 2.0f); } }
-        g.setColour(juce::Colour(0xffeaf0fa)); g.setFont(juce::Font(11.5f, juce::Font::bold));
+        g.setColour(juce::Colour(0xffeaf0fa));
         juce::String t = name_.isEmpty() ? (format ? format(val_) : juce::String())   // value-only (name in a Label below)
                                          : (format ? name_ + "  " + format(val_) : name_);
+        {   // [2026-07-15 17:00] ADAPTIVE font: shrink until the text FITS the fader's long axis
+            // (squeeze-never-clip - "50% -6.0dB" was losing its "dB" at the fixed 11.5px).
+            const int room = (vertical_ ? getHeight() : getWidth()) - 8;
+            float fs = 11.5f;
+            while (fs > 8.0f && juce::GlyphArrangement::getStringWidthInt(juce::Font(fs, juce::Font::bold), t) > room)
+                fs -= 0.5f;
+            g.setFont(juce::Font(fs, juce::Font::bold));
+        }
         if (vertical_)
         {   // draw the label rotated 90 deg so it reads up the narrow column
             juce::Graphics::ScopedSaveState ss(g);
@@ -1825,6 +1833,7 @@ private:
     float yForDb (juce::Rectangle<float> a, float db) const { return a.getCentreY() - juce::jlimit(-1.0f, 1.0f, db / kMaxDb) * a.getHeight() * 0.5f; }
     float dbForY (juce::Rectangle<float> a, float y)  const { return juce::jlimit(-kMaxDb, kMaxDb, (a.getCentreY() - y) / (a.getHeight() * 0.5f) * kMaxDb); }
     int   nearestBand(juce::Point<float> p) const;
+    int hoverBand(juce::Point<float> p) const;   // tight, no area fallback (tooltips/highlight) [2026-07-15 17:00]
     juce::Rectangle<float> plotArea() const { return getLocalBounds().toFloat().withTrimmedTop(11.0f).reduced(6.0f, 4.0f); }
 };
 

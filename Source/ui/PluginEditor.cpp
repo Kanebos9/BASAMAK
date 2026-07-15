@@ -3703,8 +3703,9 @@ int FrequencyDisplay::nearestBand(juce::Point<float> p) const
 {
     // TWO filters, each with a cutoff/reso DIAMOND + an envelope end handle (grabbable when the filter
     // is ON). Pick the NEAREST handle across both filters; the active filter's diamond wins close ties.
+    // [2026-07-15 17:00] grab radius 16 -> 13 (user: too easy to grab from far away).
     const auto a = plotArea();
-    int best = -1; float bd = 16.0f * 16.0f;
+    int best = -1; float bd = 13.0f * 13.0f;
     for (int fi = 0; fi < 2; ++fi)
     {
         const bool fOn = (fType[fi] >= DrumChannel::LowPass && fType[fi] <= DrumChannel::Notch) || fType[fi] == DrumChannel::Bell;
@@ -3716,6 +3717,23 @@ int FrequencyDisplay::nearestBand(juce::Point<float> p) const
     if (best >= 0) return best;
     if (a.contains(p)) return kFilt(activeFilt);   // empty graph area = drag the active filter's cutoff/reso
     return -1;
+}
+
+// [2026-07-15 17:00] HOVER hit-test: tighter (11 px) and NO empty-area fallback - hovering the open
+// graph shows the GENERAL tooltip + no highlight ring, instead of always reading as "a filter"
+// (the fallback exists for DRAGGING - drag-anywhere = cutoff/reso stays - not for hovering).
+int FrequencyDisplay::hoverBand(juce::Point<float> p) const
+{
+    const auto a = plotArea();
+    int best = -1; float bd = 11.0f * 11.0f;
+    for (int fi = 0; fi < 2; ++fi)
+    {
+        const bool fOn = (fType[fi] >= DrumChannel::LowPass && fType[fi] <= DrumChannel::Notch) || fType[fi] == DrumChannel::Bell;
+        if (fOn) { const float de = p.getDistanceSquaredFrom(filtEnvPos(a, fi)); if (de < bd) { bd = de; best = kFiltEnv(fi); } }
+        const float dm = p.getDistanceSquaredFrom(filtPos(a, fi));
+        if (dm < bd) { bd = dm; best = kFilt(fi); }
+    }
+    return best;
 }
 
 void FrequencyDisplay::paint(juce::Graphics& g)
@@ -3864,7 +3882,7 @@ void FrequencyDisplay::paint(juce::Graphics& g)
     }
 }
 
-void FrequencyDisplay::mouseMove(const juce::MouseEvent& e) { int b = nearestBand(e.position); if (b != hover) { hover = b; repaint(); } }
+void FrequencyDisplay::mouseMove(const juce::MouseEvent& e) { int b = hoverBand(e.position); if (b != hover) { hover = b; repaint(); } }   // tight hover [2026-07-15 17:00]
 
 void FrequencyDisplay::mouseDown(const juce::MouseEvent& e)
 {
@@ -3971,9 +3989,12 @@ juce::String FrequencyDisplay::getTooltip()
                  "centre line = flat). WHEEL = Q (" + juce::String(fReso[fi], 2) + "). RIGHT-CLICK = type, DOUBLE-CLICK = on/off.";
       return juce::String("Filter ") + juce::String(fi + 1) + " (" + tn[juce::jlimit(0, 6, fType[fi])] + "): DRAG the diamond = cutoff ("
            + juce::String(juce::roundToInt(fCutoff[fi])) + " Hz) + reso (Q " + juce::String(fReso[fi], 2) + "). RIGHT-CLICK = change type, DOUBLE-CLICK = on/off, wheel = reso."; }
-    return "TWO resonant filters in series (F1 orange, F2 cyan). Each is a DIAMOND: drag = cutoff/reso, double-click "
-           "= on/off, right-click = type (LP / HP / BP / Notch / BELL - Bell BOOSTS a band, Y = +dB). "
-           "Stack e.g. High-Pass + Low-Pass = a band. Bell + a low cutoff = a movable tone lift.";
+    return "Live spectrum of THIS channel + TWO resonant filters in series (F1 orange, F2 cyan).\n\n"
+           "- Each filter is a DIAMOND: drag = cutoff/reso, double-click = on/off, right-click = type "
+           "(LP / HP / BP / Notch / BELL - Bell BOOSTS a band, Y = +dB). Stack High-Pass + Low-Pass = a band.\n"
+           "- REVERB/DELAY tails never appear in the spectrum: they live on the shared MASTER bus - this "
+           "shows only this channel's own output, measured before the sends leave.\n"
+           "- Dragging the empty graph moves the ACTIVE filter's cutoff/reso.";
 }
 
 //==============================================================================
@@ -10051,12 +10072,8 @@ void DrumSequencerEditor::setupComponents()
                         "pitched slot's Base Freq as the 0-point; Chord/Scale slots export their full voicing.");
     patModeBtn.setTooltip("What happens after this pattern finishes: loop forever, stop after N loops, or jump to another pattern.");
 
-    freqDisplay.setTooltip("Live spectrum (the frequencies of what's playing) + this slot's filter curve.\n\n"
-                           "- The spectrum refreshes once per step (more steps = higher refresh).\n"
-                           "- REVERB/DELAY tails never appear here: they live on the shared MASTER bus, and this "
-                           "shows only THIS channel's own output (measured before the sends leave).\n"
-                           "- Boosting makes the channel louder, and channels add up - if the mix gets too hot "
-                           "some DAWs clip or auto-mute. Lower Volume or use the master Limit knob.");
+    // (freqDisplay's tooltip lives in FrequencyDisplay::getTooltip() - the override means a static
+    //  setTooltip here is NEVER shown. A dead decoy text sat here until [2026-07-15 17:00].)
     soundPad.setTooltip("Drag the yellow dot to blend the enabled sound sources. Closer to a corner = more of that source.");
     comboSampleSel.setTooltip("Pick a sample for this channel from your samples folder (or load a new one).");
     knobSpeed.setTooltip("TUNE: transpose the WHOLE channel in semitones.\n\n"
