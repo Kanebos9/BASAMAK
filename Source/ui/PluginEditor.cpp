@@ -1131,7 +1131,10 @@ static juce::String kModTgtHiName(int t)   // fixed targets ABOVE the grid range
        : t == DrumChannel::MTChFxCAmt ? "FX C Amount (Channel)" : t == DrumChannel::MTChFxCChr ? "FX C Character (Channel)"
        : t == DrumChannel::MTRingHz ? "Ring Hz" : t == DrumChannel::MTSlotPan ? "Slot Pan"
        : t == DrumChannel::MTFilt1Env ? "Filter 1 Env Amount" : t == DrumChannel::MTFilt2Env ? "Filter 2 Env Amount"
-       : t == DrumChannel::MTUniCount ? "Unison Count" : juce::String(); }
+       : t == DrumChannel::MTUniCount ? "Unison Count"
+       : t == DrumChannel::MTChFilt1Cut ? "Filter 1 Cutoff (Channel)" : t == DrumChannel::MTChFilt1Res ? "Filter 1 Reso (Channel)"
+       : t == DrumChannel::MTChFilt2Cut ? "Filter 2 Cutoff (Channel)" : t == DrumChannel::MTChFilt2Res ? "Filter 2 Reso (Channel)"
+       : juce::String(); }
 // ================================================================================================
 // MOD SOURCE / TARGET TOOLTIPS [2026-07-13 22:50] (user: "we need tips like that as tooltips") -
 // shown per ROW while hovering the RoutePicker lists. The env-target tips carry the crucial
@@ -1200,6 +1203,12 @@ static juce::String modTgtTip(int t, int engine)
         case DC::MTSlotPan:  return "This layer's pan. Note -> Pan = keyboard spread, Random -> Pan = per-hit scatter, Velocity -> Pan = accent lean. (Whole-channel MOTION = Channel FX Auto-Pan.)";
         case DC::MTFilt1Env: return "Filter 1's ENVELOPE AMOUNT (the dashed sweep arrow). Velocity -> Env Amount = harder hits sweep further (the 303 accent, squared). Live-shown on the filter display.";
         case DC::MTFilt2Env: return "Filter 2's ENVELOPE AMOUNT (the dashed sweep arrow).";
+        case DC::MTChFilt1Cut: case DC::MTChFilt2Cut:
+            return "The CHANNEL FILTER/EQ pair's cutoff (the FILTER/EQ box's CHANNEL chip) - the post-FX "
+                   "filter on the WHOLE finished channel. +-4 octaves; block-rate (channel level has no "
+                   "per-voice sources - Velocity/Note read the newest voice).";
+        case DC::MTChFilt1Res: case DC::MTChFilt2Res:
+            return "The CHANNEL FILTER/EQ pair's resonance (on a Bell = its Q). Post-FX, whole channel, block-rate.";
         case DC::MTUniCount: return "Unison VOICE COUNT (1..16). Fully CONTINUOUS: voices FADE in/out (~3 ms) as the count moves, and the stack's gain follows the effective count - swell a pad from 2 to 16 voices mid-note. Oscillator slots only (a Karplus-Strong string or Modal strike only exists if it was plucked - physics).";
         case DC::MTChFxAAmt: return "Channel FX slot A's Amount fader (block-rate, smoothed).";
         case DC::MTChFxBAmt: return "Channel FX slot B's Amount fader (block-rate, smoothed).";
@@ -1428,6 +1437,10 @@ void RoutePicker::openFor(int cs, int ct, float amt, float lagMs)
     tgtModel.rows.push_back({ DrumChannel::MTFilt1Env, "Filter 1 Env Amount" });   // [2026-07-14 00:30]
     tgtModel.rows.push_back({ DrumChannel::MTFilt2Env, "Filter 2 Env Amount" });
     tgtModel.rows.push_back({ DrumChannel::MTUniCount, "Unison Count" });
+    tgtModel.rows.push_back({ DrumChannel::MTChFilt1Cut, "Filter 1 Cutoff (Channel)" });   // [2026-07-16] the CHANNEL FILTER/EQ pair
+    tgtModel.rows.push_back({ DrumChannel::MTChFilt1Res, "Filter 1 Reso (Channel)" });
+    tgtModel.rows.push_back({ DrumChannel::MTChFilt2Cut, "Filter 2 Cutoff (Channel)" });
+    tgtModel.rows.push_back({ DrumChannel::MTChFilt2Res, "Filter 2 Reso (Channel)" });
     // ALPHABETICAL, "Off" pinned first (user) - one flat A..Z list per column, so the three
     // FX A/B/C pairs cluster together instead of FX C hiding under the engine-knob rows.
     auto alphabetize = [](std::vector<std::pair<int, juce::String>>& rows) {
@@ -3761,7 +3774,7 @@ int FrequencyDisplay::nearestBand(juce::Point<float> p) const
     for (int fi = 0; fi < 2; ++fi)
     {
         const bool fOn = (fType[fi] >= DrumChannel::LowPass && fType[fi] <= DrumChannel::Notch) || fType[fi] == DrumChannel::Bell;
-        if (fOn) { const float de = p.getDistanceSquaredFrom(filtEnvPos(a, fi)); if (de < bd) { bd = de; best = kFiltEnv(fi); } }
+        if (fOn && ! chanMode) { const float de = p.getDistanceSquaredFrom(filtEnvPos(a, fi)); if (de < bd) { bd = de; best = kFiltEnv(fi); } }
         const float dm = p.getDistanceSquaredFrom(filtPos(a, fi));
         const float bias = (fi == activeFilt) ? 6.0f : 0.0f;   // small pull toward the active filter's diamond
         if (dm - bias < bd) { bd = dm - bias; best = kFilt(fi); }
@@ -3781,7 +3794,7 @@ int FrequencyDisplay::hoverBand(juce::Point<float> p) const
     for (int fi = 0; fi < 2; ++fi)
     {
         const bool fOn = (fType[fi] >= DrumChannel::LowPass && fType[fi] <= DrumChannel::Notch) || fType[fi] == DrumChannel::Bell;
-        if (fOn) { const float de = p.getDistanceSquaredFrom(filtEnvPos(a, fi)); if (de < bd) { bd = de; best = kFiltEnv(fi); } }
+        if (fOn && ! chanMode) { const float de = p.getDistanceSquaredFrom(filtEnvPos(a, fi)); if (de < bd) { bd = de; best = kFiltEnv(fi); } }
         const float dm = p.getDistanceSquaredFrom(filtPos(a, fi));
         if (dm < bd) { bd = dm; best = kFilt(fi); }
     }
@@ -3895,7 +3908,7 @@ void FrequencyDisplay::paint(juce::Graphics& g)
                     g.fillEllipse(xForFreq(a, endHz) - 3.0f, mp2.y - 3.0f, 6.0f, 6.0f);
                 }
             }
-            if (fOn && std::abs(fEnvAmt[fi]) > 0.02f)   // envelope sweep arrow
+            if (fOn && ! chanMode && std::abs(fEnvAmt[fi]) > 0.02f)   // envelope sweep arrow (per-voice = slots only)
             {
                 const auto ep = filtEnvPos(a, fi);
                 const float dash[2] = { 4.0f, 3.0f };
@@ -3905,7 +3918,7 @@ void FrequencyDisplay::paint(juce::Graphics& g)
                 juce::Path tri; tri.addTriangle(ep.x + dir * 5.0f, ep.y, ep.x - dir * 2.0f, ep.y - 4.0f, ep.x - dir * 2.0f, ep.y + 4.0f);
                 g.fillPath(tri);
             }
-            if (fOn)   // env end handle (parks beside the diamond at env 0)
+            if (fOn && ! chanMode)   // env end handle (parks beside the diamond at env 0; per-voice = slots only)
             {
                 const auto ep = filtEnvPos(a, fi);
                 const bool parked = std::abs(fEnvAmt[fi]) <= 0.02f;
@@ -4041,9 +4054,24 @@ juce::String FrequencyDisplay::getTooltip()
                  "centre line = flat). WHEEL = Q (" + juce::String(fReso[fi], 2) + "). RIGHT-CLICK = type, DOUBLE-CLICK = on/off.";
       return juce::String("Filter ") + juce::String(fi + 1) + " (" + tn[juce::jlimit(0, 6, fType[fi])] + "): DRAG the diamond = cutoff ("
            + juce::String(juce::roundToInt(fCutoff[fi])) + " Hz) + reso (Q " + juce::String(fReso[fi], 2) + "). RIGHT-CLICK = change type, DOUBLE-CLICK = on/off, wheel = reso."; }
-    return "Live spectrum of THIS channel + TWO resonant filters in series (F1 orange, F2 cyan).\n\n"
+    if (chanMode)
+        return "CHANNEL FILTER/EQ: TWO resonant filters on the WHOLE finished channel - applied AFTER "
+               "the Channel FX (so a Bell here shapes the harmonics your Drive/FX created), before Duck; "
+               "the reverb/delay sends carry it.\n\n"
+               "- Same gestures as the slot filters: drag the diamond = cutoff/reso, double-click = "
+               "on/off, right-click = type, wheel = reso/Q.\n"
+               "- Parked, this IS a parametric EQ (Bell = a band, HP/LP = the cut filters). No envelope "
+               "arrow here: envelopes are per-note, and the channel has no notes - modulate it from the "
+               "MODULATION box instead (the \"(Channel)\" filter targets).\n"
+               "- The spectrum = the FINAL channel output (post-FX, post this filter) - curve and "
+               "picture describe the same signal.";
+    return "Live spectrum of THIS SLOT + TWO resonant filters in series (F1 orange, F2 cyan). "
+           "Parked, they double as a parametric EQ (Bell = a band, HP/LP = the cuts); add the envelope "
+           "arrow / a matrix route and they become moving filters.\n\n"
            "- Each filter is a DIAMOND: drag = cutoff/reso, double-click = on/off, right-click = type "
            "(LP / HP / BP / Notch / BELL - Bell BOOSTS a band, Y = +dB). Stack High-Pass + Low-Pass = a band.\n"
+           "- The CHANNEL chip above switches this display to the post-FX CHANNEL filter pair (shape "
+           "the finished channel, e.g. Bell-boost harmonics the Drive created).\n"
            "- REVERB/DELAY tails never appear in the spectrum: they live on the shared MASTER bus - this "
            "shows only this channel's own output, measured before the sends leave.\n"
            "- Dragging the empty graph moves the ACTIVE filter's cutoff/reso.";
@@ -6156,6 +6184,9 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
     // CHANNEL FX (both slots combined) are part of the SOUND: chorus / flanger / phaser / comp.
     for (int fx = 0; fx < 3; ++fx)
     { h = mix(h, c.chFxType[fx]); h = mix(h, f(c.chFxAmt[fx])); h = mix(h, f(c.chFxChar[fx])); }
+    for (int cf = 0; cf < 2; ++cf)   // [2026-07-16] CHANNEL FILTER/EQ pair
+    { h = mix(h, c.chFiltType[cf]); h = mix(h, f(c.chFiltCutoff[cf])); h = mix(h, f(c.chFiltReso[cf])); h = mix(h, f(c.chFiltGain[cf])); }
+    h = mix(h, f(c.chFiltDrive));
     h = mix(h, f(c.reverbSend)); h = mix(h, f(c.delaySend));   // channel sends are part of the SOUND
     h = mix(h, c.keysPolyMode ? 1 : 0);   // keys Poly/Mono is per-sound too
     h = mix(h, c.keysLegato ? 1 : 0);     // [2026-07-16] mode dropdown's legato/glide axis (per-sound)
@@ -6262,6 +6293,8 @@ juce::int64 DrumSequencerEditor::stateHash() const
             h = mix(h, ch.numSteps);
             h = mix(h, f(ch.humanizeAmt)); h = mix(h, f(ch.strumAmt)); h = mix(h, f(ch.keysMinVel)); h = mix(h, f(ch.keysMaxVel)); h = mix(h, f(ch.keysGlide));   // HUMANIZE / STRUM / min+max-vel / GLIDE (undoable)
             for (int fx = 0; fx < 3; ++fx) { h = mix(h, ch.chFxType[fx]); h = mix(h, f(ch.chFxAmt[fx])); h = mix(h, f(ch.chFxChar[fx])); }   // CHANNEL FX (undoable)
+            for (int cf = 0; cf < 2; ++cf) { h = mix(h, ch.chFiltType[cf]); h = mix(h, f(ch.chFiltCutoff[cf])); h = mix(h, f(ch.chFiltReso[cf])); h = mix(h, f(ch.chFiltGain[cf])); }
+            h = mix(h, f(ch.chFiltDrive));   // CHANNEL FILTER/EQ (undoable) [2026-07-16]
             h = mix(h, f(ch.reverbSend)); h = mix(h, f(ch.delaySend)); h = mix(h, ch.revBus); h = mix(h, ch.delBus);
             h = mix(h, ch.mergeWith + 1); h = mix(h, ch.keysSplitW1); h = mix(h, ch.keysSplitW2);   // MERGE&SPLIT pair + windows
             h = mix(h, ch.arpOn ? 1 : 0); h = mix(h, ch.arpLen); h = mix(h, ch.arpSync); h = mix(h, ch.arpRate);
@@ -6331,6 +6364,7 @@ void DrumSequencerEditor::resetChannelToDefault(DrumChannel& c, int ch)
     c.keysSlot2Down = 0;                                      // KEYS slot-2 transpose (channel-wide) resets too
     c.humanizeAmt = 0.0f; c.strumAmt = 0.0f; c.keysMinVel = 0.0f; c.keysMaxVel = 1.0f; c.keysGlide = 0.0f;   // HUMANIZE / STRUM / vel range / GLIDE default
     for (int fx = 0; fx < 3; ++fx) { c.chFxType[fx] = 0; c.chFxAmt[fx] = 0.0f; c.chFxChar[fx] = 0.5f; }   // CHANNEL FX off
+    { DrumChannel dch2; for (int cf = 0; cf < 2; ++cf) { c.chFiltType[cf] = 0; c.chFiltCutoff[cf] = dch2.chFiltCutoff[cf]; c.chFiltReso[cf] = 0.707f; c.chFiltGain[cf] = 0.0f; } c.chFiltDrive = 0.0f; }   // CHANNEL FILTER/EQ reset [2026-07-16]
     c.reverbSend = 0.0f; c.delaySend = 0.0f;   // channel sends off (the sound sets its own)
     c.mergeWith = -1; c.keysSplitW1 = 60; c.keysSplitW2 = 12;   // MERGE&SPLIT off / identity windows
     { DrumChannel d; c.arpOn = d.arpOn; c.arpLen = d.arpLen; c.arpSync = d.arpSync; c.arpRate = d.arpRate;
@@ -6406,6 +6440,13 @@ void DrumSequencerEditor::writeChannelMix(juce::ValueTree& t, const DrumChannel&
       t.setProperty("cfxT" + k, ch.chFxType[fx], nullptr);
       t.setProperty("cfxA" + k, ch.chFxAmt[fx],  nullptr);
       t.setProperty("cfxC" + k, ch.chFxChar[fx], nullptr); }
+    for (int f = 0; f < 2; ++f)   // [2026-07-16] CHANNEL FILTER/EQ pair rides with the sound
+    { const juce::String k(f);
+      t.setProperty("cfT" + k, ch.chFiltType[f],   nullptr);
+      t.setProperty("cfC" + k, ch.chFiltCutoff[f], nullptr);
+      t.setProperty("cfR" + k, ch.chFiltReso[f],   nullptr);
+      t.setProperty("cfG" + k, ch.chFiltGain[f],   nullptr); }
+    t.setProperty("cfDrv", ch.chFiltDrive, nullptr);
     t.setProperty("chRev", ch.reverbSend, nullptr);   // channel sends ride with the sound
     t.setProperty("chDel", ch.delaySend,  nullptr);
     t.setProperty("userSample", ch.usingUserSample ? ch.userSampleFile.getFullPathName() : juce::String(), nullptr);
@@ -6499,6 +6540,13 @@ void DrumSequencerEditor::readChannelMix(const juce::ValueTree& t, DrumChannel& 
       ch.chFxType[fx] = juce::jlimit(0, 16, (int) t.getProperty("cfxT" + k, 0));
       ch.chFxAmt[fx]  = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("cfxA" + k, 0.0f));
       ch.chFxChar[fx] = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("cfxC" + k, 0.5f)); }
+    for (int f = 0; f < 2; ++f)   // [2026-07-16] CHANNEL FILTER/EQ pair (0/defaults for old files)
+    { const juce::String k(f); const DrumChannel dch;
+      ch.chFiltType[f]   = juce::jlimit(0, (int) DrumChannel::Bell, (int) t.getProperty("cfT" + k, 0));
+      ch.chFiltCutoff[f] = juce::jlimit(20.0f, 20000.0f, (float) t.getProperty("cfC" + k, dch.chFiltCutoff[f]));
+      ch.chFiltReso[f]   = juce::jlimit(0.1f, 12.0f, (float) t.getProperty("cfR" + k, dch.chFiltReso[f]));
+      ch.chFiltGain[f]   = juce::jlimit(-15.0f, 15.0f, (float) t.getProperty("cfG" + k, 0.0f)); }
+    ch.chFiltDrive = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("cfDrv", 0.0f));
     {   // MIGRATION: last week's 4-fixed-effect mix files -> the strongest two FX slots
         struct OldFx { int type; float amt; };
         OldFx v[4] = { { DrumChannel::ChFxChorus,  juce::jlimit(0.0f, 1.0f, (float) t.getProperty("chFxCho", 0.0f)) },
@@ -8830,6 +8878,12 @@ void DrumSequencerEditor::setupComponents()
     // the slot; the display edits that slot's filter 1 or 2 (never the other slot's engine).
     freqDisplay.onFilterEdit = [this](int filterIdx, int type, float cut, float reso, float env, float gainDb) {
         auto& ch = proc.sequencer.channel(selectedChannel);
+        if (eqEditTarget == 3)
+        {   // [2026-07-16] CHANNEL chip: edit the post-FX channel filter pair (env has no meaning here)
+            const int f2 = juce::jlimit(0, 1, filterIdx);
+            ch.chFiltType[f2] = type; ch.chFiltCutoff[f2] = cut; ch.chFiltReso[f2] = reso; ch.chFiltGain[f2] = gainDb;
+            ch.markDspDirty(); return;
+        }
         auto& sl = ch.slots[juce::jlimit(0, DrumChannel::NUM_SLOTS - 1, eqEditTarget - 1)];
         if (filterIdx == 0) { sl.filterType = type;  sl.filterCutoff = cut;  sl.filterReso = reso;  sl.filterEnvAmt = env;  sl.filterGain = gainDb; }
         else                { sl.filterType2 = type; sl.filterCutoff2 = cut; sl.filterReso2 = reso; sl.filterEnvAmt2 = env; sl.filterGain2 = gainDb; }
@@ -9847,9 +9901,9 @@ void DrumSequencerEditor::setupComponents()
         "- 1. SLOT (each sound layer, per voice): Engine > Filter 1 > Filter 2 > Drive > "
         "Formant > Punch > Ring > Sub (the sub joins LAST, after the distortion - that's why it "
         "stays clean).\n"
-        "- 2. CHANNEL (both slots mixed): Channel FX A > B > C > Duck. The Reverb/"
-        "Delay SEND faders tap a COPY here - the finished channel sound (reverb send is low-cut "
-        "at 150 Hz so subs stay dry).\n"
+        "- 2. CHANNEL (both slots mixed): Channel FX A > B > C > CHANNEL FILTER/EQ (the "
+        "FILTER/EQ box's CHANNEL chip) > Duck. The Reverb/Delay SEND faders tap a COPY here - "
+        "the finished channel sound (reverb send is low-cut at 150 Hz so subs stay dry).\n"
         "- 3. BUSES: the sends feed Reverb A/B + Delay A/B in PARALLEL (side-chains, not part of "
         "the series chain; delay and reverb never feed each other). Their wet returns rejoin the "
         "mix just before step 4.\n"
@@ -10039,17 +10093,24 @@ void DrumSequencerEditor::setupComponents()
     setupGroupHeader(hdrPitch, "PITCH ENVELOPE");
     setupGroupHeader(hdrVoice, "UNISON");   // sub-title above the voice visual (detune/vibrato; SCALE moved above the keyboard)
     setupGroupHeader(hdrAmpEnv, "AMP ENVELOPE");
-    setupGroupHeader(hdrEqBox,  "FILTER");
+    setupGroupHeader(hdrEqBox,  "FILTER / EQ");   // [2026-07-16] parked = a parametric EQ; moving = a filter (user rename)
     // The FILTER is PER SLOT (the "All" channel target + the static EQ were removed, v1.3.5). Pick which
     // slot's filter you edit. s = slot index (0/1); eqEditTarget = s + 1 (1 or 2, never 0/All). Labels
     // stay "1"/"2" so the SlotSelector keeps its yellow/pink slot colours.
-    slotSelEq.labels = { "1", "2" };
+    slotSelEq.labels = { "1", "2", "CHANNEL" };   // [2026-07-16] CHANNEL = the post-FX channel filter pair
     content.addAndMakeVisible(slotSelEq);
-    slotSelEq.onSelect = [this](int s) { if (ignoreKnobCallbacks) return; setShapeSlot(s); };   // syncs ALL groups (like the others)
-    freqDisplay.onFilterDriveEdit = [this](float v) {   // FILTER DRIVE (selected slot; drives both its SVFs)
+    slotSelEq.onSelect = [this](int s) {
+        if (ignoreKnobCallbacks) return;
+        // CHANNEL is a BOX-LOCAL third state (user spec): it never drives the global slot
+        // selection; picking a slot anywhere else pulls this box back onto that slot.
+        if (s == 2) { eqEditTarget = 3; refreshEqTarget(); return; }
+        setShapeSlot(s);   // 1/2 = the one global slot selection (syncs ALL groups)
+    };
+    freqDisplay.onFilterDriveEdit = [this](float v) {   // FILTER DRIVE (selected slot, or the CHANNEL pair on its chip)
         if (ignoreKnobCallbacks) return;
         auto& ch = proc.sequencer.channel(selectedChannel);
-        ch.slots[juce::jlimit(0, DrumChannel::NUM_SLOTS - 1, eqEditTarget - 1)].filterDrive = v;
+        if (eqEditTarget == 3) ch.chFiltDrive = v;
+        else ch.slots[juce::jlimit(0, DrumChannel::NUM_SLOTS - 1, eqEditTarget - 1)].filterDrive = v;
         ch.markDspDirty();
     };
 
@@ -12061,8 +12122,21 @@ void DrumSequencerEditor::refreshMasterSyncFaders()
 void DrumSequencerEditor::refreshEqTarget()
 {
     auto& ch = proc.sequencer.channel(selectedChannel);
+    if (eqEditTarget == 3)
+    {   // [2026-07-16] CHANNEL chip: the post-FX filter pair on the finished channel. The spectrum
+        // tap = the FINAL MIX (analysisSlot -1 = the existing "whole channel" capture, post-filter),
+        // so the curve and the spectrum describe the same signal. No env arrows (per-voice concept).
+        freqDisplay.setChanMode(true);
+        freqDisplay.setFilters(ch.chFiltType[0], ch.chFiltCutoff[0], ch.chFiltReso[0], 0.0f, ch.chFiltGain[0],
+                               ch.chFiltType[1], ch.chFiltCutoff[1], ch.chFiltReso[1], 0.0f, ch.chFiltGain[1], proc.spectrumRate());
+        freqDisplay.setFilterDrive(ch.chFiltDrive);
+        proc.analysisSlot.store(-1);   // -1 = the final channel mix (post channel FX + this filter)
+        slotSelEq.sel = 2; slotSelEq.repaint();
+        return;
+    }
     const int si = juce::jlimit(0, DrumChannel::NUM_SLOTS - 1, eqEditTarget - 1);
     auto& fsl = ch.slots[si];
+    freqDisplay.setChanMode(false);
     freqDisplay.setFilters(fsl.filterType,  fsl.filterCutoff,  fsl.filterReso,  fsl.filterEnvAmt,  fsl.filterGain,
                            fsl.filterType2, fsl.filterCutoff2, fsl.filterReso2, fsl.filterEnvAmt2, fsl.filterGain2, proc.spectrumRate());
     freqDisplay.setFilterDrive(fsl.filterDrive);
@@ -12469,8 +12543,14 @@ void DrumSequencerEditor::timerCallback()
         }
         const float drv = liveFx(ms, 6);   // Drive is a fader (0..1)
         fxDriveFader.setModRing(drv < -900.0f ? -1.0f : juce::jlimit(0.0f, 1.0f, drv));
-        freqDisplay.setModCutoff(0, liveFx(ms, 7) < -900.0f ? -1.0f : liveFx(ms, 7));   // filter 1/2 cutoff (Hz)
-        freqDisplay.setModCutoff(1, liveFx(ms, 8) < -900.0f ? -1.0f : liveFx(ms, 8));
+        if (eqEditTarget == 3)
+        {   // CHANNEL chip: rings from the channel filter's live modulated cutoffs [2026-07-16]
+            freqDisplay.setModCutoff(0, mc.chFiltLive[0] < -900.0f ? -1.0f : mc.chFiltLive[0]);
+            freqDisplay.setModCutoff(1, mc.chFiltLive[2] < -900.0f ? -1.0f : mc.chFiltLive[2]);
+        } else {
+            freqDisplay.setModCutoff(0, liveFx(ms, 7) < -900.0f ? -1.0f : liveFx(ms, 7));   // filter 1/2 cutoff (Hz)
+            freqDisplay.setModCutoff(1, liveFx(ms, 8) < -900.0f ? -1.0f : liveFx(ms, 8));
+        }
         freqDisplay.setModReso  (0, liveFx(ms, 27)); freqDisplay.setModReso  (1, liveFx(ms, 28));   // [2026-07-14] live reso + env-amount
         freqDisplay.setModEnvAmt(0, liveFx(ms, 29)); freqDisplay.setModEnvAmt(1, liveFx(ms, 30));
         // GRID knobs (the engine's own params - FM Amount, Ratio, ...): ring both slot boxes from [9..16].

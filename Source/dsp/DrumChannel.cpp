@@ -1985,6 +1985,7 @@ void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals, SlotVoice* lat
             case MTFilt1Cut: case MTFilt2Cut: case MTFilt1Res: case MTFilt2Res:
             case MTDrive: break;
             case MTRevSend: case MTDelSend: break;   // CHANNEL sends now: accumulated separately (channelMod)
+            case MTChFilt1Cut: case MTChFilt1Res: case MTChFilt2Cut: case MTChFilt2Res: break;   // CHANNEL filter pair: accumulated separately
             case MTChFxAAmt: case MTChFxBAmt: break;   // CHANNEL FX slots: accumulated separately (channelMod), not on the slot copy
             case MTTone:     break;                  // RETIRED (Tone removed; the Bell filter covers it) - old routes are inert
             case MTPunch: case MTSub: break;   // HOT (per-sample)
@@ -2660,6 +2661,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         }
         };
     chFxMod[0] = chFxMod[1] = chFxMod[2] = chFxMod[3] = 0.0f;   // CHANNEL FX mod offset (both slots' routes accumulate below)
+    for (int cf = 0; cf < 4; ++cf) { chFiltMod[cf] = 0.0f; chFiltRouted[cf] = false; }   // CHANNEL filter pair [2026-07-16]
     for (int s = 0; s < NUM_SLOTS; ++s)
     {
         SC& c = sc[s];
@@ -2689,7 +2691,12 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 switch (r.tgt) { case MTChFxAAmt: chFxMod[0] += m; break; case MTChFxAChr: chFxMod[1] += m; break;
                                  case MTChFxBAmt: chFxMod[2] += m; break; case MTChFxBChr: chFxMod[3] += m; break;
                                  case MTRevSend:  chFxMod[4] += m; break; case MTDelSend:  chFxMod[5] += m; break;
-                                 case MTChFxCAmt: chFxMod[6] += m; break; case MTChFxCChr: chFxMod[7] += m; break; default: break; }
+                                 case MTChFxCAmt: chFxMod[6] += m; break; case MTChFxCChr: chFxMod[7] += m; break;
+                                 case MTChFilt1Cut: chFiltMod[0] += m; chFiltRouted[0] = true; break;
+                                 case MTChFilt1Res: chFiltMod[1] += m; chFiltRouted[1] = true; break;
+                                 case MTChFilt2Cut: chFiltMod[2] += m; chFiltRouted[2] = true; break;
+                                 case MTChFilt2Res: chFiltMod[3] += m; chFiltRouted[3] = true; break;
+                                 default: break; }
             }
             // WAVE / grain POSITION modulation is applied in the RENDER as an offset (so it works even
             // when the wavetable is GLIDING, which overrides the static position) - bake the base position.
@@ -4264,6 +4271,79 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
     updateFilter(maxEnvLevel, 1.0);
 
     applyEQ(renderBuf, numSamples);
+
+    // [2026-07-16] CHANNEL FILTER/EQ (the FILTER/EQ box's CHANNEL chip): a post-FX resonant pair on
+    // the FINISHED channel - after the Channel FX, before Duck, so the sends carry the filtered
+    // sound. Same Cytomic SVF + filter-drive recipe as the slot filters (mirror them); Off = the
+    // whole block is skipped = bit-identical. Matrix "(Channel)" routes move cutoff (octaves) and
+    // reso at block rate; the live values land in chFiltLive for the display's mod rings.
+    {
+        bool anyOn = false;
+        for (int f = 0; f < 2; ++f)
+            anyOn = anyOn || (chFiltType[f] >= LowPass && chFiltType[f] <= Notch) || chFiltType[f] == Bell;
+        if (anyOn)
+        {
+            const float drv = juce::jlimit(0.0f, 1.0f, chFiltDrive);
+            const double dg = 1.0 + 9.0 * drv, dgi = 1.0 / std::sqrt(dg);
+            for (int f = 0; f < 2; ++f)
+            {
+                const int ft = chFiltType[f];
+                const bool on = (ft >= LowPass && ft <= Notch) || ft == Bell;
+                const int mCut = f == 0 ? 0 : 2, mRes = f == 0 ? 1 : 3;
+                if (! on)
+                {   chFiltGm[f] = chFiltKm[f] = -1.0f;
+                    chFiltLive[mCut] = chFiltLive[mRes] = -1000.0f; continue; }
+                const float cutHz = juce::jlimit(20.0f, (float)(sr * 0.45),
+                    chFiltCutoff[f] * std::exp2(juce::jlimit(-4.0f, 4.0f, chFiltMod[mCut] * 4.0f)));
+                const float reso  = juce::jlimit(0.1f, 12.0f, chFiltReso[f] + chFiltMod[mRes] * 4.0f);
+                chFiltLive[mCut] = chFiltRouted[mCut] ? cutHz : -1000.0f;
+                chFiltLive[mRes] = chFiltRouted[mRes] ? reso  : -1000.0f;
+                const float G = std::tan((float) kPi * cutHz / (float) sr);
+                float K; double bellM1 = 0.0;
+                int fm = 0;
+                switch (ft) { case HighPass: fm = 1; break; case BandPass: fm = 2; break;
+                              case Notch: fm = 3; break; case Bell: fm = 4; break; default: fm = 0; break; }
+                double bellA = 1.0;
+                if (fm == 4)
+                {   const float A = std::pow(10.0f, juce::jlimit(-15.0f, 15.0f, chFiltGain[f]) / 40.0f);
+                    K = 1.0f / (juce::jmax(0.1f, reso) * A); bellA = (double) A; bellM1 = (double) K * ((double) A * A - 1.0); }
+                else K = 1.0f / juce::jmax(0.1f, reso);
+                juce::ignoreUnused(bellM1);
+                if (chFiltGm[f] < 0.0f) { chFiltGm[f] = G; chFiltKm[f] = K; }
+                float* dl = renderBuf.getWritePointer(0);
+                float* dr = renderBuf.getWritePointer(1);
+                const float smK = 0.0025f;
+                for (int i = 0; i < numSamples; ++i)
+                {
+                    chFiltGm[f] += smK * (G - chFiltGm[f]);
+                    chFiltKm[f] += smK * (K - chFiltKm[f]);
+                    const double g = chFiltGm[f], fk = chFiltKm[f];
+                    const double a1 = 1.0 / (1.0 + g * (g + fk)), a2 = g * a1, a3 = g * a2;
+                    const double bellM1s = (fm == 4) ? fk * (bellA * bellA - 1.0) : 0.0;   // K live = smoothed boost (the slot Bell recipe)
+                    for (int lr = 0; lr < 2; ++lr)
+                    {
+                        float& ic1 = chFiltIc1[f][lr]; float& ic2 = chFiltIc2[f][lr];
+                        const double in = lr == 0 ? dl[i] : dr[i];
+                        double v3 = in - ic2;
+                        if (drv > 0.0001f) v3 = std::tanh(v3 * dg) * dgi;
+                        const double v1 = a1 * ic1 + a2 * v3;
+                        const double v2 = ic2 + a2 * ic1 + a3 * v3;
+                        ic1 = (float)(2.0 * v1 - ic1); ic2 = (float)(2.0 * v2 - ic2);
+                        double y;
+                        switch (fm) { case 1: y = in - fk * v1 - v2; break;   // HIGHPASS
+                                      case 2: y = v1; break;                  // BANDPASS
+                                      case 3: y = in - fk * v1; break;        // NOTCH
+                                      case 4: y = in + bellM1s * v1; break;   // BELL
+                                      default: y = v2; break; }               // LOWPASS
+                        if (lr == 0) dl[i] = (float) y; else dr[i] = (float) y;
+                    }
+                }
+            }
+        }
+        else
+        {   chFiltGm[0] = chFiltGm[1] = chFiltKm[0] = chFiltKm[1] = -1.0f;
+            for (int cf = 0; cf < 4; ++cf) chFiltLive[cf] = -1000.0f; }
+    }
 
     // SIDECHAIN DUCK: another channel's hits push this one down (duckBy/duckAmt from the Routing
     // popup; the sequencer pulses duckEnv on the trigger). The envelope releases over ~130 ms and

@@ -403,10 +403,11 @@ public:
                   MTWavePos, MTDetune, MTVibrato, MTWidth, MTDrift, MTVol, MTWarp, MTChFxAChr, MTChFxBChr, MTRing, MT_GRID_BASE,
                   MTSub = MT_GRID_BASE + 8, MTFormant, MTChFxCAmt, MTChFxCChr,   // slot C Amount/Character (Channel)
                   MTRingHz, MTSlotPan,     // [2026-07-13 22:45] ring carrier (octaves) + slot pan (user request)
-                  MTFilt1Env, MTFilt2Env, MTUniCount };   // [2026-07-14 00:30] filter env amounts + unison voice count
+                  MTFilt1Env, MTFilt2Env, MTUniCount,      // [2026-07-14 00:30] filter env amounts + unison voice count
+                  MTChFilt1Cut, MTChFilt1Res, MTChFilt2Cut, MTChFilt2Res };   // [2026-07-16] the CHANNEL FILTER/EQ pair (post-FX; "(Channel)" targets)
     static constexpr int MOD_TGT_GRID = 8;   // grid knobs MT_GRID_BASE .. MT_GRID_BASE+7
     static constexpr int MT_GRID_END = MT_GRID_BASE + MOD_TGT_GRID;   // grid range check: >= BASE && < END
-    static constexpr int MT_COUNT = MTUniCount + 1;
+    static constexpr int MT_COUNT = MTChFilt2Res + 1;
     // (GridKnob + the mod-matrix DSP helpers are declared after the Slot struct, below.)
     // DRIFT visual honesty: the newest voice's REAL rolled detunes (cents) for the editor's unison
     // view - the drawn lines move with what actually played. Returns voice count (0 = none active).
@@ -766,6 +767,20 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     float  chFxMod[8] = {};
     float  modLagBlk[NUM_SLOTS][MOD_ROUTES] = {};   // [2026-07-14 01:33] block-path LAG states (voice states live on SlotVoice)
     float  chFxSm[3] = { -1.0f, -1.0f, -1.0f };      // per-SAMPLE smoothed slot amounts (-1 = snap on first use)
+    // [2026-07-16] CHANNEL FILTER/EQ (the FILTER/EQ box's CHANNEL chip): a post-FX filter pair on
+    // the FINISHED channel - runs AFTER the Channel FX, BEFORE Duck (the sends carry it). Part of
+    // the SOUND (persisted "cf*", hashed, clearSound reset). Per-voice concepts (env arrow,
+    // per-note keytrack) don't exist at channel level; matrix routes move it at block rate.
+    int    chFiltType[2]   = { 0, 0 };                 // FilterType (Off/LP/HP/BP/Notch/Bell)
+    float  chFiltCutoff[2] = { 1000.0f, 2500.0f };
+    float  chFiltReso[2]   = { 0.707f, 0.707f };
+    float  chFiltGain[2]   = { 0.0f, 0.0f };           // Bell boost/cut dB (reso field = Q, like the slots)
+    float  chFiltDrive     = 0.0f;                     // loop saturation (the slot filter-drive recipe)
+    float  chFiltMod[4]    = {};                       // matrix offsets: cut1/res1/cut2/res2 (both slots' routes add)
+    bool   chFiltRouted[4] = {};                       // a route targets it this block (live rings honesty)
+    float  chFiltLive[4]   = { -1000, -1000, -1000, -1000 };   // modulated cut Hz / reso for the display rings
+    float  chFiltIc1[2][2] = {}, chFiltIc2[2][2] = {}; // stereo SVF state per filter
+    float  chFiltGm[2] = { -1.0f, -1.0f }, chFiltKm[2] = { -1.0f, -1.0f };   // smoothed coeffs (-1 = snap)
     bool   chFxRun[3] = {};                          // engage tracking: off->on clears that slot's state (no stale burst)
     float  chSendHpZ[2] = {};                        // reverb-send high-pass state (~150 Hz; subs stay out of the verb)
     float  chSendSmR = -1.0f, chSendSmD = -1.0f;     // per-sample smoothed send gains (de-zipper; -1 = snap)

@@ -2086,6 +2086,13 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
       chState.setProperty("cfxT" + k, ch.chFxType[f], nullptr);
       chState.setProperty("cfxA" + k, ch.chFxAmt[f],  nullptr);
       chState.setProperty("cfxC" + k, ch.chFxChar[f], nullptr); }
+    for (int f = 0; f < 2; ++f)   // [2026-07-16] CHANNEL FILTER/EQ pair (the FILTER/EQ box's CHANNEL chip)
+    { const juce::String k(f);
+      chState.setProperty("cfT" + k, ch.chFiltType[f],   nullptr);
+      chState.setProperty("cfC" + k, ch.chFiltCutoff[f], nullptr);
+      chState.setProperty("cfR" + k, ch.chFiltReso[f],   nullptr);
+      chState.setProperty("cfG" + k, ch.chFiltGain[f],   nullptr); }
+    chState.setProperty("cfDrv", ch.chFiltDrive, nullptr);
     chState.setProperty("chRev", ch.reverbSend, nullptr);   // channel sends (per-slot sends retired)
     chState.setProperty("chDel", ch.delaySend,  nullptr);
     chState.setProperty("revBus", (int) ch.revBus, nullptr);   // which shared reverb/delay bus (A/B)
@@ -2273,6 +2280,13 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
             v[best].amt = 0.0f;
         }
     }
+    for (int f = 0; f < 2; ++f)   // [2026-07-16] CHANNEL FILTER/EQ pair
+    { const juce::String k(f); const DrumChannel dch;
+      ch.chFiltType[f]   = (int)  child.getProperty("cfT" + k, 0);
+      ch.chFiltCutoff[f] = (float)child.getProperty("cfC" + k, dch.chFiltCutoff[f]);
+      ch.chFiltReso[f]   = (float)child.getProperty("cfR" + k, dch.chFiltReso[f]);
+      ch.chFiltGain[f]   = (float)child.getProperty("cfG" + k, 0.0f); }
+    ch.chFiltDrive = (float)child.getProperty("cfDrv", 0.0f);
     ch.reverbSend = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("chRev", (float) ch.reverbSend));   // channel sends
     ch.delaySend  = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("chDel", (float) ch.delaySend));    // (legacy field default kept)
     ch.revBus = (int8_t) juce::jlimit(0, 1, (int) child.getProperty("revBus", 0));

@@ -589,6 +589,39 @@ int main()
         printf("[24] FREE LFO live (stopped transport): tremolo depth free=x%.2f retrig=x%.2f (both >1.8) -> %s\n",
                fr, rt, CHK(fr > 1.8 && rt > 1.8) ? "OK" : "FAIL");
     }
+    {   // [25] CHANNEL FILTER/EQ [2026-07-16]: the post-FX pair on the finished channel.
+        //     (a) all Off = bit-identical; (b) LP 300 kills a 110 Hz saw's 8th harmonic; (c) a
+        //     free-LFO "(Channel)" cutoff route makes the output differ from the static filter.
+        auto rendCh = [&](int mode) {   // 0 = off, 1 = LP 300, 2 = LP 300 + LFO->cutoff route
+            auto* q2 = new Sequencer(); q2->setStandaloneBpm(120.0f);
+            auto& c2 = q2->patterns[0].channels[0];
+            for (auto& sl2 : c2.slots) sl2 = DrumChannel::Slot();
+            auto& sl2 = c2.slots[0];
+            sl2.engine = DrumChannel::SrcOsc; sl2.weight = 1.0f;
+            sl2.oscShape = sl2.oscShapeB = DrumChannel::WvSaw; sl2.oscFreq = 110.0f;
+            sl2.atk = 0.002f; sl2.dec = 0.5f; sl2.sustain = 0.9f; sl2.release = 0.05f;
+            if (mode >= 1) { c2.chFiltType[0] = DrumChannel::LowPass; c2.chFiltCutoff[0] = 300.0f; }
+            if (mode == 2)
+            {   sl2.lfoShape[0] = 0; sl2.lfoSync[0] = 2.0f; sl2.lfoAmt[0] = 1.0f; sl2.lfoFree[0] = true;
+                sl2.mod[0] = { (int8_t) DrumChannel::MSLfoFilt, (int8_t) DrumChannel::MTChFilt1Cut, 0.7f }; }
+            for (auto& p2 : q2->patterns) for (auto& cc : p2.channels) cc.prepareToPlay(SR, 480);
+            c2.keyDown(45, 1.0f, 0, c2.keysPolyMode);
+            std::vector<float> o2; juce::AudioBuffer<float> b2(2, 480);
+            for (int bl = 0; bl < (int)(1.2 * SR / 480); ++bl)
+            { b2.clear(); q2->processBlock(b2, SR, 480, nullptr); for (int i2 = 0; i2 < 480; ++i2) o2.push_back(b2.getSample(0, i2)); }
+            delete q2; return o2;
+        };
+        auto off1 = rendCh(0), off2 = rendCh(0), lp = rendCh(1), md = rendCh(2);
+        auto gzE = [&](const std::vector<float>& x, double f) {
+            const double w = 2.0 * M_PI * f / SR, cf = 2.0 * std::cos(w);
+            double s1 = 0, s2 = 0; const int a0 = (int)(0.3 * SR), n = (int)(0.5 * SR);
+            for (int i2 = a0; i2 < a0 + n && i2 < (int) x.size(); ++i2) { const double s0 = x[(size_t) i2] + cf * s1 - s2; s2 = s1; s1 = s0; }
+            return std::sqrt(std::max(0.0, s1 * s1 + s2 * s2 - cf * s1 * s2)) / (0.5 * n); };
+        const double h8off = gzE(off1, 880.0), h8lp = gzE(lp, 880.0);
+        printf("[25] channel filter: off repeat maxdiff=%.6f | h8 off=%.4f lp300=%.4f (x%.0f down) | LFO route vs static maxdiff=%.3f -> %s\n",
+               maxdiff(off1, off2), h8off, h8lp, h8lp > 1e-9 ? h8off / h8lp : 999.0, maxdiff(lp, md),
+               CHK(maxdiff(off1, off2) < 1.0e-9f && h8off > 8.0 * (h8lp + 1e-9) && maxdiff(lp, md) > 0.01f && finite(lp)) ? "OK" : "FAIL");
+    }
     printf(fails == 0 ? ">>> ModMatrixTest PASS\n" : ">>> ModMatrixTest FAIL (%d)\n", fails);
     return fails;
 }

@@ -1813,6 +1813,10 @@ public:
     std::function<void(float)> onFilterDriveEdit;   // FILTER DRIVE drag-box (one amount, drives BOTH filters)
     void setFilterDrive(float v) { v = juce::jlimit(0.0f, 1.0f, v); if (std::abs(v - fDrive) > 1.0e-4f) { fDrive = v; repaint(); } }
     int  active() const { return activeFilt; }   // which of the 2 filters the keytrack fader edits (last touched)
+    // [2026-07-16] CHANNEL chip mode: the pair edits the post-FX CHANNEL filter - per-voice
+    // concepts (the envelope arrow) don't exist there, so the env handles are hidden + inert.
+    bool chanMode = false;
+    void setChanMode(bool m) { if (m != chanMode) { chanMode = m; repaint(); } }
     void setModCutoff(int fi, float hz) { fi = juce::jlimit(0, 1, fi);   // live modulation ring: the modulated cutoff
         if (std::abs(hz - modCutoff[fi]) > (hz > 0 ? hz * 0.01f : 0.5f)) { modCutoff[fi] = hz; repaint(); } }
     // [2026-07-14 00:30] live MODULATED reso + env-amount (user: "live visual pls"). -1000 = no route.
