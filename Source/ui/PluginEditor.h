@@ -2259,9 +2259,9 @@ struct DropButtonLNF : juce::LookAndFeel_V4
         const int yIndent = juce::jmin(4, b.proportionOfHeight(0.3f));
         const int leftIndent = 6, rightIndent = 20;   // rightIndent clears the ▼
         const int textWidth = b.getWidth() - leftIndent - rightIndent;
-        if (textWidth > 0)
+        if (textWidth > 0)   // min h-scale 0.5 = long labels ("Mono Legato") SQUEEZE, never "..." (plugin rule)
             g.drawFittedText(b.getButtonText(), leftIndent, yIndent, textWidth, b.getHeight() - yIndent * 2,
-                             juce::Justification::centred, 1);
+                             juce::Justification::centred, 1, 0.5f);
     }
 };
 

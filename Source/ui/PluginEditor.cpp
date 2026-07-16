@@ -4690,6 +4690,10 @@ KeysPanel::KeysPanel(MidiLearnManager& mlm)
     // SLOT OFFSET reads in MILLISECONDS (0..100 ms), CONSISTENT per hit (user: "use ms, not percentage").
     humanKnob.textFromValueFunction = [](double v) { return juce::String(juce::roundToInt(v * 100.0)) + " ms"; };
     humanKnob.valueFromTextFunction = [](const juce::String& t) { return t.getDoubleValue() / 100.0; };
+    // GLIDE reads in MILLISECONDS too (0..400 ms slide time; 0 = "Off") - user 2026-07-16.
+    glideKnob.textFromValueFunction = [](double v) { return v <= 0.001 ? juce::String("Off")
+                                                                       : juce::String(juce::roundToInt(v * 400.0)) + " ms"; };
+    glideKnob.valueFromTextFunction = [](const juce::String& t) { return t.getDoubleValue() / 400.0; };
     maxVelKnob.setValue(1.0);   // default full
     addAndMakeVisible(btnRec);
     btnRec.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
@@ -5730,6 +5734,7 @@ DrumSequencerEditor::~DrumSequencerEditor()
     keysPanel.btnSlot2.setLookAndFeel(nullptr);   // dropBtnLNF
     keysPanel.btnArp.setLookAndFeel(nullptr);     // dropBtnLNF
     keysPanel.btnGuide.setLookAndFeel(nullptr);   // dropBtnLNF
+    keysPanel.btnPlayMode.setLookAndFeel(nullptr);   // dropBtnLNF
     tooltipWindow.setLookAndFeel(nullptr);        // tipLNF
     keysPanel.btnTakes.setLookAndFeel(nullptr);   // dropBtnLNF
     for (auto& s : strips)
@@ -6087,6 +6092,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
     h = mix(h, f(c.reverbSend)); h = mix(h, f(c.delaySend));   // channel sends are part of the SOUND
     h = mix(h, c.keysPolyMode ? 1 : 0);   // keys Poly/Mono is per-sound too
     h = mix(h, c.keysLegato ? 1 : 0);     // [2026-07-16] mode dropdown's legato/glide axis (per-sound)
+    h = mix(h, f(c.keysGlide));           // [2026-07-16 round-3] GLIDE per-sound (user: match the Mode's scope)
     // ARP is per-sound now (user 2026-07-11): editing it marks the sound modified like any param.
     h = mix(h, c.arpOn ? 1 : 0); h = mix(h, c.arpLen); h = mix(h, c.arpRate); h = mix(h, c.arpSync);
     h = mix(h, f(c.arpGate)); h = mix(h, c.arpAlign ? 1 : 0); h = mix(h, c.arpHold ? 1 : 0);
@@ -6315,6 +6321,7 @@ void DrumSequencerEditor::writeChannelMix(juce::ValueTree& t, const DrumChannel&
     t.setProperty("sound",    (int) ch.soundType,    nullptr);
     t.setProperty("keysPoly", ch.keysPolyMode, nullptr);
     t.setProperty("keysLegato", ch.keysLegato, nullptr);   // [2026-07-16]
+    t.setProperty("keysGlide",  ch.keysGlide,  nullptr);   // [2026-07-16 round-3] glide time rides with the sound
     if (ch.arpOn)   // DEDICATED-ARP sounds: the pattern is part of the sound and travels with it.
     {               // arp OFF = the sound carries NO arp - loading it leaves the channel's arp alone
                     // (setting an arp up takes long; a plain sound swap must never wipe it - user rule).
@@ -6409,6 +6416,7 @@ void DrumSequencerEditor::readChannelMix(const juce::ValueTree& t, DrumChannel& 
 {
     ch.keysPolyMode = (bool) t.getProperty("keysPoly", true);
     ch.keysLegato   = (bool) t.getProperty("keysLegato", false);
+    ch.keysGlide    = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("keysGlide", 0.0f));   // [2026-07-16 round-3]
     if (t.hasProperty("arpOn") && (bool) t.getProperty("arpOn", false))
     {   // the sound brings its OWN arp -> apply it; sounds without one keep the channel's arp
         ch.arpOn   = true;
@@ -7972,8 +7980,8 @@ void DrumSequencerEditor::setupComponents()
         "1 = off (full). Min/Max together map [soft..hard] -> [min..max].");
     keysPanel.maxVelKnob.setColour(juce::Slider::rotarySliderFillColourId, juce::Colour(0xff5ad17a));
     keysPanel.glideKnob.setTooltip(
-        "GLIDE: pitch slide time between notes (up to ~0.4 s; 0% = no slide). Works in EVERY "
-        "play mode:\n\n"
+        "GLIDE: pitch slide time between notes in milliseconds (up to 400 ms; Off = no slide). "
+        "Works in EVERY play mode:\n\n"
         "- Only OVERLAPPING presses slide (fingered portamento) - play detached = no slide.\n"
         "- Mono modes slide from the held note; Poly modes from the last played note.\n"
         "- Whether the ENVELOPE restarts or continues is the Mode dropdown's job, not this knob's.\n\n"
@@ -8031,6 +8039,8 @@ void DrumSequencerEditor::setupComponents()
     keysPanel.btnSlot2.setLookAndFeel(&dropBtnLNF);   // dropdown look (triangle) - it's a popup button now
     keysPanel.btnArp.setLookAndFeel(&dropBtnLNF);     // same: the Arp button opens a dropdown
     keysPanel.btnGuide.setLookAndFeel(&dropBtnLNF);   // Key-guide popup button
+    keysPanel.btnPlayMode.setLookAndFeel(&dropBtnLNF);   // [2026-07-16] Mode is a dropdown too - same triangle as Arp/Guide
+                                                          // (drawFittedText squeezes "Mono Legato", never "...")
     keysPanel.btnGuide.setTooltip("KEY GUIDE (display only): dims the keys OUTSIDE a scale. Lit keys = the "
         "notes of the scale - ALL of them, not just chord roots.\n\n"
         "- MELODIES: stay on lit keys and you stay in key.\n"
