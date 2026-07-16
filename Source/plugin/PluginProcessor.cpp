@@ -2022,11 +2022,7 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
         chState.setProperty("hld" + juce::String(s), ch.srcHold[s], nullptr);
         chState.setProperty("dec" + juce::String(s), ch.srcDec[s],  nullptr);
     }
-    for (int b = 0; b < DrumChannel::NUM_EQ_BANDS; ++b) {
-        const auto& eb = ch.eqBand[b]; const juce::String k = "eb" + juce::String(b);
-        chState.setProperty(k + "on", eb.on, nullptr); chState.setProperty(k + "f", eb.freq, nullptr);
-        chState.setProperty(k + "g", eb.gainDb, nullptr); chState.setProperty(k + "q", eb.q, nullptr);
-    }
+    // (the channel 5-band EQ was DELETED 2026-07-16 - "eb*" keys no longer written)
     chState.setProperty("fType",    ch.filterType,     nullptr);
     chState.setProperty("fCutoff",  ch.filterCutoff,   nullptr);
     chState.setProperty("fReso",    ch.filterReso,     nullptr);
@@ -2195,11 +2191,7 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
             ch.srcDec[s]  = (float)child.getProperty("dec" + juce::String(s), decDef[s]);
         }
     }
-    for (int b = 0; b < DrumChannel::NUM_EQ_BANDS; ++b) {
-        auto& eb = ch.eqBand[b]; const DrumChannel::EqBand d; const juce::String k = "eb" + juce::String(b);
-        eb.on = (bool)child.getProperty(k + "on", false); eb.freq = (float)child.getProperty(k + "f", d.freq);
-        eb.gainDb = (float)child.getProperty(k + "g", 0.0f); eb.q = (float)child.getProperty(k + "q", 1.0f);
-    }
+    // ("eb*" = the DELETED channel 5-band EQ - ignored on load, 2026-07-16)
     ch.filterType   = (int)  child.getProperty("fType",   0);
     ch.filterCutoff = (float)child.getProperty("fCutoff", 20000.0f);
     ch.filterReso   = (float)child.getProperty("fReso",   0.707f);

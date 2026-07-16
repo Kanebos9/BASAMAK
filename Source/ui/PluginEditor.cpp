@@ -1017,6 +1017,17 @@ void LfoCurveEditor::paint(juce::Graphics& g)
     g.setColour(accent); g.drawRoundedRectangle(bb.reduced(0.5f), 6.0f, 1.4f);
     g.setFont(juce::Font(12.5f, juce::Font::bold)); g.setColour(accent);
     g.drawText("DRAW LFO SHAPE", 12, 4, 200, 16, juce::Justification::centredLeft, false);
+    // GRID drag box (Arp-Rate style: faint fill = position) + SNAP toggle [2026-07-16]
+    { const auto gr = gridRect();
+      g.setColour(juce::Colour(0xff20203a)); g.fillRoundedRectangle(gr, 3.0f);
+      g.setColour(accent.withAlpha(0.25f));
+      g.fillRoundedRectangle(gr.withWidth(gr.getWidth() * (float)(grid - 1) / 31.0f), 3.0f);
+      g.setColour(juce::Colour(0xffc8d0e0)); g.setFont(juce::Font(11.5f, juce::Font::bold));
+      g.drawText("Grid " + juce::String(grid), gr, juce::Justification::centred, false);
+      const auto sn = snapRect();
+      g.setColour(snap ? juce::Colour(0xff35b56a) : juce::Colour(0xff20203a)); g.fillRoundedRectangle(sn, 3.0f);
+      g.setColour(snap ? juce::Colours::black : juce::Colours::lightgrey);
+      g.drawText("Snap", sn, juce::Justification::centred, false); }
     g.setColour(juce::Colour(0xffc05050)); g.setFont(juce::Font(13.0f, juce::Font::bold));
     g.drawText("X", closeRect(), juce::Justification::centred, false);
     const auto a = strip();
@@ -1024,7 +1035,10 @@ void LfoCurveEditor::paint(juce::Graphics& g)
     g.setColour(accent.withAlpha(0.35f)); g.drawRoundedRectangle(a, 3.0f, 1.0f);
     g.setColour(juce::Colour(0xff262640));
     g.drawHorizontalLine((int) a.getCentreY(), a.getX(), a.getRight());
-    for (int q = 1; q < 4; ++q)   // quarter-cycle guides
+    if (grid > 1)   // the drawing grid (cell boundaries); replaces the old fixed quarter guides
+        for (int q = 1; q < grid; ++q)
+            g.drawVerticalLine((int) (a.getX() + a.getWidth() * (float) q / (float) grid), a.getY() + 2.0f, a.getBottom() - 2.0f);
+    else for (int q = 1; q < 4; ++q)
         g.drawVerticalLine((int) (a.getX() + a.getWidth() * (float) q / 4.0f), a.getY() + 2.0f, a.getBottom() - 2.0f);
     juce::Path p;
     for (int k = 0; k < CVN; ++k)
@@ -1041,14 +1055,53 @@ void LfoCurveEditor::paint(juce::Graphics& g)
 void LfoCurveEditor::mouseDown(const juce::MouseEvent& e)
 {
     if (closeRect().contains(e.position)) { setVisible(false); if (onClose) onClose(); return; }
+    if (snapRect().contains(e.position))
+    {   // toggling Snap ON flattens the current drawing into the grid immediately [2026-07-16]
+        snap = ! snap;
+        if (snap) { flatten(); if (onChange) onChange(curve); }
+        if (onToolsChange) onToolsChange(grid, snap);
+        repaint(); return;
+    }
+    if (gridRect().contains(e.position)) { gridDrag = true; mouseDrag(e); return; }
     lastI = -1; mouseDrag(e);
+}
+void LfoCurveEditor::flatten()
+{   // one level per cell = the cell's average (bipolar values keep their sign/meaning)
+    const int gN = juce::jlimit(1, 32, grid);
+    for (int c2 = 0; c2 < gN; ++c2)
+    {
+        const int i0 = c2 * CVN / gN, i1 = juce::jmax(i0 + 1, (c2 + 1) * CVN / gN);
+        float sum = 0.0f; for (int k = i0; k < i1; ++k) sum += curve[k];
+        const float v = sum / (float) (i1 - i0);
+        for (int k = i0; k < i1; ++k) curve[k] = v;
+    }
 }
 void LfoCurveEditor::mouseDrag(const juce::MouseEvent& e)
 {
+    if (gridDrag)
+    {   // the Grid drag box: absolute position across the box = 1..32 (flatten follows live when snapped)
+        const auto gr = gridRect();
+        const int g2 = juce::jlimit(1, 32, 1 + juce::roundToInt((e.position.x - gr.getX()) / juce::jmax(1.0f, gr.getWidth()) * 31.0f));
+        if (g2 != grid)
+        {
+            grid = g2;
+            if (snap) { flatten(); if (onChange) onChange(curve); }
+            if (onToolsChange) onToolsChange(grid, snap);
+            repaint();
+        }
+        return;
+    }
     const auto a = strip();
     const int   i = juce::jlimit(0, CVN - 1, (int) ((e.position.x - a.getX() - 2.0f) / juce::jmax(1.0f, a.getWidth() - 4.0f) * (float)(CVN - 1)));
     const float v = juce::jlimit(-1.0f, 1.0f, (a.getCentreY() - e.position.y) / juce::jmax(1.0f, a.getHeight() * 0.5f - 3.0f));
-    if (lastI < 0) curve[i] = v;
+    if (snap)
+    {   // SNAP: the whole cell under the cursor takes this level (piano-roll style)
+        const int gN = juce::jlimit(1, 32, grid);
+        const int c2 = juce::jlimit(0, gN - 1, i * gN / CVN);
+        const int i0 = c2 * CVN / gN, i1 = juce::jmax(i0 + 1, (c2 + 1) * CVN / gN);
+        for (int k = i0; k < i1; ++k) curve[k] = v;
+    }
+    else if (lastI < 0) curve[i] = v;
     else for (int n = juce::jmin(lastI, i); n <= juce::jmax(lastI, i); ++n)
     {   const float t = lastI == i ? 1.0f : (float)(n - lastI) / (float)(i - lastI);
         curve[n] = curve[lastI] + (v - curve[lastI]) * (lastI <= i ? t : 1.0f - t); }
@@ -1308,15 +1361,17 @@ void RoutePicker::Col::paintListBoxItem(int row, juce::Graphics& g, int w, int h
 {
     if (row < 0 || row >= (int) rows.size()) return;
     const bool cur = (isSrc ? owner.curSrc : owner.curTgt) == rows[(size_t) row].first;
+    const bool off = owner.rowDisabled(isSrc, rows[(size_t) row].first);   // faded-with-reason (Step Mod in the roll)
     g.setColour(cur ? owner.accent.withAlpha(0.30f) : (sel ? juce::Colour(0xff262640) : juce::Colour(0xff181828)));
     g.fillRect(0, 0, w, h);
-    g.setColour(cur ? owner.accent : juce::Colours::white);
+    g.setColour((cur ? owner.accent : juce::Colours::white).withAlpha(off ? 0.32f : 1.0f));
     g.setFont(juce::Font(12.0f, cur ? juce::Font::bold : juce::Font::plain));
     g.drawText(rows[(size_t) row].second, 8, 0, w - 10, h, juce::Justification::centredLeft, true);
 }
 void RoutePicker::Col::listBoxItemClicked(int row, const juce::MouseEvent&)
 {
     if (row < 0 || row >= (int) rows.size()) return;
+    if (owner.rowDisabled(isSrc, rows[(size_t) row].first)) return;   // faded rows don't pick
     (isSrc ? owner.curSrc : owner.curTgt) = rows[(size_t) row].first;
     if (owner.onPicked) owner.onPicked(owner.curSrc, owner.curTgt);
     owner.srcList.repaint(); owner.tgtList.repaint();
@@ -1415,6 +1470,11 @@ juce::String RoutePicker::getTooltip()
 juce::String RoutePicker::Col::getTooltipForRow(int row)
 {
     if (row < 0 || row >= (int) rows.size()) return {};
+    if (owner.rowDisabled(isSrc, rows[(size_t) row].first))
+        return "STEP MODE ONLY: the Mod A/B rows are step data - the Piano Roll switch wipes them "
+               "and the roll cannot draw them. In the Piano Roll, draw the same thing on an LFO "
+               "instead: Shape = Custom, Sync = Bar, Grid + Snap in its draw window - that lives "
+               "in the SOUND, so it survives mode switches.";
     return isSrc ? modSrcTip(rows[(size_t) row].first)
                  : modTgtTip(rows[(size_t) row].first, owner.engine);
 }
@@ -1572,6 +1632,8 @@ void ModFaderMatrix::paint(juce::Graphics& g)
     {
         auto fr = faderRect(i);
         const bool active = (src[i] != DrumChannel::MSOff && tgt[i] != DrumChannel::MTOff);
+        const bool dim = rollMode && (src[i] == DrumChannel::MSStepModA || src[i] == DrumChannel::MSStepModB);
+        if (dim) g.beginTransparencyLayer(0.35f);   // Step Mod lane routes are inert in the roll
         g.setColour(juce::Colour(0xff181828)); g.fillRoundedRectangle(fr, 3.0f);
         const float cx = fr.getCentreX(), half = fr.getWidth() * 0.5f - 4.0f;
         if (active && std::abs(amt[i]) > 1.0e-4f)
@@ -1606,6 +1668,7 @@ void ModFaderMatrix::paint(juce::Graphics& g)
             g.setColour(juce::Colour(0xff5a5f74)); g.setFont(juce::Font(8.5f));
             g.drawText("right-click to route", fr, juce::Justification::centred, false);
         }
+        if (dim) g.endTransparencyLayer();
     }
 }
 void ModFaderMatrix::mouseDown(const juce::MouseEvent& e)
@@ -6125,7 +6188,6 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         h = mix(h, sl.waveTable); h = mix(h, f(sl.wavePos)); h = mix(h, f(sl.oscWarp));
         h = mix(h, sl.modalMaterial); h = mix(h, f(sl.modalDecay)); h = mix(h, f(sl.modalTone)); h = mix(h, f(sl.modalStruct)); h = mix(h, f(sl.modalHit)); h = mix(h, f(sl.modalDamp));
         for (int k = 0; k < DrumChannel::Slot::NPE; ++k) { h = mix(h, f(sl.pEnvP[k])); h = mix(h, f(sl.pEnvT[k])); }
-        for (int e = 0; e < DrumChannel::NUM_EQ_BANDS; ++e) { const auto& eb = sl.eqBand[e]; h = mix(h, eb.on ? 1 : 0); h = mix(h, f(eb.freq)); h = mix(h, f(eb.gainDb)); h = mix(h, f(eb.q)); }
         h = mix(h, sl.filterType); h = mix(h, f(sl.filterCutoff)); h = mix(h, f(sl.filterReso)); h = mix(h, f(sl.filterEnvAmt));   // per-slot filter 1
         h = mix(h, sl.filterType2); h = mix(h, f(sl.filterCutoff2)); h = mix(h, f(sl.filterReso2)); h = mix(h, f(sl.filterEnvAmt2));   // filter 2
         h = mix(h, f(sl.filterGain)); h = mix(h, f(sl.filterGain2));   // BELL bipolar gains
@@ -6139,8 +6201,9 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         for (int d2 = 0; d2 < 4; ++d2) { h = mix(h, f(sl.lfoRate[d2])); h = mix(h, f(sl.lfoAmt[d2])); h = mix(h, f(sl.lfoSync[d2]));
                                          h = mix(h, sl.lfoShape[d2]); h = mix(h, sl.lfoFree[d2] ? 1 : 0); h = mix(h, sl.lfoLegato[d2] ? 1 : 0);
                                          if (sl.lfoShape[d2] == 7)   // the drawn LFO cycle IS the sound
+                                         {   h = mix(h, sl.lfoCurveGrid[d2]); h = mix(h, sl.lfoCurveSnap[d2] ? 1 : 0);
                                              for (int k = 0; k < DrumChannel::Slot::LFO_CURVE_N; ++k)
-                                                 h = mix(h, f(sl.lfoCurve[d2][k])); }   // per-slot LFOs
+                                                 h = mix(h, f(sl.lfoCurve[d2][k])); } }   // per-slot LFOs
         h = mix(h, f(sl.drift)); h = mix(h, f(sl.filterDrive));   // DRIFT (alive) + filter loop drive
         for (int r = 0; r < DrumChannel::MOD_ROUTES; ++r)   // MOD MATRIX routes + created sources
         { h = mix(h, sl.mod[r].src); h = mix(h, sl.mod[r].tgt); h = mix(h, f(sl.mod[r].amt));
@@ -6161,9 +6224,6 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
     h = mix(h, f(c.pitchEnvAmt)); h = mix(h, f(c.pitchEnvTime)); h = mix(h, f(c.pitchOffset)); h = mix(h, c.sampleReverse ? 1 : 0);
     for (int s = 0; s < DrumChannel::NUM_SOURCES; ++s) { h = mix(h, f(c.srcAtk[s])); h = mix(h, f(c.srcHold[s])); h = mix(h, f(c.srcDec[s])); }
     h = mix(h, f(c.pitch)); h = mix(h, f(c.volume)); h = mix(h, f(c.pan));
-    for (int b = 0; b < DrumChannel::NUM_EQ_BANDS; ++b) {
-        const auto& eb = c.eqBand[b]; h = mix(h, eb.on ? 1 : 0); h = mix(h, f(eb.freq)); h = mix(h, f(eb.gainDb)); h = mix(h, f(eb.q));
-    }
     h = mix(h, c.filterType); h = mix(h, f(c.filterCutoff)); h = mix(h, f(c.filterReso)); h = mix(h, f(c.filterEnvAmt));
     h = mix(h, c.driveType); h = mix(h, f(c.driveAmount));
     h = mix(h, f(c.reverbSend)); h = mix(h, f(c.delaySend)); h = mix(h, c.allowOverlap ? 1 : 0);
@@ -6292,7 +6352,6 @@ void DrumSequencerEditor::resetChannelToDefault(DrumChannel& c, int ch)
     { const float decDef[DrumChannel::NUM_SOURCES] = { 2.0f, 0.08f, 0.20f, 0.30f, 0.80f };
       for (int s = 0; s < DrumChannel::NUM_SOURCES; ++s) { c.srcAtk[s] = 0.003f; c.srcHold[s] = 0.0f; c.srcDec[s] = decDef[s]; } }
     c.pitch = 0.0f; c.volume = 1.0f; c.pan = 0.0f;
-    for (int b = 0; b < DrumChannel::NUM_EQ_BANDS; ++b) c.eqBand[b] = DrumChannel::defaultEqBand(b);
     c.filterType = 0; c.filterCutoff = 1000.0f; c.filterReso = 0.707f; c.filterEnvAmt = 0.0f;
     c.driveType = 0; c.driveAmount = 0.0f;
     c.reverbSend = 0.0f; c.delaySend = 0.0f;
@@ -6403,11 +6462,7 @@ void DrumSequencerEditor::writeChannelMix(juce::ValueTree& t, const DrumChannel&
     }
     t.setProperty("pitch", ch.pitch, nullptr); t.setProperty("vol", ch.volume, nullptr);
     t.setProperty("pan", ch.pan, nullptr);
-    for (int b = 0; b < DrumChannel::NUM_EQ_BANDS; ++b) {
-        const auto& eb = ch.eqBand[b]; const juce::String k = "eb" + juce::String(b);
-        t.setProperty(k + "on", eb.on, nullptr); t.setProperty(k + "f", eb.freq, nullptr);
-        t.setProperty(k + "g", eb.gainDb, nullptr); t.setProperty(k + "q", eb.q, nullptr);
-    }
+    // (the channel 5-band EQ was DELETED 2026-07-16 - "eb*" keys no longer written)
     t.setProperty("fType", ch.filterType, nullptr); t.setProperty("fCut", ch.filterCutoff, nullptr);
     t.setProperty("fReso", ch.filterReso, nullptr); t.setProperty("fEnv", ch.filterEnvAmt, nullptr);
     t.setProperty("drvT", ch.driveType, nullptr); t.setProperty("drvA", ch.driveAmount, nullptr);
@@ -6514,11 +6569,7 @@ void DrumSequencerEditor::readChannelMix(const juce::ValueTree& t, DrumChannel& 
           ch.srcDec[s]  = (float)t.getProperty("dec" + juce::String(s), decDef[s]); } }
     ch.pitch = (float)t.getProperty("pitch", 0.0f); ch.volume = (float)t.getProperty("vol", 1.0f);
     ch.pan = (float)t.getProperty("pan", 0.0f);
-    for (int b = 0; b < DrumChannel::NUM_EQ_BANDS; ++b) {
-        auto& eb = ch.eqBand[b]; const DrumChannel::EqBand d = DrumChannel::EqBand(); const juce::String k = "eb" + juce::String(b);
-        eb.on = (bool)t.getProperty(k + "on", false); eb.freq = (float)t.getProperty(k + "f", d.freq);
-        eb.gainDb = (float)t.getProperty(k + "g", 0.0f); eb.q = (float)t.getProperty(k + "q", 1.0f);
-    }
+    // ("eb*" = the DELETED channel 5-band EQ - ignored on load, 2026-07-16)
     ch.filterType = (int)t.getProperty("fType", 0); ch.filterCutoff = (float)t.getProperty("fCut", 20000.0f);
     ch.filterReso = (float)t.getProperty("fReso", 0.707f); ch.filterEnvAmt = (float)t.getProperty("fEnv", 0.0f);
     ch.driveType = (int)t.getProperty("drvT", 0); ch.driveAmount = (float)t.getProperty("drvA", 0.0f);
@@ -7466,8 +7517,11 @@ void DrumSequencerEditor::setupComponents()
     btnModeModB.onClick  = [this] { setStepEditMode(stepGrid.editMode == StepGridComponent::ModeModB  ? 0 : StepGridComponent::ModeModB);  };
     btnModeModA.setTooltip("Step Mod A: draw a value (0-100%) per step. It's a MODULATION SOURCE - "
                            "route it in the MODULATION box (source \"Step Mod A\") to move any target in "
-                           "time with the pattern. Separate from Vel/Pitch/Pan; drawing it changes nothing else.");
-    btnModeModB.setTooltip("Step Mod B: a second drawable per-step modulation lane (route it as \"Step Mod B\").");
+                           "time with the pattern. Separate from Vel/Pitch/Pan; drawing it changes nothing else. "
+                           "STEP MODE ONLY (the Piano Roll switch wipes it) - in the roll, draw the same thing "
+                           "on an LFO: Shape = Custom, Sync = Bar, then Grid + Snap in its draw window.");
+    btnModeModB.setTooltip("Step Mod B: a second drawable per-step modulation lane (route it as \"Step Mod B\"). "
+                           "STEP MODE ONLY - in the Piano Roll use a Custom LFO with Grid + Snap instead.");
     btnModeVel.onClick   = [this] { setStepEditMode(stepGrid.editMode == StepGridComponent::ModeVel   ? 0 : StepGridComponent::ModeVel);   };
     btnModeLen.onClick   = [this] { setStepEditMode(stepGrid.editMode == StepGridComponent::ModeLen   ? 0 : StepGridComponent::ModeLen);   };
     btnModePitch.onClick = [this] { setStepEditMode(stepGrid.editMode == StepGridComponent::ModePitch ? 0 : StepGridComponent::ModePitch); };
@@ -9274,6 +9328,15 @@ void DrumSequencerEditor::setupComponents()
     lfoDisplay.onOpenCurveEditor = [this](int dest) { openLfoCurveEditor(dest); };   // click the wave in Custom
     content.addChildComponent(lfoCurveEd);
     lfoCurveEd.clickIgnore = &lfoDisplay;
+    // [2026-07-16] Grid/Snap are saved WITH the sound (per LFO) - reopening shows it as it was made.
+    lfoCurveEd.onToolsChange = [this](int g2, bool sn) {
+        if (ignoreKnobCallbacks) return;
+        auto& ch = proc.sequencer.channel(selectedChannel);
+        auto& sl = ch.slots[envTargetSlot()];
+        const int d = juce::jlimit(0, 3, lfoCurveEdDest);
+        sl.lfoCurveGrid[d] = (uint8_t) juce::jlimit(1, 32, g2);
+        sl.lfoCurveSnap[d] = sn;
+    };
     lfoCurveEd.onChange = [this](const float* cv) {
         auto& ch = proc.sequencer.channel(selectedChannel);
         auto& sl = ch.slots[envTargetSlot()];
@@ -9781,10 +9844,10 @@ void DrumSequencerEditor::setupComponents()
     // MASTER text") - the one place that documents the order everything is applied in.
     hdrSounds.setTooltip(
         "SIGNAL CHAIN - the order everything is applied in:\n\n"
-        "- 1. SLOT (each sound layer, per voice): Engine > Filter 1 > Filter 2 > slot EQ > Drive > "
+        "- 1. SLOT (each sound layer, per voice): Engine > Filter 1 > Filter 2 > Drive > "
         "Formant > Punch > Ring > Sub (the sub joins LAST, after the distortion - that's why it "
         "stays clean).\n"
-        "- 2. CHANNEL (both slots mixed): Channel FX A > B > C > channel EQ > Duck. The Reverb/"
+        "- 2. CHANNEL (both slots mixed): Channel FX A > B > C > Duck. The Reverb/"
         "Delay SEND faders tap a COPY here - the finished channel sound (reverb send is low-cut "
         "at 150 Hz so subs stay dry).\n"
         "- 3. BUSES: the sends feed Reverb A/B + Delay A/B in PARALLEL (side-chains, not part of "
@@ -10598,6 +10661,7 @@ void DrumSequencerEditor::setShapeSlot(int s)
                          envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8));
     // The 12-fader matrix + the Mod Env follow the selected slot too (yellow slot 1 / pink slot 2).
     modFaders.slotIdx = envTargetSlot();
+    modFaders.rollMode = proc.sequencer.channel(selectedChannel).drawMode;
     modFaders.accent = envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8);
     modFaders.setValues(sl);
     lfoDisplay.setModEnv(sl.modEnvA, sl.modEnvH, sl.modEnvD, sl.modEnvS, sl.modEnvR);
@@ -11656,6 +11720,8 @@ void DrumSequencerEditor::openLfoCurveEditor(int dest)
     lfoCurveEdDest = juce::jlimit(0, 3, dest);
     auto& sl = proc.sequencer.channel(selectedChannel).slots[envTargetSlot()];
     lfoCurveEd.setCurve(sl.lfoCurve[lfoCurveEdDest]);
+    lfoCurveEd.grid = juce::jlimit(1, 32, (int) sl.lfoCurveGrid[lfoCurveEdDest]);   // per-sound per-LFO tools
+    lfoCurveEd.snap = sl.lfoCurveSnap[lfoCurveEdDest];
     lfoCurveEd.accent = kLfoDestCol[lfoCurveEdDest];
     lfoCurveEd.setVisible(true); lfoCurveEd.toFront(false);
 }
@@ -11666,6 +11732,7 @@ void DrumSequencerEditor::openRoutePicker(int route)
     const int si = envTargetSlot();
     routePicker.accent = (si == 0) ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8);
     routePicker.engine = proc.sequencer.channel(selectedChannel).slots[si].engine;   // gates Warp/WavePos targets
+    routePicker.rollMode = proc.sequencer.channel(selectedChannel).drawMode;   // Step Mod rows fade in the roll [2026-07-16]
     routePicker.remapOn = proc.sequencer.channel(selectedChannel).slots[si].mod[juce::jlimit(0, DrumChannel::MOD_ROUTES - 1, route)].curveOn != 0;
     { // [2026-07-14 11:10] the MIDI button shows this route's current assignment
       const int mcc = proc.midiLearn.getCCForParam("ui_sel_modAmt" + juce::String(route));
@@ -11718,6 +11785,7 @@ void DrumSequencerEditor::refreshDetailPanel()
         lfoDisplay.setValues(sl.lfoRate, sl.lfoAmt, sl.lfoSync, sl.lfoShape, sl.lfoFree, sl.lfoLegato, sl.lfoCurve, lfoRt, ((sl.filterType >= DrumChannel::LowPass && sl.filterType <= DrumChannel::Notch) || sl.filterType == DrumChannel::Bell || (sl.filterType2 >= DrumChannel::LowPass && sl.filterType2 <= DrumChannel::Notch) || sl.filterType2 == DrumChannel::Bell), (sl.oscShape >= DrumChannel::WvCustom || sl.engine == DrumChannel::SrcGrain),
                            envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8));
       modFaders.slotIdx = envTargetSlot();
+    modFaders.rollMode = proc.sequencer.channel(selectedChannel).drawMode;
       modFaders.accent = envTargetSlot() == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8);
       modFaders.setValues(sl);
       lfoDisplay.setModEnv(sl.modEnvA, sl.modEnvH, sl.modEnvD, sl.modEnvS, sl.modEnvR); }   // 12-fader matrix + Mod Env follow the selected slot
@@ -13299,7 +13367,7 @@ void DrumSequencerEditor::layoutContent()
     // DRAW HARMONICS overlay: parked over the amp/pitch columns (opened from the Custom wave preview;
     // hidden again at the top of every layoutContent like the sound picker).
     harmEd.setBounds(cxAmp, colTop, ampEqW + gp + pitchW + gp + fxColW, colH);   // covers amp..FX (user-outlined area)
-    lfoCurveEd.setBounds(cxPitch, colTop + 60, pitchW + gp + fxColW, 220);   // LFO SHAPER overlay (near the LFO box)
+    lfoCurveEd.setBounds(cxAmp, colTop, ampEqW + gp + pitchW + gp + fxColW, colH);   // LFO draw window = the wavetable menu's footprint (user 2026-07-16)
     routePicker.setBounds(cxPitch, colTop + 24, pitchW + gp + fxColW, colH - 48);   // route source|target chooser (parked left of the faders)
 
     hdrDrive.setBounds(0, 0, 0, 0);

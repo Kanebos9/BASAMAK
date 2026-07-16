@@ -735,13 +735,7 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         // 4-point pitch envelope (pitch + time fraction per dot)
         st.setProperty("zP0", s.pEnvP[0], nullptr); st.setProperty("zP1", s.pEnvP[1], nullptr); st.setProperty("zP2", s.pEnvP[2], nullptr); st.setProperty("zP3", s.pEnvP[3], nullptr);
         st.setProperty("zT0", s.pEnvT[0], nullptr); st.setProperty("zT1", s.pEnvT[1], nullptr); st.setProperty("zT2", s.pEnvT[2], nullptr); st.setProperty("zT3", s.pEnvT[3], nullptr);
-        // === PER-SLOT EQ (begin) ===
-        for (int e = 0; e < NUM_EQ_BANDS; ++e) {
-            const auto& eb = s.eqBand[e]; const juce::String k = "qe" + juce::String(e);
-            st.setProperty(k + "o", eb.on, nullptr); st.setProperty(k + "f", eb.freq, nullptr);
-            st.setProperty(k + "g", eb.gainDb, nullptr); st.setProperty(k + "q", eb.q, nullptr);
-        }
-        // === PER-SLOT EQ (end) ===
+        // (the old per-slot 5-band EQ was DELETED 2026-07-16 - "qe*" keys no longer written)
         // === PER-SLOT FILTER (begin) ===
         st.setProperty("flT", s.filterType, nullptr); st.setProperty("flC", s.filterCutoff, nullptr);
         st.setProperty("flR", s.filterReso, nullptr); st.setProperty("flE", s.filterEnvAmt, nullptr);
@@ -779,7 +773,9 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
             { juce::String cv;
               for (int k = 0; k < Slot::LFO_CURVE_N; ++k)
                   cv << juce::String(s.lfoCurve[d2][k], 3) << (k < Slot::LFO_CURVE_N - 1 ? "," : "");
-              st.setProperty("lfCv" + juce::String(d2), cv, nullptr); }
+              st.setProperty("lfCv" + juce::String(d2), cv, nullptr);
+              st.setProperty("lfCg" + juce::String(d2), (int) s.lfoCurveGrid[d2], nullptr);   // draw-window Grid
+              st.setProperty("lfCn" + juce::String(d2), s.lfoCurveSnap[d2], nullptr); }       //  + Snap (saved with the sound)
         }
         st.setProperty("drf", s.drift, nullptr);          // DRIFT (alive) amount
         st.setProperty("flDrv", s.filterDrive, nullptr);  // filter loop saturation
@@ -882,13 +878,7 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         s.modalMorph = (float)st.getProperty("mMo", d.modalMorph);
         s.pEnvP[0] = (float)st.getProperty("zP0", d.pEnvP[0]); s.pEnvP[1] = (float)st.getProperty("zP1", d.pEnvP[1]); s.pEnvP[2] = (float)st.getProperty("zP2", d.pEnvP[2]); s.pEnvP[3] = (float)st.getProperty("zP3", d.pEnvP[3]);
         s.pEnvT[0] = (float)st.getProperty("zT0", d.pEnvT[0]); s.pEnvT[1] = (float)st.getProperty("zT1", d.pEnvT[1]); s.pEnvT[2] = (float)st.getProperty("zT2", d.pEnvT[2]); s.pEnvT[3] = (float)st.getProperty("zT3", d.pEnvT[3]);
-        // === PER-SLOT EQ (begin) ===
-        for (int e = 0; e < NUM_EQ_BANDS; ++e) {
-            auto& eb = s.eqBand[e]; const EqBand de = defaultEqBand(e); const juce::String k = "qe" + juce::String(e);
-            eb.on = (bool)st.getProperty(k + "o", false); eb.freq = (float)st.getProperty(k + "f", de.freq);
-            eb.gainDb = (float)st.getProperty(k + "g", 0.0f); eb.q = (float)st.getProperty(k + "q", de.q);
-        }
-        // === PER-SLOT EQ (end) ===
+        // ("qe*" = the DELETED per-slot 5-band EQ, 2026-07-16 - ignored on load)
         // === PER-SLOT FILTER (begin) ===
         s.filterType = (int)st.getProperty("flT", d.filterType); s.filterCutoff = (float)st.getProperty("flC", d.filterCutoff);
         s.filterReso = (float)st.getProperty("flR", d.filterReso); s.filterEnvAmt = (float)st.getProperty("flE", d.filterEnvAmt);
@@ -961,6 +951,8 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
             s.lfoShape[d2] = juce::jlimit(0, 7, (int) st.getProperty("lfSh" + juce::String(d2), d.lfoShape[d2]));
             s.lfoFree[d2]  = (bool) st.getProperty("lfFr" + juce::String(d2), d.lfoFree[d2]);
             s.lfoLegato[d2] = (bool) st.getProperty("lfLg" + juce::String(d2), d.lfoLegato[d2]);
+            s.lfoCurveGrid[d2] = (uint8_t) juce::jlimit(1, 32, (int) st.getProperty("lfCg" + juce::String(d2), (int) d.lfoCurveGrid[d2]));
+            s.lfoCurveSnap[d2] = (bool) st.getProperty("lfCn" + juce::String(d2), false);
             if (st.hasProperty("lfCv" + juce::String(d2)))
             { juce::StringArray a; a.addTokens(st.getProperty("lfCv" + juce::String(d2)).toString(), ",", "");
               for (int k = 0; k < Slot::LFO_CURVE_N; ++k)
@@ -1063,7 +1055,6 @@ void DrumChannel::prepareToPlay(double sampleRate, int maxBlockSize)
     sr = sampleRate;
     waveBank();   // force-build the wavetable bank now (message thread), not on the audio thread
 
-    for (auto& b : eqHP) b.reset();  for (auto& b : eqBell) b.reset();  for (auto& b : eqLP) b.reset();
     for (auto& b : formantBP) b.reset();
 
     for (auto& v : voices)
@@ -2178,9 +2169,6 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         // -- 4-point pitch envelope (applies on top of the legacy per-engine env) --
         bool   pEnvOn = false; float pEnvP[Slot::NPE] = { 0, 0, 0, 0 }, pEnvT[Slot::NPE] = { 0.2f, 0.4f, 0.6f, 0.8f };
         double voiceLenSamp = 1.0;   // sound length in samples, for the time-fraction axis
-        // === PER-SLOT EQ (begin) - coeffs (state lives per-voice in SlotVoice) ===
-        bool   eqAny = false; bool eqUse[7] = {}; Biquad eqBq[7];
-        // === PER-SLOT EQ (end) ===
         // === PER-SLOT FILTER (begin) - resonant LP; raw params here, coeffs recomputed per BLOCK
         //     (env-follow) into 'filt' just before the voice loop; state lives per-voice ===
         float  uniSpread = 0.0f; float uniPanL[UNI_MAX + 1] = {}, uniPanR[UNI_MAX + 1] = {};   // stereo WIDTH per voice (equal power)
@@ -2569,21 +2557,6 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         if (sl.engine == SrcSample)
             c.voiceLenSamp = juce::jmax(1.0, (double)(c.regHi - c.regLo) * (double) engineOS / juce::jmax(0.05, c.speed) / (double) c.slices);
 
-        // === PER-SLOT EQ (begin) - coeffs for this slot's HP(2)+bells(3)+LP(2) ===
-        {
-            const double nyq = sr * 0.49;
-            const auto& E = sl.eqBand;
-            if (E[EQ_HP].on) { double f = juce::jlimit(20.0, nyq, (double) E[EQ_HP].freq);
-                               c.eqBq[0].highpass(sr, f, 0.5412); c.eqBq[1].highpass(sr, f, 1.3066); c.eqUse[0] = c.eqUse[1] = true; }
-            for (int k = 0; k < 3; ++k) if (E[EQ_B1 + k].on) {
-                c.eqBq[2 + k].peaking(sr, juce::jlimit(20.0, nyq, (double) E[EQ_B1 + k].freq),
-                                      juce::jlimit(0.2, 12.0, (double) E[EQ_B1 + k].q), (double) E[EQ_B1 + k].gainDb);
-                c.eqUse[2 + k] = true; }
-            if (E[EQ_LP].on) { double f = juce::jlimit(20.0, nyq, (double) E[EQ_LP].freq);
-                               c.eqBq[5].lowpass(sr, f, 0.5412); c.eqBq[6].lowpass(sr, f, 1.3066); c.eqUse[5] = c.eqUse[6] = true; }
-            for (bool u : c.eqUse) c.eqAny |= u;
-        }
-        // === PER-SLOT EQ (end) ===
         // === PER-SLOT FILTERS (begin) - TWO in series; stash raw params, coeffs baked per BLOCK below.
         const int   fTy[2] = { sl.filterType,   sl.filterType2 };
         const float fCu[2] = { sl.filterCutoff, sl.filterCutoff2 };
@@ -3767,18 +3740,6 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 blockSlotEnv[s] = juce::jmax(blockSlotEnv[s], env * v.velGain);
                 // === PER-SLOT FILTER (end) ===
 
-                // === PER-SLOT EQ (begin) - filter THIS slot's signal before it's mixed ===
-                if (c.eqAny) {
-                    if (stereo) {
-                        for (int k = 0; k < 7; ++k) if (c.eqUse[k]) {
-                            sL = eqProcess(c.eqBq[k], sv.eqZ1[k], sv.eqZ2[k], sL, 0);
-                            sR = eqProcess(c.eqBq[k], sv.eqZ1[k], sv.eqZ2[k], sR, 1); }
-                    } else {
-                        for (int k = 0; k < 7; ++k) if (c.eqUse[k])
-                            sig = eqProcess(c.eqBq[k], sv.eqZ1[k], sv.eqZ2[k], sig, 0);
-                    }
-                }
-                // === PER-SLOT EQ (end) ===
 
                 // Per-slot DRIVE (insert): shape THIS slot's signal with its own drive type/amount.
                 // [2026-07-13 19:57] ROUTE-swept drive DRY-BLENDS over the first ~8% (SMOOTHSTEP): the
@@ -4427,8 +4388,6 @@ void DrumChannel::applyEQ(juce::AudioBuffer<float>& buf, int numSamples)
     const bool useFormant      = (filterType == Formant);
     const bool useLegacyFilter = (filterType != FilterOff && filterType != Formant);  // factory LP/HP/BP/Notch
     const bool useDrive        = (driveType != DriveOff && driveAmount > 0.0f);
-    const bool anyEq           = eqBand[EQ_HP].on || eqBand[EQ_B1].on || eqBand[EQ_B2].on
-                              || eqBand[EQ_B3].on || eqBand[EQ_LP].on;
 
     // -- Stage 1: filter (Formant, or a factory LP/HP/BP/Notch) --
     if (useFormant || useLegacyFilter)
@@ -4469,21 +4428,7 @@ void DrumChannel::applyEQ(juce::AudioBuffer<float>& buf, int numSamples)
         }
     }
 
-    // -- Stage 3: channel EQ: HP (24 dB/oct) -> 3 bells -> LP (24 dB/oct) --
-    if (anyEq)
-        for (int ch = 0; ch < 2; ++ch)
-        {
-            float* d = buf.getWritePointer(ch);
-            for (int i = 0; i < numSamples; ++i)
-            {
-                float x = d[i];
-                if (eqBand[EQ_HP].on) { x = eqHP[0].process(x, ch); x = eqHP[1].process(x, ch); }
-                for (int b = 0; b < 3; ++b)
-                    if (eqBand[EQ_B1 + b].on) x = eqBell[b].process(x, ch);
-                if (eqBand[EQ_LP].on) { x = eqLP[0].process(x, ch); x = eqLP[1].process(x, ch); }
-                d[i] = x;
-            }
-        }
+    // (Stage 3, the channel 5-band EQ, was DELETED 2026-07-16 with the rest of the old EQ code.)
 }
 
 void DrumChannel::updateFilter(float envModLevel, double cutoffMul)
@@ -4604,19 +4549,6 @@ void DrumChannel::updateDSP()
 {
     if (sr <= 0.0) return;
 
-    const double nyq = sr * 0.49;
-    // HP / LP: two cascaded biquads with the Butterworth 4th-order Q pair => 24 dB/oct.
-    if (eqBand[EQ_HP].on) {
-        const double f = juce::jlimit(20.0, nyq, (double) eqBand[EQ_HP].freq);
-        eqHP[0].highpass(sr, f, 0.54119610); eqHP[1].highpass(sr, f, 1.30656296);
-    }
-    if (eqBand[EQ_LP].on) {
-        const double f = juce::jlimit(20.0, nyq, (double) eqBand[EQ_LP].freq);
-        eqLP[0].lowpass(sr, f, 0.54119610); eqLP[1].lowpass(sr, f, 1.30656296);
-    }
-    for (int b = 0; b < 3; ++b) {
-        const auto& bd = eqBand[EQ_B1 + b];
-        eqBell[b].peaking(sr, juce::jlimit(20.0, nyq, (double) bd.freq),
-                          juce::jlimit(0.2, 12.0, (double) bd.q), (double) bd.gainDb);
-    }
+    // (the channel 5-band EQ coeff bake was DELETED 2026-07-16 with the old EQ code)
+    juce::ignoreUnused(sr);
 }

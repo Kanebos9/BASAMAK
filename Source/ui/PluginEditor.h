@@ -577,8 +577,11 @@ class LfoCurveEditor : public juce::Component, public juce::SettableTooltipClien
 public:
     static constexpr int CVN = 64;
     float curve[CVN] = {};
+    int  grid = 16;       // [2026-07-16] draw grid, 1..32 cells (saved with the sound per LFO)
+    bool snap = false;    // SNAP toggle: on = flatten + draw as flat per-cell steps
     juce::Colour accent { 0xffff9a3c };
     std::function<void(const float*)> onChange;
+    std::function<void(int grid, bool snap)> onToolsChange;   // editor persists Grid/Snap onto the slot
     std::function<void()> onClose;
     juce::Component* clickIgnore = nullptr;
     ~LfoCurveEditor() override { juce::Desktop::getInstance().removeGlobalMouseListener(&closer); }
@@ -591,10 +594,22 @@ public:
     void paint(juce::Graphics& g) override;
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
-    void mouseUp(const juce::MouseEvent&) override { lastI = -1; }
+    void mouseUp(const juce::MouseEvent&) override { lastI = -1; gridDrag = false; }
+    void flatten();   // quantize the current curve into `grid` flat cells (snap-on behaviour)
     juce::String getTooltip() override
-    { return "Draw ONE cycle of this LFO's movement (left-drag). It plays at the LFO's speed and is "
-             "scaled by its Amount; Sync / Retrig / Free all apply. Click outside to close."; }
+    {
+        const auto p = getMouseXYRelative().toFloat();
+        if (gridRect().contains(p))
+            return "GRID: how many cells one LFO cycle is divided into (drag, 1-32; odd counts = "
+                   "polyrhythms). With SNAP on, drawing on this grid does the same job as step "
+                   "modulation (Mod A/B) - but it is part of the SOUND, so it works in the Piano "
+                   "Roll too and survives switching modes. Pair with Sync = Bar for one cycle per bar.";
+        if (snapRect().contains(p))
+            return "SNAP: while ON, the drawing flattens into one level per Grid cell (piano-roll "
+                   "style steps) and new strokes land as flat cells. Off = freehand drawing.";
+        return "Draw ONE cycle of this LFO's movement (left-drag). It plays at the LFO's speed and is "
+               "scaled by its Amount; Sync / Retrig / Free all apply. Click outside to close.";
+    }
 private:
     struct Closer : juce::MouseListener
     {
@@ -611,8 +626,11 @@ private:
     Closer closer { *this };
     bool closerHooked = false;
     int  lastI = -1;
+    bool gridDrag = false;
     juce::Rectangle<float> closeRect() const { return { (float) getWidth() - 24.0f, 4.0f, 20.0f, 16.0f }; }
-    juce::Rectangle<float> strip() const { return getLocalBounds().toFloat().reduced(10.0f).withTrimmedTop(24.0f).withTrimmedBottom(16.0f); }
+    juce::Rectangle<float> gridRect() const { return { (float) getWidth() - 250.0f, 3.0f, 130.0f, 18.0f }; }   // "Grid 16" drag box
+    juce::Rectangle<float> snapRect() const { return { (float) getWidth() - 112.0f, 3.0f, 70.0f, 18.0f }; }    // "Snap" toggle
+    juce::Rectangle<float> strip() const { return getLocalBounds().toFloat().reduced(10.0f).withTrimmedTop(26.0f).withTrimmedBottom(16.0f); }
 };
 
 //==============================================================================
@@ -708,6 +726,10 @@ public:
     std::function<juce::String(int gridIdx)> gridKnobName;  // live engine-knob names for grid targets
     juce::Colour accent { 0xffe8bf4d };
     int engine = -1;   // the slot's engine (set before openFor) - gates engine-specific targets (Warp = Osc only)
+    bool rollMode = false;   // [2026-07-16] channel in PIANO ROLL: Step Mod A/B rows FADE with a reason
+                             // (their lanes are step data - wiped by the mode switch, undrawable in the roll)
+    bool rowDisabled(bool isSrc, int id) const
+    { return isSrc && rollMode && (id == DrumChannel::MSStepModA || id == DrumChannel::MSStepModB); }
     RoutePicker();
     ~RoutePicker() override { juce::Desktop::getInstance().removeGlobalMouseListener(&closer); }
     void openFor(int curSrc, int curTgt, float amt, float lagMs = 0.0f);   // (re)fill both lists, select current, become visible
@@ -783,6 +805,7 @@ public:
     static constexpr int NR = DrumChannel::MOD_ROUTES;      // 12
     juce::Colour accent { 0xffe8bf4d };
     int  slotIdx = 0;
+    bool rollMode = false;   // [2026-07-16] roll channel: Step Mod routes draw DIMMED (their lanes are step-mode-only)
     int   src[NR] = {}, tgt[NR] = {};
     float amt[NR] = {};
     bool  cvOn[NR] = {};   // [2026-07-14] this route has a REMAP curve (small glyph on the fader)

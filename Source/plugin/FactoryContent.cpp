@@ -36,6 +36,22 @@ static void chFx(DC& c, int type, float amt, float chr = 0.5f)
         if (c.chFxType[f] == DC::ChFxOff)
         { c.chFxType[f] = type; c.chFxAmt[f] = amt; c.chFxChar[f] = chr; return; }
 }
+// Fill route r's MOD AMOUNT MAP from a preset shape (1 = Soft, 2 = Hard, 3 = S-Curve) - the exact
+// curves the map editor's preset buttons draw; visible on the RoutePicker's map row like any map.
+static void modCurve(DC::Slot& s, int routeIdx, int shape)
+{
+    auto& r = s.mod[juce::jlimit(0, DC::MOD_ROUTES - 1, routeIdx)];
+    r.curveOn = 1;
+    for (int k = 0; k < DC::Slot::MOD_CURVE_N; ++k)
+    {
+        const float x = (float) k / (float) (DC::Slot::MOD_CURVE_N - 1);
+        float y = x;
+        if      (shape == 1) y = std::sqrt(x);                    // Soft: fine control low, fast top
+        else if (shape == 2) y = x * x;                           // Hard: quiet low end, late rise
+        else if (shape == 3) y = x * x * (3.0f - 2.0f * x);       // S-Curve: stable ends, morph in the middle
+        r.curve[k] = (uint8_t) juce::jlimit(0, 255, (int) std::lround(y * 255.0f));
+    }
+}
 // Any source -> any target (incl. the CHANNEL FX targets "... (Channel)"), first free mod slot.
 static void modRoute(DC::Slot& s, int src, int tgt, float amt)
 {
@@ -47,6 +63,11 @@ static void modRoute(DC::Slot& s, int src, int tgt, float amt)
 // Reset only the *sound* parameters of a channel to a clean, sample-free state.
 // Leaves the channel's identity (name/colour/MIDI note) and its step pattern
 // untouched, so applying a mix swaps the sound without disturbing the groove.
+// The mud-cut HIGH-PASS a builder requests via hp(freq): finishSound() writes it onto each
+// audible slot's VISIBLE High-Pass filter (the old invisible channel-EQ vehicle is deleted).
+static float gPendingHp = 0.0f;
+static void hp(float freq) { gPendingHp = freq; }
+
 static void clearSound(DC& c)
 {
     c.keysPolyMode = true;   // POLY by default (per-sound); a builder may set it off
@@ -79,7 +100,7 @@ static void clearSound(DC& c)
     const float decDef[DC::NUM_SOURCES] = { 2.0f, 0.08f, 0.20f, 0.30f, 0.80f };
     for (int s = 0; s < DC::NUM_SOURCES; ++s) { c.srcAtk[s] = 0.003f; c.srcHold[s] = 0.0f; c.srcDec[s] = decDef[s]; }
     c.pitch = 0.0f; c.volume = 0.8f; c.pan = 0.0f;
-    for (int b = 0; b < DC::NUM_EQ_BANDS; ++b) c.eqBand[b] = DC::defaultEqBand(b);
+    gPendingHp = 0.0f;   // the mud-cut HP a builder may request (consumed by finishSound onto the slots)
     c.filterType = DC::FilterOff; c.filterCutoff = 20000.0f; c.filterReso = 0.707f; c.filterEnvAmt = 0.0f;
     c.driveType = DC::DriveOff; c.driveAmount = 0.0f;
     c.reverbSend = 0.0f; c.delaySend = 0.0f;
@@ -141,7 +162,7 @@ static void mNoiseSnare(DC& c) // classic synth snare: bright noise crack + a kn
     c.layerOscShape = DC::OscTriangle; c.layerSineFreq = 165.0f;                // lower body = the "fat" snare
     c.layerSinePEnvAmt = 6.0f; c.layerSinePEnvTime = 0.04f;                     // drum-body pitch knock
     c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 0.15f;
-    c.eqBand[DC::EQ_HP] = { true, 140.0f, 0.0f, 0.707f };                       // keep the low mud out
+    hp(140.0f);                       // keep the low mud out
     c.driveType = DC::Tube; c.driveAmount = 0.346f;
     c.reverbSend = 0.10f; c.volume = 0.86f;
 }
@@ -151,7 +172,7 @@ static void mClap(DC& c)   // tight modern clap: short, mid-bright, dry-ish
     c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 1.0f;
     c.noiseType = 0; c.layerNoiseCenter = 1450.0f; c.layerNoiseWidth = 0.32f;
     c.srcAtk[DC::SrcNoise] = 0.001f; c.srcDec[DC::SrcNoise] = 0.10f;
-    c.eqBand[DC::EQ_HP] = { true, 550.0f, 0.0f, 0.707f };   // claps have no low end - cleans the thump away
+    hp(550.0f);   // claps have no low end - cleans the thump away
     c.reverbSend = 0.15f; c.volume = 0.84f;
 }
 static void mClosedHat(DC& c)   // airy modern closed hat (purple noise = brighter than the 808's white)
@@ -285,7 +306,7 @@ static void m808Clap(DC& c) {
     clearSound(c); c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 1.0f;
     c.noiseType = 0; c.layerNoiseCenter = 1200.0f; c.layerNoiseWidth = 0.30f;
     c.srcAtk[DC::SrcNoise] = 0.001f; c.srcDec[DC::SrcNoise] = 0.14f;
-    c.eqBand[DC::EQ_HP] = { true, 480.0f, 0.0f, 0.707f };
+    hp(480.0f);
     c.reverbSend = 0.22f; c.volume = 0.84f;
 }
 static void m808ClosedHat(DC& c) {
@@ -392,7 +413,7 @@ static void m606Snare(DC& c) {   // 606: short papery snap
     c.layerOscShape = DC::OscTriangle; c.layerSineFreq = 215.0f;
     c.layerSinePEnvAmt = 5.0f; c.layerSinePEnvTime = 0.025f;
     c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 0.08f;
-    c.eqBand[DC::EQ_HP] = { true, 300.0f, 0.0f, 0.707f };
+    hp(300.0f);
     c.volume = 0.84f;
 }
 static void m606ClosedHat(DC& c) {
@@ -477,7 +498,7 @@ static void mBreakKick(DC& c) {   // tight boxy breakbeat kick: mid-forward, sma
     c.layerOscShape = DC::OscSine; c.layerSineFreq = 78.0f;
     c.layerSinePEnvAmt = 8.0f; c.layerSinePEnvTime = 0.025f;
     c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 0.16f;
-    c.eqBand[DC::EQ_HP] = { true, 55.0f, 0.0f, 0.707f };   // boxy = no sub weight
+    hp(55.0f);   // boxy = no sub weight
     c.driveType = DC::Tube; c.driveAmount = 0.469f; c.volume = 0.93f;
 }
 static void mRumbleKick(DC& c) {   // hard-techno: clipped knock + a LONG dark noise rumble tail
@@ -490,7 +511,7 @@ static void mRumbleKick(DC& c) {   // hard-techno: clipped knock + a LONG dark n
     c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 0.38f;
     c.noiseType = 2; c.layerNoiseCenter = 1400.0f; c.layerNoiseWidth = 0.35f;   // brown = the dark rumble
     c.srcAtk[DC::SrcNoise] = 0.002f; c.srcDec[DC::SrcNoise] = 0.70f;
-    c.eqBand[DC::EQ_HP] = { true, 40.0f, 0.0f, 0.707f };
+    hp(40.0f);
     c.driveType = DC::HardClip; c.driveAmount = 0.616f; c.volume = 0.90f;
 }
 // -- Snares & Claps --
@@ -504,7 +525,7 @@ static void mTrapSnare(DC& c) {   // sharp trap crack
     c.layerOscShape = DC::OscTriangle; c.layerSineFreq = 250.0f;
     c.layerSinePEnvAmt = 6.0f; c.layerSinePEnvTime = 0.028f;
     c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 0.09f;
-    c.eqBand[DC::EQ_HP] = { true, 350.0f, 0.0f, 0.707f };
+    hp(350.0f);
     c.driveType = DC::Tube; c.driveAmount = 0.387f;
     c.reverbSend = 0.12f; c.volume = 0.86f;
 }
@@ -519,7 +540,7 @@ static void mModSnare(DC& c) {   // realistic snare: Modal membrane body + reson
     n.noiseRes = 0.20f; n.noiseDrive = 0.15f;   // slightly ringing, saturated "snare wires"
     n.atk = 0.001f; n.dec = 0.17f;
     c.padX = 0.52f; c.padY = 0.5f;
-    c.eqBand[DC::EQ_HP] = { true, 160.0f, 0.0f, 0.707f };
+    hp(160.0f);
     c.reverbSend = 0.10f; c.volume = 0.9f;
 }
 // -- Hats & Cymbals --
@@ -1031,7 +1052,7 @@ static void mBrushSnare(DC& c) {   // soft brush hit: PINK noise, slow-ish attac
     clearSound(c); c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 1.0f;
     c.noiseType = 1; c.layerNoiseCenter = 2400.0f; c.layerNoiseWidth = 0.35f;
     c.srcAtk[DC::SrcNoise] = 0.006f; c.srcDec[DC::SrcNoise] = 0.28f;
-    c.eqBand[DC::EQ_HP] = { true, 300.0f, 0.0f, 0.707f };
+    hp(300.0f);
     c.reverbSend = 0.06f; c.volume = 0.8f;
 }
 static void mSnapSnare(DC& c) {    // ultra-tight snap: bright white crack + a whisper of 240 Hz body
@@ -1044,7 +1065,7 @@ static void mSnapSnare(DC& c) {    // ultra-tight snap: bright white crack + a w
     c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 0.06f;
     c.noiseType = 0; c.layerNoiseCenter = 3800.0f; c.layerNoiseWidth = 0.3f;
     c.srcAtk[DC::SrcNoise] = 0.0005f; c.srcDec[DC::SrcNoise] = 0.09f;
-    c.eqBand[DC::EQ_HP] = { true, 350.0f, 0.0f, 0.707f };
+    hp(350.0f);
     c.volume = 0.9f;
 }
 static void mRoomSnare(DC& c) {    // big wet room: mid body + darker noise, heavy reverb send
@@ -1057,7 +1078,7 @@ static void mRoomSnare(DC& c) {    // big wet room: mid body + darker noise, hea
     c.srcAtk[DC::SrcOsc] = 0.001f; c.srcDec[DC::SrcOsc] = 0.2f;
     c.noiseType = 0; c.layerNoiseCenter = 1700.0f; c.layerNoiseWidth = 0.3f;
     c.srcAtk[DC::SrcNoise] = 0.001f; c.srcDec[DC::SrcNoise] = 0.3f;
-    c.eqBand[DC::EQ_HP] = { true, 140.0f, 0.0f, 0.707f };
+    hp(140.0f);
     c.driveType = DC::Tube; c.driveAmount = 0.387f;
     c.reverbSend = 0.45f; c.volume = 0.85f;
 }
@@ -1070,7 +1091,7 @@ static void mClackSnare(DC& c) {   // woody clack: HIGH-tuned membrane + a pinch
     n.noiseType = 0; n.noiseCenter = 3200.0f; n.noiseWidth = 0.2f;
     n.atk = 0.0005f; n.dec = 0.05f;
     c.padX = 0.2f; c.padY = 0.5f;
-    c.eqBand[DC::EQ_HP] = { true, 200.0f, 0.0f, 0.707f };
+    hp(200.0f);
     c.volume = 0.88f;
 }
 // ---- Claps (+4) ----
@@ -1078,14 +1099,14 @@ static void mSnapClap(DC& c) {     // shortest clap in the family: one bright cr
     clearSound(c); c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 1.0f;
     c.noiseType = 0; c.layerNoiseCenter = 2600.0f; c.layerNoiseWidth = 0.18f;
     c.srcAtk[DC::SrcNoise] = 0.0005f; c.srcDec[DC::SrcNoise] = 0.07f;
-    c.eqBand[DC::EQ_HP] = { true, 600.0f, 0.0f, 0.707f };
+    hp(600.0f);
     c.volume = 0.9f;
 }
 static void mBigClap(DC& c) {      // stadium clap: long, very wet, darker centre than the 909
     clearSound(c); c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 1.0f;
     c.noiseType = 1; c.layerNoiseCenter = 1100.0f; c.layerNoiseWidth = 0.32f;
     c.srcAtk[DC::SrcNoise] = 0.002f; c.srcDec[DC::SrcNoise] = 0.38f;
-    c.eqBand[DC::EQ_HP] = { true, 400.0f, 0.0f, 0.707f };
+    hp(400.0f);
     c.reverbSend = 0.5f; c.volume = 0.82f;
 }
 // ---- Hi-Hats (+1) ----
@@ -1093,7 +1114,7 @@ static void mFootHat(DC& c) {      // pedal "chick": the shortest, dullest hat (
     clearSound(c); c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 1.0f;
     c.noiseType = 0; c.layerNoiseCenter = 6500.0f; c.layerNoiseWidth = 0.15f;
     c.srcAtk[DC::SrcNoise] = 0.0005f; c.srcDec[DC::SrcNoise] = 0.012f;
-    c.eqBand[DC::EQ_HP] = { true, 400.0f, 0.0f, 0.707f };
+    hp(400.0f);
     c.volume = 0.6f;
 }
 // ---- Cymbals (+2) ----
@@ -1101,7 +1122,7 @@ static void mChina(DC& c) {        // trashy china: wide fuzzy purple noise, exp
     clearSound(c); c.srcOn[DC::SrcNoise] = true; c.srcWeight[DC::SrcNoise] = 1.0f;
     c.noiseType = 4; c.layerNoiseCenter = 8800.0f; c.layerNoiseWidth = 0.5f;
     c.srcAtk[DC::SrcNoise] = 0.0005f; c.srcDec[DC::SrcNoise] = 0.85f;
-    c.eqBand[DC::EQ_HP] = { true, 800.0f, 0.0f, 0.707f };
+    hp(800.0f);
     c.driveType = DC::Fuzz; c.driveAmount = 0.469f; c.volume = 0.62f;
 }
 static void mBellRide(DC& c) {     // ride BELL ping: inharmonic struck metal, none of the noise wash
@@ -1266,7 +1287,7 @@ static void kHouseStab(DC& c) {    // classic house piano-organ stab: Min7 voici
     // none since the redesign), so the voicing is fully user-replicable + editable (user rule).
     s.atk = 0.002f; s.dec = 0.4f; s.sustain = 0.0f; s.release = 0.08f;
     s.fxDriveType = DC::Tube; s.fxDrive = 0.316f;
-    c.eqBand[DC::EQ_HP] = { true, 160.0f, 0.0f, 0.707f };
+    hp(160.0f);
     c.reverbSend = 0.15f; c.volume = 0.78f;
 }
 static void kRaveStab(DC& c) {     // hoover-adjacent rave stab: detuned saws voiced as a MAJOR triad
@@ -1277,7 +1298,7 @@ static void kRaveStab(DC& c) {     // hoover-adjacent rave stab: detuned saws vo
     s.oscDetune = 0.2f; s.uniSpread = 0.4f;
     s.atk = 0.002f; s.dec = 0.5f; s.sustain = 0.0f; s.release = 0.1f;
     s.fxDriveType = DC::Foldback; s.fxDrive = 0.5f;
-    c.eqBand[DC::EQ_HP] = { true, 120.0f, 0.0f, 0.707f };
+    hp(120.0f);
     c.volume = 0.72f;
 }
 static void kTranceArp(DC& c) {    // DEDICATED ARP: octave-bounce 16ths on a bright pluck
@@ -2193,6 +2214,7 @@ static void oTwoFacedKeys(DC& c) { // VELOCITY = the instrument: soft = dark slo
     modRoute(s, DC::MSVel, DC::MTFilt1Cut, 0.8f);    // dig in = the filter opens ~3 octaves
     modRoute(s, DC::MSVel, DC::MTDrive,    0.45f);   // ...and it starts to bite
     modRoute(s, DC::MSVel, DC::MTAtk,     -0.6f);    // ...and the swell becomes a pluck (latched per hit)
+    modCurve(s, 0, 3); modCurve(s, 1, 3);            // S-CURVE maps: both faces stable, the morph in the middle
     c.reverbSend = 0.18f; c.volume = 0.8f;
 }
 static void oVowelWalker(DC& c) {  // the KEYBOARD POSITION is the mouth: low keys "oh", high keys "ee"
@@ -2216,6 +2238,7 @@ static void oScatterKit(DC& c) {   // per-hit RANDOM -> grain position + PAN: no
     s.atk = 0.001f; s.dec = 0.16f; s.sustain = 0.0f; s.release = 0.05f;
     modRoute(s, DC::MSRandom, DC::MT_GRID_BASE + 0, 0.9f);   // Random -> grain Position: a new timbre every hit
     modRoute(s, DC::MSRandom, DC::MTSlotPan,        0.8f);   // Random -> pan: hits scatter across the field
+    modCurve(s, 1, 2);                                        // HARD map: most hits near centre, outliers jump wide
     c.volume = 0.85f;
 }
 static void oBloomStab(DC& c) {    // bone-dry hit, then the DELAY SEND swells in AFTER the transient = each stab blooms
@@ -2239,17 +2262,27 @@ static void oSequencerBass(DC& c) { // built FOR the grid: draw the Mod A step l
     s.filterType = DC::LowPass; s.filterCutoff = 900.0f; s.filterReso = 1.5f;
     s.fxSub = 0.4f;
     s.addPos = 0.35f;   // resting face = the WARM frame (pure-sub A read 0.99 vs Sub Bass in the audit)
-    modRoute(s, DC::MSStepModA, DC::MTWavePos, 1.0f);   // DRAW the Mod A lane: each step picks its own timbre
+    // A 16-STEP timbre sequence drawn on LFO 1 (Custom shape, Grid 16 + Snap, 1 cycle/bar, timeline-
+    // anchored) -> Wave Position: the bass mutates per 16th OUT OF THE BOX, in steps AND the roll,
+    // and the pattern is right there to redraw in the LFO's draw window. (Replaced the round-1
+    // Step Mod A route - lanes are pattern data, so a factory sound could never ship one drawn.)
+    s.lfoShape[0] = 7; s.lfoSync[0] = 1.0f; s.lfoFree[0] = true; s.lfoAmt[0] = 1.0f;
+    s.lfoCurveGrid[0] = 16; s.lfoCurveSnap[0] = true;
+    { const float seq[16] = { -0.6f, -0.6f, 0.1f, -0.6f,  0.5f, -0.6f, 0.8f, 0.1f,
+                              -0.6f,  0.3f, -0.6f, 0.6f,  0.9f,  0.2f, 0.5f, 1.0f };
+      for (int k = 0; k < DC::Slot::LFO_CURVE_N; ++k) s.lfoCurve[0][k] = seq[(k * 16) / DC::Slot::LFO_CURVE_N]; }
+    modRoute(s, DC::MSLfoFilt, DC::MTWavePos, 0.65f);   // LFO 1 -> Wave Position (the timbre sequence)
     chFx(c, DC::ChFxComp, 0.3f); c.volume = 0.9f;
 }
-static void oPressureLead(DC& c) { // AFTERTOUCH sings: hold a note and lean in = vibrato + brightness swell
-    auto& s = mkSlot(c, DC::SrcOsc);
+static void oSingingLead(DC& c) { // the MOD WHEEL sings: push it and the note gains vibrato + opens up
+    auto& s = mkSlot(c, DC::SrcOsc);   // (round-2: was aftertouch - rare hardware; the wheel is universal)
     s.oscShape = s.oscShapeB = DC::WvPulse; s.oscFreq = 261.63f;
     s.oscUnison = 2; s.oscDetune = 0.08f;
     s.atk = 0.01f; s.dec = 0.8f; s.sustain = 0.85f; s.release = 0.25f;
     s.filterType = DC::LowPass; s.filterCutoff = 1400.0f; s.filterReso = 1.6f;
-    modRoute(s, DC::MSPressure, DC::MTVibrato,  0.55f);   // lean in = it starts to sing
-    modRoute(s, DC::MSPressure, DC::MTFilt1Cut, 0.5f);    // ...and open up
+    modRoute(s, DC::MSModWheel, DC::MTVibrato,  0.55f);   // push the wheel = it starts to sing
+    modRoute(s, DC::MSModWheel, DC::MTFilt1Cut, 0.5f);    // ...and open up
+    modCurve(s, 0, 1); modCurve(s, 1, 1);                 // SOFT maps: fine expression in the low wheel range
     c.keysPolyMode = false; c.keysLegato = true; c.keysGlide = 0.1f;
     c.reverbSend = 0.2f; c.volume = 0.8f;
 }
@@ -2262,6 +2295,7 @@ static void oWheelGrowl(DC& c) {   // KEY-TRACKED audio-rate AM = a real FM grow
     s.lfoRate[0] = 1.0f; s.lfoAmt[0] = 0.8f; s.lfoSync[0] = -2.0f;   // LFO 1 = KEY-tracked x1 (audio rate)
     modRoute(s, DC::MSLfoFilt, DC::MTVol, 0.6f);          // -> Volume per sample = true AM sidebands (the growl)
     modRoute(s, DC::MSModWheel, DC::MTFilt1Cut, 0.6f);    // the wheel = clean sub .. snarling open
+    modCurve(s, 1, 1);                                    // SOFT map: the first quarter of the wheel already talks
     c.keysPolyMode = false;
     chFx(c, DC::ChFxComp, 0.35f); c.volume = 0.9f;
 }
@@ -2483,7 +2517,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     // ---- Leads ----
     { "Vox", mVox, "Leads" },
     { "Scatter Lead", grScatterLead, "Leads" },   // GRANULAR
-    { "Pressure Lead", oPressureLead, "Leads" },  // ORIGINALS: aftertouch -> vibrato + brightness (lean in and it sings)
+    { "Singing Lead", oSingingLead, "Leads" },    // ORIGINALS: Mod Wheel -> vibrato + brightness (push it and it sings)
     { "Talkbox", mTalkbox, "Leads" },
     { "Whistle", mWhistle, "Leads" },
     { "Pulse Lead", kPulseLead, "Leads" },
@@ -2659,19 +2693,16 @@ static void finishSound(DC& ch)
         }
     }
     // === NO HIDDEN PARAMETERS (user rule, EMPHATIC) ===================================
-    // A factory sound's tone MUST be fully VISIBLE + editable in the UI - never applied in the
-    // background. The old drum "clean the low mud" high-pass lived on the CHANNEL EQ, which only
-    // showed as a faint gain-0 handle under the "All" tab = effectively invisible. Move it onto
-    // each audible slot's VISIBLE resonant FILTER (High-Pass mode), then clear the channel EQ.
-    // The slot SVF is 12 dB/oct vs the EQ's 24, so the mud-cut is a touch gentler (accepted).
-    for (int b = 0; b < DC::NUM_EQ_BANDS; ++b)
-        if (ch.eqBand[b].on && b == DC::EQ_HP)
-        {
-            for (auto& sl : ch.slots)
-                if (sl.engine >= 0 && sl.weight > 0.001f && sl.filterType == DC::FilterOff)
-                { sl.filterType = DC::HighPass; sl.filterCutoff = ch.eqBand[b].freq; sl.filterReso = 0.707f; }
-            ch.eqBand[b] = DC::defaultEqBand(b);   // off the (now removed) channel EQ
-        }
+    // A factory sound's tone MUST be fully VISIBLE + editable in the UI. The old channel-EQ
+    // high-pass is DELETED (2026-07-16); builders request a mud-cut via hp(freq) and it lands
+    // HERE on each audible slot's VISIBLE resonant FILTER (High-Pass mode; 12 dB/oct, accepted).
+    if (gPendingHp > 0.0f)
+    {
+        for (auto& sl : ch.slots)
+            if (sl.engine >= 0 && sl.weight > 0.001f && sl.filterType == DC::FilterOff)
+            { sl.filterType = DC::HighPass; sl.filterCutoff = gPendingHp; sl.filterReso = 0.707f; }
+        gPendingHp = 0.0f;
+    }
     // Slot-authored KS sounds (e.g. String Keys = Physical) never hit buildSlotsFromLegacy, so
     // allocate the lazy KS delay lines here too - else the audio thread gates them to SILENCE
     // (ksReady == false) until a later prepareToPlay happens to allocate them.

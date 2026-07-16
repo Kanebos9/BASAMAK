@@ -496,19 +496,9 @@ public:
     static int scaleNoteOffset(int scaleType, int key, int playedMidi, int voiceIdx);
 
     //-- EQ band model (used by BOTH the channel EQ and the per-slot EQ). HP + 3 bells + LP.
-    static constexpr int NUM_EQ_BANDS = 5;
-    enum { EQ_HP = 0, EQ_B1 = 1, EQ_B2 = 2, EQ_B3 = 3, EQ_LP = 4 };
+    // (NUM_EQ_BANDS/EqBand: the old 5-band EQ types - DELETED 2026-07-16 with the feature)
     struct EqBand { bool on = false; float freq = 1000.0f; float gainDb = 0.0f; float q = 1.0f; };
-    static EqBand defaultEqBand(int b) {
-        static const EqBand d[NUM_EQ_BANDS] = {
-            { false,    30.0f, 0.0f, 0.707f },   // HP
-            { false,   180.0f, 0.0f, 1.0f   },   // bell 1 (low)
-            { false,  1000.0f, 0.0f, 1.0f   },   // bell 2 (mid)
-            { false,  5000.0f, 0.0f, 1.0f   },   // bell 3 (high)
-            { false, 16000.0f, 0.0f, 0.707f },   // LP
-        };
-        return d[juce::jlimit(0, NUM_EQ_BANDS - 1, b)];
-    }
+    // (EqBand/defaultEqBand tables: DELETED with the old 5-band EQ, 2026-07-16)
 
     struct Slot
     {
@@ -632,6 +622,8 @@ public:
         // view. The curve IS what plays (all-zero = no modulation). Persisted "lfCv0..3".
         static constexpr int LFO_CURVE_N = 64;
         float lfoCurve[4][LFO_CURVE_N] = {};
+        uint8_t lfoCurveGrid[4] = { 16, 16, 16, 16 };   // [2026-07-16] draw-window GRID (1..32 cells; a drawing tool, saved with the sound)
+        bool    lfoCurveSnap[4] = {};                   //  + SNAP: while on, drawing lands as flat per-cell steps (piano-roll style)
         // TEMPO SYNC per LFO: lfoSync = cycles-per-bar (0 = OFF/free Hz, -1 = LOCK TO GRID,
         // -2 = KEY: rate follows the played pitch x lfoRate-as-ratio). Hz from the host bar length.
         // (The dormant lfoSyncRate rate-multiplier field was DELETED 2026-07-13 22:15 - declutter.)
@@ -651,9 +643,7 @@ public:
         bool  pEnvOn() const { for (int i = 0; i < NPE; ++i) if (pEnvP[i] != 0.0f) return true; return false; }
         // === PER-SLOT EQ (begin) - remove this line + its DSP/persist blocks to revert to
         //     channel-only EQ. Applied to THIS slot's signal before the slots are mixed. ===
-        EqBand eqBand[NUM_EQ_BANDS] {
-            defaultEqBand(0), defaultEqBand(1), defaultEqBand(2), defaultEqBand(3), defaultEqBand(4) };
-        bool  eqOn() const { for (auto& b : eqBand) if (b.on) return true; return false; }
+        // (the per-slot 5-band EQ was DELETED 2026-07-16 - the two resonant FILTERS are the tone tools)
         // === PER-SLOT EQ (end) ===
         // === PER-SLOT FILTER (begin) - a resonant LowPass on THIS slot's signal (before its EQ),
         //     so a filtered sound (e.g. Acid Bass) doesn't filter the OTHER slot's engine. Edited on
@@ -891,8 +881,7 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
 
     //-- Drawable channel EQ (the "ALL" / final EQ on the blended sound): HP + 3 bells + LP.
     //   Edited on the FrequencyDisplay. (Per-slot EQ lives in Slot::eqBand - see PER-SLOT EQ.)
-    EqBand eqBand[NUM_EQ_BANDS] {
-        defaultEqBand(0), defaultEqBand(1), defaultEqBand(2), defaultEqBand(3), defaultEqBand(4) };
+    // (the channel 5-band EQ was DELETED 2026-07-16; "eb*" file keys are ignored on load)
 
     //-- Filter: only Off + Formant remain (LP/HP now live in the EQ). Enum values kept so
     //   old saved projects still parse; LowPass..Notch are no longer offered or processed.
@@ -1232,7 +1221,6 @@ private:
         float    ksApSt[KS_UNI][12] = {};   // dispersion allpass state per string (up to 12 stages for Stiffness)
         double   smpHead = 0.0;          // this slot's sample playhead
         // === PER-SLOT EQ (begin) - filter state for HP(2)+bells(3)+LP(2); coeffs live in SC ===
-        float    eqZ1[7][2] = {}, eqZ2[7][2] = {};
         // === PER-SLOT EQ (end) ===
         // === PER-SLOT FILTER (begin) - resonant LP state (stereo); coeffs live in SC ===
         float    drvLp[2] = {}, drvDcX[2] = {}, drvDcY[2] = {};   // drive post-smoothing (~8 kHz, harsh types) + Fuzz DC blocker
@@ -1404,7 +1392,6 @@ private:
     }
 
     // Filters: 8 EQ peaking bands + one multimode filter, applied to the mix
-    Biquad eqHP[2], eqBell[3], eqLP[2];   // channel EQ (HP & LP are 24 dB/oct = 2 cascaded)
     Biquad filter;         // legacy multimode filter - kept for factory sounds (LP+env etc.); not user-selectable
     Biquad formantBP[3];   // 3 parallel band-passes for the vowel/Formant filter
 
