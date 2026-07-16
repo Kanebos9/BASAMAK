@@ -1,7 +1,7 @@
 // MONO LEGATO GLIDE (keysGlide): pressing a new key while the previous is HELD makes the new note
 // SLIDE from the old pitch to the new. [1] glide ON: the 2nd note STARTS near the old pitch and ENDS
 // near the new, passing through the middle (a real sweep). [2] glide OFF: the 2nd note JUMPS straight
-// to the new pitch. [3] poly never glides (jumps even with glide up).
+// to the new pitch. [3] poly = fingered portamento (overlap slides, detached jumps) [2026-07-16].
 #include "DrumChannel.h"
 #include "Sequencer.h"
 #include <cstdio>
@@ -62,16 +62,28 @@ int main() {
         printf("[2] no glide: start C3=%.3f C4=%.3f -> %s\n", eLo, eHi,
                CHK(eHi > eLo) ? "JUMPS to C4 (OK)" : "FAIL");
     }
-    {   // [3] POLY never glides even with glide up (both notes just ring)
+    {   // [3] POLY glide = FINGERED PORTAMENTO ([2026-07-16 round-2] two-axis model: the Glide
+        //     knob works in every mode; only OVERLAPPING presses slide). (a) note 2 pressed while
+        //     note 1 is HELD -> slides in (C4 NOT there immediately, arrives by the end, C3 keeps
+        //     ringing = poly). (b) DETACHED press with glide up -> jumps straight to C4 (no slide).
         DrumChannel ch; setupSine(ch); ch.prepareToPlay(SR, bs);
         ch.keysGlide = 1.0f;
         ch.keyDown(60, 1.0f, 0, true);
         { std::vector<float> est; render(ch, est, 0.12); }
-        ch.keyDown(72, 1.0f, 0, true);
-        std::vector<float> out; render(ch, out, 0.2);
-        const double eHi = W(out, 0.00, 0.05, C4);
-        printf("[3] poly: C4 present immediately=%.3f -> %s\n", eHi,
-               CHK(eHi > 0.05) ? "no glide in poly (OK)" : "FAIL");
+        ch.keyDown(72, 1.0f, 0, true);                       // C3 still held = overlapping
+        std::vector<float> out; render(ch, out, 0.45);
+        const double eHi = W(out, 0.00, 0.05, C4), lHi = W(out, 0.40, 0.45, C4), lLo = W(out, 0.40, 0.45, C3);
+        DrumChannel ch2; setupSine(ch2); ch2.prepareToPlay(SR, bs);
+        ch2.keysGlide = 1.0f;
+        ch2.keyDown(60, 1.0f, 0, true);
+        ch2.keyUp(60);                                        // released = the next press is DETACHED
+        { std::vector<float> est; render(ch2, est, 0.12); }
+        ch2.keyDown(72, 1.0f, 0, true);
+        std::vector<float> out2; render(ch2, out2, 0.2);
+        const double dHi = W(out2, 0.00, 0.05, C4);
+        printf("[3] poly fingered glide: overlap C4 imm=%.3f end C4=%.3f (C3 rings %.3f) | detached C4 imm=%.3f -> %s\n",
+               eHi, lHi, lLo, dHi,
+               CHK(eHi < 0.05 && lHi > 0.1 && lLo > 0.05 && dHi > 0.05) ? "OK" : "FAIL");
     }
 
     {   // [4] RECORDED glide reproduces on PLAYBACK: a mono draw channel with two LEGATO notes

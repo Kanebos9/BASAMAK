@@ -4515,7 +4515,13 @@ void ScaleBox::mouseDown(const juce::MouseEvent& e)
         if (keyRect().contains(p))   { showMidiLearnMenu(this, *mlm, "ui_sel_scaleKey",   -1); return; }
         return;
     }
-    for (int i = 0; i < 2; ++i) if (chipRect(i).contains(p)) { if (slot != i) { slot = i; repaint(); } return; }
+    for (int i = 0; i < 2; ++i) if (chipRect(i).contains(p))
+    {   // [2026-07-16] the chip is a face of the editor's ONE slot selection (setShapeSlot syncs
+        // the sound editor, filter/env targets and this box together - they must never diverge).
+        if (onSlotSelect) onSlotSelect(i);
+        else if (slot != i) { slot = i; repaint(); }
+        return;
+    }
     if (keyRect().contains(p))
     {
         juce::PopupMenu m;
@@ -4556,7 +4562,9 @@ juce::String ScaleBox::getTooltip()
 {
     const auto p = getMouseXYRelative();
     if (chipRect(0).contains(p) || chipRect(1).contains(p))
-        return "Which SOUND SLOT these scale controls edit: 1 = yellow, 2 = pink (each slot has its own scale).";
+        return "Which SOUND SLOT these scale controls edit: 1 = yellow, 2 = pink (each slot has its own scale). "
+               "This is the SAME slot selection as the sound editor's - switching here switches there too "
+               "(and the ui_sel_slotSel MIDI target flips both).";
     if (keyRect().contains(p))
         return "KEY: the scale's root note (C..B). Right-click = assign a MIDI knob (acts on the selected channel + this box's slot chip).";
     if (notesRect().contains(p))
@@ -7964,11 +7972,11 @@ void DrumSequencerEditor::setupComponents()
         "1 = off (full). Min/Max together map [soft..hard] -> [min..max].");
     keysPanel.maxVelKnob.setColour(juce::Slider::rotarySliderFillColourId, juce::Colour(0xff5ad17a));
     keysPanel.glideKnob.setTooltip(
-        "GLIDE: how long a pitch slide takes (up to ~0.4 s; 0% = instant/off). WHEN slides happen "
-        "is the Mode dropdown's job:\n\n"
-        "- Mono / Mono Legato: sliding on OVERLAPPING presses (play detached = no slide).\n"
-        "- Poly Glide: every new note slides in from the last played note's pitch.\n"
-        "- Poly: no sliding (this knob is inert there).\n\n"
+        "GLIDE: pitch slide time between notes (up to ~0.4 s; 0% = no slide). Works in EVERY "
+        "play mode:\n\n"
+        "- Only OVERLAPPING presses slide (fingered portamento) - play detached = no slide.\n"
+        "- Mono modes slide from the held note; Poly modes from the last played note.\n"
+        "- Whether the ENVELOPE restarts or continues is the Mode dropdown's job, not this knob's.\n\n"
         "Live playing only - recorded notes use the piano roll's per-note glide flag instead "
         "(CMD/CTRL+click a note).");
     keysPanel.glideKnob.setColour(juce::Slider::rotarySliderFillColourId, juce::Colour(0xff35c0ff));   // cyan = pitch/glide
@@ -7987,14 +7995,15 @@ void DrumSequencerEditor::setupComponents()
     };
     // [2026-07-16] PLAY MODE dropdown (replaced the Poly toggle): 4 modes, per-sound.
     keysPanel.btnPlayMode.setTooltip(
-        "Play mode (per sound):\n\n"
-        "- Poly: held keys stack like a piano - chords by hand, up to 16 notes with tails.\n"
-        "- Poly Glide: poly + every new note SLIDES in from the last played note's pitch "
-        "(the Glide knob = slide time).\n"
-        "- Mono: a new key cuts the previous one (classic lead/bass; with Glide up, overlapping "
-        "presses slide - and the envelope restarts each note).\n"
-        "- Mono Legato: overlapping presses RETUNE the sounding note - the envelope rides on, so a "
-        "slow-attack pad swells ONCE across a whole phrase. Glide adds portamento on top.\n\n"
+        "Play mode (per sound). The mode decides ONE thing: does an overlapping press RESTART the "
+        "envelope, or CONTINUE it (Legato)? Pitch sliding is the separate GLIDE knob (works in "
+        "every mode).\n\n"
+        "- Poly: held keys stack like a piano; every note gets its own attack.\n"
+        "- Poly Legato: notes played while others are held CONTINUE the phrase's envelope (no "
+        "re-attack) - a slow-attack pad swells ONCE under a whole held phrase. Fresh chords from "
+        "silence still attack normally.\n"
+        "- Mono: a new key cuts the previous one; the envelope restarts each note.\n"
+        "- Mono Legato: overlapping presses retune the sounding note - the envelope rides on.\n\n"
         "Mono modes do NOT block Chord/Scale - one key still plays its full voicing. Keyboard only; "
         "the sequencer's per-channel OV button is separate.");
     keysPanel.btnPlayMode.onClick = [this] {
@@ -8002,7 +8011,7 @@ void DrumSequencerEditor::setupComponents()
         const int cur = (c0.keysPolyMode ? 0 : 2) + (c0.keysLegato ? 1 : 0);
         juce::PopupMenu m;
         m.addItem(1, "Poly",        true, cur == 0);
-        m.addItem(2, "Poly Glide",  true, cur == 1);
+        m.addItem(2, "Poly Legato", true, cur == 1);
         m.addItem(3, "Mono",        true, cur == 2);
         m.addItem(4, "Mono Legato", true, cur == 3);
         m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&keysPanel.btnPlayMode),
@@ -8016,6 +8025,9 @@ void DrumSequencerEditor::setupComponents()
             });
     };
     keysPanel.scaleBox.mlm = &proc.midiLearn;   // right-click a ScaleBox control = MIDI-learn [2026-07-16]
+    // [2026-07-16] ONE slot selection everywhere: the ScaleBox chip drives setShapeSlot (which
+    // syncs the sound editor's selectors, filter/env targets and, via refreshKeysPanel, this chip).
+    keysPanel.scaleBox.onSlotSelect = [this](int i) { if (! ignoreKnobCallbacks) setShapeSlot(i); };
     keysPanel.btnSlot2.setLookAndFeel(&dropBtnLNF);   // dropdown look (triangle) - it's a popup button now
     keysPanel.btnArp.setLookAndFeel(&dropBtnLNF);     // same: the Arp button opens a dropdown
     keysPanel.btnGuide.setLookAndFeel(&dropBtnLNF);   // Key-guide popup button
@@ -10873,10 +10885,9 @@ void DrumSequencerEditor::refreshKeysPanel()
     keysPanel.minVelKnob.setValue(kch.keysMinVel, juce::dontSendNotification);
     keysPanel.maxVelKnob.setValue(kch.keysMaxVel, juce::dontSendNotification);
     keysPanel.glideKnob.setValue(kch.keysGlide,   juce::dontSendNotification);
-    // [2026-07-16] Glide is meaningful in every mode EXCEPT plain Poly (Mono slides on overlap,
-    // Mono Legato = portamento, Poly Glide = per-note slide).
-    const bool glideOk = ! kch.keysPolyMode || kch.keysLegato;
-    keysPanel.glideKnob.setEnabled(glideOk); keysPanel.glideKnob.setAlpha(glideOk ? 1.0f : 0.4f);
+    // [2026-07-16 round-2] Glide = the pitch-slide time in EVERY mode now (two-axis model: the
+    // Mode dropdown owns the envelope question, this knob owns the slide question) - never faded.
+    keysPanel.glideKnob.setEnabled(true); keysPanel.glideKnob.setAlpha(1.0f);
     // ARP editor: mirror the channel's arp state in, and push edits back out (+ mark modified / undoable).
     for (int si = 0; si < 2; ++si)
     {
@@ -10884,6 +10895,7 @@ void DrumSequencerEditor::refreshKeysPanel()
         keysPanel.scaleBox.v[si] = { sl.scaleOn, juce::jlimit(0, kNumScales - 1, sl.scaleType),
                                      ((sl.scaleKey % 12) + 12) % 12, juce::jlimit(1, 7, sl.scaleUnison) };
     }
+    keysPanel.scaleBox.slot = juce::jmin(1, envTargetSlot());   // [2026-07-16] the chip mirrors the ONE slot selection
     keysPanel.scaleBox.repaint();
     { const int p0 = kch.mergeWith;
       const int first  = (p0 >= 0) ? juce::jmin(selectedChannel, p0) : -1;
@@ -10922,7 +10934,7 @@ void DrumSequencerEditor::refreshKeysPanel()
         keysPanel.btnArp.setColour(juce::TextButton::textColourOffId, c.arpOn ? juce::Colours::black : juce::Colours::lightgrey);
         keysPanel.btnArp.repaint();
     };
-    keysPanel.btnPlayMode.setButtonText(kch.keysPolyMode ? (kch.keysLegato ? "Poly Glide" : "Poly")
+    keysPanel.btnPlayMode.setButtonText(kch.keysPolyMode ? (kch.keysLegato ? "Poly Legato" : "Poly")
                                                           : (kch.keysLegato ? "Mono Legato" : "Mono"));
     keysPanel.polyMode = kch.keysPolyMode;
     ignoreKnobCallbacks = prevIgnore;
@@ -12976,14 +12988,7 @@ void DrumSequencerEditor::layoutContent()
         // Master volume: horizontal fader across the top (kept horizontal - user).
         knobMasterVol.setBounds(sx + 8, colTop + 22, masterW - 16, 16); lblMasterVol.setBounds(0, 0, 0, 0);
         // vertical-fader placer: fader + a centred Label below it. Spread across the (now wider) box.
-        const int FPITCH = (masterW - 16) / 5, FW = FPITCH - 8, FH = 64;   // sized so all 3 rows + labels fit INSIDE the box (colH 338)
-        auto vf = [&](int idx, juce::Label& lbl, int col, int fy) {
-            const int fx = sx + 8 + col * FPITCH;
-            masterVF[idx].setVisible(true); masterVF[idx].setBounds(fx, fy, FW, FH);
-            lbl.setVisible(true); lbl.setJustificationType(juce::Justification::centred);
-            lbl.setFont(juce::Font(9.5f, juce::Font::bold)); lbl.setMinimumHorizontalScale(0.7f);
-            lbl.setBounds(fx - 5, fy + FH + 1, FW + 10, 11);
-        };
+        const int FH = 64;   // fader height - all 3 rows + labels fit INSIDE the box (colH 338)
         // Row 1: Tilt / Sat / Glue / Limit / Width + Mono toggle (col 5) - six slots like the
         // other rows [2026-07-15 12:10]; Width = the new bass-safe master stereo width.
         { const int fy = colTop + 44;

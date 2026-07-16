@@ -1241,9 +1241,10 @@ class ScaleBox : public juce::Component, public juce::SettableTooltipClient
 public:
     struct V { bool on = false; int type = 0, key = 0, count = 3; };
     V   v[2];
-    int slot = 0;                                  // which slot the faders edit (chip-selected)
+    int slot = 0;                                  // which slot the faders edit - a MIRROR of the editor's ONE slot selection (setShapeSlot)
     MidiLearnManager* mlm = nullptr;               // [2026-07-16] right-click a fader/key = MIDI-learn (ui_sel_scale*)
     std::function<void(int slot)> onChange;        // editor writes v[slot] back onto the channel slot
+    std::function<void(int slot)> onSlotSelect;    // [2026-07-16] chip click -> setShapeSlot (ONE selection everywhere; the editor syncs `slot` back)
     void paint(juce::Graphics&) override;
     void mouseDown(const juce::MouseEvent&) override;
     void mouseDrag(const juce::MouseEvent&) override;
@@ -1313,7 +1314,7 @@ public:
     // The feel knobs are SELECTED-SCOPE MIDI targets (right-click = learn; they act on the
     // selected pattern's selected channel via the SelCC ring).
     LearnableKnob humanKnob, strumKnob, minVelKnob, maxVelKnob, glideKnob;   // SLOT OFFSET / STRUM / min+max vel / GLIDE
-    juce::TextButton btnPlayMode { "Poly" };              // [2026-07-16] PLAY MODE dropdown: Poly / Poly Glide / Mono / Mono Legato
+    juce::TextButton btnPlayMode { "Poly" };              // [2026-07-16] PLAY MODE dropdown: Poly / Poly Legato / Mono / Mono Legato (legato = envelope continues; Glide = separate knob)
     juce::TextButton btnArp { "Arp" };                    // opens the ARP editor popup (space-saving)
     juce::TextButton btnGuide { "Guide" };                // KEY GUIDE popup: dim out-of-scale keys (display only)
     juce::Label      lblGuideCur;                         // caption under it: the active key + scale ("Off")

@@ -1774,30 +1774,35 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
 // semitones (sub-oscillator style). Ineligible slots (Sample/Noise/legacy) stay silent.
 int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly, int slotMask, int midiChan)
 {
-    // MONO LEGATO GLIDE (portamento): if a key is still HELD when this new one is pressed and Glide > 0,
-    // the new note SLIDES from the held note's pitch to the new pitch. Poly never glides. Glide 0 = the
-    // old instant behaviour (glideFrom/glideSamp both 0 -> the trigger() call below is bit-identical).
+    // [2026-07-16 round-2] TWO-AXIS PLAY MODEL (user design): the MODE only decides whether an
+    // OVERLAPPING press RESTARTS the envelope (plain Poly/Mono) or CONTINUES it (Legato = the new
+    // voice inherits the held voice's envelope position - a slow-attack pad swells ONCE across a
+    // whole connected phrase). The GLIDE knob alone decides whether pitch slides between notes
+    // (fingered portamento: only overlapping presses slide, in EVERY mode; knob 0 = no slide).
+    // Detached presses always restart + never slide. Glide 0 + no held key = bit-identical old path.
     long  glideSamp = 0; float glideFrom = 0.0f;
-    double legatoAge = -1.0;   // [2026-07-16] MONO LEGATO: the held voice's envelope position to inherit
-    if (! poly)
-    {
-        int prevNote = -1;
-        for (auto& vv : voices)
-            if (vv.active() && vv.isKey && vv.keyOff < 0 && vv.keyNote >= 0)
-            { prevNote = vv.keyNote; if (keysLegato) legatoAge = vv.playHead; break; }
-        if (prevNote >= 0 && prevNote != midiNote && keysGlide > 0.0001f)
+    double legatoAge = -1.0;   // the envelope position to inherit (Legato modes only)
+    int prevNote = -1;
+    for (auto& vv : voices)
+        if (vv.active() && vv.isKey && vv.keyOff < 0 && vv.keyNote >= 0)
         {
-            glideFrom = (float) (prevNote - midiNote);                              // start this many semitones off target
-            glideSamp = (long) (juce::jmax(0.005f, keysGlide * 0.4f) * (float) sr); // up to 400 ms
+            if (prevNote < 0) prevNote = vv.keyNote;
+            if (keysLegato && vv.playHead > legatoAge) legatoAge = vv.playHead;   // poly: the furthest-along envelope leads the phrase
+            if (! poly) break;                          // mono: the one held voice IS the held note
         }
+    if (prevNote >= 0 && keysGlide > 0.0001f)
+    {
+        // Poly slides from the LAST played note's pitch (the musical "previous note" in a chord
+        // world); mono from the held note. Same knob = the slide time everywhere (up to 400 ms).
+        const int from = (poly && lastKeyNote >= 0) ? lastKeyNote : prevNote;
+        if (from != midiNote)
+        {
+            glideFrom = (float) (from - midiNote);                              // start this many semitones off target
+            glideSamp = (long) (juce::jmax(0.005f, keysGlide * 0.4f) * (float) sr);
+        }
+    }
+    if (! poly)
         fadeOutVoices(0.015f);                         // 15 ms handover (3 ms crackled on slides)
-    }
-    else if (keysLegato && keysGlide > 0.0001f && lastKeyNote >= 0 && lastKeyNote != midiNote)
-    {   // [2026-07-16] POLY GLIDE: every new note slides in from the LAST played note's pitch
-        // (Serum/Vital-style poly portamento). Envelopes stay per-note (normal poly attacks).
-        glideFrom = (float) (lastKeyNote - midiNote);
-        glideSamp = (long) (juce::jmax(0.005f, keysGlide * 0.4f) * (float) sr);
-    }
     // KEYBOARD = ABSOLUTE PITCH, KNOB UNTOUCHED (2026-07-08, user spec): the old block here
     // re-based every slot's Freq to C4 on key press - REMOVED. keySemis below already targets the
     // pressed note ABSOLUTELY (12*log2(target/base)), so the keyboard plays real notes no matter
@@ -1806,11 +1811,12 @@ int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly,
     // exactly. TEST + step pitch 0 keep meaning "whatever the knob says" (the drum contract).
     const int vi = trigger(velocity, glideFrom, 0.0f, 0, /*glideTo*/ 0.0f, glideSamp, /*forceOverlap*/ true, slotMask);
     Voice& v = voices[vi];
-    // [2026-07-16] MONO LEGATO: overlapping press = the envelope CONTINUES where the held note's
-    // was (no re-attack; a 2 s pad swells ONCE across a whole legato phrase). Phases stay fresh;
-    // the 15 ms handover above masks the seam. Detached presses restart normally.
+    // [2026-07-16] LEGATO (both worlds): overlapping press = the envelope CONTINUES where the
+    // held note's was (no re-attack). Phases stay fresh; mono's 15 ms handover masks the seam,
+    // poly voices just start mid-envelope. A chord rolled from silence is safe: its notes land
+    // ms apart, so inheriting a barely-started envelope ~= a fresh attack.
     if (legatoAge > 0.0) v.playHead = legatoAge;
-    lastKeyNote = midiNote;   // poly-glide source for the NEXT note
+    lastKeyNote = midiNote;   // poly glide source for the NEXT note
     v.isKey = true; v.keyOff = -1; v.keyNote = midiNote;   // tag: keyUp(note) releases only this note's voices
     v.keyChan = (int8_t) juce::jlimit(0, 16, midiChan);     // MPE: expression events find this voice by channel
     v.pressTgt = v.pressCur = v.slideTgt = v.slideCur = v.bendTgt = v.bendCur = 0.0f;
