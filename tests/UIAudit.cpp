@@ -22,6 +22,7 @@ int main() {
         for (int s = 0; s < DrumChannel::NUM_SLOTS; ++s)
         {
             if (ch->slots[s].engine < 0 || ch->slots[s].weight <= 0.001f) continue;
+            if (ch->slots[s].oscUniCenter)   // the centre-voice toggle's UI was removed with the chord chips
                 v.add("slot" + juce::String(s + 1) + "uniCenter");
         }
         if (! v.isEmpty()) { ++bad; printf("%-16s %s\n", names[i].toRawUTF8(), v.joinIntoString(" ").toRawUTF8()); }

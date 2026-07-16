@@ -2181,6 +2181,129 @@ static void uEvilLaugh(DC& c)   // "evil laugh": pulsing resonant pink noise + a
     s.lfoRate[2] = 5.4f; s.lfoAmt[2] = 0.457f; lfoRoute(s, 2, DC::MTVol);   // the ha-ha-ha pulse (VOL LFO; halved - matrix MTVol is bipolar around the 0.5 weight, 0.914 drove it to silence)
 }
 
+// ---- ORIGINALS batch (2026-07-16, user: "create some original sounds that use modulations,
+// FXs, filters, unisons etc... they shouldn't sound like the current ones"). Each is built
+// AROUND one modern mechanism nothing else in the bank leads with. All UI-replicable. ----
+static void oTwoFacedKeys(DC& c) { // VELOCITY = the instrument: soft = dark slow pad, hard = bright biting pluck
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
+    s.oscUnison = 3; s.oscDetune = 0.12f; s.uniSpread = 0.35f;
+    s.atk = 0.30f; s.dec = 1.2f; s.sustain = 0.7f; s.release = 0.5f;      // the SOFT face
+    s.filterType = DC::LowPass; s.filterCutoff = 480.0f; s.filterReso = 1.2f;
+    modRoute(s, DC::MSVel, DC::MTFilt1Cut, 0.8f);    // dig in = the filter opens ~3 octaves
+    modRoute(s, DC::MSVel, DC::MTDrive,    0.45f);   // ...and it starts to bite
+    modRoute(s, DC::MSVel, DC::MTAtk,     -0.6f);    // ...and the swell becomes a pluck (latched per hit)
+    c.reverbSend = 0.18f; c.volume = 0.8f;
+}
+static void oVowelWalker(DC& c) {  // the KEYBOARD POSITION is the mouth: low keys "oh", high keys "ee"
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 55.0f;
+    s.atk = 0.004f; s.dec = 0.7f; s.sustain = 0.8f; s.release = 0.12f;
+    s.fxFormant = 0.45f;                              // parked mid-vowel at the base note
+    s.fxSub = 0.6f;                                   // clean octave-down carries the weight
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.25f;
+    modRoute(s, DC::MSNote, DC::MTFormant, 0.6f);     // Note -> vowel: the walk IS the melody
+    c.keysPolyMode = false; c.keysLegato = true; c.keysGlide = 0.12f;   // a talking mono bass wants legato
+    chFx(c, DC::ChFxComp, 0.3f); c.volume = 0.85f;
+}
+static void oScatterKit(DC& c) {   // per-hit RANDOM -> grain position + PAN: no two hits land in the same place
+    auto& s = grSlot(c, 14);       // Custom wave: a clicky metallic source to scatter
+    wtFrame(s, 0, {{1,0.5f},{7,1.0f},{13,0.7f}});
+    wtFrame(s, 1, {{2,0.8f},{9,1.0f},{19,0.5f}});
+    wtFrame(s, 2, {{3,0.7f},{11,0.9f},{23,0.6f}});
+    wtFrame(s, 3, {{5,0.8f},{17,1.0f},{29,0.5f}});
+    s.grainPos = 0.5f; s.grainSize = 0.1f; s.grainDens = 0.75f; s.grainSpray = 0.1f; s.grainPitch = 0.12f;
+    s.atk = 0.001f; s.dec = 0.16f; s.sustain = 0.0f; s.release = 0.05f;
+    modRoute(s, DC::MSRandom, DC::MT_GRID_BASE + 0, 0.9f);   // Random -> grain Position: a new timbre every hit
+    modRoute(s, DC::MSRandom, DC::MTSlotPan,        0.8f);   // Random -> pan: hits scatter across the field
+    c.volume = 0.85f;
+}
+static void oBloomStab(DC& c) {    // bone-dry hit, then the DELAY SEND swells in AFTER the transient = each stab blooms
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSquare; s.oscFreq = 261.63f;
+    s.scaleOn = true; s.scaleType = 1; s.scaleUnison = 3;     // minor stabs (edit Key/scale in the ScaleBox)
+    s.atk = 0.002f; s.dec = 0.35f; s.sustain = 0.0f; s.release = 0.1f;
+    s.filterType = DC::BandPass; s.filterCutoff = 1500.0f; s.filterReso = 2.0f;   // hollow crack (LP read too close to Acid Arp)
+    s.modEnvA = 0.14f; s.modEnvD = 0.5f;                      // the bloom clock: rises after the hit
+    modRoute(s, DC::MSModEnv, DC::MTDelSend, 0.75f);          // Mod Env -> delay send = dry crack, echo tail
+    c.delaySend = 0.02f; c.volume = 0.85f;
+}
+static void oSequencerBass(DC& c) { // built FOR the grid: draw the Mod A step lane = the timbre moves per STEP
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvCustom; s.oscFreq = 55.0f;
+    wtFrame(s, 0, {{1,1.0f}});                                          // A = pure sub
+    wtFrame(s, 1, {{1,0.9f},{2,0.7f},{3,0.5f}});                        // B = warm
+    wtFrame(s, 2, {{1,0.8f},{3,0.8f},{5,0.6f},{7,0.4f}});               // C = hollow reeds
+    wtFrame(s, 3, {{1,0.7f},{2,0.6f},{3,0.6f},{4,0.5f},{5,0.5f},{6,0.4f},{7,0.4f},{8,0.3f}});   // D = full snarl
+    s.atk = 0.003f; s.dec = 0.5f; s.sustain = 0.7f; s.release = 0.08f;
+    s.filterType = DC::LowPass; s.filterCutoff = 900.0f; s.filterReso = 1.5f;
+    s.fxSub = 0.4f;
+    s.addPos = 0.35f;   // resting face = the WARM frame (pure-sub A read 0.99 vs Sub Bass in the audit)
+    modRoute(s, DC::MSStepModA, DC::MTWavePos, 1.0f);   // DRAW the Mod A lane: each step picks its own timbre
+    chFx(c, DC::ChFxComp, 0.3f); c.volume = 0.9f;
+}
+static void oPressureLead(DC& c) { // AFTERTOUCH sings: hold a note and lean in = vibrato + brightness swell
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvPulse; s.oscFreq = 261.63f;
+    s.oscUnison = 2; s.oscDetune = 0.08f;
+    s.atk = 0.01f; s.dec = 0.8f; s.sustain = 0.85f; s.release = 0.25f;
+    s.filterType = DC::LowPass; s.filterCutoff = 1400.0f; s.filterReso = 1.6f;
+    modRoute(s, DC::MSPressure, DC::MTVibrato,  0.55f);   // lean in = it starts to sing
+    modRoute(s, DC::MSPressure, DC::MTFilt1Cut, 0.5f);    // ...and open up
+    c.keysPolyMode = false; c.keysLegato = true; c.keysGlide = 0.1f;
+    c.reverbSend = 0.2f; c.volume = 0.8f;
+}
+static void oWheelGrowl(DC& c) {   // KEY-TRACKED audio-rate AM = a real FM growl; the MOD WHEEL opens the throat
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 55.0f;
+    s.atk = 0.004f; s.dec = 0.6f; s.sustain = 0.85f; s.release = 0.1f;
+    s.fxSub = 0.5f;
+    s.filterType = DC::LowPass; s.filterCutoff = 600.0f; s.filterReso = 2.0f;
+    s.lfoRate[0] = 1.0f; s.lfoAmt[0] = 0.8f; s.lfoSync[0] = -2.0f;   // LFO 1 = KEY-tracked x1 (audio rate)
+    modRoute(s, DC::MSLfoFilt, DC::MTVol, 0.6f);          // -> Volume per sample = true AM sidebands (the growl)
+    modRoute(s, DC::MSModWheel, DC::MTFilt1Cut, 0.6f);    // the wheel = clean sub .. snarling open
+    c.keysPolyMode = false;
+    chFx(c, DC::ChFxComp, 0.35f); c.volume = 0.9f;
+}
+static void oTapeGhost(DC& c) {    // a wavetable journey through TAPE whose wow itself BREATHES (LFO -> FX Character)
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvCustom; s.oscFreq = 261.63f;
+    wtFrame(s, 0, {{1,1.0f},{2,0.25f}});
+    wtFrame(s, 1, {{1,0.8f},{3,0.5f},{5,0.3f}});
+    wtFrame(s, 2, {{1,0.7f},{2,0.5f},{4,0.4f},{8,0.25f}});
+    wtFrame(s, 3, {{1,0.6f},{3,0.5f},{6,0.4f},{9,0.3f},{12,0.2f}});
+    s.addSeg[0] = 1.5f; s.addSeg[1] = 2.0f; s.addSeg[2] = 2.5f; s.addLoop = true;   // wanders A<->D forever
+    s.oscUnison = 3; s.oscDetune = 0.14f; s.uniSpread = 0.5f;
+    s.atk = 0.5f; s.dec = 1.8f; s.sustain = 0.8f; s.release = 1.1f;
+    s.lfoRate[0] = 0.07f; s.lfoAmt[0] = 0.6f; s.lfoFree[0] = true;
+    modRoute(s, DC::MSLfoFilt, DC::MTChFxAChr, 0.4f);     // the wow/flutter SPEED itself drifts
+    chFx(c, DC::ChFxTape, 0.5f);
+    c.reverbSend = 0.35f; c.volume = 0.7f;
+}
+static void oStrumCloud(DC& c) {   // granular + SCALE + STRUM: the chord tones cascade INTO the cloud, low to high
+    auto& s = grSlot(c, 14);
+    wtFrame(s, 0, {{1,1.0f},{4,0.3f}});
+    wtFrame(s, 1, {{1,0.8f},{3,0.5f},{8,0.3f}});
+    wtFrame(s, 2, {{1,0.7f},{5,0.5f},{10,0.3f}});
+    wtFrame(s, 3, {{1,0.6f},{6,0.5f},{12,0.35f}});
+    s.grainPos = 0.35f; s.grainSize = 0.35f; s.grainDens = 0.85f; s.grainSpray = 0.12f;
+    s.scaleOn = true; s.scaleType = 0; s.scaleUnison = 4;    // major 7th clouds (Key in the ScaleBox)
+    s.atk = 0.05f; s.dec = 1.2f; s.sustain = 0.7f; s.release = 0.6f;
+    c.strumAmt = 0.6f;                                       // the tones ENTER the cloud like a strum
+    c.reverbSend = 0.35f; c.volume = 0.75f;
+}
+static void oLastBraam(DC& c) {    // the full stack at full stretch: 16 drifting voices folded into a cinematic wall
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 55.0f;
+    s.oscUnison = 16; s.oscDetune = 0.45f; s.uniSpread = 0.85f; s.drift = 0.5f;
+    s.atk = 0.03f; s.hold = 0.2f; s.dec = 2.8f; s.sustain = 0.0f; s.release = 1.2f;
+    s.fxDriveType = DC::Foldback; s.fxDrive = 0.4f;
+    s.filterType = DC::LowPass; s.filterCutoff = 1900.0f; s.filterReso = 1.2f;
+    s.fxSub = 0.35f;
+    chFx(c, DC::ChFxOtt, 0.5f);
+    c.reverbSend = 0.5f; c.volume = 0.8f;
+}
+
 static const struct { const char* name; Builder build; const char* cat; } kMixes[] = {
     // Categories are by INSTRUMENT (never by engine). Grouped + ordered like catOrder[] in
     // rebuildSoundMixMenu() - a category missing there is silently dropped from the menu.
@@ -2262,6 +2385,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     // ---- Electro Perc ----
     { "Zap", mZap, "Electro Perc" },
     { "Particle Perc", grParticlePerc, "Electro Perc" },   // GRANULAR
+    { "Scatter Kit", oScatterKit, "Electro Perc" },   // ORIGINALS: per-hit Random -> grain position + pan (never lands twice)
     { "FM Clang", nFmClang, "Electro Perc" },        // AUDIO-RATE: fixed 780 Hz -> Pitch = metal clang
     { "Filter Zap", eFilterZap, "Electro Perc" },
     { "Blip", mBlip, "Electro Perc" },
@@ -2293,6 +2417,9 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Fuzz Bass", gFuzzBass, "Bass" },
     { "Amp Bass", gAmpBass, "Bass" },            // KS bass through the BASS AMP split rig
     { "Hungry Bass", uHungryBass, "Bass" },          // USER IMPORT (my growl)
+    { "Vowel Walker", oVowelWalker, "Bass" },        // ORIGINALS: Note -> Formant (the keyboard is the mouth) + sub, mono legato
+    { "Sequencer Bass", oSequencerBass, "Bass" },    // ORIGINALS: Step Mod A lane -> wavetable position (draw the timbre per step)
+    { "Wheel Growl", oWheelGrowl, "Bass" },          // ORIGINALS: key-tracked audio-rate AM growl; Mod Wheel opens the filter
     { "Talking Bass", nTalkingBass, "Bass" },        // FORMANT + SUB showcase (LFO -> Formant = it talks)
     { "FM Growl", nFmGrowl, "Bass" },                // AUDIO-RATE showcase: KEY LFO -> Pitch = playable FM growl
     { "Scooped Bass", nScoopedBass, "Bass" },        // BIPOLAR BELL showcase: mids CUT -9 dB
@@ -2309,6 +2436,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     // ---- Keys ----
     { "E-Piano", kEPiano, "Keys" },
     { "Grain Keys", grGrainKeys, "Keys" },   // GRANULAR
+    { "Two-Faced Keys", oTwoFacedKeys, "Keys" },   // ORIGINALS: velocity -> cutoff/drive/attack = soft pad, hard pluck
     { "String Keys", kStringKeys, "Keys" },
     { "Toy Piano", kToyPiano, "Keys" },
     { "Harpsichord", kHarpsichord, "Keys" },
@@ -2337,6 +2465,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Chorus Pad", nChorusPad, "Pads & Choirs" },
     { "Jet Pad", nJetPad, "Pads & Choirs" },          // CHANNEL FX showcase: LFO -> Flanger (Channel)
     { "Neon Pad", nNeonPad, "Pads & Choirs" },        // OTT showcase: upward compression = glowing inflated wall
+    { "Tape Ghost", oTapeGhost, "Pads & Choirs" },    // ORIGINALS: looping wavetable journey through TAPE; the wow itself breathes
 
     { "Vowel Pad", nVowelPad, "Pads & Choirs" },      // FORMANT showcase: slow LFO -> vowel morph
     { "AM Shimmer", nAmShimmer, "Pads & Choirs" },    // AUDIO-RATE AM at the octave (KEY x2 -> Volume)
@@ -2354,6 +2483,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     // ---- Leads ----
     { "Vox", mVox, "Leads" },
     { "Scatter Lead", grScatterLead, "Leads" },   // GRANULAR
+    { "Pressure Lead", oPressureLead, "Leads" },  // ORIGINALS: aftertouch -> vibrato + brightness (lean in and it sings)
     { "Talkbox", mTalkbox, "Leads" },
     { "Whistle", mWhistle, "Leads" },
     { "Pulse Lead", kPulseLead, "Leads" },
@@ -2413,6 +2543,8 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Minor Rhodes", kMinorRhodes, "Chords & Arps" },
     { "House Stab", kHouseStab, "Chords & Arps" },
     { "Rave Stab", kRaveStab, "Chords & Arps" },
+    { "Bloom Stab", oBloomStab, "Chords & Arps" },   // ORIGINALS: Mod Env -> delay send (dry crack, echo blooms after)
+    { "Strum Cloud", oStrumCloud, "Chords & Arps" }, // ORIGINALS: granular + Scale + Strum (tones cascade into the cloud)
     { "Trance Arp", kTranceArp, "Chords & Arps" },
     { "Acid Arp", kAcidArp, "Chords & Arps" },
     { "Dream Arp", kDreamArp, "Chords & Arps" },
@@ -2434,6 +2566,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Thud", mThud, "Impacts & Booms" },
     { "Blast", mBlast, "Impacts & Booms" },
     { "Braam", mBraam, "Impacts & Booms" },
+    { "Last Braam", oLastBraam, "Impacts & Booms" },   // ORIGINALS: 16 drifting voices + foldback + OTT = the cinematic wall
     // ---- Noise & Texture ----
     { "Wind", mWind, "Noise & Texture" },
     { "Dust Motes", grDustMotes, "Noise & Texture" },   // GRANULAR

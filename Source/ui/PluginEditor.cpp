@@ -9777,6 +9777,25 @@ void DrumSequencerEditor::setupComponents()
     //-- Sounds section: 4 source toggle-switches + 2D blend pad + per-source knobs
     setupGroupHeader(hdrSounds, "MASTER");
     hdrSounds.setColour(juce::Label::textColourId, juce::Colour(0xffe8947a));   // BLEND orange = global/master (the "both slots" mix colour) [2026-07-15]
+    // [2026-07-16] THE SIGNAL-CHAIN MAP lives on this header (user: "i want all the info at that
+    // MASTER text") - the one place that documents the order everything is applied in.
+    hdrSounds.setTooltip(
+        "SIGNAL CHAIN - the order everything is applied in:\n\n"
+        "- 1. SLOT (each sound layer, per voice): Engine > Filter 1 > Filter 2 > slot EQ > Drive > "
+        "Formant > Punch > Ring > Sub (the sub joins LAST, after the distortion - that's why it "
+        "stays clean).\n"
+        "- 2. CHANNEL (both slots mixed): Channel FX A > B > C > channel EQ > Duck. The Reverb/"
+        "Delay SEND faders tap a COPY here - the finished channel sound (reverb send is low-cut "
+        "at 150 Hz so subs stay dry).\n"
+        "- 3. BUSES: the sends feed Reverb A/B + Delay A/B in PARALLEL (side-chains, not part of "
+        "the series chain; delay and reverb never feed each other). Their wet returns rejoin the "
+        "mix just before step 4.\n"
+        "- 4. MASTER (this column; the top-row fader order IS the signal order): dry mix + wet "
+        "returns > Tilt > Sat > Width > Glue > Limit (a ~1 ms lookahead ceiling) > Mono > a "
+        "final always-on safety soft-clip.\n\n"
+        "MODULATION is never IN this chain: the matrix moves the KNOBS the chain reads (per block "
+        "per voice; pitch/volume/cutoffs/FM/warp per sample), so a route acts wherever its target "
+        "lives.");
     for (auto& e : boxEngine) e = -1;
     for (int b = 0; b < DrumChannel::NUM_SLOTS; ++b)
     {
