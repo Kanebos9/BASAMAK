@@ -1036,6 +1036,11 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     //   keysPolyMode = keyboard POLY: held keys stack like a piano (up to POLY notes); off = MONO,
     //     a new key cuts the previous one (classic lead/slide feel). Per pattern/channel, keys only.
     bool  keysPolyMode = true;    // POLY by default (per-sound; saved in mix files)
+    bool  keysLegato   = false;   // [2026-07-16] the mode dropdown's 2nd axis (per-sound): with MONO =
+                                  // legato (overlapping presses retune the sounding voice, envelope
+                                  // rides on); with POLY = poly glide (every note slides in from the
+                                  // last played note's pitch). Glide knob = the shared slide time.
+    int   lastKeyNote  = -1;      // runtime: the previous key (poly-glide source pitch); not persisted
     //-- TRANSPOSE LOCK (PER-SOUND, rides with Sound Bank mixes like the engines do): when true the
     //   Freq knobs/faders of BOTH slots are UI-disabled, so nothing can sneakily transpose the sound's
     //   pitch reference (keys / steps / MIDI export stay anchored). UI-only lock - the engine's keys

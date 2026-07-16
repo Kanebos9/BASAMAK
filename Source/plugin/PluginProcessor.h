@@ -172,6 +172,7 @@ public:
                        SelChFxAmtC, SelChFxChrC,                 // CHANNEL FX slot C
                        SelSlotPan,                               // static slot pan (selected slot)
                        SelVolReset, SelKeysView, SelView16, SelEditorToggle, SelOthersVol,   // title-strip controls [2026-07-15 22:30]
+                       SelScaleNotes, SelScaleType, SelScaleKey,   // ScaleBox (selected slot chip) [2026-07-16]
                        SelSlotPBase = 1000,    // 1000 + N = the N-th knob of the selected slot's engine grid
                        SelStepBase  = 2000,    // 2000 + N = step N on the selected channel
                        SelModAmtBase = 3000 }; // [2026-07-14 11:10] 3000 + R = mod route R's AMOUNT (selected slot)

@@ -1407,7 +1407,9 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
             { "ui_sel_chVol", SelChVol }, { "ui_sel_swing", SelSwing }, { "ui_sel_bpm", SelBpm },
             { "ui_sel_slotFreq", SelSlotFreq }, { "ui_sel_slotFmAmt", SelSlotFmAmt },
             { "ui_sel_slotWarp", SelSlotWarp },
-            { "ui_sel_others", SelOthersVol } };   // Others trim (+-6 dB on unselected channels) [2026-07-15 22:30]
+            { "ui_sel_others", SelOthersVol },     // Others trim (+-6 dB on unselected channels) [2026-07-15 22:30]
+            { "ui_sel_scaleNotes", SelScaleNotes }, { "ui_sel_scaleType", SelScaleType },   // ScaleBox [2026-07-16]
+            { "ui_sel_scaleKey", SelScaleKey } };
         for (auto& k : kSelKnobs) if (pid == k.first) { pushSelCC(k.second, norm); return; }
         if (pid == "ui_sel_modWheel") { sequencer.modWheel = norm; return; }   // learn ANY CC to the Mod Wheel source (not just CC1)
         if (pid == "ui_sel_slide")    { expressionSweep(1, msg.getChannel(), norm); return; }   // [2026-07-13 23:20] learn ANY CC to the Slide source (not just CC74)
@@ -2107,6 +2109,7 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
     { juce::String ao; for (int i = 0; i < DrumChannel::ARP_ROWS; ++i) ao << (int) ch.arpOffset[i] << ',';
       chState.setProperty("arpOff", ao, nullptr); }                 // ARP: 12 row offsets (ARP_REST = rest)
     chState.setProperty("keysPoly",   ch.keysPolyMode, nullptr);   // KEYS: poly (held keys stack) vs mono (new key cuts)
+    chState.setProperty("keysLegato", ch.keysLegato, nullptr);     // [2026-07-16] the mode dropdown's legato/glide axis
     chState.setProperty("chokeGrp", ch.chokeGroup,     nullptr);   // choke group (channel-wide)
     chState.setProperty("duckBy",   ch.duckBy,         nullptr);   // sidechain duck (channel-wide)
     chState.setProperty("duckAmt",  ch.duckAmt,        nullptr);
@@ -2300,6 +2303,7 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
         for (int i = 0; i < DrumChannel::ARP_ROWS && i < f.size(); ++i)
           ch.arpOffset[i] = (int8_t) juce::jlimit(-128, 127, f[i].getIntValue()); } }
     ch.keysPolyMode = (bool) child.getProperty("keysPoly", true);    // KEYS poly/mono (poly default)
+    ch.keysLegato   = (bool) child.getProperty("keysLegato", false);
     ch.chokeGroup  = (int)  child.getProperty("chokeGrp", 0);
     ch.duckBy      = juce::jlimit(-1, Sequencer::NUM_CHANNELS - 1, (int) child.getProperty("duckBy", -1));
     ch.duckAmt     = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("duckAmt", 0.5f));
