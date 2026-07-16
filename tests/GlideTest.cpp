@@ -108,6 +108,36 @@ int main() {
         delete sq;
     }
 
+    {   // [5] PER-NOTE LEGATO reproduces on PLAYBACK [2026-07-16]: a SLOW-ATTACK sound, two butted
+        //     notes; note 2 flagged legato = the envelope CONTINUES (its onset is already loud),
+        //     unflagged = the attack restarts near silence. LIVE == RECORDING for legato phrases.
+        auto renderPair = [&](bool legato) {
+            auto* sq = new Sequencer();
+            sq->setStandaloneBpm(120.0f);
+            auto& ch = sq->patterns[0].channels[0];
+            setupSine(ch);
+            ch.slots[0].atk = 0.6f;                       // slow swell: age 0.5 s = still mid-attack
+            ch.drawMode = true; ch.keysPolyMode = true;
+            ch.addDrawNote(0,  96, 0, 255, 0, 0);         // C3, beat 1 (0.5 s)
+            ch.addDrawNote(96, 96, 0, 255, 0, 0);         // C3, beat 2 (butted)
+            ch.drawNotes[1].legato = legato ? 1 : 0;
+            for (auto& p : sq->patterns) for (auto& c2 : p.channels) c2.prepareToPlay(SR, bs);
+            sq->startStandalone();
+            std::vector<float> out;
+            const int blocks = (int) (0.8 * SR / bs) + 1;
+            juce::AudioBuffer<float> buf(2, bs);
+            for (int b = 0; b < blocks; ++b) { buf.clear(); sq->processBlock(buf, SR, bs, nullptr); for (int i = 0; i < bs; ++i) out.push_back(buf.getSample(0, i)); }
+            delete sq;
+            double e = 0.0; const int i0 = (int) (0.52 * SR), i1 = (int) (0.58 * SR);
+            for (int i = i0; i < i1 && i < (int) out.size(); ++i) e += (double) out[(size_t) i] * out[(size_t) i];
+            return std::sqrt(e / (double) juce::jmax(1, i1 - i0));
+        };
+        const double on = renderPair(true), off = renderPair(false);
+        printf("[5] legato flag: note2 onset rms flagged=%.4f vs plain=%.4f (x%.1f) -> %s\n",
+               on, off, off > 1.0e-9 ? on / off : 999.0,
+               CHK(on > off * 2.0 && on > 0.05) ? "envelope CONTINUES on playback (OK)" : "FAIL");
+    }
+
     printf(fails ? "\n>>> GLIDE FAILURES\n" : "\n>>> GlideTest PASS\n");
     return fails;
 }

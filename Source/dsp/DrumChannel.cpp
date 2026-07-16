@@ -1421,6 +1421,15 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
 {
     // slotMask 0 (or all-bits) = every slot sounds; a piano-roll note may restrict to slot 1 or 2.
     const int mask = (slotMask == 0) ? ~0 : slotMask;
+    // [2026-07-16] Per-note LEGATO playback: capture the newest ringing voice's envelope age NOW
+    // (before any mono handover fade marks it killing) - applied to the fresh voice at the end.
+    long legatoInherit = -1;
+    if (legatoNext)
+    {
+        legatoNext = false;
+        for (auto& vv : voices)
+            if (vv.active() && vv.voiceSamples > legatoInherit) legatoInherit = vv.voiceSamples;
+    }
     // If this is the channel the editor is analysing, start a fresh spectrum
     // capture aligned to this hit's attack so repeats look identical.
     if (analysisTap != nullptr) analysisTap->arm();
@@ -1764,6 +1773,15 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
             }
         }
     }
+    // [2026-07-16] Per-note LEGATO: continue the phrase's envelope exactly like the live legato
+    // modes do - the fresh voice starts at the inherited age; its gate end / voice life shift by
+    // the same amount so the RELEASE still lands at this note's end (not instantly).
+    if (legatoInherit > 0)
+    {
+        v.voiceSamples = legatoInherit;
+        if (v.keyOff  >= 0) v.keyOff  += legatoInherit;
+        if (v.gateLen >  0) v.gateLen += legatoInherit;
+    }
     return vi;
 }
 
@@ -1781,13 +1799,15 @@ int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly,
     // (fingered portamento: only overlapping presses slide, in EVERY mode; knob 0 = no slide).
     // Detached presses always restart + never slide. Glide 0 + no held key = bit-identical old path.
     long  glideSamp = 0; float glideFrom = 0.0f;
-    double legatoAge = -1.0;   // the envelope position to inherit (Legato modes only)
+    long legatoAge = -1;   // the envelope AGE to inherit (Legato modes only). voiceSamples IS the
+                           // envelope clock - playHead is just the alive marker (a round-1 bug:
+                           // inheriting playHead was a silent no-op, it never advances).
     int prevNote = -1;
     for (auto& vv : voices)
         if (vv.active() && vv.isKey && vv.keyOff < 0 && vv.keyNote >= 0)
         {
             if (prevNote < 0) prevNote = vv.keyNote;
-            if (keysLegato && vv.playHead > legatoAge) legatoAge = vv.playHead;   // poly: the furthest-along envelope leads the phrase
+            if (keysLegato && vv.voiceSamples > legatoAge) legatoAge = vv.voiceSamples;   // poly: the furthest-along envelope leads the phrase
             if (! poly) break;                          // mono: the one held voice IS the held note
         }
     if (prevNote >= 0 && keysGlide > 0.0001f)
@@ -1814,8 +1834,9 @@ int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly,
     // [2026-07-16] LEGATO (both worlds): overlapping press = the envelope CONTINUES where the
     // held note's was (no re-attack). Phases stay fresh; mono's 15 ms handover masks the seam,
     // poly voices just start mid-envelope. A chord rolled from silence is safe: its notes land
-    // ms apart, so inheriting a barely-started envelope ~= a fresh attack.
-    if (legatoAge > 0.0) v.playHead = legatoAge;
+    // ms apart, so inheriting a barely-started envelope ~= a fresh attack. Key voices have
+    // keyOff = -1 and no gate, so only the age itself moves (no end-shifts needed).
+    if (legatoAge > 0) v.voiceSamples = legatoAge;
     lastKeyNote = midiNote;   // poly glide source for the NEXT note
     v.isKey = true; v.keyOff = -1; v.keyNote = midiNote;   // tag: keyUp(note) releases only this note's voices
     v.keyChan = (int8_t) juce::jlimit(0, 16, midiChan);     // MPE: expression events find this voice by channel

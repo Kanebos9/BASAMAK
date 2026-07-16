@@ -712,10 +712,16 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                     const int cur = kicked ? 0 : juce::jlimit(0, DrumChannel::DRAW_RES - 1,
                                                               (int) (sequencer.barPos() * DrumChannel::DRAW_RES));
                     openIdx = pch.addDrawNote(cur, 1, playNote - 60, (int) std::lround(kvel * 255.0f));
-                    // Legato + mono + Glide up: mark this note to SLIDE from the note already held (so a
-                    // recorded portamento performance reproduces; editable by hand in the piano roll).
-                    if (openIdx >= 0 && keysHeldCount > 0 && ! pch.keysPolyMode && pch.keysGlide > 0.0001f)
-                        pch.drawNotes[openIdx].glide = 1;
+                    // A key was still HELD when this one opened = the note was played LEGATO:
+                    // - mono + Glide up: mark it to SLIDE from the held note (portamento reproduces);
+                    // - Legato mode (either world): mark it to CONTINUE the envelope on playback
+                    //   [2026-07-16] - so a recorded legato pad phrase swells once, exactly as played.
+                    // Both flags are hand-editable in the piano roll's right-click note menu.
+                    if (openIdx >= 0 && keysHeldCount > 0)
+                    {
+                        if (! pch.keysPolyMode && pch.keysGlide > 0.0001f) pch.drawNotes[openIdx].glide = 1;
+                        if (pch.keysLegato)                                pch.drawNotes[openIdx].legato = 1;
+                    }
                 }
                 keysHeldOpenIdx[keysHeldCount] = openIdx;
                 keysHeldOpenPat[keysHeldCount] = openPat;

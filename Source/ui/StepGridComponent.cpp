@@ -1677,6 +1677,7 @@ void StepGridComponent::showRollNoteMenu(int ch2, int idx)
     m.addSubMenu("Pan", pm);
     m.addSeparator();
     m.addItem(3, "Glide into this note", true, nn.glide != 0);
+    m.addItem(41, "Legato: continue the previous note's envelope", true, nn.legato != 0);   // [2026-07-16]
     juce::PopupMenu sm;
     sm.addItem(10, "Both slots", true, nn.slot == 0);
     sm.addItem(11, "Slot 1",     true, nn.slot == 1);
@@ -1713,6 +1714,7 @@ void StepGridComponent::showRollNoteMenu(int ch2, int idx)
             if (r == 1)      apply(+[](DrumChannel::DrawNote& n, int){ n.oneShot = 1; }, 0);
             else if (r == 2) apply(+[](DrumChannel::DrawNote& n, int){ n.oneShot = 0; }, 0);
             else if (r == 3) apply(+[](DrumChannel::DrawNote& n, int){ n.glide = n.glide ? 0 : 1; }, 0);
+            else if (r == 41) apply(+[](DrumChannel::DrawNote& n, int){ n.legato = n.legato ? 0 : 1; }, 0);
             else if (r == 5) apply(+[](DrumChannel::DrawNote& n, int){ n.strumUp = 0; }, 0);
             else if (r == 6) apply(+[](DrumChannel::DrawNote& n, int){ n.strumUp = 1; }, 0);
             else if (r == 20) apply(+[](DrumChannel::DrawNote& n, int){ n.strumPct = 255; }, 0);

@@ -130,6 +130,7 @@ public:
                           float drawGlideFrom = -999.0f;   // MONO glide: slide this note FROM this pitch (semis); -999 = no glide
                           bool  drawOneShot = false;       // ONE-SHOT note: instant trigger, natural ring (no gate) - like a bare step
                           bool  drawStrumUp = false;       // per-note STRUM direction (true = up / alt. strum)
+                          bool  drawLegato = false;        // [2026-07-16] per-note LEGATO: inherit the ringing envelope (no re-attack)
                           int   drawStrumPct = -1;         // per-note STRUM amount override (0..100; -1 = Strum knob)
                           float drawNotePan = 0.0f; };     // per-note PAN (-1..+1); overrides the whole-channel drawPan
 

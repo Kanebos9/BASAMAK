@@ -72,6 +72,7 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
             const bool kg = ! e.drawOneShot;
             c.strumFlip = e.drawStrumUp;   // per-note strum direction + amount (trigger() consumes both)
             c.strumOverride = e.drawStrumPct >= 0 ? (float) e.drawStrumPct * 0.01f : -1.0f;
+            c.legatoNext = e.drawLegato;   // [2026-07-16] per-note LEGATO: trigger() inherits the ringing envelope (consumed)
             if (e.drawGlideFrom > -900.0f) {   // MONO legato glide: slide from the previous note's pitch to this one's
                 const long gs = (long) (c.keysGlide * 0.4 * sampleRate);   // same 0..400 ms as live keys
                 c.fadeOutVoices(0.015f);                                   // 15 ms handover on the outgoing voice (like keyDown)
@@ -495,6 +496,7 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
                 e.drawSlot = nt.slot;                                 // per-note slot tag
                 e.drawOneShot = nt.oneShot != 0;
                 e.drawStrumUp = nt.strumUp != 0;
+                e.drawLegato = nt.legato != 0;
                 e.drawStrumPct = nt.strumPct > 100 ? -1 : (int) nt.strumPct;
                 e.drawNotePan = nt.pan == DrumChannel::PAN_INHERIT ? c.drawPan : (float) nt.pan * 0.01f;   // 127 = inherit channel pan; else explicit (0 = true centre)
                 e.drawOverlap = overlap;
