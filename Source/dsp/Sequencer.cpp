@@ -122,13 +122,23 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
             chan.modWheel      = modWheel;                   // live mod wheel (shared mod source)
             // FREE-RUN LFO anchor: bars into the playing unit at THIS segment's start (group bar
             // index + fraction). Same bar position = same phase on every pass (deterministic).
-            chan.lfoBarPos = juce::jmax(0.0,
-                (double)(playPattern - groupHead(playPattern)) + barPosition
-                - (double)(numSamples - segStart) / juce::jmax(1.0, blockBarSeconds * sampleRate));
-            // STEP MOD lanes: the current step position (within-bar fraction * numSteps) at this segment.
+            // [2026-07-16] ONLY while the transport actually plays: this loop also runs STOPPED
+            // (live keys/tails render through it), and the jmax(0.0, ...) turned the parked
+            // barPosition into "bar position 0" every block - which RESET the free-run clock
+            // per block = FREE LFOs frozen at phase 0 on live keys (the Sequencer Bass bug).
+            // Stopped = the -1 sentinel -> renderInto's lfoFreeSec wall clock keeps them moving.
+            chan.lfoBarPos = isCurrentlyPlaying
+                ? juce::jmax(0.0,
+                    (double)(playPattern - groupHead(playPattern)) + barPosition
+                    - (double)(numSamples - segStart) / juce::jmax(1.0, blockBarSeconds * sampleRate))
+                : -1.0;
+            // STEP MOD lanes: the current step position (within-bar fraction * numSteps) at this
+            // segment; stopped = -1 (no step is playing - the lanes read as silent, not "step 0").
+            if (isCurrentlyPlaying)
             { double bf = barPosition - (double)(numSamples - segStart) / juce::jmax(1.0, blockBarSeconds * sampleRate);
               bf -= std::floor(bf);   // wrap into 0..1 of the bar
               chan.modStepPos = (float) (bf * (double) juce::jmax(1, chan.numSteps)); }
+            else chan.modStepPos = -1.0f;
             const int ob = chan.outputBus;   // 0 = Main; 1..numAux = a discrete aux out
             const bool toMain = ! (ob >= 1 && ob <= numAux && auxBuses != nullptr && auxBuses[ob - 1] != nullptr);
             juce::AudioBuffer<float>* dest = toMain ? &audio : auxBuses[ob - 1];

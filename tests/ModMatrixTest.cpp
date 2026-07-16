@@ -556,6 +556,39 @@ int main()
                lift, maxdiff(dry3, wet3),
                CHK(lift > 4.0 && maxdiff(dry3, wet3) > 0.05f && finite(wet3)) ? "OK" : "FAIL");
     }
+    {   // [24] FREE LFO routes work on a LIVE key with the transport STOPPED [2026-07-16]: the
+        //     stopped render loop used to feed lfoBarPos = jmax(0, parked barPosition) = "bar 0"
+        //     every block, which RESET the free-run clock per block = free LFOs frozen at phase 0
+        //     (the "Sequencer Bass does nothing live" user report). Fixed: stopped = the -1
+        //     sentinel -> the lfoFreeSec wall clock drives them. Retrig was always fine.
+        auto liveVar = [&](bool freeRun) {
+            auto* q2 = new Sequencer();
+            q2->setStandaloneBpm(120.0f);
+            auto& c2 = q2->patterns[0].channels[0];
+            for (auto& sl2 : c2.slots) sl2 = DrumChannel::Slot();
+            auto& sl2 = c2.slots[0];
+            sl2.engine = DrumChannel::SrcOsc; sl2.weight = 1.0f;
+            sl2.oscShape = sl2.oscShapeB = DrumChannel::WvSine; sl2.oscFreq = 110.0f;
+            sl2.atk = 0.002f; sl2.dec = 0.5f; sl2.sustain = 0.9f; sl2.release = 0.05f;
+            sl2.lfoShape[0] = 0; sl2.lfoSync[0] = 1.0f; sl2.lfoAmt[0] = 1.0f; sl2.lfoFree[0] = freeRun;
+            sl2.mod[0] = { (int8_t) DrumChannel::MSLfoFilt, (int8_t) DrumChannel::MTVol, 0.9f };
+            for (auto& p2 : q2->patterns) for (auto& cc : p2.channels) cc.prepareToPlay(SR, 480);
+            c2.keyDown(45, 1.0f, 0, c2.keysPolyMode);           // held live; transport NEVER started
+            std::vector<float> o2; juce::AudioBuffer<float> b2(2, 480);
+            for (int bl = 0; bl < (int)(2.2 * SR / 480); ++bl)
+            { b2.clear(); q2->processBlock(b2, SR, 480, nullptr); for (int i2 = 0; i2 < 480; ++i2) o2.push_back(b2.getSample(0, i2)); }
+            delete q2;
+            double mn = 1.0e9, mx = 0.0;                        // tremolo depth across 16th windows
+            for (int w2 = 0; w2 < 14; ++w2)
+            {   const double t0 = 0.15 + w2 * 0.125; double e = 0; int n = 0;
+                for (int i2 = (int)(t0 * SR); i2 < (int)((t0 + 0.11) * SR) && i2 < (int) o2.size(); ++i2) { e += (double) o2[(size_t) i2] * o2[(size_t) i2]; ++n; }
+                const double r = std::sqrt(e / juce::jmax(1, n)); mn = juce::jmin(mn, r); mx = juce::jmax(mx, r); }
+            return mx / juce::jmax(1.0e-9, mn);
+        };
+        const double fr = liveVar(true), rt = liveVar(false);
+        printf("[24] FREE LFO live (stopped transport): tremolo depth free=x%.2f retrig=x%.2f (both >1.8) -> %s\n",
+               fr, rt, CHK(fr > 1.8 && rt > 1.8) ? "OK" : "FAIL");
+    }
     printf(fails == 0 ? ">>> ModMatrixTest PASS\n" : ">>> ModMatrixTest FAIL (%d)\n", fails);
     return fails;
 }

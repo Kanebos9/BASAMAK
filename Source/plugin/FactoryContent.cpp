@@ -52,6 +52,16 @@ static void modCurve(DC::Slot& s, int routeIdx, int shape)
         r.curve[k] = (uint8_t) juce::jlimit(0, 255, (int) std::lround(y * 255.0f));
     }
 }
+// Write a SNAPPED step-sequence onto LFO 1's Custom shape (Grid = n, Snap on, 1 cycle/bar,
+// timeline-anchored) - the "step modulation that lives in the sound" recipe [2026-07-16].
+static void lfoSteps(DC::Slot& s, std::initializer_list<float> cells)
+{
+    const int n = juce::jlimit(1, 32, (int) cells.size());
+    s.lfoShape[0] = 7; s.lfoSync[0] = 1.0f; s.lfoFree[0] = true; s.lfoAmt[0] = 1.0f;
+    s.lfoCurveGrid[0] = (uint8_t) n; s.lfoCurveSnap[0] = true;
+    int k = 0; const float* c2 = cells.begin();
+    for (; k < DC::Slot::LFO_CURVE_N; ++k) s.lfoCurve[0][k] = c2[juce::jlimit(0, n - 1, (k * n) / DC::Slot::LFO_CURVE_N)];
+}
 // Any source -> any target (incl. the CHANNEL FX targets "... (Channel)"), first free mod slot.
 static void modRoute(DC::Slot& s, int src, int tgt, float amt)
 {
@@ -2266,11 +2276,8 @@ static void oSequencerBass(DC& c) { // built FOR the grid: draw the Mod A step l
     // anchored) -> Wave Position: the bass mutates per 16th OUT OF THE BOX, in steps AND the roll,
     // and the pattern is right there to redraw in the LFO's draw window. (Replaced the round-1
     // Step Mod A route - lanes are pattern data, so a factory sound could never ship one drawn.)
-    s.lfoShape[0] = 7; s.lfoSync[0] = 1.0f; s.lfoFree[0] = true; s.lfoAmt[0] = 1.0f;
-    s.lfoCurveGrid[0] = 16; s.lfoCurveSnap[0] = true;
-    { const float seq[16] = { -0.6f, -0.6f, 0.1f, -0.6f,  0.5f, -0.6f, 0.8f, 0.1f,
-                              -0.6f,  0.3f, -0.6f, 0.6f,  0.9f,  0.2f, 0.5f, 1.0f };
-      for (int k = 0; k < DC::Slot::LFO_CURVE_N; ++k) s.lfoCurve[0][k] = seq[(k * 16) / DC::Slot::LFO_CURVE_N]; }
+    lfoSteps(s, { -0.6f, -0.6f, 0.1f, -0.6f,  0.5f, -0.6f, 0.8f, 0.1f,
+                  -0.6f,  0.3f, -0.6f, 0.6f,  0.9f,  0.2f, 0.5f, 1.0f });
     modRoute(s, DC::MSLfoFilt, DC::MTWavePos, 0.65f);   // LFO 1 -> Wave Position (the timbre sequence)
     chFx(c, DC::ChFxComp, 0.3f); c.volume = 0.9f;
 }
@@ -2336,6 +2343,41 @@ static void oLastBraam(DC& c) {    // the full stack at full stretch: 16 driftin
     s.fxSub = 0.35f;
     chFx(c, DC::ChFxOtt, 0.5f);
     c.reverbSend = 0.5f; c.volume = 0.8f;
+}
+
+// ---- SNAPPED-LFO showcases (2026-07-16, user: "more sounds that use custom lfo with snapped grid") ----
+static void oTranceGate(DC& c) {   // THE classic: a wide pad chopped by a 16-step gate pattern
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
+    s.oscUnison = 5; s.oscDetune = 0.18f; s.uniSpread = 0.6f;
+    s.atk = 0.02f; s.dec = 1.2f; s.sustain = 0.85f; s.release = 0.25f;
+    s.filterType = DC::LowPass; s.filterCutoff = 3800.0f; s.filterReso = 0.9f;
+    lfoSteps(s, { 1, 1, -1, 1,  -1, 1, 1, -1,  1, -1, 1, 1,  -1, 1, -1, 1 });   // the gate rhythm
+    modRoute(s, DC::MSLfoFilt, DC::MTVol, 0.9f);
+    c.reverbSend = 0.25f; c.volume = 0.75f;
+}
+static void oPumpBass(DC& c) {     // sidechain FEEL without a sidechain: a per-beat duck-and-recover staircase
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 55.0f;
+    s.atk = 0.004f; s.dec = 0.8f; s.sustain = 0.85f; s.release = 0.1f;
+    s.filterType = DC::LowPass; s.filterCutoff = 700.0f; s.filterReso = 1.2f;
+    s.fxSub = 0.5f;
+    lfoSteps(s, { -1.0f, -0.2f, 0.4f, 0.8f,  -1.0f, -0.2f, 0.4f, 0.8f,
+                  -1.0f, -0.2f, 0.4f, 0.8f,  -1.0f, -0.2f, 0.4f, 0.8f });   // duck ON the beat, climb back
+    modRoute(s, DC::MSLfoFilt, DC::MTVol, 0.8f);
+    chFx(c, DC::ChFxComp, 0.3f); c.volume = 0.9f;
+}
+static void oWobbleStep(DC& c) {   // a PROGRAMMED dubstep wobble: 8 drawn filter steps per bar, redraw at will
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 55.0f;
+    s.oscUnison = 2; s.oscDetune = 0.1f;
+    s.atk = 0.004f; s.dec = 0.7f; s.sustain = 0.85f; s.release = 0.08f;
+    s.filterType = DC::LowPass; s.filterCutoff = 420.0f; s.filterReso = 2.6f;
+    s.fxSub = 0.45f;
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.3f;
+    lfoSteps(s, { 0.9f, -0.6f, 0.7f, -0.8f,  0.4f, 0.9f, -0.7f, 0.3f });   // the wobble PATTERN (Grid 8)
+    modRoute(s, DC::MSLfoFilt, DC::MTFilt1Cut, 0.8f);
+    chFx(c, DC::ChFxComp, 0.35f); c.volume = 0.9f;
 }
 
 static const struct { const char* name; Builder build; const char* cat; } kMixes[] = {
@@ -2454,6 +2496,8 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Vowel Walker", oVowelWalker, "Bass" },        // ORIGINALS: Note -> Formant (the keyboard is the mouth) + sub, mono legato
     { "Sequencer Bass", oSequencerBass, "Bass" },    // ORIGINALS: Step Mod A lane -> wavetable position (draw the timbre per step)
     { "Wheel Growl", oWheelGrowl, "Bass" },          // ORIGINALS: key-tracked audio-rate AM growl; Mod Wheel opens the filter
+    { "Pump Bass", oPumpBass, "Bass" },              // SNAPPED LFO: per-beat duck-and-recover staircase = sidechain feel, no sidechain
+    { "Wobble Step", oWobbleStep, "Bass" },          // SNAPPED LFO: an 8-step drawn filter wobble pattern (Grid 8 in the LFO window)
     { "Talking Bass", nTalkingBass, "Bass" },        // FORMANT + SUB showcase (LFO -> Formant = it talks)
     { "FM Growl", nFmGrowl, "Bass" },                // AUDIO-RATE showcase: KEY LFO -> Pitch = playable FM growl
     { "Scooped Bass", nScoopedBass, "Bass" },        // BIPOLAR BELL showcase: mids CUT -9 dB
@@ -2500,6 +2544,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Jet Pad", nJetPad, "Pads & Choirs" },          // CHANNEL FX showcase: LFO -> Flanger (Channel)
     { "Neon Pad", nNeonPad, "Pads & Choirs" },        // OTT showcase: upward compression = glowing inflated wall
     { "Tape Ghost", oTapeGhost, "Pads & Choirs" },    // ORIGINALS: looping wavetable journey through TAPE; the wow itself breathes
+    { "Trance Gate", oTranceGate, "Pads & Choirs" },  // SNAPPED LFO: a 16-step gate pattern chops a wide pad (redraw it in the LFO window)
 
     { "Vowel Pad", nVowelPad, "Pads & Choirs" },      // FORMANT showcase: slow LFO -> vowel morph
     { "AM Shimmer", nAmShimmer, "Pads & Choirs" },    // AUDIO-RATE AM at the octave (KEY x2 -> Volume)
