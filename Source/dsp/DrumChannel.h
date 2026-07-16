@@ -494,8 +494,6 @@ public:
     // in `scaleType`/`key` for a note `playedMidi` - off-scale notes snap to the nearest member. Public
     // so the editor can light up the played keys. (Wraps the DSP's own scaleSemis - single source.)
     static int scaleNoteOffset(int scaleType, int key, int playedMidi, int voiceIdx);
-    // CHORD interval (note-independent) for voice k of chord type `chordMode`. Same table the DSP uses.
-    static int chordNoteOffset(int chordMode, int k);
 
     //-- EQ band model (used by BOTH the channel EQ and the per-slot EQ). HP + 3 bells + LP.
     static constexpr int NUM_EQ_BANDS = 5;
@@ -529,15 +527,15 @@ public:
         int   oscUnison = 1; float oscDetune = 0.0f; bool oscUniCenter = false;   // dry/centre voice alongside detuned copies
         float uniSpread = 0.0f;   // STEREO WIDTH: unison/chord voices pan across the field (0 = mono = bit-identical)
         int   oscDetuneMode = 0;         // detune direction: 0 = symmetric (both ways), 1 = up only (sharp), 2 = down only (flat)
-        int   chordMode = 0;             // 0 = STD (detuned copies); 1-7 = chord types (Oct/5th/Maj/Min/Sus4/Maj7/Min7) - Osc/Modal/Physical
-        int   chordUnison = 3;           // unison count used in CHORD mode (SEPARATE from oscUnison so STD + CHORD don't share)
-        // -- SCALE mode (a per-slot diatonic HARMONIZER; precedence scaleOn ? SCALE : chordMode>0 ? CHORD : STD).
+        // (chordMode/chordUnison = the LEGACY CHORD MODE - DELETED 2026-07-16 on user order.
+        //  "chd"/"chdU" file keys are ignored on load; SCALE below is the one voicing system.)
+        // -- SCALE mode (a per-slot diatonic HARMONIZER).
         //    Each played note is voiced with the diatonic chord for its scale degree in scaleKey/scaleType;
         //    off-scale/between notes SNAP to the nearest scale note at play time. Unlike CHORD the intervals
         //    depend on the note, so they're computed per-note into SlotVoice::uniSemis (not baked in SC). --
         bool  scaleOn = false;
         int   scaleType = 0;             // 0..9: Major, Nat/Har Minor, Dorian, Phrygian, Lydian, Mixolydian, Maj/Min Pentatonic, Blues
-        int   scaleUnison = 3;           // voice/chord-size count in SCALE mode (SEPARATE, like chordUnison)
+        int   scaleUnison = 3;           // voice/chord-size count in SCALE mode (SEPARATE from oscUnison)
         int   scaleKey = 0;              // 0..11 root pitch class (C = 0)
         // -- Wavetable (SrcWave) -- which table + scan position (0..1); pitch reuses oscFreq.
         int   waveTable = 0; float wavePos = 0.0f;

@@ -1710,7 +1710,7 @@ class VoiceModDisplay : public juce::Component, public juce::SettableTooltipClie
 public:
     MidiLearnManager* mlm = nullptr;     // RIGHT-CLICK = MIDI-learn menu (5 ui_sel_uni* targets)
     static constexpr int kMaxUni = 16;   // Osc cap (KS 6 / Modal 3 set via setMaxUni)
-    void setValues(int unison, int chordUnison, int scaleUnison, float detune, float vibrato, bool centre, int detuneMode, int chordMode, bool scaleOn, int scaleType, int scaleKey, float uniSpread = 0.0f, float driftIn = 0.0f);
+    void setValues(int unison, int scaleUnison, float detune, float vibrato, bool centre, int detuneMode, bool scaleOn, int scaleType, int scaleKey, float uniSpread = 0.0f, float driftIn = 0.0f);
     // DRIFT visual honesty: the DSP's real rolled per-voice detunes (cents) from the newest playing
     // voice - the drawn lines move with what actually just played (change-gated repaint).
     void setDriftLive(const float* cents, int n);
@@ -1719,8 +1719,8 @@ public:
     void setModLive(float det, float vib, float width, float drift, float uniCnt = -1000.0f);
     float modUniCnt = -1000.0f;   // [2026-07-14] live modulated unison COUNT (ring at the uni handle; -1000 = no route)
     void setSupport(bool uniSupported, bool vibSupported, juce::String naReason);
-    void setMaxUni(int m) { const int c = juce::jlimit(1, kMaxUni, m); if (c == maxUni) return; maxUni = c; if (uni > maxUni) uni = maxUni; if (uniChord > maxUni) uniChord = maxUni; if (uniScale > maxUni) uniScale = maxUni; repaint(); }  // per-engine unison cap
-    std::function<void(int unison, float detune, float vibrato, bool centre, int detuneMode, int chordMode, bool scaleOn, int scaleType, int scaleKey, float uniSpread, float drift)> onChange;
+    void setMaxUni(int m) { const int c = juce::jlimit(1, kMaxUni, m); if (c == maxUni) return; maxUni = c; if (uni > maxUni) uni = maxUni; if (uniScale > maxUni) uniScale = maxUni; repaint(); }  // per-engine unison cap
+    std::function<void(int unison, float detune, float vibrato, bool centre, int detuneMode, bool scaleOn, int scaleType, int scaleKey, float uniSpread, float drift)> onChange;
     std::function<void()> onDragEnd;                              // released after editing (for auto-audition)
     void paint(juce::Graphics& g) override;
     void mouseDown(const juce::MouseEvent& e) override;
@@ -1732,9 +1732,8 @@ public:
     juce::String getTooltip() override;
 private:
     int   uni = 1;         // STD-mode voice count
-    int   uniChord = 3;   // CHORD-mode voice count (SEPARATE from STD - switching modes shows each one's own)
     int   uniScale = 3;   // SCALE-mode voice count (chord size for the diatonic harmonizer)
-    int   curUni() const { return scaleOn ? uniScale : chord > 0 ? uniChord : uni; }   // the ACTIVE mode's count
+    int   curUni() const { return scaleOn ? uniScale : uni; }   // the ACTIVE mode's count
     float det = 0.0f, vib = 0.0f;
     float uniWidth = 0.0f;   // stereo WIDTH of the unison/chord voices (top-left mini bar; NOT 'spread' - paint() has a pixel local by that name)
     float driftAmt = 0.0f;   // DRIFT: per-note randomness (phase scatter + micro-detune + level breath)
@@ -1744,8 +1743,7 @@ private:
     int   mode = 0;                // detune direction: 0 = symmetric (drag right), 1 = up (drag up), 2 = down (drag down)
     bool  uniOn = true, vibOn = true;
     int   maxUni = 7;              // per-engine unison cap (Osc 7 / Modal 4 / Physical 3)
-    int   chord = 0;               // display copy - FORCED 0 now (the visual is STD/UNISON-only; Scale moved above the keyboard)
-    int   emitChord = 0; bool emitScaleOn = false; int emitScaleType = 0, emitScaleKey = 0;   // pass-through for emit()
+    bool  emitScaleOn = false; int emitScaleType = 0, emitScaleKey = 0;   // pass-through for emit()
     bool  scaleOn = false;         // SCALE (diatonic harmonizer) mode; the detune dot picks the scale type
     int   scaleType = 0;           // 0-9 which scale (Major, Minor, ...)
     int   scaleKey = 0;            // 0-11 key root pitch class (C = 0)
@@ -1757,7 +1755,7 @@ private:
                  float rangeX, rangeY, dPtX, dPtY, rootY, upRange, uniTop; };   // rootY = root line; upRange = room above it; uniTop = unison-dot ceiling (below the chips)
     Geo  geom() const;
     int  nearestHandle(juce::Point<float> p) const;
-    void emit() { if (onChange) onChange(curUni(), det, vib, centre, mode, emitChord, emitScaleOn, emitScaleType, emitScaleKey, uniWidth, driftAmt); }
+    void emit() { if (onChange) onChange(curUni(), det, vib, centre, mode, emitScaleOn, emitScaleType, emitScaleKey, uniWidth, driftAmt); }
 };
 
 //==============================================================================

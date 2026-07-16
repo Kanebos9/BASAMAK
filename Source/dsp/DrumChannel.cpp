@@ -695,7 +695,6 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("oEA", s.oscPEnvAmt, nullptr); st.setProperty("oET", s.oscPEnvTime, nullptr); st.setProperty("oOf", s.oscPOffset, nullptr);
         st.setProperty("oUn", s.oscUnison, nullptr); st.setProperty("oDt", s.oscDetune, nullptr);
         st.setProperty("uniSp", s.uniSpread, nullptr);
-        st.setProperty("chd", s.chordMode, nullptr); st.setProperty("chdU", s.chordUnison, nullptr);
         st.setProperty("scOn", s.scaleOn, nullptr); st.setProperty("scTy", s.scaleType, nullptr);
         st.setProperty("scUn", s.scaleUnison, nullptr); st.setProperty("scKy", s.scaleKey, nullptr);   // SCALE mode
         st.setProperty("oUC", s.oscUniCenter, nullptr); st.setProperty("oDM", s.oscDetuneMode, nullptr);
@@ -828,7 +827,7 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         s.oscPEnvAmt = (float)st.getProperty("oEA", d.oscPEnvAmt); s.oscPEnvTime = (float)st.getProperty("oET", d.oscPEnvTime); s.oscPOffset = (float)st.getProperty("oOf", d.oscPOffset);
         s.oscUnison = (int)st.getProperty("oUn", d.oscUnison); s.oscDetune = (float)st.getProperty("oDt", d.oscDetune);
         s.uniSpread = (float)st.getProperty("uniSp", d.uniSpread);
-        s.chordMode = (int) st.getProperty("chd", d.chordMode); s.chordUnison = (int) st.getProperty("chdU", d.chordUnison);
+        // "chd"/"chdU" (the DELETED legacy chord mode, 2026-07-16) are ignored on load.
         s.scaleOn = (bool) st.getProperty("scOn", d.scaleOn); s.scaleType = (int) st.getProperty("scTy", d.scaleType);
         s.scaleUnison = (int) st.getProperty("scUn", d.scaleUnison); s.scaleKey = (int) st.getProperty("scKy", d.scaleKey);
         s.oscUniCenter = (bool)st.getProperty("oUC", d.oscUniCenter);
@@ -1312,22 +1311,7 @@ float DrumChannel::physDecayScale(int material)
     return kPhysModels[juce::jlimit(0, kNumPhysModels - 1, material)].decScale;
 }
 
-// Chord-mode intervals (semitones): unison voice u plays triad note u%3, +1 octave per wrap.
-// Major = root / +4 (major third) / +7 (perfect fifth); minor = root / +3 (minor third) / +7.
-// Chord tables: semitone offset from the root for unison voice k, octave-extended past the
-// core so any voice count works. chordMode: 0 = STD (plain detune), 1..7 = these. Shared by
-// Osc / Modal / Physical so all three engines voice a chord the same way.
-static const int8_t kChordTab[7][6] = {
-    { 0, 12, 24, 36, 48, 60 },   // 1 Oct   (octaves)
-    { 0,  7, 12, 19, 24, 31 },   // 2 5th   (power chord)
-    { 0,  4,  7, 12, 16, 19 },   // 3 Maj
-    { 0,  3,  7, 12, 15, 19 },   // 4 Min
-    { 0,  5,  7, 12, 17, 19 },   // 5 Sus4
-    { 0,  4,  7, 11, 12, 16 },   // 6 Maj7
-    { 0,  3,  7, 10, 12, 15 },   // 7 Min7
-};
-static inline int chordSemis(int chordMode, int k)
-{ return (chordMode >= 1 && chordMode <= 7) ? (int) kChordTab[chordMode - 1][juce::jlimit(0, 5, k)] : 0; }
+// (kChordTab/chordSemis = the LEGACY CHORD MODE - DELETED 2026-07-16 on user order; SCALE is the one voicing system.)
 
 // SCALE mode (a diatonic HARMONIZER). Each scale = ascending semitone offsets from its root; kScaleLen
 // = how many notes it has (5/6/7). Unlike chords these intervals are NOTE-DEPENDENT (they change with the
@@ -1413,7 +1397,6 @@ static inline int scaleSemis(int scaleType, int key, int playedMidi, int k)
 // Public wrappers so the editor's keyboard-highlight can use the exact DSP voicing (single source).
 int DrumChannel::scaleNoteOffset(int scaleType, int key, int playedMidi, int voiceIdx)
 { return scaleSemis(scaleType, key, playedMidi, voiceIdx); }
-int DrumChannel::chordNoteOffset(int chordMode, int k) { return chordSemis(chordMode, k); }
 
 int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long gateSamples,
                          float glideToSemis, long glideSamples, bool forceOverlap, int slotMask, bool keyGate,
@@ -1615,11 +1598,10 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         // every hit). Only when the slot voices distinct pitches (CHORD or SCALE), else notes are
         // identical and a "strum" would just comb-filter. uniDelay[0] stays 0 (the root leads).
         const float sAmt = strumOverride >= 0.0f ? strumOverride : strumAmt;   // per-note override (piano roll)
-        if (sAmt > 0.001f && (sl.scaleOn || sl.chordMode > 0)
+        if (sAmt > 0.001f && sl.scaleOn
             && (sl.engine == SrcOsc || sl.engine == SrcModal || sl.engine == SrcPhys || sl.engine == SrcGrain))   // grain strums its cloud [2026-07-16]
         {
-            const int nStr = juce::jlimit(1, UNI_MAX, sl.scaleOn ? (sl.scaleType >= 10 ? 6 : sl.scaleUnison)
-                                                    : sl.chordMode > 0 ? sl.chordUnison : sl.oscUnison);
+            const int nStr = juce::jlimit(1, UNI_MAX, sl.scaleType >= 10 ? 6 : sl.scaleUnison);
             if (nStr > 1)
             {
                 // The ALTERNATE stroke (strumFlip) is a real UPSTROKE, not just a reversed list:
@@ -1766,7 +1748,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
                 if (sl.engine == SrcPhys && nStr > 1)
                 {
                     const double sp = 2.0 * (double) k / (double) (nStr - 1) - 1.0;
-                    const double interval = sl.scaleOn ? (double) sv.uniSemis[k] : (double) chordSemis(sl.chordMode, k);
+                    const double interval = sl.scaleOn ? (double) sv.uniSemis[k] : 0.0;
                     uniMul = std::pow(2.0, interval / 12.0
                                           + sp * (double) (sl.oscDetune * 100.0f) / 1200.0);
                 }
@@ -2163,7 +2145,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
     struct SC {
         int    engine = -1; float weight = 0, atk = 0, hold = 0, dec = 0, sustain = 0, release = 0.06f;
         int    oscShape = 0, oscShapeB = 0; double oscFreq = 0; float oscPEnvAmt = 0, oscPEnvTime = 0.04f, oscPOffset = 0;
-        int    uniVoices = 1; float uniCents = 0, uniGain = 1, oscVibFac = 1; bool uniCenter = false; int uniMode = 0; int chord = 0;
+        int    uniVoices = 1; float uniCents = 0, uniGain = 1, oscVibFac = 1; bool uniCenter = false; int uniMode = 0;
         bool   scaleOn = false;   // SCALE (diatonic harmonizer): read per-voice sv.uniSemis[] instead of the fixed chord table
         double uniMul[KS_UNI] = { 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };   // per-string pitch multipliers (Physical unison/chord)
         int    noiseType = 0; bool noiseBP = false; double noiseFc = 1000, nQ = 0.7; float noiseDrive = 0, noiseCrackle = 0;
@@ -2369,11 +2351,10 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 c.oscShape = sl.oscShape; c.oscShapeB = sl.oscShapeB; c.oscFreq = (float) slotBaseHz(s, sl);
                 c.oscPEnvAmt = sl.oscPEnvAmt; c.oscPEnvTime = sl.oscPEnvTime; c.oscPOffset = sl.oscPOffset;
                 c.scaleOn   = sl.scaleOn;
-                c.uniVoices = juce::jlimit(1, UNI_MAX, sl.scaleOn ? (sl.scaleType >= 10 ? 6 : sl.scaleUnison) : sl.chordMode > 0 ? sl.chordUnison : sl.oscUnison);
+                c.uniVoices = juce::jlimit(1, UNI_MAX, sl.scaleOn ? (sl.scaleType >= 10 ? 6 : sl.scaleUnison) : sl.oscUnison);
                 c.uniCents  = juce::jlimit(0.0f, 1.0f, sl.oscDetune) * 100.0f;   // up to +/-100 cents (1 semitone) spread
                 c.uniCenter = sl.oscUniCenter; c.uniMode = sl.oscDetuneMode;
                 c.uniGain   = 1.0f / std::sqrt((float) (c.uniVoices + (c.uniCenter ? 1 : 0)));
-                c.chord     = sl.scaleOn ? 0 : juce::jlimit(0, 7, sl.chordMode);   // SCALE forces chord off; render reads sv.uniSemis
                 c.oscVibFac = 1.0f + juce::jlimit(0.0f, 1.0f, sl.vibrato) * 0.09f * vibLfo;
                 // Merged FM section (Depth 0 = pure analog). Modulator = sine at carrier*ratio.
                 c.oscWarp    = sl.oscWarp;
@@ -2433,13 +2414,12 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 // (Release is the user's own value now - see the note in the amp-env bake above.)
                 // UNISON/CHORD: pre-compute each string's pitch multiplier (chord interval + detune spread).
                 c.scaleOn   = sl.scaleOn;   // SCALE reads sv.uniSemis per-string in the render (c.uniMul ignored)
-                c.uniVoices = juce::jlimit(1, KS_UNI, sl.scaleOn ? (sl.scaleType >= 10 ? 6 : sl.scaleUnison) : sl.chordMode > 0 ? sl.chordUnison : sl.oscUnison);
-                c.chord     = juce::jlimit(0, 7, sl.chordMode);
+                c.uniVoices = juce::jlimit(1, KS_UNI, sl.scaleOn ? (sl.scaleType >= 10 ? 6 : sl.scaleUnison) : sl.oscUnison);
                 c.uniCents  = juce::jlimit(0.0f, 1.0f, sl.oscDetune) * 100.0f;
                 for (int k = 0; k < KS_UNI; ++k)
                 {
                     const double sp = c.uniVoices > 1 ? 2.0 * (double) k / (double)(c.uniVoices - 1) - 1.0 : 0.0;
-                    c.uniMul[k] = std::pow(2.0, (double) chordSemis(c.chord, k) / 12.0 + sp * (double) c.uniCents / 1200.0);
+                    c.uniMul[k] = std::pow(2.0, sp * (double) c.uniCents / 1200.0);
                 }
                 // Pluck POSITION also shades the LOOP brightness (a mid-string pluck excites fewer
                 // highs, and the burst comb alone fades from earshot once the loop filter takes
@@ -2513,9 +2493,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 // granular"]: the spawn loop cycles successive grains through the voicing's
                 // notes - the CLOUD is the chord (granular has no unison stack to retune).
                 c.scaleOn   = sl.scaleOn;
-                c.chord     = sl.scaleOn ? 0 : juce::jlimit(0, 7, sl.chordMode);
-                c.uniVoices = juce::jlimit(1, UNI_MAX, sl.scaleOn ? (sl.scaleType >= 10 ? 6 : sl.scaleUnison)
-                                                       : sl.chordMode > 0 ? sl.chordUnison : 1);
+                c.uniVoices = juce::jlimit(1, UNI_MAX, sl.scaleOn ? (sl.scaleType >= 10 ? 6 : sl.scaleUnison) : 1);
                 c.grPos   = juce::jlimit(0.0f, 1.0f, sl.grainPos);
                 c.grSpray = juce::jlimit(0.0f, 1.0f, sl.grainSpray);
                 c.grPitch = juce::jlimit(0.0f, 1.0f, sl.grainPitch);
@@ -2579,9 +2557,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 c.modalDecaySec = decaySec;
                 c.oscVibFac = 1.0f + juce::jlimit(0.0f, 1.0f, sl.vibrato) * 0.07f * vibLfo;   // block-rate pole-angle wobble
                 c.scaleOn   = sl.scaleOn;   // SCALE reads sv.uniSemis per bank-note in the render
-                c.uniVoices = juce::jlimit(1, MODAL_NOTES, sl.scaleOn ? sl.scaleUnison : sl.chordMode > 0 ? sl.chordUnison : sl.oscUnison);   // one FULL bank per note (cap MODAL_NOTES)
+                c.uniVoices = juce::jlimit(1, MODAL_NOTES, sl.scaleOn ? sl.scaleUnison : sl.oscUnison);   // one FULL bank per note (cap MODAL_NOTES)
                 c.uniCents  = juce::jlimit(0.0f, 1.0f, sl.oscDetune) * 100.0f;
-                c.chord     = sl.scaleOn ? 0 : juce::jlimit(0, 7, sl.chordMode);
                 // Pitch-envelope time base = the audible Strike + Ring (matches the editor's axis).
                 c.voiceLenSamp = juce::jmax(1.0, (double)((sl.atk + decaySec) * (float) sr));
                 break; }
@@ -3256,8 +3233,6 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                                 if (sv.uniSemis[u] < -90.0f) continue;   // strings with a sentinel
                                 det *= std::pow(2.0, (double) sv.uniSemis[u] / 12.0);
                             }
-                            else if (c.chord > 0 && ! centreVoice)
-                                det *= std::pow(2.0, (double) chordSemis(c.chord, u) / 12.0);
                             det *= (double) sv.driftMul[juce::jmin(u, UNI_MAX)] * (double) sv.driftWobMul;   // DRIFT (1 = off)
                             const float dt = (float)(freq * det / sr);   // cycles/sample for PolyBLEP
                             // FM active -> plain morphWave (matches the old FM engine exactly, no BLEP under
@@ -3555,7 +3530,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                                 {
                                     const int k = sv.grNoteIdx % (uint8_t) c.uniVoices;
                                     sv.grNoteIdx = (uint8_t) ((k + 1) % c.uniVoices);
-                                    const float iv = c.scaleOn ? sv.uniSemis[k] : (float) chordSemis(c.chord, k);
+                                    const float iv = sv.uniSemis[k];   // uniVoices > 1 only in SCALE mode now
                                     if (iv < -90.0f) continue;                    // guitar voicing: missing string
                                     if (t < sv.uniDelay[juce::jmin(k, UNI_MAX - 1)]) continue;   // strum: not entered yet
                                     noteIv = (double) iv; break;
@@ -3643,7 +3618,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             bool noteOn[MODAL_NOTES];
                             for (int j = 0; j < nNotes; ++j) {
                                 const double sp = nNotes > 1 ? 2.0 * (double) j / (double)(nNotes - 1) - 1.0 : 0.0;
-                                const double iv = c.scaleOn ? (double) sv.uniSemis[j] : (double) chordSemis(c.chord, j);   // SCALE per-note offset
+                                const double iv = c.scaleOn ? (double) sv.uniSemis[j] : 0.0;
                                 noteOn[j] = ! (c.scaleOn && sv.uniSemis[j] < -90.0f);   // guitar voicing: missing string
                                 uniMul[j] = noteOn[j] ? std::pow(2.0, iv / 12.0 + sp * (double) c.uniCents / 1200.0)
                                                           * (double) sv.driftMul[juce::jmin(j, UNI_MAX)] : 1.0;   // DRIFT

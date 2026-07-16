@@ -1641,7 +1641,7 @@ void StepGridComponent::showRollNoteMenu(int ch2, int idx)
     sa.addItem(24, "60%",                          strumOk, nn.strumPct == 60);
     sa.addItem(28, "80%",                          strumOk, nn.strumPct == 80);
     sa.addItem(29, "100%",                         strumOk, nn.strumPct == 100);
-    m.addSubMenu("Strum amount (needs a chord: stacked same-time notes, or a Scale/Chord sound)", sa, strumOk);
+    m.addSubMenu("Strum amount (needs a chord: stacked same-time notes, or a Scale sound)", sa, strumOk);
     m.addSeparator();
     // VELOCITY: "Type exact %" gives FULL 1% resolution (matches the min/max vel knobs -
     // no coarse mismatch, user rule), plus quick 10% presets. Current % shown at the top.

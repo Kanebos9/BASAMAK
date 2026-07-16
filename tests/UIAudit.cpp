@@ -1,7 +1,7 @@
 // FACTORY-SOUND UI-REPLICABILITY AUDIT (informational; exits 0). Lists every sound that relies
 // on HIDDEN state a user cannot set from the UI: channel drive (no knob), channel reverb/delay
 // sends (the visible Reverb/Delay knobs are PER-SLOT sends), the channel Formant filter (combo
-// hidden), or slot chordMode (chips removed). "Replicate from the UI" must be possible for all.
+// hidden), "Replicate from the UI" must be possible for all.
 #include "Sequencer.h"
 #include "FactoryContent.h"
 #include <cstdio>
@@ -22,9 +22,6 @@ int main() {
         for (int s = 0; s < DrumChannel::NUM_SLOTS; ++s)
         {
             if (ch->slots[s].engine < 0 || ch->slots[s].weight <= 0.001f) continue;
-            if (ch->slots[s].chordMode > 0)
-                v.add("slot" + juce::String(s + 1) + "chord(" + juce::String(ch->slots[s].chordMode) + ")");
-            if (ch->slots[s].oscUniCenter)   // the centre-voice toggle's UI was removed with the chord chips
                 v.add("slot" + juce::String(s + 1) + "uniCenter");
         }
         if (! v.isEmpty()) { ++bad; printf("%-16s %s\n", names[i].toRawUTF8(), v.joinIntoString(" ").toRawUTF8()); }

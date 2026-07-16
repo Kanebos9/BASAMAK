@@ -1894,7 +1894,7 @@ juce::File DrumSequencerProcessor::exportMidiFile(int channel)
         // de-duped). Sample/Noise slots have NO Freq base, so they don't add per-slot notes; but a
         // channel with NO pitched slot (pure Sample/Noise) still exports its step/draw PITCH contour
         // on the channel's own note (`midiNote` + pitch) - NO fixed C3 anchor.
-        struct PSlot { int slotIdx; int base; bool scaleOn; int scaleType, scaleKey, scaleUni, chordMode, chordUni; };
+        struct PSlot { int slotIdx; int base; bool scaleOn; int scaleType, scaleKey, scaleUni; };
         juce::Array<PSlot> pslots;
         if (! chn.midiOut)
             for (int si = 0; si < DrumChannel::NUM_SLOTS; ++si)
@@ -1902,13 +1902,14 @@ juce::File DrumSequencerProcessor::exportMidiFile(int channel)
                 const auto& sl = chn.slots[si];
                 if (sl.weight <= 0.001f) continue;
                 double hz = 0.0;
-                if      (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal) hz = sl.oscFreq;
+                if      (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal
+                      || sl.engine == DrumChannel::SrcGrain) hz = sl.oscFreq;   // grain is pitched too [2026-07-16]
                 else if (sl.engine == DrumChannel::SrcPhys)                                      hz = sl.physFreq;
                 else continue;   // Sample / Noise: unpitched -> contributes no notes
                 PSlot p; p.slotIdx = si;
                 p.base = juce::jlimit(0, 127, (int) std::lround(69.0 + 12.0 * std::log2(juce::jmax(20.0, hz) / 440.0)));
                 p.scaleOn = sl.scaleOn; p.scaleType = sl.scaleType; p.scaleKey = sl.scaleKey;
-                p.scaleUni = sl.scaleUnison; p.chordMode = sl.chordMode; p.chordUni = sl.chordUnison;
+                p.scaleUni = sl.scaleUnison;
                 pslots.add(p);
             }
         // Emit one hit: every slot's voiced notes (or the MIDI-out / drum fallback), de-duped per hit.
@@ -1931,8 +1932,6 @@ juce::File DrumSequencerProcessor::exportMidiFile(int channel)
                 const int played = p.base + semis;
                 if (p.scaleOn)          { const int nv = juce::jlimit(1, DrumChannel::UNI_MAX, p.scaleUni);
                     for (int k = 0; k < nv; ++k) add(played + DrumChannel::scaleNoteOffset(p.scaleType, p.scaleKey, played, k)); }
-                else if (p.chordMode > 0) { const int nv = juce::jlimit(1, DrumChannel::UNI_MAX, p.chordUni);
-                    for (int k = 0; k < nv; ++k) add(played + DrumChannel::chordNoteOffset(p.chordMode, k)); }
                 else add(played);
             }
         };
