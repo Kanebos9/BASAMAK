@@ -804,9 +804,14 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     // handle + glide + WAVE LFO, straight from the render; -1 = nothing playing / not Custom).
     float getWtPos(int slot) const
     {
+        const int sl2 = juce::jlimit(0, NUM_SLOTS - 1, slot);
+        // [2026-07-16] AUDIBILITY GATE (user: "the dot goes for a long time after the sound
+        // ends"): a voice legally outlives audibility (exponential tails render to ~3.2x the
+        // decay) - hide the marker once the slot's level is below ~-60 dB (genuinely inaudible).
+        if (slotFiltEnv[sl2] < 0.001f) return -1.0f;
         const Voice* nv = nullptr;
         for (auto& v : voices) if (v.active() && (nv == nullptr || v.voiceSamples < nv->voiceSamples)) nv = &v;
-        return nv != nullptr ? nv->sv[juce::jlimit(0, NUM_SLOTS - 1, slot)].wtPosCur : -1.0f;
+        return nv != nullptr ? nv->sv[sl2].wtPosCur : -1.0f;
     }
     // UI: the newest voice's LIVE grain read positions (0..1 across the source) - the preview's
     // dots are real grains, never an animation. Returns the count (0 = nothing sounding).
@@ -1271,6 +1276,7 @@ private:
         struct Grain { double pos = 0, inc = 0; int age = 0, len = 0; float amp = 0; };
         Grain    grains[GRAINS_MAX];
         float    grAcc = 0.0f;
+        uint8_t  grNoteIdx = 0;    // [2026-07-16] chord/scale on GRANULAR: successive grains cycle the voicing's notes
         float    wtPosCur = -1.0f; // UI: LIVE wavetable position 0..1 the render last played
                                    // (handle + glide + WAVE LFO combined; -1 = not rendering a
                                    // Custom table). Torn-read tolerant like the other UI reads.

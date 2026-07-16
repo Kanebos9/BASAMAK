@@ -1520,6 +1520,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
             }
         sv.wtPosCur = -1.0f;                       // live-position read-out: nothing rendered yet
         sv.grAcc = 1.0f;                           // GRANULAR: first grain fires immediately;
+        sv.grNoteIdx = 0;                          // chord/scale note cycling restarts (identical-hits rule)
         for (auto& gr : sv.grains) { gr.age = 0; gr.len = 0; }   // stale grains from the last note die
         sv.keySemis = 0.0f;
         // TEST on a PIANO-ROLL channel: the block config is C4-absolute (slotBaseHz), so play
@@ -1597,7 +1598,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         // SCALE mode (diatonic harmonizer): the chord depends on the played NOTE, so compute this voice's
         // per-note diatonic offsets now (keySemis is 0 for step/draw hits; keyDown recomputes for held keys).
         for (int u = 0; u < UNI_MAX; ++u) sv.uniSemis[u] = 0.0f;
-        if (sl.scaleOn && (sl.engine == SrcOsc || sl.engine == SrcModal || sl.engine == SrcPhys))
+        if (sl.scaleOn && (sl.engine == SrcOsc || sl.engine == SrcModal || sl.engine == SrcPhys || sl.engine == SrcGrain))
         {
             const double baseF = slotBaseHz(s, sl);
             const int playedMidi = (int) std::lround(69.0 + 12.0 * std::log2(juce::jmax(1.0, baseF) / 440.0) + (double) pitchSemis);
@@ -1615,7 +1616,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         // identical and a "strum" would just comb-filter. uniDelay[0] stays 0 (the root leads).
         const float sAmt = strumOverride >= 0.0f ? strumOverride : strumAmt;   // per-note override (piano roll)
         if (sAmt > 0.001f && (sl.scaleOn || sl.chordMode > 0)
-            && (sl.engine == SrcOsc || sl.engine == SrcModal || sl.engine == SrcPhys))
+            && (sl.engine == SrcOsc || sl.engine == SrcModal || sl.engine == SrcPhys || sl.engine == SrcGrain))   // grain strums its cloud [2026-07-16]
         {
             const int nStr = juce::jlimit(1, UNI_MAX, sl.scaleOn ? (sl.scaleType >= 10 ? 6 : sl.scaleUnison)
                                                     : sl.chordMode > 0 ? sl.chordUnison : sl.oscUnison);
@@ -2508,6 +2509,13 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     c.grLo = juce::jlimit(0, n - 2, (int) (sl.smpStart * (float) n));
                     c.grHi = juce::jlimit(c.grLo + 2, n, (int) (sl.smpEnd * (float) n));
                 }
+                // CHORD/SCALE on granular [2026-07-16, user: "scale mode cant be used in
+                // granular"]: the spawn loop cycles successive grains through the voicing's
+                // notes - the CLOUD is the chord (granular has no unison stack to retune).
+                c.scaleOn   = sl.scaleOn;
+                c.chord     = sl.scaleOn ? 0 : juce::jlimit(0, 7, sl.chordMode);
+                c.uniVoices = juce::jlimit(1, UNI_MAX, sl.scaleOn ? (sl.scaleType >= 10 ? 6 : sl.scaleUnison)
+                                                       : sl.chordMode > 0 ? sl.chordUnison : 1);
                 c.grPos   = juce::jlimit(0.0f, 1.0f, sl.grainPos);
                 c.grSpray = juce::jlimit(0.0f, 1.0f, sl.grainSpray);
                 c.grPitch = juce::jlimit(0.0f, 1.0f, sl.grainPitch);
@@ -3518,27 +3526,61 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         if (sv.grAcc >= 1.0f)
                         {
                             sv.grAcc -= 1.0f;
+                            // [2026-07-16] GLIDE JOURNEY: with the draw window's A>B/B>C/C>D times set,
+                            // the grain POSITION travels the source over the note's life (Loop =
+                            // ping-pong) - the oscillator's exact piecewise clock. The Position knob is
+                            // overridden while glide is on (the osc convention); Spray + the WAVE LFO
+                            // still add on top. No glide = the knob, bit-identical to before.
+                            float grBase = c.grPos;
+                            if (c.wtGlide)
+                            {
+                                float tf = (float) t;
+                                if (c.wtLoop) { const float L2 = 2.0f * c.wtLoopEnd;
+                                                tf = std::fmod(tf, L2); if (tf > c.wtLoopEnd) tf = L2 - tf; }
+                                if      (tf < c.wtT1) grBase = tf * c.wtInv0;
+                                else if (tf < c.wtT2) grBase = 1.0f / 3.0f + (tf - c.wtT1) * c.wtInv1;
+                                else if (tf < c.wtT3) grBase = 2.0f / 3.0f + (tf - c.wtT2) * c.wtInv2;
+                                else                  grBase = 1.0f;
+                                // cap just below 1.0: the spray wrap (p01 -= floor) would fold an
+                                // EXACT 1.0 journey end back to 0 = frame A (found by GrainTest [7])
+                                grBase = juce::jlimit(0.0f, 0.9995f, grBase);
+                            }
+                            // CHORD/SCALE voicing: successive grains CYCLE the voicing's notes (the
+                            // cloud is the chord). uniVoices 1 = plain = bit-identical. STRUM works
+                            // too: a note still inside its strum delay is skipped this round, so the
+                            // chord tones ENTER the cloud low->high like a real strum.
+                            double noteIv = 0.0;
+                            if (c.uniVoices > 1)
+                                for (int tryN = 0; tryN < c.uniVoices; ++tryN)
+                                {
+                                    const int k = sv.grNoteIdx % (uint8_t) c.uniVoices;
+                                    sv.grNoteIdx = (uint8_t) ((k + 1) % c.uniVoices);
+                                    const float iv = c.scaleOn ? sv.uniSemis[k] : (float) chordSemis(c.chord, k);
+                                    if (iv < -90.0f) continue;                    // guitar voicing: missing string
+                                    if (t < sv.uniDelay[juce::jmin(k, UNI_MAX - 1)]) continue;   // strum: not entered yet
+                                    noteIv = (double) iv; break;
+                                }
                             for (auto& gr : sv.grains)
                                 if (gr.age >= gr.len)              // a free grain slot
                                 {
                                     const float r1 = whiteNoise(sv.noiseState);   // position spray
                                     const float r2 = whiteNoise(sv.noiseState);   // pitch spray
                                     const double pmul = (double) noteMul * (double) pe3Mul
-                                                      * std::pow(2.0, (double) (r2 * c.grPitch));   // +-12 st max
+                                                      * std::pow(2.0, (double) (r2 * c.grPitch) + noteIv / 12.0);   // spray +-12 st + chord/scale note
                                     gr.len = juce::jmax(64, c.grLenSamp);
                                     gr.age = 0; gr.amp = 1.0f;
                                     const float lfoP = mWt;          // matrix WAVE->grain-position modulation (de-zippered)
                                     if (smp)
                                     {
                                         const double span = (double) (c.grHi - c.grLo);
-                                        double p01 = (double) c.grPos + (double) (r1 * c.grSpray) + (double) lfoP;
+                                        double p01 = (double) grBase + (double) (r1 * c.grSpray) + (double) lfoP;
                                         p01 -= std::floor(p01);
                                         gr.pos = (double) c.grLo + p01 * juce::jmax(1.0, span - 4.0);
                                         gr.inc = pmul / (double) engineOS;         // varispeed at the file's rate
                                     }
                                     else
                                     {
-                                        double p01 = (double) c.grPos + (double) (r1 * c.grSpray) + (double) lfoP;
+                                        double p01 = (double) grBase + (double) (r1 * c.grSpray) + (double) lfoP;
                                         p01 -= std::floor(p01);
                                         gr.pos = p01 * (double) GRAIN_TBL;
                                         gr.inc = c.grIncBase * pmul;               // the table cycle at base pitch

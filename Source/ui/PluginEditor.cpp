@@ -8291,7 +8291,7 @@ void DrumSequencerEditor::setupComponents()
         const auto& c  = proc.sequencer.patterns[proc.sequencer.currentPattern].channels[ch];
         const auto& sl = c.slots[juce::jlimit(0, DrumChannel::NUM_SLOTS - 1, slot)];
         const bool pitched = sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal
-                          || sl.engine == DrumChannel::SrcPhys;
+                          || sl.engine == DrumChannel::SrcPhys || sl.engine == DrumChannel::SrcGrain;   // grain voices chords too [2026-07-16]
         if (! pitched || sl.weight <= 0.001f) return 0;
         const int down = (slot == 1) ? c.keysSlot2Down : 0;   // positive = semitones DOWN (baked into slot 2's Freq)
         const int base = semi - down;
@@ -11099,7 +11099,7 @@ void DrumSequencerEditor::updateKeyboardHighlight()
             const auto& sl = c.slots[s];
             if (sl.engine < 0 || sl.weight <= 0.001f) return;   // empty/muted slot
             const bool pitched = (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal
-                                  || sl.engine == DrumChannel::SrcPhys);
+                                  || sl.engine == DrumChannel::SrcPhys || sl.engine == DrumChannel::SrcGrain);   // [2026-07-16]
             const bool transposes = pitched || (sl.engine == DrumChannel::SrcSample && ! sl.smpPreservePitch);
             const int base = held - (s == 1 && transposes ? c.keysSlot2Down : 0);
             auto add = [&](int off) { if (off < -90) return;   // guitar voicing: missing string
