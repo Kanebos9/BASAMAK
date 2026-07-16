@@ -149,7 +149,10 @@ public:
     // orange, slot 1 = yellow, slot 2 = pink (matches the keyboard highlight).
     static constexpr int8_t PAN_INHERIT = 127;   // per-note pan sentinel: use the whole-channel drawPan
     struct DrawNote { int16_t start = 0, len = 1; int8_t semi = 0; uint8_t vel = 255; uint8_t slot = 0;
-                      uint8_t glide = 0;      // glide=1: slide INTO this note from the previous (legato) note's pitch
+                      uint8_t glide = 0;      // DORMANT [2026-07-16 round-5]: glide/legato are GEOMETRY-DRIVEN now
+                                              //  (overlap/butt + the sound's Mode + Glide knob decide at playback) -
+                                              //  this old per-note flag is kept ONLY for pack-format stability
+                                              //  (field 6 of 12); never read, never written by recording.
                       uint8_t oneShot = 0;    // 1 = INSTANT TRIGGER (no gate: pure AHD ring, exactly like a bare step);
                                               // 0 = held-key gate (sustain holds for len, then release). Right-click menu.
                       uint8_t strumUp = 0;     // STRUM direction: 0 = down (normal), 1 = UP (alt. strum: reversed
@@ -161,20 +164,15 @@ public:
                       uint8_t condLen = 1;     // [2026-07-15 23:00] per-note LOOP CONDITION (the step Loop
                       uint8_t condMask = 0;    //  system, per note): fire only on chosen loops of an N-loop
                                                //  cycle. condLen 1 OR mask 0 = every loop (default).
-                      uint8_t legato = 0;      // [2026-07-16] LEGATO: continue the previous overlapping/butted
-                                               //  note's ENVELOPE (no re-attack) - stamped by recording when a
-                                               //  key was still held; right-click note menu edits it.
-
         // ONE serialization format (was smeared across 4 sites; adding a field used to mean editing
         // all of them by hand). "start:len:semi:vel:slot:glide:oneShot:strumUp:strumPct:pan:condLen:
-        // condMask:legato" - the caller appends the ',' separator. unpack() is old-string tolerant.
+        // condMask" - the caller appends the ',' separator. unpack() is old-string tolerant.
         juce::String pack() const {
             return juce::String((int) start) + ":" + juce::String((int) len) + ":" + juce::String((int) semi)
                  + ":" + juce::String((int) vel) + ":" + juce::String((int) slot) + ":" + juce::String((int) glide)
                  + ":" + juce::String((int) oneShot) + ":" + juce::String((int) strumUp)
                  + ":" + juce::String((int) strumPct) + ":" + juce::String((int) pan)
-                 + ":" + juce::String((int) condLen) + ":" + juce::String((int) condMask)
-                 + ":" + juce::String((int) legato);
+                 + ":" + juce::String((int) condLen) + ":" + juce::String((int) condMask);
         }
         static DrawNote unpack(const juce::StringArray& f) {
             DrawNote n;
@@ -191,8 +189,7 @@ public:
             n.pan     = (int8_t)  (f.size() > 9 ? juce::jlimit(-128, 127, f[9].getIntValue()) : PAN_INHERIT);
             n.condLen = (uint8_t) juce::jlimit(1, 10, f.size() > 10 ? f[10].getIntValue() : 1);
             n.condMask= (uint8_t) juce::jlimit(0, 255, f.size() > 11 ? f[11].getIntValue() : 0);
-            n.legato  = (uint8_t) (f.size() > 12 && f[12].getIntValue() ? 1 : 0);
-            return n;
+            return n;   // (a 13th "legato" field existed for a few hours - ignored on read)
         }
     };
     bool     drawMode = false;

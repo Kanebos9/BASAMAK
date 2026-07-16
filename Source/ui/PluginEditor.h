@@ -431,6 +431,12 @@ public:
     void setModLive(float fm, float ratio, float warp)
     { if (std::abs(fm - modFm) > 0.004f || std::abs(ratio - modRatio) > 0.004f || std::abs(warp - modWarp) > 0.004f)
       { modFm = fm; modRatio = ratio; modWarp = warp; repaint(); } }
+    // [2026-07-16 round-5] LIVE WAVETABLE POSITION on the slot preview (user ask): the engine's
+    // real playing position (knob + glide + WAVE LFO, same feed as the draw window's amber
+    // marker) as a thin amber marker along the bottom. -1 = none (idle / not a Custom wave).
+    float wtPosLive = -1.0f;
+    void setWtPosLive(float p)
+    { if (std::abs(p - wtPosLive) > 0.004f && ! (p < 0.0f && wtPosLive < 0.0f)) { wtPosLive = p; repaint(); } }
     // GRANULAR: live grain read positions (0..1 across the source) + the source caption. The
     // dots are REAL grain positions from the engine (honest-visual rule); -1 = not a grain slot.
     float grainPos[DrumChannel::GRAINS_MAX] = {}; int grainN = -1;

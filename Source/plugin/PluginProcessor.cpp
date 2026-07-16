@@ -712,16 +712,10 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                     const int cur = kicked ? 0 : juce::jlimit(0, DrumChannel::DRAW_RES - 1,
                                                               (int) (sequencer.barPos() * DrumChannel::DRAW_RES));
                     openIdx = pch.addDrawNote(cur, 1, playNote - 60, (int) std::lround(kvel * 255.0f));
-                    // A key was still HELD when this one opened = the note was played LEGATO:
-                    // - mono + Glide up: mark it to SLIDE from the held note (portamento reproduces);
-                    // - Legato mode (either world): mark it to CONTINUE the envelope on playback
-                    //   [2026-07-16] - so a recorded legato pad phrase swells once, exactly as played.
-                    // Both flags are hand-editable in the piano roll's right-click note menu.
-                    if (openIdx >= 0 && keysHeldCount > 0)
-                    {
-                        if (! pch.keysPolyMode && pch.keysGlide > 0.0001f) pch.drawNotes[openIdx].glide = 1;
-                        if (pch.keysLegato)                                pch.drawNotes[openIdx].legato = 1;
-                    }
+                    // [2026-07-16 round-5] NOTHING is stamped for legato/glide any more (user
+                    // design): the recorded note GEOMETRY (overlap/butt) already says what was
+                    // played, and playback derives slide + envelope-continuation from it plus the
+                    // sound's CURRENT Mode and Glide knob - one source of truth, nothing to go stale.
                 }
                 keysHeldOpenIdx[keysHeldCount] = openIdx;
                 keysHeldOpenPat[keysHeldCount] = openPat;
@@ -1443,7 +1437,10 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
             { "ui_sel_follow", SelFollow }, { "ui_sel_test", SelTest },
             { "ui_sel_undo", SelUndo }, { "ui_sel_redo", SelRedo },
             { "ui_sel_volReset", SelVolReset }, { "ui_sel_keysView", SelKeysView },       // title strip [2026-07-15 22:30]
-            { "ui_sel_view16", SelView16 }, { "ui_sel_editor", SelEditorToggle } };
+            { "ui_sel_view16", SelView16 }, { "ui_sel_editor", SelEditorToggle },
+            { "ui_sel_scaleTypeNext", SelScaleTypeNext }, { "ui_sel_scaleTypePrev", SelScaleTypePrev },   // ScaleBox step buttons
+            { "ui_sel_scaleKeyNext", SelScaleKeyNext }, { "ui_sel_scaleKeyPrev", SelScaleKeyPrev },       //  (wrap) [2026-07-16 round-5]
+            { "ui_sel_scaleNotesNext", SelScaleNotesNext }, { "ui_sel_scaleNotesPrev", SelScaleNotesPrev } };
         for (auto& k : kSelBtns) if (pid == k.first) { if (on) pushSelCC(k.second, 1.0f); return; }
         return;
     }

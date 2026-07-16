@@ -2,6 +2,7 @@
 // SLIDE from the old pitch to the new. [1] glide ON: the 2nd note STARTS near the old pitch and ENDS
 // near the new, passing through the middle (a real sweep). [2] glide OFF: the 2nd note JUMPS straight
 // to the new pitch. [3] poly = fingered portamento (overlap slides, detached jumps) [2026-07-16].
+// [4]/[5] roll playback: butted notes slide/continue the envelope from GEOMETRY + Mode/knob (no flags).
 #include "DrumChannel.h"
 #include "Sequencer.h"
 #include <cstdio>
@@ -94,7 +95,7 @@ int main() {
         setupSine(ch);
         ch.drawMode = true; ch.keysPolyMode = false; ch.keysGlide = 1.0f;   // mono + glide
         ch.addDrawNote(0,  96, 0,  255, 0, 0);        // C3, beat 1
-        ch.addDrawNote(96, 96, 12, 255, 0, 1);        // C4, beat 2 (butted -> legato), GLIDE flag set
+        ch.addDrawNote(96, 96, 12, 255, 0, 0);        // C4, beat 2 (butted) - NO flag: geometry + knob drive the slide [2026-07-16 round-5]
         for (auto& p : sq->patterns) for (auto& c2 : p.channels) c2.prepareToPlay(SR, bs);
         sq->startStandalone();
         std::vector<float> out;
@@ -108,9 +109,9 @@ int main() {
         delete sq;
     }
 
-    {   // [5] PER-NOTE LEGATO reproduces on PLAYBACK [2026-07-16]: a SLOW-ATTACK sound, two butted
-        //     notes; note 2 flagged legato = the envelope CONTINUES (its onset is already loud),
-        //     unflagged = the attack restarts near silence. LIVE == RECORDING for legato phrases.
+    {   // [5] GEOMETRY LEGATO reproduces on PLAYBACK [2026-07-16 round-5]: a SLOW-ATTACK sound,
+        //     two butted notes; Legato MODE on = note 2 CONTINUES the envelope (onset already
+        //     loud), mode off = the attack restarts near silence. LIVE == RECORDING, no flags.
         auto renderPair = [&](bool legato) {
             auto* sq = new Sequencer();
             sq->setStandaloneBpm(120.0f);
@@ -120,7 +121,7 @@ int main() {
             ch.drawMode = true; ch.keysPolyMode = true;
             ch.addDrawNote(0,  96, 0, 255, 0, 0);         // C3, beat 1 (0.5 s)
             ch.addDrawNote(96, 96, 0, 255, 0, 0);         // C3, beat 2 (butted)
-            ch.drawNotes[1].legato = legato ? 1 : 0;
+            ch.keysLegato = legato;                       // geometry + the Legato MODE (no per-note flag)
             for (auto& p : sq->patterns) for (auto& c2 : p.channels) c2.prepareToPlay(SR, bs);
             sq->startStandalone();
             std::vector<float> out;
@@ -133,7 +134,7 @@ int main() {
             return std::sqrt(e / (double) juce::jmax(1, i1 - i0));
         };
         const double on = renderPair(true), off = renderPair(false);
-        printf("[5] legato flag: note2 onset rms flagged=%.4f vs plain=%.4f (x%.1f) -> %s\n",
+        printf("[5] geometry legato: note2 onset rms mode-on=%.4f vs mode-off=%.4f (x%.1f) -> %s\n",
                on, off, off > 1.0e-9 ? on / off : 999.0,
                CHK(on > off * 2.0 && on > 0.05) ? "envelope CONTINUES on playback (OK)" : "FAIL");
     }

@@ -73,9 +73,11 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
             c.strumFlip = e.drawStrumUp;   // per-note strum direction + amount (trigger() consumes both)
             c.strumOverride = e.drawStrumPct >= 0 ? (float) e.drawStrumPct * 0.01f : -1.0f;
             c.legatoNext = e.drawLegato;   // [2026-07-16] per-note LEGATO: trigger() inherits the ringing envelope (consumed)
-            if (e.drawGlideFrom > -900.0f) {   // MONO legato glide: slide from the previous note's pitch to this one's
+            if (e.drawGlideFrom > -900.0f) {   // GLIDE: slide from the legato predecessor's pitch to this one's
                 const long gs = (long) (c.keysGlide * 0.4 * sampleRate);   // same 0..400 ms as live keys
-                c.fadeOutVoices(0.015f);                                   // 15 ms handover on the outgoing voice (like keyDown)
+                // Mono keeps the live 15 ms handover; POLY must NOT fade (it would cut ringing
+                // chord tones - live poly glide never fades either) [2026-07-16 round-5].
+                if (! c.keysPolyMode) c.fadeOutVoices(0.015f);
                 c.trigger(e.drawVel, e.drawGlideFrom, e.drawNotePan, g, /*glideTo*/ e.drawPitch, gs,
                           /*forceOverlap*/ true, mask, kg);
             } else
@@ -472,22 +474,31 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
                 const long gate = (long) juce::jmax(64.0, segBars * samplesPerBar);
                 const int off = baseOffset + (int) juce::jlimit(0.0, (double) spanSamples - 1.0,
                                                 (colPos - oldPos) / span * (double) spanSamples);
-                // PER-NOTE GLIDE (portamento): a note FLAGGED glide slides FROM its LEGATO predecessor's
-                // pitch (the most recent earlier note that overlaps or butts up to it). The Glide knob sets
-                // the time. Recording sets the flag for legato passes; the piano roll toggles it by hand
-                // (the roll equivalent of per-step Slide). No flag / no predecessor / Glide 0 = no slide.
-                float glideFrom = -999.0f;
-                if (nt.glide && c.keysGlide > 0.0001f)
+                // GEOMETRY-DRIVEN LEGATO + GLIDE [2026-07-16 round-5, user design - replaced the
+                // per-note flags]: the notes THEMSELVES say what was played. A note with a legato
+                // PREDECESSOR (the most recent earlier note that overlaps or butts up to it, ~1/64
+                // bar tolerance) follows the sound's CURRENT settings: Glide knob up = slide from
+                // the predecessor's pitch (different pitches only); a Legato mode = continue the
+                // ringing envelope (no re-attack). Detached notes always restart. One source of
+                // truth (grid + Mode + knob), nothing stamped = nothing to go stale.
+                float glideFrom = -999.0f; bool legato = false;
+                if (c.keysLegato || c.keysGlide > 0.0001f)
                 {
-                    const int adjGap = R / 64;   // "adjacent" tolerance (~1/64 bar) so butted notes count as legato
-                    int bestStart = -1;
+                    const int adjGap = R / 64;
+                    int bestStart = -1; int bestSemi = 0;
                     for (int mj = 0; mj < nN; ++mj)
                     {
                         if (mj == ni) continue;
                         const auto& m = c.drawNotes[mj];
                         if (m.start < nt.start && (m.start + m.len) >= (nt.start - adjGap)
-                            && m.semi != nt.semi && m.start > bestStart)
-                        { bestStart = m.start; glideFrom = (float) m.semi; }
+                            && m.start > bestStart)
+                        { bestStart = m.start; bestSemi = (int) m.semi; }
+                    }
+                    if (bestStart >= 0)
+                    {
+                        legato = c.keysLegato;
+                        if (c.keysGlide > 0.0001f && bestSemi != (int) nt.semi)
+                            glideFrom = (float) bestSemi;
                     }
                 }
                 TriggerEvent e; e.channel = ch; e.step = 0; e.offset = off; e.gate = gate;
@@ -496,7 +507,7 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
                 e.drawSlot = nt.slot;                                 // per-note slot tag
                 e.drawOneShot = nt.oneShot != 0;
                 e.drawStrumUp = nt.strumUp != 0;
-                e.drawLegato = nt.legato != 0;
+                e.drawLegato = legato;   // geometry + Mode (see above), not a stored flag
                 e.drawStrumPct = nt.strumPct > 100 ? -1 : (int) nt.strumPct;
                 e.drawNotePan = nt.pan == DrumChannel::PAN_INHERIT ? c.drawPan : (float) nt.pan * 0.01f;   // 127 = inherit channel pan; else explicit (0 = true centre)
                 e.drawOverlap = overlap;

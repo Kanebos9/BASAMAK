@@ -695,16 +695,11 @@ void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle
             if (! n.oneShot && bar.getWidth() > 14.0f)   // resize tab on the right edge (gated notes)
             { g.setColour(juce::Colours::white.withAlpha(0.55f));
               g.fillRect(juce::Rectangle<float>(bar.getRight() - 4.0f, bar.getY() + 1.0f, 3.0f, bar.getHeight() - 2.0f)); }
-            if (n.glide)   // GLIDE flag: a cyan ramp sliding UP into the note's left edge (portamento)
-            { g.setColour(juce::Colour(0xff35c0ff));
-              g.drawLine(x1 - 8.0f, bar.getBottom() + 3.0f, x1, bar.getY(), 2.2f); }
         }
         else
         {
             g.setColour(col);
             g.fillRect(juce::Rectangle<float>(x1, y - bh * 0.5f, juce::jmax(2.0f, x2 - x1 - 1.0f), bh));
-            if (n.glide)   // tiny cyan tick at the note start (glide) in the compact row view
-            { g.setColour(juce::Colour(0xff35c0ff)); g.fillRect(juce::Rectangle<float>(x1 - 2.0f, y - bh, 2.0f, bh * 2.0f)); }
         }
     }
     if (overlay && prMode == 5)   // MARQUEE rubber band (right-drag)
@@ -955,9 +950,10 @@ juce::String StepGridComponent::getTooltip()
                             "to move them.\n"
                             "- Faint lines show every pitch each slot REALLY sounds (chords, scales, slot-2 pitch) "
                             "- display only.\n"
-                            "- CMD/CTRL+click a note = GLIDE (slides in from the previous note; the KEYS Glide "
-                            "knob sets the time).\n"
-                            "- RIGHT-CLICK a note (no drag) = the NOTE MENU: Gate on/off, glide, slot, delete. "
+                            "- GLIDE + LEGATO are automatic: a note that overlaps or butts against the previous "
+                            "one slides in (Glide knob = time) and continues its envelope (Legato modes) - "
+                            "exactly what the sound's Mode + Glide knob say. Leave a gap = a fresh note.\n"
+                            "- RIGHT-CLICK a note (no drag) = the NOTE MENU: Gate on/off, strum, velocity, pan, slot, loop condition, delete. "
                             "GATE OFF (tapered end) = fires like a step and rings naturally; GATE ON (square end) "
                             "= holds at sustain for its length, then releases.\n"
                             "- RIGHT-DRAG = SELECT an area (marquee): then drag any selected note to move them all "
@@ -1258,12 +1254,6 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
             {   // RIGHT-CLICK: decided on release. NO drag = the NOTE MENU (on a note); a DRAG =
                 // marquee area-select (any pitch). prMode 8 = 'pending right-click' until mouseUp/mouseDrag.
                 prMode = 8; prMarqA = prMarqB = p; prRightIdx = idx; return;
-            }
-            if ((e.mods.isCommandDown() || e.mods.isCtrlDown()) && idx >= 0)
-            {   // cmd/ctrl+click toggles GLIDE on this note: it slides in from the previous (legato) note's
-                // pitch (Glide knob = time). The piano-roll equivalent of a step's Slide flag.
-                drawNotes[ch2][idx].glide = drawNotes[ch2][idx].glide ? 0 : 1;
-                pushNotes(ch2); repaint(); return;
             }
             if (idx >= 0 && prSel[idx])
             {   // drag any SELECTED note = move the WHOLE selection together
@@ -1676,8 +1666,6 @@ void StepGridComponent::showRollNoteMenu(int ch2, int idx)
     pm.addItem(204, "Right 100%", true, ! panInherit && nn.pan >= 90);
     m.addSubMenu("Pan", pm);
     m.addSeparator();
-    m.addItem(3, "Glide into this note", true, nn.glide != 0);
-    m.addItem(41, "Legato: continue the previous note's envelope", true, nn.legato != 0);   // [2026-07-16]
     juce::PopupMenu sm;
     sm.addItem(10, "Both slots", true, nn.slot == 0);
     sm.addItem(11, "Slot 1",     true, nn.slot == 1);
@@ -1713,8 +1701,6 @@ void StepGridComponent::showRollNoteMenu(int ch2, int idx)
             }
             if (r == 1)      apply(+[](DrumChannel::DrawNote& n, int){ n.oneShot = 1; }, 0);
             else if (r == 2) apply(+[](DrumChannel::DrawNote& n, int){ n.oneShot = 0; }, 0);
-            else if (r == 3) apply(+[](DrumChannel::DrawNote& n, int){ n.glide = n.glide ? 0 : 1; }, 0);
-            else if (r == 41) apply(+[](DrumChannel::DrawNote& n, int){ n.legato = n.legato ? 0 : 1; }, 0);
             else if (r == 5) apply(+[](DrumChannel::DrawNote& n, int){ n.strumUp = 0; }, 0);
             else if (r == 6) apply(+[](DrumChannel::DrawNote& n, int){ n.strumUp = 1; }, 0);
             else if (r == 20) apply(+[](DrumChannel::DrawNote& n, int){ n.strumPct = 255; }, 0);

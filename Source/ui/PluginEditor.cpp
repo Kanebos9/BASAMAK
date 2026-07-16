@@ -423,6 +423,18 @@ void WaveMorphDisplay::paint(juce::Graphics& g)
         g.setColour(juce::Colour(0xffe8bf4d).withAlpha(0.8f));
         g.drawRoundedRectangle(b.reduced(1.0f), 4.0f, 1.6f);
     }
+    if (wtPosLive >= 0.0f)
+    {   // [2026-07-16 round-5] LIVE WAVETABLE POSITION (Custom-wave Osc slots): the engine's real
+        // playing position (knob + glide + WAVE LFO) as an amber marker along the bottom - the
+        // slot-preview twin of the draw window's Position-strip marker. Underlay strip = grain-dot
+        // convention; only drawn while a voice actually plays (idle = no marker, honest).
+        g.setColour(juce::Colour(0x66000000));
+        g.fillRoundedRectangle(b.getX() + 2.0f, b.getBottom() - 8.0f, b.getWidth() - 4.0f, 7.0f, 2.0f);
+        const float x = b.getX() + 4.0f + juce::jlimit(0.0f, 1.0f, wtPosLive) * (b.getWidth() - 8.0f);
+        g.setColour(juce::Colour(0xffffc169));
+        g.fillRect(x - 1.0f, b.getBottom() - 8.0f, 2.0f, 7.0f);
+        g.fillEllipse(x - 2.4f, b.getBottom() - 7.2f, 4.8f, 4.8f);
+    }
     if (grainN >= 0)
     {   // GRANULAR: the dots are the REAL positions the engine's grains are reading right now
         // (fed from getGrainSnapshot - honest visual, never an animation). A darker underlay strip
@@ -4510,9 +4522,24 @@ void ScaleBox::mouseDown(const juce::MouseEvent& e)
     if ((e.mods.isPopupMenu() || e.mods.isRightButtonDown()) && mlm != nullptr)
     {   // [2026-07-16] right-click = MIDI-learn. SELECTION-scope by design: the CC always edits
         // whatever pattern/channel is selected AND whichever slot chip is active in THIS box.
-        if (notesRect().contains(p)) { showMidiLearnMenu(this, *mlm, "ui_sel_scaleNotes", -1); return; }
-        if (scaleRect().contains(p)) { showMidiLearnMenu(this, *mlm, "ui_sel_scaleType",  -1); return; }
-        if (keyRect().contains(p))   { showMidiLearnMenu(this, *mlm, "ui_sel_scaleKey",   -1); return; }
+        // [round-5] Each region offers a KNOB (absolute sweep) or NEXT/PREV step BUTTONS (wrap).
+        auto learnMenu = [this](const char* base, const char* next, const char* prev)
+        {
+            juce::PopupMenu m;
+            m.addItem(1, "Assign a knob (full sweep)...");
+            m.addItem(2, "Assign a NEXT button (step + wrap)...");
+            m.addItem(3, "Assign a PREV button (step + wrap)...");
+            juce::String b(base), nx(next), pv(prev);
+            m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this),
+                [this, b, nx, pv](int r) {
+                    if (r == 1) showMidiLearnMenu(this, *mlm, b,  -1);
+                    if (r == 2) showMidiLearnMenu(this, *mlm, nx, -1);
+                    if (r == 3) showMidiLearnMenu(this, *mlm, pv, -1);
+                });
+        };
+        if (notesRect().contains(p)) { learnMenu("ui_sel_scaleNotes", "ui_sel_scaleNotesNext", "ui_sel_scaleNotesPrev"); return; }
+        if (scaleRect().contains(p)) { learnMenu("ui_sel_scaleType",  "ui_sel_scaleTypeNext",  "ui_sel_scaleTypePrev");  return; }
+        if (keyRect().contains(p))   { learnMenu("ui_sel_scaleKey",   "ui_sel_scaleKeyNext",   "ui_sel_scaleKeyPrev");   return; }
         return;
     }
     for (int i = 0; i < 2; ++i) if (chipRect(i).contains(p))
@@ -4566,14 +4593,14 @@ juce::String ScaleBox::getTooltip()
                "This is the SAME slot selection as the sound editor's - switching here switches there too "
                "(and the ui_sel_slotSel MIDI target flips both).";
     if (keyRect().contains(p))
-        return "KEY: the scale's root note (C..B). Right-click = assign a MIDI knob (acts on the selected channel + this box's slot chip).";
+        return "KEY: the scale's root note (C..B). Right-click = assign a MIDI knob or NEXT/PREV buttons (acts on the selected channel + this box's slot chip).";
     if (notesRect().contains(p))
         return "NOTES (drag): the chord size the harmonizer plays per key - x1 = just the (snapped) note, "
-               "x3 = triads, x4 = 7th chords. Right-click = assign a MIDI knob.";
+               "x3 = triads, x4 = 7th chords. Right-click = assign a MIDI knob or NEXT/PREV buttons.";
     if (scaleRect().contains(p))
         return "SCALE (drag): Off, or the scale the slot plays in. With a scale ON, every key you press plays "
                "a full chord built from that key inside the scale; off-scale keys snap to the nearest scale note. "
-               "Right-click = assign a MIDI knob.";
+               "Right-click = assign a MIDI knob or NEXT/PREV buttons.";
     return "SCALE harmonizer for the selected channel's sound slots: one key = a full in-scale chord.\n\n"
            "- Pick the slot (1/2), a Key, a scale and the chord size (Notes).\n"
            "- The read-outs above the keys name what sounds LIVE: yellow = slot 1, pink = slot 2, "
@@ -6212,7 +6239,7 @@ juce::int64 DrumSequencerEditor::stateHash() const
             h = mix(h, ch.drawMode ? 1 : 0);
             if (ch.drawMode) { h = mix(h, f(ch.drawVel)); h = mix(h, f(ch.drawPan)); h = mix(h, f(ch.drawTuneCents));
                 for (int i = 0; i < ch.drawNoteCount; ++i) { const auto& nt = ch.drawNotes[i];
-                    h = mix(h, nt.start); h = mix(h, nt.len); h = mix(h, (int) nt.semi + 128); h = mix(h, (int) nt.vel); h = mix(h, (int) nt.slot); h = mix(h, (int) nt.glide); h = mix(h, (int) nt.oneShot); h = mix(h, (int) nt.strumUp); h = mix(h, (int) nt.strumPct); h = mix(h, (int) nt.pan); h = mix(h, (int) nt.condLen); h = mix(h, (int) nt.condMask); h = mix(h, (int) nt.legato); } }
+                    h = mix(h, nt.start); h = mix(h, nt.len); h = mix(h, (int) nt.semi + 128); h = mix(h, (int) nt.vel); h = mix(h, (int) nt.slot); h = mix(h, (int) nt.glide); h = mix(h, (int) nt.oneShot); h = mix(h, (int) nt.strumUp); h = mix(h, (int) nt.strumPct); h = mix(h, (int) nt.pan); h = mix(h, (int) nt.condLen); h = mix(h, (int) nt.condMask); } }
         }
     }
     h = mix(h, f(s.standaloneBpm)); h = mix(h, s.timeSigNum); h = mix(h, s.timeSigDen);
@@ -7191,6 +7218,29 @@ void DrumSequencerEditor::applySelCC(int t, float v, bool& slotDirty, bool& keys
             s2.scaleKey = juce::jlimit(0, 11, juce::roundToInt(v * 11.0f));
             ch.markDspDirty(); slotDirty = true; keysDirty = true; return;
         }
+        // ScaleBox NEXT/PREV buttons [2026-07-16 round-5]: one position per press, wrap at the
+        // ends (the Sound Bank next/prev convention). Same selection + slot-chip scope as the knobs.
+        case P::SelScaleTypeNext: case P::SelScaleTypePrev:
+        {
+            auto& s2 = ch.slots[juce::jlimit(0, 1, keysPanel.scaleBox.slot)];
+            const int d = t == P::SelScaleTypeNext ? 1 : -1;
+            const int pos = ((s2.scaleOn ? s2.scaleType + 1 : 0) + d + kNumScales + 1) % (kNumScales + 1);
+            s2.scaleOn = pos > 0; if (pos > 0) s2.scaleType = pos - 1;
+            ch.markDspDirty(); slotDirty = true; keysDirty = true; return;
+        }
+        case P::SelScaleKeyNext: case P::SelScaleKeyPrev:
+        {
+            auto& s2 = ch.slots[juce::jlimit(0, 1, keysPanel.scaleBox.slot)];
+            s2.scaleKey = (s2.scaleKey + (t == P::SelScaleKeyNext ? 1 : 11) + 12) % 12;
+            ch.markDspDirty(); slotDirty = true; keysDirty = true; return;
+        }
+        case P::SelScaleNotesNext: case P::SelScaleNotesPrev:
+        {
+            auto& s2 = ch.slots[juce::jlimit(0, 1, keysPanel.scaleBox.slot)];
+            if (! (s2.scaleOn && s2.scaleType >= 10))   // guitar voicings: string count is AUTO
+                s2.scaleUnison = 1 + ((s2.scaleUnison - 1 + (t == P::SelScaleNotesNext ? 1 : 6)) % 7);
+            ch.markDspDirty(); slotDirty = true; keysDirty = true; return;
+        }
         // Title-strip controls [2026-07-15 22:30] - the real buttons fire so all side-effects run.
         case P::SelVolReset:     btnVolReset.triggerClick(); return;
         case P::SelKeysView:     btnKeysView.triggerClick(); return;
@@ -7985,8 +8035,9 @@ void DrumSequencerEditor::setupComponents()
         "- Only OVERLAPPING presses slide (fingered portamento) - play detached = no slide.\n"
         "- Mono modes slide from the held note; Poly modes from the last played note.\n"
         "- Whether the ENVELOPE restarts or continues is the Mode dropdown's job, not this knob's.\n\n"
-        "Live playing only - recorded notes use the piano roll's per-note glide flag instead "
-        "(CMD/CTRL+click a note).");
+        "Applies to LIVE playing AND piano-roll playback the same way: roll notes that overlap or "
+        "butt against the previous note slide in; separated notes don't. Nothing is stamped into "
+        "the notes - the grid + this knob + the Mode are the one source of truth.");
     keysPanel.glideKnob.setColour(juce::Slider::rotarySliderFillColourId, juce::Colour(0xff35c0ff));   // cyan = pitch/glide
     keysPanel.glideKnob.onValueChange = [this] {
         if (ignoreKnobCallbacks) return;
@@ -8012,7 +8063,8 @@ void DrumSequencerEditor::setupComponents()
         "silence still attack normally.\n"
         "- Mono: a new key cuts the previous one; the envelope restarts each note.\n"
         "- Mono Legato: overlapping presses retune the sounding note - the envelope rides on.\n\n"
-        "Mono modes do NOT block Chord/Scale - one key still plays its full voicing. Keyboard only; "
+        "Mono modes do NOT block Chord/Scale - one key still plays its full voicing. Applies to the "
+        "keyboard AND piano-roll playback (overlapping/butted roll notes = an overlapping press); "
         "the sequencer's per-channel OV button is separate.");
     keysPanel.btnPlayMode.onClick = [this] {
         auto& c0 = proc.sequencer.channel(selectedChannel);
@@ -10816,7 +10868,7 @@ juce::int64 DrumSequencerEditor::takeDataHash(const DrumSequencerProcessor::Keys
     auto mix = [&](juce::int64 v) { h = h * 33 ^ v; };
     mix(t.channel); mix(t.isDraw ? 1 : 0);
     if (t.isDraw) { mix(t.drawPat); for (const auto& nt : t.drawNotes)
-                    { mix(nt.start); mix(nt.len); mix((int) nt.semi + 128); mix((int) nt.vel); mix((int) nt.slot); mix((int) nt.glide); mix((int) nt.oneShot); mix((int) nt.strumUp); mix((int) nt.strumPct); mix((int) nt.pan); mix((int) nt.condLen); mix((int) nt.condMask); mix((int) nt.legato); } }
+                    { mix(nt.start); mix(nt.len); mix((int) nt.semi + 128); mix((int) nt.vel); mix((int) nt.slot); mix((int) nt.glide); mix((int) nt.oneShot); mix((int) nt.strumUp); mix((int) nt.strumPct); mix((int) nt.pan); mix((int) nt.condLen); mix((int) nt.condMask); } }
     else for (auto& e : t.evts) { mix(e.pattern); mix(e.step); mix((int) e.semis + 128); mix(e.flags); }
     return h;
 }
@@ -12404,6 +12456,11 @@ void DrumSequencerEditor::timerCallback()
                                           : juce::String());
             }
             else if (mv.grainN >= 0) mv.setGrainLive(nullptr, -1, {});
+            // LIVE wavetable position marker on the slot preview [2026-07-16 round-5]: same
+            // engine value as the draw window's amber marker (honest; -1 clears when idle).
+            mv.setWtPosLive(dc.slots[b2].engine == DrumChannel::SrcOsc
+                                && dc.slots[b2].oscShape >= DrumChannel::WvCustom
+                            ? dc.getWtPos(b2) : -1.0f);
         }
     }
     // live tempo so the wave/read-out always show the TRUE synced speed (change-gated)
