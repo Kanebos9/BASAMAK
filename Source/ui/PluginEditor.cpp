@@ -6548,10 +6548,10 @@ void DrumSequencerEditor::readChannelMix(const juce::ValueTree& t, DrumChannel& 
       ch.chFxAmt[fx]  = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("cfxA" + k, 0.0f));
       ch.chFxChar[fx] = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("cfxC" + k, 0.5f)); }
     for (int f = 0; f < 2; ++f)   // [2026-07-16] CHANNEL FILTER/EQ pair (0/defaults for old files)
-    { const juce::String k(f); const DrumChannel dch;
+    { const juce::String k(f); const float cDef = (f == 0) ? 1000.0f : 2500.0f;   // struct defaults (a full DrumChannel per read = heavy)
       ch.chFiltType[f]   = juce::jlimit(0, (int) DrumChannel::Bell, (int) t.getProperty("cfT" + k, 0));
-      ch.chFiltCutoff[f] = juce::jlimit(20.0f, 20000.0f, (float) t.getProperty("cfC" + k, dch.chFiltCutoff[f]));
-      ch.chFiltReso[f]   = juce::jlimit(0.1f, 12.0f, (float) t.getProperty("cfR" + k, dch.chFiltReso[f]));
+      ch.chFiltCutoff[f] = juce::jlimit(20.0f, 20000.0f, (float) t.getProperty("cfC" + k, cDef));
+      ch.chFiltReso[f]   = juce::jlimit(0.1f, 12.0f, (float) t.getProperty("cfR" + k, 0.707f));
       ch.chFiltGain[f]   = juce::jlimit(-15.0f, 15.0f, (float) t.getProperty("cfG" + k, 0.0f)); }
     ch.chFiltDrive = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("cfDrv", 0.0f));
     {   // MIGRATION: last week's 4-fixed-effect mix files -> the strongest two FX slots

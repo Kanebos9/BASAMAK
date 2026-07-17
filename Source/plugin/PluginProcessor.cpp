@@ -2281,10 +2281,10 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
         }
     }
     for (int f = 0; f < 2; ++f)   // [2026-07-16] CHANNEL FILTER/EQ pair
-    { const juce::String k(f); const DrumChannel dch;
+    { const juce::String k(f); const float cDef = (f == 0) ? 1000.0f : 2500.0f;   // struct defaults (a full DrumChannel per read = heavy)
       ch.chFiltType[f]   = (int)  child.getProperty("cfT" + k, 0);
-      ch.chFiltCutoff[f] = (float)child.getProperty("cfC" + k, dch.chFiltCutoff[f]);
-      ch.chFiltReso[f]   = (float)child.getProperty("cfR" + k, dch.chFiltReso[f]);
+      ch.chFiltCutoff[f] = (float)child.getProperty("cfC" + k, cDef);
+      ch.chFiltReso[f]   = (float)child.getProperty("cfR" + k, 0.707f);
       ch.chFiltGain[f]   = (float)child.getProperty("cfG" + k, 0.0f); }
     ch.chFiltDrive = (float)child.getProperty("cfDrv", 0.0f);
     ch.reverbSend = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("chRev", (float) ch.reverbSend));   // channel sends

@@ -4110,7 +4110,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     // CHARACTER = speed (0.7 Hz chorale .. 7 Hz tremolo). Amount = intensity.
                     const int flen = juce::jmax(64, (int) (0.006 * sr));
                     if ((int) chFxDL[fx].size() != flen) { chFxDL[fx].assign((size_t) flen, 0.0f); chFxDR[fx].assign((size_t) flen, 0.0f); chFxW[fx] = 0; chFxPhs[fx] = 0.0; }
-                    int w = chFxW[fx]; double ph = chFxPhs[fx];
+                    int w = chFxW[fx]; double ph = chFxPhs[fx]; double phR = chFxPhs2[fx];   // rotor = its OWN accumulator (non-integer 0.34x of a wrapped phase JUMPED at every wrap = clicks)
                     const double hornHz = typeSync ? syncHz : 0.7 * std::pow(10.0, (double) ch1);   // free: 0.7..7 Hz
                     const double dPh = 2.0 * kPi * hornHz / sr;
                     const float  kX  = 1.0f - std::exp(-2.0f * (float) kPi * 800.0f / (float) sr);
@@ -4124,9 +4124,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     for (int i = 0; i < numSamples; ++i)
                     {
                         amt += smK * (aTgt[fx] - amt);
-                        const double rotPh = ph * 0.34;
                         const float hs = (float) std::sin(ph),  hc = (float) std::cos(ph);
-                        const float rs = (float) std::sin(rotPh);
+                        const float rs = (float) std::sin(phR);
                         // split (states [0]/[1] = LP per side); highs into the doppler line
                         chFxPzL[fx][0] += kX * (outL[i] - chFxPzL[fx][0]);
                         chFxPzR[fx][0] += kX * (outR[i] - chFxPzR[fx][0]);
@@ -4144,9 +4143,10 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         const float lR = loR * rAM * std::sqrt(juce::jlimit(0.0f, 2.0f, 1.0f + rpn));
                         outL[i] = lL + hiL; outR[i] = lR + hiR;
                         if (++w >= flen) w = 0;
-                        ph += dPh; if (ph > 2.0 * kPi) ph -= 2.0 * kPi;
+                        ph  += dPh;        if (ph  > 2.0 * kPi) ph  -= 2.0 * kPi;
+                        phR += dPh * 0.34; if (phR > 2.0 * kPi) phR -= 2.0 * kPi;   // wraps ITSELF = continuous
                     }
-                    chFxW[fx] = w; chFxPhs[fx] = ph; sm = amt;
+                    chFxW[fx] = w; chFxPhs[fx] = ph; chFxPhs2[fx] = phR; sm = amt;
                 } break;
                 case ChFxTape:
                 {   // TAPE wow/flutter: the whole channel passes through a slowly-warped delay line =
@@ -4154,7 +4154,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     // speed. NOTE: adds a small constant delay (~3 ms) while engaged (disclosed).
                     const int flen = juce::jmax(64, (int) (0.008 * sr));
                     if ((int) chFxDL[fx].size() != flen) { chFxDL[fx].assign((size_t) flen, 0.0f); chFxDR[fx].assign((size_t) flen, 0.0f); chFxW[fx] = 0; chFxPhs[fx] = 0.0; }
-                    int w = chFxW[fx]; double ph = chFxPhs[fx];
+                    int w = chFxW[fx]; double ph = chFxPhs[fx]; double phF = chFxPhs2[fx];   // flutter = its OWN accumulator (see the header note)
                     const double rate = typeSync ? syncHz : 0.8 * std::pow(4.0, 2.0 * (double) ch1 - 1.0);   // free: 0.2..3.2 Hz wow
                     const double dPh  = 2.0 * kPi * rate / sr;
                     const float  baseS = (float) (0.003 * sr);
@@ -4169,7 +4169,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     {
                         amt += smK * (aTgt[fx] - amt);
                         const float d = baseS + amt * ((float)(0.0016 * sr) * (float) std::sin(ph)
-                                                     + (float)(0.00025 * sr) * (float) std::sin(ph * 6.7));
+                                                     + (float)(0.00025 * sr) * (float) std::sin(phF));
                         chFxDL[fx][(size_t) w] = outL[i]; chFxDR[fx][(size_t) w] = outR[i];
                         float xl = rd(chFxDL[fx], d), xr = rd(chFxDR[fx], d);
                         chFxPzL[fx][0] += hfK * (xl - chFxPzL[fx][0]);        // tape HF softening (mixed by amount)
@@ -4177,9 +4177,10 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         outL[i] = xl + (chFxPzL[fx][0] - xl) * amt * 0.35f;
                         outR[i] = xr + (chFxPzR[fx][0] - xr) * amt * 0.35f;
                         if (++w >= flen) w = 0;
-                        ph += dPh; if (ph > 2.0 * kPi) ph -= 2.0 * kPi;
+                        ph  += dPh;       if (ph  > 2.0 * kPi) ph  -= 2.0 * kPi;
+                        phF += dPh * 6.7; if (phF > 2.0 * kPi) phF -= 2.0 * kPi;   // wraps ITSELF = sin stays continuous
                     }
-                    chFxW[fx] = w; chFxPhs[fx] = ph; sm = amt;
+                    chFxW[fx] = w; chFxPhs[fx] = ph; chFxPhs2[fx] = phF; sm = amt;
                 } break;
                 case ChFxAutoPan:
                 {   // AUTO-PAN: equal-power stereo movement (gL = sqrt(1-p), gR = sqrt(1+p), p = amt*sin).
@@ -4298,6 +4299,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 const int mCut = f == 0 ? 0 : 2, mRes = f == 0 ? 1 : 3;
                 if (! on)
                 {   chFiltGm[f] = chFiltKm[f] = -1.0f;
+                    chFiltIc1[f][0] = chFiltIc1[f][1] = chFiltIc2[f][0] = chFiltIc2[f][1] = 0.0f;   // stale state = a re-enable transient
                     chFiltLive[mCut] = chFiltLive[mRes] = -1000.0f; continue; }
                 const float cutHz = juce::jlimit(20.0f, (float)(sr * 0.45),
                     chFiltCutoff[f] * std::exp2(juce::jlimit(-4.0f, 4.0f, chFiltMod[mCut] * 4.0f)));
@@ -4348,6 +4350,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         }
         else
         {   chFiltGm[0] = chFiltGm[1] = chFiltKm[0] = chFiltKm[1] = -1.0f;
+            for (int f = 0; f < 2; ++f) chFiltIc1[f][0] = chFiltIc1[f][1] = chFiltIc2[f][0] = chFiltIc2[f][1] = 0.0f;
             for (int cf = 0; cf < 4; ++cf) chFiltLive[cf] = -1000.0f; }
     }
 

@@ -759,6 +759,9 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     std::vector<float> chFxDL[3], chFxDR[3];
     int    chFxW[3]  = {};
     double chFxPhs[3] = {};
+    double chFxPhs2[3] = {};   // [2026-07-17] SECOND phase per FX slot: Tape's flutter (6.7x) + Rotary's rotor
+                               // (0.34x) run at NON-INTEGER multiples of the main phase - deriving them from a
+                               // 2pi-WRAPPED phase made them JUMP at every wrap = a click per cycle (user bug).
     float  chFxPzL[3][6] = {}, chFxPzR[3][6] = {};   // allpass/split/env states per slot (meaning per type)
     float  chFxFbL[3] = {}, chFxFbR[3] = {};
     float  chFxCompEnv[3] = {};
