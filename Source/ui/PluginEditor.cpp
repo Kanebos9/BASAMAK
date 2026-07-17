@@ -4597,24 +4597,19 @@ void ScaleBox::mouseDown(const juce::MouseEvent& e)
     if ((e.mods.isPopupMenu() || e.mods.isRightButtonDown()) && mlm != nullptr)
     {   // [2026-07-16] right-click = MIDI-learn. SELECTION-scope by design: the CC always edits
         // whatever pattern/channel is selected AND whichever slot chip is active in THIS box.
-        // [round-5] Each region offers a KNOB (absolute sweep) or NEXT/PREV step BUTTONS (wrap).
-        auto learnMenu = [this](const char* base, const char* next, const char* prev)
-        {
-            juce::PopupMenu m;
-            m.addItem(1, "Assign a knob (full sweep)...");
-            m.addItem(2, "Assign a NEXT button (step + wrap)...");
-            m.addItem(3, "Assign a PREV button (step + wrap)...");
-            juce::String b(base), nx(next), pv(prev);
-            m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this),
-                [this, b, nx, pv](int r) {
-                    if (r == 1) showMidiLearnMenu(this, *mlm, b,  -1);
-                    if (r == 2) showMidiLearnMenu(this, *mlm, nx, -1);
-                    if (r == 3) showMidiLearnMenu(this, *mlm, pv, -1);
-                });
-        };
-        if (notesRect().contains(p)) { learnMenu("ui_sel_scaleNotes", "ui_sel_scaleNotesNext", "ui_sel_scaleNotesPrev"); return; }
-        if (scaleRect().contains(p)) { learnMenu("ui_sel_scaleType",  "ui_sel_scaleTypeNext",  "ui_sel_scaleTypePrev");  return; }
-        if (keyRect().contains(p))   { learnMenu("ui_sel_scaleKey",   "ui_sel_scaleKeyNext",   "ui_sel_scaleKeyPrev");   return; }
+        // [2026-07-17] ONE menu with all three assignments (knob + NEXT/PREV buttons via the
+        // learn menu's alt slots - the proven step-menu pattern). The round-5 version CHAINED a
+        // picker menu into showMidiLearnMenu = the menu-after-closing-menu death ("options
+        // appear but I can't assign", user) - never chain into the learn menu.
+        if (notesRect().contains(p)) { showMidiLearnMenu(this, *mlm, "ui_sel_scaleNotes", -1,
+                "ui_sel_scaleNotesNext", "NEXT button (step + wrap)",
+                "ui_sel_scaleNotesPrev", "PREV button (step + wrap)"); return; }
+        if (scaleRect().contains(p)) { showMidiLearnMenu(this, *mlm, "ui_sel_scaleType", -1,
+                "ui_sel_scaleTypeNext", "NEXT button (step + wrap)",
+                "ui_sel_scaleTypePrev", "PREV button (step + wrap)"); return; }
+        if (keyRect().contains(p))   { showMidiLearnMenu(this, *mlm, "ui_sel_scaleKey", -1,
+                "ui_sel_scaleKeyNext", "NEXT button (step + wrap)",
+                "ui_sel_scaleKeyPrev", "PREV button (step + wrap)"); return; }
         return;
     }
     for (int i = 0; i < 2; ++i) if (chipRect(i).contains(p))
