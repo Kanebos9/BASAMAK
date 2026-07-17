@@ -3937,8 +3937,9 @@ void FrequencyDisplay::paint(juce::Graphics& g)
             else     { g.setColour(fcol.withAlpha(0.45f)); g.strokePath(dia, juce::PathStrokeType(1.5f)); }
             // Type name ON the diamond (a small tag just above it): the user always sees F1/F2's type.
             g.setColour(fOn ? fcol : fcol.withAlpha(0.6f)); g.setFont(juce::Font(9.5f, juce::Font::bold));
-            g.drawText(juce::String("F") + juce::String(fi + 1) + " " + tn[juce::jlimit(0, 6, fType[fi])],
-                       juce::jlimit(left, right - 52.0f, mp.x - 26.0f), mp.y - r - 13.0f, 52.0f, 11.0f, juce::Justification::centred, false);
+            g.drawText(juce::String("F") + juce::String(fi + 1) + " " + tn[juce::jlimit(0, 6, fType[fi])]
+                         + (chanMode ? juce::String() : (fi == 0 ? " - pre" : " - post")),   // [2026-07-17] F1 = input (pre-FX), F2 = output (post-FX)
+                       juce::jlimit(left, right - 86.0f, mp.x - 43.0f), mp.y - r - 13.0f, 86.0f, 11.0f, juce::Justification::centred, false);
         }
         // one-line gesture hint (no buttons to discover from)
         g.setColour(juce::Colour(0xff6a7290)); g.setFont(juce::Font(9.0f, juce::Font::bold));
@@ -4052,7 +4053,11 @@ juce::String FrequencyDisplay::getTooltip()
                  "DRAG = frequency (" + juce::String(juce::roundToInt(fCutoff[fi])) + " Hz) + gain ("
                  + juce::String(fGain[fi] >= 0 ? "+" : "") + juce::String(fGain[fi], 1) + " dB - the diamond sits AT its gain; "
                  "centre line = flat). WHEEL = Q (" + juce::String(fReso[fi], 2) + "). RIGHT-CLICK = type, DOUBLE-CLICK = on/off.";
-      return juce::String("Filter ") + juce::String(fi + 1) + " (" + tn[juce::jlimit(0, 6, fType[fi])] + "): DRAG the diamond = cutoff ("
+      return juce::String("Filter ") + juce::String(fi + 1) + " (" + tn[juce::jlimit(0, 6, fType[fi])] + ")"
+           + (chanMode ? juce::String(": post-FX, whole channel. ") : fi == 0
+               ? juce::String(": the INPUT filter - runs BEFORE the slot FX (Drive/Ring/Sub), so it shapes what FEEDS them. ")
+               : juce::String(": the OUTPUT filter - runs AFTER all the slot FX, on exactly the signal this spectrum shows. "))
+           + juce::String("DRAG the diamond = cutoff (")
            + juce::String(juce::roundToInt(fCutoff[fi])) + " Hz) + reso (Q " + juce::String(fReso[fi], 2) + "). RIGHT-CLICK = change type, DOUBLE-CLICK = on/off, wheel = reso."; }
     if (chanMode)
         return "CHANNEL FILTER/EQ: TWO resonant filters on the WHOLE finished channel - applied AFTER "
@@ -4065,9 +4070,11 @@ juce::String FrequencyDisplay::getTooltip()
                "MODULATION box instead (the \"(Channel)\" filter targets).\n"
                "- The spectrum = the FINAL channel output (post-FX, post this filter) - curve and "
                "picture describe the same signal.";
-    return "Live spectrum of THIS SLOT + TWO resonant filters in series (F1 orange, F2 cyan). "
-           "Parked, they double as a parametric EQ (Bell = a band, HP/LP = the cuts); add the envelope "
-           "arrow / a matrix route and they become moving filters.\n\n"
+    return "Live spectrum of THIS SLOT + TWO resonant filters (F1 orange, F2 cyan). "
+           "F1 = the INPUT filter (runs before the slot FX - shape what feeds the Drive/Ring); "
+           "F2 = the OUTPUT filter (runs after ALL the slot FX - acts on exactly what this spectrum "
+           "shows). Parked, they double as a parametric EQ; add the envelope arrow / a matrix route "
+           "and they become moving filters.\n\n"
            "- Each filter is a DIAMOND: drag = cutoff/reso, double-click = on/off, right-click = type "
            "(LP / HP / BP / Notch / BELL - Bell BOOSTS a band, Y = +dB). Stack High-Pass + Low-Pass = a band.\n"
            "- The CHANNEL chip above switches this display to the post-FX CHANNEL filter pair (shape "
@@ -9898,9 +9905,9 @@ void DrumSequencerEditor::setupComponents()
     // MASTER text") - the one place that documents the order everything is applied in.
     hdrSounds.setTooltip(
         "SIGNAL CHAIN - the order everything is applied in:\n\n"
-        "- 1. SLOT (each sound layer, per voice): Engine > Filter 1 > Filter 2 > Drive > "
-        "Formant > Punch > Ring > Sub (the sub joins LAST, after the distortion - that's why it "
-        "stays clean).\n"
+        "- 1. SLOT (each sound layer, per voice): Engine > FILTER 1 (the input filter) > Drive > "
+        "Formant > Punch > Ring > Sub > FILTER 2 (the output filter - it acts on everything the "
+        "slot FX created, the exact signal the slot spectrum shows).\n"
         "- 2. CHANNEL (both slots mixed): Channel FX A > B > C > CHANNEL FILTER/EQ (the "
         "FILTER/EQ box's CHANNEL chip) > Duck. The Reverb/Delay SEND faders tap a COPY here - "
         "the finished channel sound (reverb send is low-cut at 150 Hz so subs stay dry).\n"
@@ -11499,7 +11506,18 @@ void DrumSequencerEditor::onSlotEngineChange(int box)
         }
         // (layoutContent() -> refreshDetailPanel() below re-reads modFaders from the selected slot.)
     }
-    syncPadFromSlots (true);   // adding/removing a slot rebalances the blend
+    // [2026-07-17] WEIGHT ON ENABLE (the "slot 2 doesn't work at all" bug): the v1.3.9 blend-fader
+    // fix made syncPadFromSlots READ-ONLY - right for refreshes, but it was also what gave a newly
+    // enabled slot its weight, so an engine picked on an EMPTY slot kept weight 0 = silent forever.
+    // Adding/removing a LAYER is an explicit user ACTION (not a refresh) - write the balance here.
+    if ((oldEng < 0) != (ch.slots[box].engine < 0))
+    {
+        const bool n0 = ch.slots[0].engine >= 0, n1 = ch.slots[1].engine >= 0;
+        if (n0 && n1) { ch.slots[0].weight = ch.slots[1].weight = 0.5f; ch.padX = 0.5f; }
+        else if (n0)  { ch.slots[0].weight = 1.0f; ch.padX = 0.0f; }
+        else if (n1)  { ch.slots[1].weight = 1.0f; ch.padX = 1.0f; }
+    }
+    syncPadFromSlots (true);   // adding/removing a slot rebalances the blend DISPLAY
     ch.markDspDirty();
     layoutContent();
     refreshDetailPanel();

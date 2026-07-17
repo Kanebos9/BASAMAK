@@ -3697,14 +3697,17 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         if (sv.lfoPhase[d2] > 2.0 * kPi) { sv.lfoPhase[d2] -= 2.0 * kPi; ++sv.lfoCyc[d2]; }
                     }
 
-                // === PER-SLOT FILTERS (begin) - TWO resonant TPT/ZDF SVFs IN SERIES on THIS slot's source
-                //     (before its EQ), so they never touch the other slot's engine. State is per-voice.
-                //     Each SVF's cutoff coeff is smoothed PER SAMPLE (~2 ms) so env/LFO sweeps glide; KEYTRACK
-                //     (per voice) shifts the target cutoff with the note pitch (sv.filtGkt from voice setup). ===
-                for (int fi = 0; fi < 2; ++fi)
+                // === PER-SLOT FILTERS (begin) - TWO resonant TPT/ZDF SVFs, SPLIT POSITIONS
+                //     [2026-07-17, user design]: FILTER 1 = the INPUT filter, applied HERE (before
+                //     Drive/Formant/Punch/Ring/Sub = it shapes what FEEDS the FX - the acid/growl
+                //     tool); FILTER 2 = the OUTPUT filter, applied at the END of the slot chain
+                //     (after every slot FX + its modulations = it acts on exactly the signal the
+                //     slot spectrum draws). State per-voice; cutoff coeff smoothed ~2 ms; keytrack
+                //     via matrix Note routes works at either position. ===
+                auto applySlotFilt = [&](int fi)
                 {
                     const auto& fc = c.filt[fi];
-                    if (! fc.on) continue;
+                    if (! fc.on) return;
                     double& gm = sv.filtGm[fi];
                     const double tgt = (sv.filtGkt[fi] > 0.0) ? sv.filtGkt[fi] : fc.G;   // keytrack and/or drift per-note cutoff
                     if (gm < 0.0) gm = tgt;
@@ -3742,7 +3745,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     };
                     if (stereo) { sL = (float) svf(sL, 0); sR = (float) svf(sR, 1); }
                     else          sig = (float) svf(sig, 0);
-                }
+                };
+                applySlotFilt(0);   // FILTER 1 = the INPUT filter (pre-FX; the acid/growl position)
                 // Track this slot's max amp level this block -> next block's env-follow cutoff.
                 blockSlotEnv[s] = juce::jmax(blockSlotEnv[s], env * v.velGain);
                 // === PER-SLOT FILTER (end) ===
@@ -3851,8 +3855,9 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     if (stereo) { sL = sL * (1.0f - rg) + sL * m * rg; sR = sR * (1.0f - rg) + sR * m * rg; }
                     else          sig = sig * (1.0f - rg) + sig * m * rg;
                 }
-                // SUB (per slot, LAST in the chain so it stays clean - it bypasses the slot filter/EQ/
-                // drive): a sine ONE OCTAVE below the slot's pitch, following note/step/glide (noteMul)
+                // SUB (per slot, near the END of the chain so it stays clean of Filter 1 + drive;
+                // FILTER 2 - the output filter - DOES shape it, like everything the spectrum shows):
+                // a sine ONE OCTAVE below the slot's pitch, following note/step/glide (noteMul)
                 // + the pitch envelope (pe3Mul) + the slot's own amp env. Unpitched engines = inert.
                 if (mSub > 0.0f && c.subHz > 0.0) {
                     sv.subPh += 2.0 * kPi * c.subHz * (double) noteMul * pe3Mul / sr;
@@ -3860,6 +3865,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     const float sub = (float) std::sin(sv.subPh) * env * mSub * 0.9f;
                     if (stereo) { sL += sub * 0.7071f; sR += sub * 0.7071f; } else sig += sub;
                 }
+                applySlotFilt(1);   // FILTER 2 = the OUTPUT filter (post ALL slot FX incl. Sub - matches the spectrum)
                 vEnv = juce::jmax(vEnv, env);
                 // HUMANIZE velocity jitter: sv.velScale (~1) loosens this slot's level per hit (1 = identical).
                 // Weight is smoothed PER SAMPLE (~3 ms) toward the block value: block-rate volume modulation
