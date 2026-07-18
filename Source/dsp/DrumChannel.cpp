@@ -3722,7 +3722,21 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         if (loopEngaged)
                             env = keyAdsr(t, v.isKey ? v.keyOff : v.gateLen, c.atk, c.hold, c.dec, c.sustain, c.release);
                         else
+                        {
                             env = (c.smpEnv || sv.gateDec > 0.0f) ? ahdsEnv(t, c.atk, c.hold, sv.gateDec > 0.0f ? sv.gateDec : c.dec, c.sustain, c.release) : 1.0f;
+                            // [2026-07-19] MULTISAMPLE = INSTRUMENT semantics (user: "shouldn't the
+                            // sound end when I release my finger?"): a ZONE voice's key release /
+                            // gate end fades the note with the sound's Release (min 30 ms) instead
+                            // of ringing to the file end. Plain single samples keep the drum
+                            // one-shot default (enable the amp env / a loop for gating there).
+                            if (ms)
+                            {
+                                const long tOff = v.isKey ? (long) v.keyOff
+                                                 : (v.gateLen > 0 ? (long) v.gateLen : -1L);
+                                if (tOff >= 0 && (long) t >= tOff)
+                                    env *= decayCurve((long) t - tOff, juce::jmax(0.03f, c.release));
+                            }
+                        }
                         double head = sv.smpHead;
                         double headXf = -1.0; float xfW = 0.0f;   // crossfade partner read + its weight
                         if (loopEngaged)

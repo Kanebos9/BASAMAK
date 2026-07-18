@@ -544,10 +544,25 @@ public:
         const juce::Rectangle<int> mr(b.getX() + 12, b.getBottom() - 62, b.getWidth() - 24, 8);
         g.setColour(juce::Colour(0xff20203a)); g.fillRoundedRectangle(mr.toFloat(), 3.0f);
         const float mf = juce::jlimit(0.0f, 1.0f, (float)(std::log10(juce::jmax(1.0e-4f, lvl)) / 4.0 + 1.0));
-        g.setColour(lvl > 0.02f ? juce::Colour(0xff35b56a) : juce::Colour(0xff5a5a78));
+        // [2026-07-19] the fill answers "would this arm?" at a glance (user design): GREEN =
+        // above the Start gate (recording would arm), amber = still above the End gate (a take
+        // would keep running), grey = under both.
+        g.setColour(lvl >= armThresh() ? juce::Colour(0xff35b56a)
+                  : lvl >= endThresh() ? juce::Colour(0xffc9a23c) : juce::Colour(0xff5a5a78));
         g.fillRoundedRectangle(mr.toFloat().withWidth(mr.getWidth() * mf), 3.0f);
+        auto dbPos = [&](int db) { return mr.getX() + (int)(mr.getWidth() * juce::jlimit(0.0f, 1.0f, (float) db / 80.0f + 1.0f)); };
+        g.setColour(juce::Colours::white.withAlpha(0.9f));                 // Start-at gate tick
+        g.fillRect(dbPos(armDb), mr.getY() - 2, 2, mr.getHeight() + 4);
+        g.setColour(juce::Colour(0xff9aa0ae));                             // End-below gate tick
+        g.fillRect(dbPos(endDb), mr.getY() - 2, 2, mr.getHeight() + 4);
         g.setColour(juce::Colour(0xffaebada)); g.setFont(10.5f);
-        g.drawText("input level", mr.getX(), mr.getY() - 13, 100, 12, juce::Justification::left);
+        g.drawText("input level (white tick = Start at, grey = End below)", mr.getX(), mr.getY() - 13, 320, 12, juce::Justification::left);
+        if (phase != Setup && floorFrames > (juce::int64)(rate() * 0.35) && noiseFloorPk > armThresh() * 0.7f)
+        {   // the measured idle noise is at/above the arm gate - the classic "records by itself" trap
+            g.setColour(juce::Colour(0xffffc24a)); g.setFont(juce::Font(11.0f, juce::Font::bold));
+            g.drawText("Input noise is near your \"Start at\" level - raise Start at (or lower your gain).",
+                       mr.getX(), mr.getY() - 27, mr.getWidth(), 13, juce::Justification::left);
+        }
 
         if (phase == Setup)
         {
@@ -565,13 +580,17 @@ public:
             box(loRect(),  "Lowest note",  juce::MidiMessage::getMidiNoteName(loNote, true, true, 4));
             box(hiRect(),  "Highest note", juce::MidiMessage::getMidiNoteName(hiNote, true, true, 4));
             box(spRect(),  "Record every", juce::String(spacing) + " st");
+            box(mxRect(),  "Max time",     juce::String(maxSec, 1) + " s");
+            box(adRect(),  "Start at",     juce::String(armDb) + " dB");
+            box(edRect(),  "End below",    juce::String(endDb) + " dB");
+            box(prRect(),  "Pre-roll",     juce::String(preMs) + " ms");
             g.setColour(juce::Colour(0xffaebada)); g.setFont(11.5f);
-            g.drawFittedText("Play each note your instrument makes when asked - the wizard hears it, checks the "
-                             "pitch, trims it and saves it.\nDrag the boxes to set the range. "
-                             + juce::String(noteCountFor()) + " notes will be recorded.\n"
+            g.drawFittedText("Play each note when asked - recording ARMS when the input crosses \"Start at\", ENDS "
+                             "once the ring falls under \"End below\" (or at Max time), then the pitch is checked and "
+                             "the take trimmed + saved. " + juce::String(noteCountFor()) + " notes will be recorded.\n"
                              "Standalone: enable your input device under Options (input starts muted). "
-                             "DAW: route audio into BASAMAK's optional input bus.",
-                             b.getX() + 12, b.getY() + 118, b.getWidth() - 24, 64, juce::Justification::topLeft, 5);
+                             "DAW: route audio into BASAMAK's input bus.",
+                             b.getX() + 12, b.getY() + 166, b.getWidth() - 24, 52, juce::Justification::topLeft, 4);
         }
         else if (phase == Listen || phase == Capture || phase == Review)
         {
@@ -620,7 +639,13 @@ public:
         if (loRect().contains(e.getPosition())) dragBox = 1;
         else if (hiRect().contains(e.getPosition())) dragBox = 2;
         else if (spRect().contains(e.getPosition())) dragBox = 3;
-        dragBase = dragBox == 1 ? loNote : dragBox == 2 ? hiNote : spacing;
+        else if (mxRect().contains(e.getPosition())) dragBox = 4;
+        else if (adRect().contains(e.getPosition())) dragBox = 5;
+        else if (edRect().contains(e.getPosition())) dragBox = 6;
+        else if (prRect().contains(e.getPosition())) dragBox = 7;
+        dragBase = dragBox == 1 ? loNote : dragBox == 2 ? hiNote : dragBox == 3 ? spacing
+                 : dragBox == 4 ? (int) std::lround(maxSec * 2.0f) : dragBox == 5 ? armDb
+                 : dragBox == 6 ? endDb : preMs;
     }
     void mouseDrag(const juce::MouseEvent& e) override
     {
@@ -628,7 +653,11 @@ public:
         const int d = -e.getDistanceFromDragStartY() / 8;
         if (dragBox == 1) loNote = juce::jlimit(12, hiNote, dragBase + d);
         else if (dragBox == 2) hiNote = juce::jlimit(loNote, 108, dragBase + d);
-        else spacing = juce::jlimit(1, 6, dragBase + d);
+        else if (dragBox == 3) spacing = juce::jlimit(1, 6, dragBase + d);
+        else if (dragBox == 4) maxSec = juce::jlimit(2, 20, dragBase + d) * 0.5f;         // 1..10 s in halves
+        else if (dragBox == 5) armDb  = juce::jlimit(-60, -10, dragBase + d);
+        else if (dragBox == 6) endDb  = juce::jlimit(-80, -20, dragBase + d);
+        else if (dragBox == 7) preMs  = juce::jlimit(0, 100, dragBase + d * 2);
         repaint();
     }
 
@@ -636,6 +665,15 @@ private:
     enum Phase { Setup, Listen, Capture, Review, DoneAll };
     Phase phase = Setup;
     int slotIdx = 0, loNote = 28, hiNote = 64, spacing = 2;   // default E1..E4 every 2 st (bass/guitar friendly)
+    // [2026-07-19] USER-SET dB GATES (his design - "start and end recording at certain db's";
+    // a guitar note is LOUDEST at the attack then decays, so the end gate = where in the ring
+    // to stop) + a max-time cap. Defaults match the old fixed constants.
+    float maxSec = 6.0f;                                      // take cap, 1..10 s
+    int   armDb  = -34, endDb = -50;                          // start / end gates
+    int   preMs  = 10;                                        // PRE-ROLL kept before the Start gate fires (user
+                                                              // design: the gate trips partway UP the attack -
+                                                              // this keeps the soft beginning; 0..100 ms)
+    float noiseFloorPk = 0.0f; juce::int64 floorFrames = 0;   // measured while listening (warning only)
     juce::Array<int> noteList; int curIdx = 0; bool savedAny = false;
     juce::int64 readCur = 0, capStartFrame = 0;
     std::vector<float> capBuf;
@@ -662,6 +700,12 @@ private:
     juce::Rectangle<int> loRect() const { return { getWidth() / 2 - 170, 80, 100, 26 }; }
     juce::Rectangle<int> hiRect() const { return { getWidth() / 2 - 50,  80, 100, 26 }; }
     juce::Rectangle<int> spRect() const { return { getWidth() / 2 + 70,  80, 100, 26 }; }
+    juce::Rectangle<int> mxRect() const { return { getWidth() / 2 - 188, 128, 88, 26 }; }
+    juce::Rectangle<int> adRect() const { return { getWidth() / 2 - 92,  128, 88, 26 }; }
+    juce::Rectangle<int> edRect() const { return { getWidth() / 2 + 4,   128, 88, 26 }; }
+    juce::Rectangle<int> prRect() const { return { getWidth() / 2 + 100, 128, 88, 26 }; }
+    float armThresh() const { return juce::Decibels::decibelsToGain((float) armDb); }
+    float endThresh() const { return juce::Decibels::decibelsToGain((float) endDb); }
     double rate() const { return proc != nullptr ? juce::jmax(8000.0, proc->getSampleRate()) : 48000.0; }
     juce::int64 tapNow() const { return proc != nullptr ? proc->msTapWrite.load(std::memory_order_acquire) : 0; }
     int noteCountFor() const
@@ -690,6 +734,7 @@ private:
             sessionDir = baseDir.getChildFile(nm + " " + juce::String(suffix++));
         sessionDir.createDirectory();
         curIdx = 0; savedAny = false; capBuf.clear();
+        noiseFloorPk = 0.0f; floorFrames = 0;
         readCur = tapNow(); phase = Listen; syncButtons(); repaint();
     }
     void timerCallback() override
@@ -703,30 +748,38 @@ private:
         proc->readMsTap(readCur, blk.data(), n);
         if (phase == Listen)
         {
+            const float arm = armThresh();               // the user's "Start at" gate
             for (int i = 0; i < n; ++i)
-                if (std::abs(blk[(size_t) i]) > 0.02f)   // ~-34 dB arm threshold
+            {
+                const float av = std::abs(blk[(size_t) i]);
+                if (av > arm)
                 {
-                    capStartFrame = readCur + i - 512;    // small pre-roll (still in the 8 s ring)
+                    const int preN = (int) (rate() * preMs * 0.001);   // the user's Pre-roll (8 s ring covers it)
+                    capStartFrame = readCur + i - preN;
                     capBuf.clear();
-                    const int pre = (int) juce::jmin<juce::int64>(512, juce::jmax((juce::int64) 0, readCur + i));
+                    const int pre = (int) juce::jmin<juce::int64>(preN, juce::jmax((juce::int64) 0, readCur + i));
                     capBuf.resize((size_t) pre);
                     proc->readMsTap(readCur + i - pre, capBuf.data(), pre);
                     capBuf.insert(capBuf.end(), blk.begin() + i, blk.begin() + n);
                     phase = Capture; syncButtons();
                     break;
                 }
+                // idle = measure the NOISE FLOOR (drives the on-screen "noise near Start at" warning)
+                noiseFloorPk = juce::jmax(noiseFloorPk * 0.9999f, av); ++floorFrames;
+            }
         }
-        else   // Capture: append + look for the end (trailing silence or the 6 s cap)
+        else   // Capture: append + look for the end (the user's "End below" gate or Max time)
         {
             capBuf.insert(capBuf.end(), blk.begin(), blk.begin() + n);
             const double sr = rate();
             const size_t len = capBuf.size();
-            bool finish = len > (size_t)(sr * 6.0);
+            bool finish = len > (size_t)(sr * (double) maxSec);
             if (! finish && len > (size_t)(sr * 0.8))
-            {   // done when the LAST 0.5 s is silence (note released + rung out)
+            {   // done once the RING has fallen under the End gate for 0.5 s (guitar notes are
+                // loudest at the attack then decay - the gate says where in the decay to stop)
                 float pk = 0.0f;
                 for (size_t i = len - (size_t)(sr * 0.5); i < len; ++i) pk = juce::jmax(pk, std::abs(capBuf[i]));
-                finish = pk < 0.006f;
+                finish = pk < endThresh();
             }
             if (finish) analyzeTake();
         }
@@ -735,18 +788,39 @@ private:
     void analyzeTake()
     {
         const double sr = rate();
-        // tail trim: last audible sample + a 50 ms fade
+        // HEAD TRIM [2026-07-19]: cut everything before the real onset (an early arm - noise,
+        // a bumped string - otherwise bakes silence into the file = "crazy lag" on playback).
+        {
+            const float on = armThresh() * 0.7f;
+            size_t first = 0;
+            while (first < capBuf.size() && std::abs(capBuf[first]) < on) ++first;
+            const size_t pre = (size_t)(sr * preMs * 0.001);   // keep the user's Pre-roll of pre-attack air
+            first = first > pre ? first - pre : 0;
+            if (first > 0) capBuf.erase(capBuf.begin(), capBuf.begin() + (long) first);
+        }
+        // tail trim: last sample above the End gate + a 50 ms fade
+        const float tailFloor = juce::jmax(0.002f, endThresh() * 0.7f);
         size_t last = capBuf.size();
-        while (last > 0 && std::abs(capBuf[last - 1]) < 0.004f) --last;
+        while (last > 0 && std::abs(capBuf[last - 1]) < tailFloor) --last;
         const size_t fade = (size_t)(sr * 0.05);
         capBuf.resize(juce::jmin(capBuf.size(), last + fade));
         for (size_t i = last; i < capBuf.size(); ++i)
             capBuf[i] *= 1.0f - (float)(i - last) / (float) juce::jmax((size_t) 1, fade);
-        // pitch: a window past the attack (same NSDF detector as the tuner)
+        // pitch: the LOUDEST sustained window (blind "25% in" could land on noise or the pluck
+        // transient = the tuner "disagreeing with GTune"); same shared NSDF detector as the tuner.
         heardHz = 0.0;
         const int W = juce::jmin((int) capBuf.size() / 2, 8192);
         if (W > 2048)
-            heardHz = basamakDetectPitch(capBuf.data() + capBuf.size() / 4, W, sr);
+        {
+            size_t bestOff = 0; double bestE = -1.0;
+            const size_t step = 2048, lim = capBuf.size() - (size_t) W;
+            for (size_t off = juce::jmin((size_t)(sr * 0.04), lim); off <= lim; off += step)
+            {   double e2 = 0.0;
+                for (int i = 0; i < W; i += 4) e2 += (double) capBuf[off + (size_t) i] * capBuf[off + (size_t) i];
+                if (e2 > bestE) { bestE = e2; bestOff = off; }
+                if (off + step > lim) break; }
+            heardHz = basamakDetectPitch(capBuf.data() + bestOff, W, sr);
+        }
         if (heardHz > 0.0)
         {
             const double m = 69.0 + 12.0 * std::log2(heardHz / 440.0);

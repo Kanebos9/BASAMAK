@@ -13960,7 +13960,7 @@ void DrumSequencerEditor::layoutContent()
     // DRAW HARMONICS overlay: parked over the amp/pitch columns (opened from the Custom wave preview;
     // hidden again at the top of every layoutContent like the sound picker).
     harmEd.setBounds(cxAmp, colTop, ampEqW + gp + pitchW + gp + fxColW, colH);   // covers amp..FX (user-outlined area)
-    msWizard.setBounds(cxAmp, colTop + 40, 560, 250);   // [2026-07-18] wizard keeps its spot across relayouts (never auto-closed - a take may be running)
+    msWizard.setBounds(cxAmp, colTop + 20, 560, 292);   // [2026-07-18] wizard keeps its spot across relayouts (never auto-closed - a take may be running)
     lfoCurveEd.setBounds(cxAmp, colTop, ampEqW + gp + pitchW + gp + fxColW, colH);   // LFO draw window = the wavetable menu's footprint (user 2026-07-16)
     routePicker.setBounds(cxPitch, colTop + 24, pitchW + gp + fxColW, colH - 48);   // route source|target chooser (parked left of the faders)
 

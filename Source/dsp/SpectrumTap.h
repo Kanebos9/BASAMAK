@@ -76,16 +76,29 @@ static inline double basamakDetectPitch(const float* x, int W, double fs) noexce
         { ac += (double) x[i] * x[i + L]; m0 += (double) x[i] * x[i] + (double) x[i + L] * x[i + L]; }
         nsdf[(size_t) L] = m0 > 1.0e-12 ? 2.0 * ac / m0 : 0.0;
     }
-    for (int L = lagMin + 1; L < lagMax; ++L)   // FIRST strong local peak (not global - octave errors)
+    // [2026-07-19] TRUE McLeod (MPM) peak picking. The old rule - "first local peak above a
+    // FIXED 0.62" - was right for pure tones (TunerTest passed) but wrong for REAL strings: a
+    // plucked bass/guitar's strong 2nd harmonic puts a >0.62 NSDF peak at the HALF period, and
+    // first-above-fixed picked it = read an octave (or a 5th) off "sometimes" (user vs GTune).
+    // MPM: collect ALL local maxima (parabolic-refined), find the GLOBAL best, then take the
+    // FIRST peak within 90% of it - the true period's peak is taller than any harmonic's.
+    static thread_local std::vector<double> pkLag, pkVal;
+    pkLag.clear(); pkVal.clear();
+    for (int L = lagMin + 1; L < lagMax; ++L)
     {
-        if (nsdf[(size_t) L] > 0.62 && nsdf[(size_t) L] >= nsdf[(size_t) L - 1] && nsdf[(size_t) L] > nsdf[(size_t) L + 1])
-        {
-            const double a = nsdf[(size_t) L - 1], b = nsdf[(size_t) L], c = nsdf[(size_t) L + 1];
-            const double den = a - 2.0 * b + c;
-            const double delta = std::abs(den) > 1.0e-12 ? juce::jlimit(-0.5, 0.5, 0.5 * (a - c) / den) : 0.0;
-            return fs / ((double) L + delta);
-        }
+        const double a = nsdf[(size_t) L - 1], b = nsdf[(size_t) L], c = nsdf[(size_t) L + 1];
+        if (b < 0.30 || b < a || b <= c) continue;                  // 0.30 abs floor = noise reject
+        const double den   = a - 2.0 * b + c;
+        const double delta = std::abs(den) > 1.0e-12 ? juce::jlimit(-0.5, 0.5, 0.5 * (a - c) / den) : 0.0;
+        pkLag.push_back((double) L + delta);
+        pkVal.push_back(b - 0.25 * (a - c) * delta);                // refined peak height
     }
+    if (pkLag.empty()) return -1.0;
+    double best = 0.0;
+    for (double v : pkVal) best = juce::jmax(best, v);
+    if (best < 0.45) return -1.0;                                   // nothing convincingly periodic
+    for (size_t k = 0; k < pkLag.size(); ++k)
+        if (pkVal[k] >= 0.90 * best) return fs / pkLag[k];
     return -1.0;
 }
 
