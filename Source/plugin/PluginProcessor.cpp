@@ -1904,8 +1904,7 @@ juce::File DrumSequencerProcessor::exportMidiFile(int channel)
                 if (sl.weight <= 0.001f) continue;
                 double hz = 0.0;
                 if      (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal
-                      || sl.engine == DrumChannel::SrcGrain
-                      || sl.engine == DrumChannel::SrcWguide) hz = sl.oscFreq;   // grain + waveguide are pitched too
+                      || sl.engine == DrumChannel::SrcGrain) hz = sl.oscFreq;   // grain is pitched too [2026-07-16]
                 else if (sl.engine == DrumChannel::SrcPhys)                                      hz = sl.physFreq;
                 else continue;   // Sample / Noise: unpitched -> contributes no notes
                 PSlot p; p.slotIdx = si;

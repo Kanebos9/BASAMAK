@@ -255,28 +255,6 @@ juce::Array<SlotParam> slotParamsFor(int engine)
                      "- Mallet: a soft padded push - dark and thumpy. A smooth push has few overtones, "
                      "so materials naturally sound closer together with it (real mallets do this too)."));
             break;   // pitch-env/Vibrato moved to the shared shape groups (4 params = knob grid)
-        case DrumChannel::SrcWguide:
-            // [2026-07-18] WAVEGUIDE: 4 knobs; the pickup POSITION + loop BRIGHTNESS are edited on
-            // the interactive BORE visual (WaveguideDisplay - the drawing IS the parameters).
-            p.add(F ("Base Freq", 20, 4186, &S::oscFreq, "nHz", false,
-                     "Base pitch of the blown/bowed bore. CLICK the value read-out to switch Hz <-> NOTE mode. "
-                     "Follows per-step pitch; fully playable on the KEYS (the note holds as long as the key does "
-                     "when Sustain is up)."));
-            p.add(Ic("Exciter", 0, 2, &S::wgExcite, { "Reed","Flute","Bow" },
-                     "What DRIVES the bore, every sample, as long as the note runs.\n\n"
-                     "- Reed: clarinet family - hollow, odd harmonics, woody bite.\n"
-                     "- Flute: an air jet - breathy, pure, airy top.\n"
-                     "- Bow: stick-slip friction - a bowed string's grainy singing edge.\n\n"
-                     "Tip: raise SUSTAIN in the amp envelope - a blown/bowed note holds while the key is down."));
-            p.add(F ("Pressure", 0, 1, &S::wgPressure, "", true,
-                     "How hard the bore is blown / bowed. Low = soft, almost underblown; high = louder and "
-                     "brighter, and the nonlinearity starts to growl. A great matrix target (Mod Wheel or "
-                     "Aftertouch -> Pressure = real breath control)."));
-            p.add(F ("Breath", 0, 1, &S::wgBreath, "", true,
-                     "REAL AIR around the note: turbulence blown INTO the bore (the tube colours it around "
-                     "the pitch) plus a little radiated hiss - 0 = clean tone, up = breathy/raspy. "
-                     "A small floor always remains (a perfectly still reed would latch silent - physics)."));
-            break;   // 4 params = knob grid; Position/Brightness live on the bore visual
         case DrumChannel::SrcGrain:
             p.add(F ("Position", 0, 1, &S::grainPos, "", true,
                      "WHERE in the source the grains read.\n\n"
@@ -1269,7 +1247,7 @@ static juce::String modTgtTip(int t, int engine)
 // Engine display name (matches the slot engine dropdown) for the mod-target parentheses "(Oscillator)" etc.
 static juce::String engineDisplayName(int engine)
 {
-    static const char* eng[10] = { "Sample", "Noise", "Oscillator", "FM", "Karplus-Strong", "Synth", "Wavetable", "Modal", "Granular", "Waveguide" };
+    static const char* eng[9] = { "Sample", "Noise", "Oscillator", "FM", "Karplus-Strong", "Synth", "Wavetable", "Modal", "Granular" };
     return (engine >= 0 && engine < 9) ? juce::String(eng[engine]) : juce::String();
 }
 // Which of the 4 LFOs (index 0..3) feed at least one mod-matrix route (for the LFO "not routed" hint).
@@ -1867,254 +1845,6 @@ juce::String StringDisplay::getTooltip()
 }
 
 //==============================================================================
-// [2026-07-18] WaveguideDisplay - the Waveguide engine's interactive bore. Three honest layers:
-// the drawing IS the parameters (pickup dot = wgPos, bell = wgBright), the excitation inset is
-// the EXACT per-sample nonlinearity (mirror of DrumChannel.cpp's SrcWguide formulas - keep in
-// sync), and the wave inside the bore is the LITERAL delay-line contents (getWaveguideSnapshot).
-//==============================================================================
-void WaveguideDisplay::paint(juce::Graphics& g)
-{
-    auto b = getLocalBounds().toFloat();
-    g.setColour(juce::Colour(0xff101022));      g.fillRoundedRectangle(b, 4.0f);
-    g.setColour(juce::Colour(0xff33335a)); g.drawRoundedRectangle(b.reduced(0.5f), 4.0f, 1.0f);
-    auto* s = getSlot ? getSlot() : nullptr;
-    const int   mode   = s ? juce::jlimit(0, 2, s->wgExcite) : 0;
-    const float pos    = s ? juce::jlimit(0.02f, 0.98f, s->wgPos) : 0.25f;
-    const float bright = s ? juce::jlimit(0.0f, 1.0f, s->wgBright) : 0.6f;
-    juce::Rectangle<float> in, brightR, curveR;
-    layoutRects(in, brightR, curveR);
-
-    // BORE: a tube whose right end (the bell) opens with Brightness
-    const float cy = in.getCentreY();
-    const float half = juce::jmax(5.0f, in.getHeight() * 0.24f);
-    const float bell = half * (1.0f + 0.9f * bright);          // bright = a more open bell
-    juce::Path tube;
-    tube.startNewSubPath(in.getX(), cy - half);
-    tube.lineTo(in.getRight() - 8.0f, cy - half);
-    tube.quadraticTo(in.getRight(), cy - half, in.getRight(), cy - bell);
-    tube.lineTo(in.getRight(), cy + bell);
-    tube.quadraticTo(in.getRight(), cy + half, in.getRight() - 8.0f, cy + half);
-    tube.lineTo(in.getX(), cy + half);
-    tube.closeSubPath();
-    g.setColour(juce::Colour(0xff1b1b33)); g.fillPath(tube);
-    g.setColour(accent.withAlpha(0.35f + 0.45f * bright)); g.strokePath(tube, juce::PathStrokeType(1.2f));
-
-    // LIVE travelling wave inside the bore = the real delay-line contents (honest layer 3)
-    if (liveN > 1)
-    {
-        juce::Path w;
-        for (int i = 0; i < liveN; ++i)
-        {
-            const float fx = in.getX() + 3.0f + ((float) i / (float)(liveN - 1)) * (in.getWidth() - 6.0f);
-            const float fy = cy - juce::jlimit(-1.0f, 1.0f, live[i]) * (half - 1.5f);
-            if (i == 0) w.startNewSubPath(fx, fy); else w.lineTo(fx, fy);
-        }
-        g.setColour(juce::Colours::white.withAlpha(0.75f));
-        g.strokePath(w, juce::PathStrokeType(1.1f));
-    }
-    else { g.setColour(juce::Colour(0xff2a2a44)); g.drawLine(in.getX() + 3.0f, cy, in.getRight() - 3.0f, cy, 1.0f); }
-
-    // exciter glyph text at the mouth (left) - says "(drawn)" while THIS exciter runs a hand curve
-    const bool drawn = s != nullptr && s->wgCurveOn[mode];
-    g.setFont(juce::Font(8.5f, juce::Font::bold));
-    g.setColour(drawn ? accent : juce::Colour(0xff8aa0c8));
-    g.drawText(juce::String(mode == 0 ? "REED" : mode == 1 ? "AIR" : "BOW") + (drawn ? " (drawn)" : ""),
-               (int) in.getX() + 2, (int) (cy - half) - 11, 90, 10, juce::Justification::centredLeft, false);
-
-    // PICKUP / BOW-POINT handle (drag LEFT/RIGHT = wgPos) on the bore's centre line
-    const float hx = in.getX() + pos * (in.getWidth() - 8.0f);
-    g.setColour(dragWhat == 1 ? juce::Colours::white : accent);
-    g.fillEllipse(hx - 4.0f, cy - 4.0f, 8.0f, 8.0f);
-    g.setColour(juce::Colours::white); g.drawEllipse(hx - 4.0f, cy - 4.0f, 8.0f, 8.0f, 1.2f);
-
-    // [2026-07-18 r2] BRIGHTNESS = its own FULL-HEIGHT vertical track (the bell dot was nearly
-    // ungrabbable and its travel was a few pixels - user). Whole column = its hit zone.
-    g.setColour(juce::Colour(0xff20203a));
-    g.fillRoundedRectangle(brightR, 3.0f);
-    { const float hy = brightR.getY() + (1.0f - bright) * brightR.getHeight();
-      g.setColour(accent.withAlpha(0.35f));
-      g.fillRoundedRectangle(brightR.withTop(hy), 3.0f);   // filled below the handle = the amount
-      g.setColour(dragWhat == 2 ? juce::Colours::white : accent);
-      g.fillEllipse(brightR.getCentreX() - 4.5f, hy - 4.5f, 9.0f, 9.0f);
-      g.setColour(juce::Colours::white); g.drawEllipse(brightR.getCentreX() - 4.5f, hy - 4.5f, 9.0f, 9.0f, 1.1f); }
-
-    // EXCITATION CURVE inset (honest layer 2): THIS exciter's drawn curve when active, else its
-    // built-in formula. CLICK = open the DRAW EXCITER overlay.
-    g.setColour(juce::Colour(0xff181830)); g.fillRoundedRectangle(curveR, 3.0f);
-    g.setColour(drawn ? accent.withAlpha(0.8f) : juce::Colour(0xff2a2a48));
-    g.drawRoundedRectangle(curveR.reduced(0.5f), 3.0f, 1.0f);
-    {
-        juce::Path cp; const int NP = 40;
-        for (int i = 0; i < NP; ++i)
-        {
-            const float x01 = (float) i / (float)(NP - 1);
-            const float xin = x01 * 2.0f - 1.0f;
-            float yv;
-            if (drawn)
-            {
-                const float p = x01 * 63.0f; const int i0 = (int) p; const float fr = p - (float) i0;
-                const float a2 = (float) s->wgCurve[mode][i0] * (1.0f / 32767.5f) - 1.0f;
-                const float b2 = (float) s->wgCurve[mode][juce::jmin(63, i0 + 1)] * (1.0f / 32767.5f) - 1.0f;
-                yv = a2 + (b2 - a2) * fr;
-            }
-            else yv = WgCurveEditor::presetY(mode, xin * WgCurveEditor::XR);
-            const float fx = curveR.getX() + 2.0f + x01 * (curveR.getWidth() - 4.0f);
-            const float fy = curveR.getCentreY() - juce::jlimit(-1.0f, 1.0f, yv) * (curveR.getHeight() * 0.42f);
-            if (i == 0) cp.startNewSubPath(fx, fy); else cp.lineTo(fx, fy);
-        }
-        g.setColour(accent.withAlpha(0.9f)); g.strokePath(cp, juce::PathStrokeType(1.1f));
-    }
-    g.setFont(juce::Font(7.0f, juce::Font::bold));
-    g.setColour(juce::Colour(0xff8aa0c8));
-    g.drawText(drawn ? "drawn" : "draw", curveR.withTrimmedTop(curveR.getHeight() - 9.0f).toNearestInt(),
-               juce::Justification::centred, false);
-
-    // read-out (StringDisplay convention)
-    g.setFont(juce::Font(9.0f, juce::Font::bold));
-    g.setColour(dragWhat != 0 ? juce::Colours::white : juce::Colour(0xff8aa0c8));
-    g.drawText("Pos " + juce::String(juce::roundToInt(pos * 100)) + "%  Bright "
-                   + juce::String(juce::roundToInt(bright * 100)) + "%",
-               getLocalBounds().reduced(5, 1), juce::Justification::bottomLeft, false);
-}
-void WaveguideDisplay::mouseDown(const juce::MouseEvent& e)
-{
-    juce::Rectangle<float> in, brightR, curveR;
-    layoutRects(in, brightR, curveR);
-    if (curveR.expanded(2.0f).contains(e.position))          // click the inset = the draw overlay
-    { dragWhat = 0; if (onOpenCurve) onOpenCurve(); return; }
-    dragWhat = (e.position.x >= brightR.getX() - 4.0f) ? 2 : 1;   // the whole right column = brightness
-    applyDrag(e);
-}
-void WaveguideDisplay::mouseDrag(const juce::MouseEvent& e) { applyDrag(e); }
-void WaveguideDisplay::applyDrag(const juce::MouseEvent& e)
-{
-    auto* s = getSlot ? getSlot() : nullptr;
-    if (! s || dragWhat == 0) return;
-    juce::Rectangle<float> in, brightR, curveR;
-    layoutRects(in, brightR, curveR);
-    if (dragWhat == 2)
-        s->wgBright = juce::jlimit(0.0f, 1.0f, 1.0f - (e.position.y - brightR.getY()) / juce::jmax(1.0f, brightR.getHeight()));
-    else
-        s->wgPos = juce::jlimit(0.02f, 0.98f, (e.position.x - in.getX()) / juce::jmax(1.0f, in.getWidth()));
-    if (onEdit) onEdit();
-    repaint();
-}
-juce::String WaveguideDisplay::getTooltip()
-{
-    return "The BORE, drawn for real.\n\n"
-           "- Drag the centre dot LEFT/RIGHT = Position (pickup comb; on BOW it is the BOWING POINT).\n"
-           "- Drag the vertical TRACK on the right = Brightness (dark bore to singing open bell).\n"
-           "- CLICK the small curve = DRAW YOUR OWN EXCITER (the reed/jet/bow transfer, editable).\n"
-           "- The wave inside the tube is the LIVE bore contents while a note sounds - real state, not an animation.";
-}
-
-//==============================================================================
-// [2026-07-18 r2] WgCurveEditor - the DRAW EXCITER overlay (see the header comment).
-//==============================================================================
-void WgCurveEditor::paint(juce::Graphics& g)
-{
-    auto b = getLocalBounds().toFloat();
-    g.setColour(juce::Colour(0xf0141428)); g.fillRoundedRectangle(b, 6.0f);
-    g.setColour(accent);                   g.drawRoundedRectangle(b.reduced(1.0f), 6.0f, 1.4f);
-    g.setFont(juce::Font(12.5f, juce::Font::bold));
-    g.setColour(juce::Colours::white);
-    g.drawText("DRAW EXCITER CURVE - " + juce::String(mode == 0 ? "REED" : mode == 1 ? "FLUTE" : "BOW")
-               + " (this exciter's own drawing)", 12, 4, 400, 16, juce::Justification::centredLeft, false);
-    static const char* pn[4] = { "Reed", "Flute", "Bow", "Formula" };
-    for (int i = 0; i < 4; ++i)
-    {
-        auto r = presetRect(i);
-        const bool lit = (i == 3 && ! on);
-        g.setColour(lit ? accent.withAlpha(0.35f) : juce::Colour(0xff222240));
-        g.fillRoundedRectangle(r, 3.0f);
-        g.setColour(lit ? accent : juce::Colour(0xff44446a));
-        g.drawRoundedRectangle(r.reduced(0.5f), 3.0f, 1.0f);
-        g.setFont(juce::Font(10.5f, juce::Font::bold));
-        g.setColour(juce::Colours::white);
-        g.drawText(pn[i], r.toNearestInt(), juce::Justification::centred, false);
-    }
-    { auto r = closeRect();
-      g.setColour(juce::Colour(0xff44446a)); g.drawRoundedRectangle(r, 3.0f, 1.0f);
-      g.setColour(juce::Colours::white);
-      g.drawLine(r.getX() + 6, r.getY() + 4, r.getRight() - 6, r.getBottom() - 4, 1.4f);
-      g.drawLine(r.getX() + 6, r.getBottom() - 4, r.getRight() - 6, r.getY() + 4, 1.4f); }
-    auto st = strip();
-    g.setColour(juce::Colour(0xff10101e)); g.fillRoundedRectangle(st, 4.0f);
-    g.setColour(juce::Colour(0xff2a2a48)); g.drawRoundedRectangle(st.reduced(0.5f), 4.0f, 1.0f);
-    g.setColour(juce::Colour(0xff26263c));
-    g.drawHorizontalLine((int) st.getCentreY(), st.getX(), st.getRight());
-    g.drawVerticalLine((int) st.getCentreX(), st.getY(), st.getBottom());
-    // axis watermarks (the PitchEnv convention; 13px - the 9px version was unreadable, user)
-    g.setFont(juce::Font(13.0f, juce::Font::bold));
-    g.setColour(juce::Colour(0xff6a6a94));
-    g.drawText("what the exciter FEELS", st.toNearestInt().removeFromBottom(18).reduced(6, 0),
-               juce::Justification::centredRight, false);
-    { juce::Graphics::ScopedSaveState ss(g);
-      g.addTransform(juce::AffineTransform::rotation(-juce::MathConstants<float>::halfPi,
-                                                     st.getX() + 14.0f, st.getCentreY()));
-      g.drawText("what it DOES BACK", (int) st.getX() - 60, (int) st.getCentreY() - 16, 160, 16,
-                 juce::Justification::centred, false); }
-    // +-1 guides inside the +-2.5 window (the r3 window was ONLY this middle part = the bug)
-    for (float gx : { -1.0f, 1.0f })
-    {
-        const float px = st.getCentreX() + gx / XR * (st.getWidth() * 0.5f - 3.0f);
-        g.setColour(juce::Colour(0xff20203a)); g.drawVerticalLine((int) px, st.getY(), st.getBottom());
-    }
-    g.setFont(juce::Font(11.0f, juce::Font::bold));
-    g.setColour(juce::Colour(0xff6a6a94));
-    g.drawText("-2.5", (int) st.getX() + 4, (int) st.getY() + 2, 40, 13, juce::Justification::centredLeft, false);
-    g.drawText("+2.5", (int) st.getRight() - 44, (int) st.getY() + 2, 40, 13, juce::Justification::centredRight, false);
-    // the curve (drawn = accent; formula shown dim when off, so you see what you would replace)
-    juce::Path cp;
-    for (int k = 0; k < N; ++k)
-    {
-        const float x = st.getX() + 3.0f + (float) k / (float)(N - 1) * (st.getWidth() - 6.0f);
-        const float yv = on ? curve[k] : presetY(mode, xAt(k));
-        const float y = st.getCentreY() - juce::jlimit(-1.0f, 1.0f, yv) * (st.getHeight() * 0.46f);
-        if (k == 0) cp.startNewSubPath(x, y); else cp.lineTo(x, y);
-    }
-    g.setColour(on ? accent : accent.withAlpha(0.45f));
-    g.strokePath(cp, juce::PathStrokeType(1.8f));
-    // the honest footer warning (12.5px - readable, user)
-    g.setFont(juce::Font(12.5f, juce::Font::bold));
-    g.setColour(juce::Colour(0xffd9a13c));
-    g.drawText("Some drawings will NOT oscillate (a jammed reed is SILENT - physics). Silent note = redraw or load a preset.",
-               10, getHeight() - 18, getWidth() - 20, 15, juce::Justification::centredLeft, false);
-}
-void WgCurveEditor::mouseDown(const juce::MouseEvent& e)
-{
-    if (closeRect().contains(e.position)) { setVisible(false); return; }
-    for (int i = 0; i < 4; ++i)
-        if (presetRect(i).contains(e.position))
-        {
-            if (i == 3) { on = false; repaint(); if (onChange) onChange(curve, on); }
-            else loadPreset(i);
-            return;
-        }
-    lastI = -1; mouseDrag(e);
-}
-void WgCurveEditor::mouseDrag(const juce::MouseEvent& e)
-{
-    auto st = strip();
-    if (! st.expanded(6.0f).contains(e.position)) return;
-    const int   i = juce::jlimit(0, N - 1, (int) std::lround((e.position.x - st.getX() - 3.0f)
-                                                             / juce::jmax(1.0f, st.getWidth() - 6.0f) * (float)(N - 1)));
-    const float v = juce::jlimit(-1.0f, 1.0f, (st.getCentreY() - e.position.y) / (st.getHeight() * 0.46f));
-    if (! on)   // first stroke on the formula view = seed from it, then edit (nothing jumps)
-    { for (int k = 0; k < N; ++k) curve[k] = presetY(mode, xAt(k)); on = true; }
-    if (lastI >= 0 && std::abs(i - lastI) > 1)   // span-connect fast strokes
-    {
-        const int a = juce::jmin(lastI, i), b2 = juce::jmax(lastI, i);
-        const float va = curve[a == i ? b2 : a], vb = v;
-        for (int k = a; k <= b2; ++k)
-            curve[k] = va + (vb - va) * (float)(k - a) / (float) juce::jmax(1, b2 - a);
-    }
-    curve[i] = v; lastI = i;
-    repaint();
-    if (onChange) onChange(curve, on);
-}
-
-//==============================================================================
 // ModalDisplay - the Modal engine's interactive controller, same philosophy as the
 // Physical string: THE DRAWN SHAPE IS THE SOUND. It plots the struck body's actual
 // standing wave - the sum of the REAL mode shapes (sin((i+1)*pi*x)) weighted by the
@@ -2300,7 +2030,7 @@ void SlotEditor::init(int idx, MidiLearnManager& mlm, juce::LookAndFeel* knobLNF
                     params[kid].set(*s, v);
                     if (params[kid].reBake) pendingRebake = true;   // Stretch -> needs a re-bake on release
                     if (onEdit) onEdit();
-                    morphView.repaint(); waveView.repaint(); physView.repaint(); modalView.repaint(); wgView.repaint();
+                    morphView.repaint(); waveView.repaint(); physView.repaint(); modalView.repaint();
                     if (activeParamCount() != lastActiveCount) relayoutSelf();
                 }
         };
@@ -2325,10 +2055,6 @@ void SlotEditor::init(int idx, MidiLearnManager& mlm, juce::LookAndFeel* knobLNF
     physView.getSlot   = slotFn;
     physView.onEdit    = [this] { if (onEdit) onEdit(); };
     physView.onDragEnd = [this] { if (onAudition) onAudition(); };
-    addChildComponent(wgView);                    // [2026-07-18] Waveguide: interactive bore
-    wgView.getSlot   = slotFn;
-    wgView.onEdit    = [this] { if (onEdit) onEdit(); };
-    wgView.onDragEnd = [this] { if (onAudition) onAudition(); };
     addChildComponent(modalView);                 // Modal: interactive struck body (Hit Pos/Damp)
     modalView.getSlot   = slotFn;
     modalView.onEdit    = [this] { if (onEdit) onEdit(); };
@@ -2486,7 +2212,6 @@ void SlotEditor::setEngine(int eng)
     morphView.setVisible(morph);   // GRAIN reuses the wave preview: it shows the grain SOURCE
     waveView.setVisible(eng == DrumChannel::SrcWave);   // wavetable visual
     physView.setVisible(eng == DrumChannel::SrcPhys);   // interactive string (Position/Tone)
-    wgView.setVisible(eng == DrumChannel::SrcWguide);   // [2026-07-18] interactive bore (Position/Brightness)
     modalView.setVisible(eng == DrumChannel::SrcModal); // interactive struck body (Hit Pos/Damp)
     fmEnvSw.setVisible(eng == DrumChannel::SrcOsc);     // FM Amount env-follow (placed by placeOsc)
     morphView.fmMode = morph && ! grain;   // grain preview = the raw source (no FM applied to grains)
@@ -2573,7 +2298,7 @@ void SlotEditor::pushValues()
         fromFader->setValue (s->oscShape, juce::dontSendNotification); fromFader->updateText();
     }
     morphView.repaint();          // reflect this slot's wave (+ warp + FM)
-    physView.repaint(); modalView.repaint(); wgView.repaint();   // reflect Position/Tone / Hit Pos/Damp / bore looks
+    physView.repaint(); modalView.repaint();   // reflect Position/Tone / Hit Pos/Damp + material looks
     applyFreqLock();              // transpose lock follows the channel on every refresh
 }
 
@@ -2685,12 +2410,6 @@ void SlotEditor::placeGeneric(int boxW)
         const int mh = 52;
         modalView.setBounds(mL, yTop, innerW, mh);
         modalView.repaint();
-        yTop += mh + 4;
-    }
-    if (wgView.isVisible()) {                             // [2026-07-18] Waveguide: interactive bore across the top
-        const int mh = 56;
-        wgView.setBounds(mL, yTop, innerW, mh);
-        wgView.repaint();
         yTop += mh + 4;
     }
     if (n == 0) return;
@@ -6581,10 +6300,6 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         h = mix(h, sl.noiseType); h = mix(h, f(sl.noiseCenter)); h = mix(h, f(sl.noiseWidth)); h = mix(h, f(sl.noiseRes)); h = mix(h, f(sl.noiseDrive)); h = mix(h, f(sl.noiseCrackle));
         h = mix(h, f(sl.fmPitch)); h = mix(h, f(sl.fmSpread)); h = mix(h, f(sl.fmDepth)); h = mix(h, f(sl.fmPEnvAmt)); h = mix(h, f(sl.fmPEnvTime)); h = mix(h, f(sl.fmPOffset)); h = mix(h, f(sl.fmFeedback)); h = mix(h, f(sl.fmSub));
         h = mix(h, f(sl.physFreq)); h = mix(h, f(sl.physTone)); h = mix(h, f(sl.physMaterial)); h = mix(h, f(sl.physPosition)); h = mix(h, f(sl.physPEnvAmt)); h = mix(h, f(sl.physPEnvTime)); h = mix(h, f(sl.physPOffset)); h = mix(h, f(sl.physStiff)); h = mix(h, sl.physExcite); h = mix(h, f(sl.grainPos)); h = mix(h, f(sl.grainSize)); h = mix(h, f(sl.grainDens)); h = mix(h, f(sl.grainSpray)); h = mix(h, f(sl.grainPitch));
-        h = mix(h, sl.wgExcite); h = mix(h, f(sl.wgPressure)); h = mix(h, f(sl.wgBreath)); h = mix(h, f(sl.wgPos)); h = mix(h, f(sl.wgBright));   // [2026-07-18] WAVEGUIDE
-        for (int ex = 0; ex < 3; ++ex) {   // per-exciter drawn curves [r3]
-            h = mix(h, sl.wgCurveOn[ex] ? 1 : 0);
-            if (sl.wgCurveOn[ex]) for (int k = 0; k < 64; k += 4) h = mix(h, (int) sl.wgCurve[ex][k]); }
         h = mix(h, f(sl.smpSpeed)); h = mix(h, f(sl.smpCrush)); h = mix(h, f(sl.smpPitch)); h = mix(h, f(sl.smpPEnvAmt)); h = mix(h, f(sl.smpPEnvTime)); h = mix(h, f(sl.smpPOffset)); h = mix(h, sl.smpReverse ? 1 : 0); h = mix(h, sl.smpUseRegion ? 1 : 0);
         h = mix(h, f(sl.smpStart)); h = mix(h, f(sl.smpEnd)); h = mix(h, sl.smpSlices); h = mix(h, f(sl.smpStretch)); h = mix(h, f(sl.smpGain));
         h = mix(h, sl.smpEnvOn ? 1 : 0); h = mix(h, sl.smpPreservePitch ? 1 : 0); h = mix(h, sl.fmEnvFollow ? 1 : 0); h = mix(h, f(sl.modalMorph));
@@ -8802,8 +8517,7 @@ void DrumSequencerEditor::setupComponents()
         const auto& c  = proc.sequencer.patterns[proc.sequencer.currentPattern].channels[ch];
         const auto& sl = c.slots[juce::jlimit(0, DrumChannel::NUM_SLOTS - 1, slot)];
         const bool pitched = sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal
-                          || sl.engine == DrumChannel::SrcPhys || sl.engine == DrumChannel::SrcGrain
-                          || sl.engine == DrumChannel::SrcWguide;   // grain voices chords too; waveguide is pitched [2026-07-18]
+                          || sl.engine == DrumChannel::SrcPhys || sl.engine == DrumChannel::SrcGrain;   // grain voices chords too [2026-07-16]
         if (! pitched || sl.weight <= 0.001f) return 0;
         const int down = (slot == 1) ? c.keysSlot2Down : 0;   // positive = semitones DOWN (baked into slot 2's Freq)
         const int base = semi - down;
@@ -9198,7 +8912,7 @@ void DrumSequencerEditor::setupComponents()
                                 "(no sound, sequences another plugin).");
         strip.comboSound.setTooltip("Sound Bank: pick this channel's sound (opens the searchable picker; the "
                                     "current sound is highlighted amber).\n\n"
-                                    "- Search matches names, categories AND ENGINES: type \"waveguide\", "
+                                    "- Search matches names, categories AND ENGINES: type "
                                     "\"granular\", \"modal\", \"karplus\"... to list every sound built on that engine.\n"
                                     "- RIGHT-CLICK = MIDI-learn sound browsing on the SELECTED channel: "
                                     "NEXT/PREV buttons - tap = one sound, HOLD = keeps scrolling until released.\n"
@@ -9860,18 +9574,6 @@ void DrumSequencerEditor::setupComponents()
     lfoDisplay.onOpenCurveEditor = [this](int dest) { openLfoCurveEditor(dest); };   // click the wave in Custom
     content.addChildComponent(lfoCurveEd);
     lfoCurveEd.clickIgnore = &lfoDisplay;
-    // [2026-07-18 r2] DRAW EXCITER overlay (waveguide): edits go straight onto the slot.
-    content.addChildComponent(wgCurveEd);
-    wgCurveEd.onChange = [this](const float* cv, bool on) {
-        auto& sl = proc.sequencer.channel(selectedChannel).slots[juce::jlimit(0, 1, wgCurveEdSlot)];
-        const int ex = juce::jlimit(0, 2, wgCurveEd.mode);   // the exciter this drawing BELONGS to [r3]
-        sl.wgCurveOn[ex] = on;
-        for (int k = 0; k < WgCurveEditor::N; ++k)
-            sl.wgCurve[ex][k] = (uint16_t) juce::jlimit(0, 65535, (int) std::lround((cv[k] * 0.5f + 0.5f) * 65535.0f));
-        proc.sequencer.channel(selectedChannel).markDspDirty();
-        slotEd[juce::jlimit(0, 1, wgCurveEdSlot)].wgView.repaint();
-    };
-    // [2026-07-16] Grid/Snap are saved WITH the sound (per LFO) - reopening shows it as it was made.
     lfoCurveEd.onToolsChange = [this](int g2, bool sn) {
         if (ignoreKnobCallbacks) return;
         auto& ch = proc.sequencer.channel(selectedChannel);
@@ -10490,7 +10192,6 @@ void DrumSequencerEditor::setupComponents()
         slotEd[b].morphView.getCustomFrame = [this, b](int f) -> const float* {
             return proc.sequencer.channel(selectedChannel)
                        .addTbl[b][juce::jlimit(0, DrumChannel::ADD_FRAMES - 1, f)]; };
-        slotEd[b].wgView.onOpenCurve = [this, b] { openWgCurveEditor(b); };   // [2026-07-18 r2]
         slotEd[b].morphView.onOpenCustom = [this, b] {
             {   // not on Custom yet? switch to it, seeding the 4 frames from the CURRENT shape's
                 // recipe (only when the frames are still the untouched default) - same tone, now drawable
@@ -11062,10 +10763,6 @@ static juce::String engineDescription(int eng)
         case DrumChannel::SrcGrain:  return "GRANULAR - clouds of tiny windowed grains. Source = this slot's SAMPLE when "
                                             "one is loaded, else a rendered journey of the slot's wave (Custom's 4 frames "
                                             "= the Position scan). Pads, textures, stutters, frozen moments.";
-        case DrumChannel::SrcWguide: return "WAVEGUIDE - a blown/bowed physical model (Reed / Flute / Bow): the note is "
-                                            "CONTINUOUSLY DRIVEN as long as the key is held (raise Sustain!), then rings "
-                                            "out on release. Winds, bowed strings, breathy sustains - drag the bore "
-                                            "visual's handles for pickup position + brightness.";
         default:                     return "Pick this slot's sound engine (or a sample). Two slots blend into one sound.";
     }
 }
@@ -11122,7 +10819,6 @@ void DrumSequencerEditor::rebuildSlotMenus()
                                         // projects); the Oscillator now covers wavetable-style shaping (more shapes + Warp).
         root->addItem(9, "Modal");      // id = engine+2 -> SrcModal (7); maps automatically (struck resonant body)
         root->addItem(10, "Granular");  // id = engine+2 -> SrcGrain (8): grains of a wave journey or the slot's sample
-        root->addItem(11, "Waveguide"); // id = engine+2 -> SrcWguide (9): continuously-driven blown/bowed bore [2026-07-18]
     }
     syncBoxesFromSrcOn();   // restore the current channel's displayed text
 }
@@ -11135,9 +10831,9 @@ void DrumSequencerEditor::rebuildSlotMenus()
 void DrumSequencerEditor::syncPadFromSlots(bool recenter)
 {
     auto& ch = proc.sequencer.channel(selectedChannel);
-    static const char* eng[DrumChannel::NUM_SOURCES + 5] = { "Sample", "Noise", "Oscillator", "FM", "Karplus-Strong", "Synth", "Wavetable", "Modal", "Granular", "Waveguide" };
+    static const char* eng[DrumChannel::NUM_SOURCES + 4] = { "Sample", "Noise", "Oscillator", "FM", "Karplus-Strong", "Synth", "Wavetable", "Modal", "Granular" };
     bool a[DrumChannel::NUM_SLOTS];
-    int total[DrumChannel::NUM_SOURCES + 5] = {}, seen[DrumChannel::NUM_SOURCES + 5] = {};
+    int total[DrumChannel::NUM_SOURCES + 4] = {}, seen[DrumChannel::NUM_SOURCES + 4] = {};
     for (int b = 0; b < DrumChannel::NUM_SLOTS; ++b)
     { a[b] = (ch.slots[b].engine >= 0); if (a[b]) total[ch.slots[b].engine]++; }
 
@@ -11714,8 +11410,7 @@ void DrumSequencerEditor::updateKeyboardHighlight()
             const auto& sl = c.slots[s];
             if (sl.engine < 0 || sl.weight <= 0.001f) return;   // empty/muted slot
             const bool pitched = (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal
-                                  || sl.engine == DrumChannel::SrcPhys || sl.engine == DrumChannel::SrcGrain
-                                  || sl.engine == DrumChannel::SrcWguide);   // [2026-07-18]
+                                  || sl.engine == DrumChannel::SrcPhys || sl.engine == DrumChannel::SrcGrain);   // [2026-07-16]
             const bool transposes = pitched || (sl.engine == DrumChannel::SrcSample && ! sl.smpPreservePitch);
             const int base = held - (s == 1 && transposes ? c.keysSlot2Down : 0);
             auto add = [&](int off) { if (off < -90) return;   // guitar voicing: missing string
@@ -11980,7 +11675,7 @@ void DrumSequencerEditor::onSlotEngineChange(int box)
     }
     else
     {
-        boxEngine[box] = (id <= 1) ? -1 : id - 2;   // None / Noise / Analog+FM / FM / Physical / Synth / Wave / Modal / Granular / Waveguide
+        boxEngine[box] = (id <= 1) ? -1 : id - 2;   // None / Noise / Analog+FM / FM / Physical / Synth / Wave / Modal / Granular
         ch.slots[box].engine = boxEngine[box];
         ch.silenceAllVoices();   // don't let a voice ringing on the OLD engine get re-read as the new one (= noise)
         ch.ensureKsBuffers();    // KS lines are lazily allocated; a KS engine just got assigned (message thread)
@@ -12288,21 +11983,6 @@ void DrumSequencerEditor::updateFxFaders(const DrumChannel::Slot& sl)
       sendRevF.setValue01(ch.reverbSend); sendRevF.repaint();   // repaint: the bus name in the value may have changed
       sendDelF.setValue01(ch.delaySend); sendDelF.repaint(); }
     // (LFO tempo sync lives INSIDE the LfoDisplay now - setValues carries sl.lfoSync.)
-}
-
-// [2026-07-18 r2] DRAW EXCITER: open the waveguide transfer overlay for one slot.
-void DrumSequencerEditor::openWgCurveEditor(int slotIdx)
-{
-    wgCurveEdSlot = juce::jlimit(0, 1, slotIdx);
-    auto& sl = proc.sequencer.channel(selectedChannel).slots[wgCurveEdSlot];
-    wgCurveEd.mode = juce::jlimit(0, 2, sl.wgExcite);   // edits THIS exciter's own curve [r3]
-    wgCurveEd.on = sl.wgCurveOn[wgCurveEd.mode];
-    for (int k = 0; k < WgCurveEditor::N; ++k)
-        wgCurveEd.curve[k] = wgCurveEd.on ? (float) sl.wgCurve[wgCurveEd.mode][k] * (1.0f / 32767.5f) - 1.0f
-                                          : WgCurveEditor::presetY(wgCurveEd.mode, WgCurveEditor::xAt(k));
-    wgCurveEd.accent = slotEd[wgCurveEdSlot].accent;
-    wgCurveEd.clickIgnore = &slotEd[wgCurveEdSlot].wgView;
-    wgCurveEd.setVisible(true); wgCurveEd.toFront(false);
 }
 
 // LFO SHAPER: open the draw overlay for one LFO tab, loaded with that tab's current curve.
@@ -13172,12 +12852,6 @@ void DrumSequencerEditor::timerCallback()
                                           : juce::String());
             }
             else if (mv.grainN >= 0) mv.setGrainLive(nullptr, -1, {});
-            // [2026-07-18] WAVEGUIDE live bore wave: the literal delay-line contents (honest layer 3)
-            if (dc.slots[b2].engine == DrumChannel::SrcWguide)
-            {
-                float wp[96];
-                slotEd[b2].wgView.setLive(wp, dc.getWaveguideSnapshot(b2, wp, 96));
-            }
             // LIVE wavetable position marker on the slot preview [2026-07-16 round-5]: same
             // engine value as the draw window's amber marker (honest; -1 clears when idle).
             mv.setWtPosLive(dc.slots[b2].engine == DrumChannel::SrcOsc
@@ -13255,7 +12929,7 @@ void DrumSequencerEditor::zoomToGroup(juce::Rectangle<int> designRect)
     if (soundPicker != nullptr && soundPicker->isVisible())
         static_cast<SoundPickerPanel&>(*soundPicker).close();
     harmEd.setVisible(false);
-    lfoCurveEd.setVisible(false); wgCurveEd.setVisible(false);
+    lfoCurveEd.setVisible(false);
     routePicker.setVisible(false);
     remapEd.setVisible(false);
     fxTypeList.close();   // anchored under a combo that just moved (close() frees the combo latch)
@@ -13558,7 +13232,7 @@ void DrumSequencerEditor::layoutContent()
     if (! keepPickerOnLayout && soundPicker != nullptr && soundPicker->isVisible())
         static_cast<SoundPickerPanel&>(*soundPicker).close();
     harmEd.setVisible(false);   // same rule for the DRAW HARMONICS overlay
-    lfoCurveEd.setVisible(false); wgCurveEd.setVisible(false);   // and the LFO SHAPER overlay
+    lfoCurveEd.setVisible(false);   // and the LFO SHAPER overlay
     routePicker.setVisible(false);  // and the route source|target picker
     remapEd.setVisible(false);      // and its REMAP curve overlay
     fxTypeList.close();             // and the per-item-tooltip type dropdown
@@ -14035,7 +13709,6 @@ void DrumSequencerEditor::layoutContent()
     // hidden again at the top of every layoutContent like the sound picker).
     harmEd.setBounds(cxAmp, colTop, ampEqW + gp + pitchW + gp + fxColW, colH);   // covers amp..FX (user-outlined area)
     lfoCurveEd.setBounds(cxAmp, colTop, ampEqW + gp + pitchW + gp + fxColW, colH);   // LFO draw window = the wavetable menu's footprint (user 2026-07-16)
-    wgCurveEd.setBounds(cxAmp, colTop, ampEqW + gp + pitchW + gp + fxColW, colH);    // DRAW EXCITER = the same footprint [2026-07-18 r2]
     routePicker.setBounds(cxPitch, colTop + 24, pitchW + gp + fxColW, colH - 48);   // route source|target chooser (parked left of the faders)
 
     hdrDrive.setBounds(0, 0, 0, 0);

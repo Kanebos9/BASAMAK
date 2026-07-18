@@ -913,121 +913,6 @@ private:
 };
 
 //==============================================================================
-// [2026-07-18] WAVEGUIDE bore controller - three HONEST layers (user-approved concept):
-// (1) the drawing IS the parameters (StringDisplay precedent): drag the PICKUP dot along the
-//     bore = wgPos; drag the BELL (right end) up/down = wgBright;
-// (2) the small excitation-curve inset is data-as-drawing: the EXACT nonlinearity the DSP
-//     evaluates per sample (Reed table / jet cubic / bow friction - mirror rule);
-// (3) the travelling wave INSIDE the bore is real state: the literal delay-line contents
-//     (setLive, fed by the editor timer from getWaveguideSnapshot - the grain-dot precedent).
-class WaveguideDisplay : public juce::Component, public juce::SettableTooltipClient
-{
-public:
-    std::function<DrumChannel::Slot*()> getSlot;
-    std::function<void()> onEdit;
-    std::function<void()> onDragEnd;
-    std::function<void()> onOpenCurve;   // [2026-07-18 r2] click the curve inset = open the DRAW EXCITER overlay
-    juce::Colour accent { 0xffe8bf4d };
-    void setLive(const float* pts, int n)
-    {
-        liveN = juce::jmin(n, 96);
-        for (int i = 0; i < liveN; ++i) live[i] = pts[i];
-        repaint();
-    }
-    void paint(juce::Graphics& g) override;
-    void mouseDown(const juce::MouseEvent& e) override;
-    void mouseDrag(const juce::MouseEvent& e) override;
-    void mouseUp(const juce::MouseEvent&) override { dragWhat = 0; if (onDragEnd) onDragEnd(); }
-    juce::String getTooltip() override;
-private:
-    void applyDrag(const juce::MouseEvent& e);
-    // [2026-07-18 r2] shared geometry (paint + hit-testing must never drift apart - the prHdr rule):
-    // bore | BRIGHTNESS TRACK (full-height, its own column - the bell dot was ungrabbable) | curve inset
-    void layoutRects(juce::Rectangle<float>& bore, juce::Rectangle<float>& bright,
-                     juce::Rectangle<float>& curve) const
-    {
-        auto in = getLocalBounds().toFloat().reduced(8.0f, 5.0f);
-        curve  = in.removeFromRight(52.0f).reduced(3.0f, 1.0f);
-        in.removeFromRight(3.0f);
-        bright = in.removeFromRight(13.0f).reduced(0.0f, 2.0f);
-        in.removeFromRight(4.0f);
-        bore = in;
-    }
-    int   dragWhat = 0;   // 1 = pickup dot (x -> wgPos), 2 = brightness track (y -> wgBright)
-    float live[96] = {}; int liveN = 0;
-};
-
-//==============================================================================
-// [2026-07-18 r2] WgCurveEditor - DRAW YOUR OWN EXCITER: the overlay behind the WaveguideDisplay's
-// curve inset. The drawn transfer REPLACES the built-in reed/jet/bow table per slot (wgCurveOn +
-// wgCurve[64]). Presets = the three built-in formulas as starting points; "Formula" = back to the
-// built-in. HONEST WARNING drawn in the footer: many curves simply won't oscillate (the reed-latch
-// physics) - a silent result means the exciter jammed, redraw or load a preset.
-class WgCurveEditor : public juce::Component, public juce::SettableTooltipClient
-{
-public:
-    static constexpr int N = 64;
-    float curve[N] = {};
-    bool  on = false;                             // false = the built-in formula is active
-    int   mode = 0;                               // the slot's exciter (labels the presets' relevance)
-    juce::Colour accent { 0xffe8bf4d };
-    std::function<void(const float*, bool)> onChange;   // (curve, on)
-    juce::Component* clickIgnore = nullptr;
-    ~WgCurveEditor() override { juce::Desktop::getInstance().removeGlobalMouseListener(&closer); }
-    void visibilityChanged() override
-    {
-        if (isVisible() && ! closerHooked)      { juce::Desktop::getInstance().addGlobalMouseListener(&closer); closerHooked = true; }
-        else if (! isVisible() && closerHooked) { juce::Desktop::getInstance().removeGlobalMouseListener(&closer); closerHooked = false; }
-    }
-    // [r4] the drawing's INPUT DOMAIN = +-2.5 (everything the exciter can feel - the write
-    // clamps' range). r3's +-1 window went flat beyond +-1 = no amplitude brake = buzz.
-    static constexpr float XR = 2.5f;
-    static float presetY(int which, float x)      // the EXACT built-in transfers (mirror rule), x in +-XR
-    {
-        if (which == 0) return juce::jlimit(-1.0f, 1.0f, 0.7f - 0.3f * x);                    // Reed table
-        if (which == 1) { const float j = juce::jlimit(-1.0f, 1.0f, x); return j * (j * j - 1.0f); }   // jet cubic (its own input limiter)
-        return juce::jlimit(0.0f, 1.0f, std::pow(std::abs(x * 3.0f) + 0.75f, -4.0f)) * 2.0f - 1.0f;    // bow friction
-    }
-    static float xAt(int k) { return ((float) k / (float)(N - 1) * 2.0f - 1.0f) * XR; }
-    void loadPreset(int which)
-    { for (int k = 0; k < N; ++k) curve[k] = presetY(which, xAt(k));
-      on = true; repaint(); if (onChange) onChange(curve, on); }
-    void paint(juce::Graphics& g) override;
-    void mouseDown(const juce::MouseEvent& e) override;
-    void mouseDrag(const juce::MouseEvent& e) override;
-    void mouseUp(const juce::MouseEvent&) override { lastI = -1; }
-    juce::String getTooltip() override
-    {
-        return "DRAW YOUR OWN EXCITER (the reed/jet/bow transfer the engine evaluates every sample).\n\n"
-               "- X = what the exciter FEELS (pressure difference / jet deflection / bow-string speed), across the FULL +-2.5 range it can swing (the faint lines mark +-1).\n"
-               "- Y = what it does back (reflection / spill / grip).\n"
-               "- Presets = the three built-in curves; Formula = back to the built-in (drawing off).\n"
-               "- WARNING: many drawings will NOT oscillate - a silent note means the exciter jammed "
-               "(the same physics that silences a too-stiff reed). Redraw or load a preset.";
-    }
-private:
-    struct Closer : juce::MouseListener
-    {
-        WgCurveEditor& ed; explicit Closer(WgCurveEditor& e) : ed(e) {}
-        void mouseDown(const juce::MouseEvent& e) override
-        {
-            if (! ed.isVisible()) return;
-            const auto p = e.getScreenPosition();
-            if (ed.getScreenBounds().contains(p)) return;
-            if (ed.clickIgnore != nullptr && ed.clickIgnore->getScreenBounds().contains(p)) return;
-            ed.setVisible(false);
-        }
-    };
-    Closer closer { *this };
-    bool closerHooked = false;
-    int  lastI = -1;
-    juce::Rectangle<float> closeRect() const { return { (float) getWidth() - 24.0f, 4.0f, 20.0f, 16.0f }; }
-    juce::Rectangle<float> presetRect(int i) const   // Reed / Flute / Bow / Formula
-    { return { (float) getWidth() - 320.0f + (float) i * 72.0f, 3.0f, 66.0f, 18.0f }; }
-    juce::Rectangle<float> strip() const { return getLocalBounds().toFloat().reduced(10.0f).withTrimmedTop(26.0f).withTrimmedBottom(18.0f); }
-};
-
-//==============================================================================
 // WavetableDisplay - shows the SrcWave engine's current single-cycle waveform (read from the
 // real wavetable bank at the slot's Table + Position). Faint neighbour frames behind give the
 // "table" feel; the bright wave morphs as you turn Position. Read-only (no click editing).
@@ -1576,7 +1461,6 @@ public:
     WaveMorphDisplay morphView;                     // Analog/FM only: Wave A->B morph (replaces 2 knobs)
     WavetableDisplay waveView;                       // SrcWave only: the current wavetable waveform
     StringDisplay    physView;                       // Physical only: interactive string (Position/Tone on the visual)
-    WaveguideDisplay wgView;                         // [2026-07-18] Waveguide only: interactive bore (Position/Brightness + live wave)
     ModalDisplay     modalView;                      // Modal only: interactive struck-body (Hit Pos/Damp on the visual)
     ToggleSwitch     fmEnvSw;                        // SrcOsc only: FM Amount follows the amp envelope
     // Drop an audio file on the box -> the editor switches this slot to Sample + loads it.
@@ -1618,7 +1502,6 @@ public:
         for (auto* f : { freqFader.get(), depthFader.get(), fromFader.get(), warpFader.get(),
                          syncFader.get(), bendFader.get() })
             if (f) f->setColour(juce::Slider::trackColourId, c);
-        wgView.accent = c;   // [2026-07-18] the bore visual wears the slot colour too
     }
     void setEngine(int eng);     // rebuild params + show/hide knobs
     void pushValues();           // slot -> knobs (no notification)
@@ -2920,12 +2803,9 @@ private:
     bool masterBusB = false;               // which shared bus the MASTER reverb/delay rows EDIT (A or B)
     void refreshReverbModeHeader();
     void openLfoCurveEditor(int dest);   // LFO SHAPER overlay
-    void openWgCurveEditor(int slotIdx); // [2026-07-18 r2] DRAW EXCITER overlay
     void openRoutePicker(int route);     // two-column source|target picker for one matrix fader
     HarmonicEditor harmEd;    // ADDITIVE draw-harmonics overlay (content child)
     LfoCurveEditor lfoCurveEd;             // LFO SHAPER overlay (draw the Custom LFO cycle)
-    WgCurveEditor  wgCurveEd;              // [2026-07-18 r2] DRAW EXCITER overlay (waveguide transfer)
-    int            wgCurveEdSlot = 0;      // which slot the exciter overlay edits
     ModFaderMatrix  modFaders;             // 12 route faders (6x2) inline in the MODULATION box
     RoutePicker     routePicker;           // its right-click source|target chooser (overlay)
     RemapEditor     remapEd;               // [2026-07-14] the per-route REMAP curve overlay (opened from the picker)

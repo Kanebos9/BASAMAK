@@ -2368,49 +2368,10 @@ static void oPumpBass(DC& c) {     // sidechain FEEL without a sidechain: a per-
     modRoute(s, DC::MSLfoFilt, DC::MTVol, 0.8f);
     chFx(c, DC::ChFxComp, 0.3f); c.volume = 0.9f;
 }
-// ==== [2026-07-18] SOUND-EXPANSION showcases: the WAVEGUIDE engine (Reed/Flute/Bow = the bank's
-// first CONTINUOUSLY-DRIVEN family), the shape trio (Sync/Bend/Fold), the Resonator channel FX
-// and the Metal Cluster material. Mechanism-first per the ORIGINALS rule - each sound exists
-// because its mechanism can't be made any other way. ====
-static void yWoodReed(DC& c) {     // WAVEGUIDE Reed: a real driven clarinet-family bore
-    auto& s = mkSlot(c, DC::SrcWguide);
-    s.oscFreq = 261.63f; s.wgExcite = 0; s.wgPressure = 0.62f; s.wgBreath = 0.18f;
-    s.wgBright = 0.55f; s.wgPos = 0.3f;      // [r3] louder voicing - "barely hearable" (user)
-    s.atk = 0.045f; s.dec = 0.4f; s.sustain = 0.85f; s.release = 0.2f;
-    s.vibrato = 0.25f; s.drift = 0.2f;
-    modRoute(s, DC::MSModWheel, DC::MT_GRID_BASE + 2, 0.35f);   // Mod Wheel -> Pressure = real breath control
-    c.reverbSend = 0.25f; c.volume = 1.1f;
-}
-static void yBreathFlute(DC& c) {  // WAVEGUIDE Flute: air jet + airy breath, bright open bore
-    auto& s = mkSlot(c, DC::SrcWguide);
-    s.oscFreq = 523.25f; s.wgExcite = 1; s.wgPressure = 0.5f; s.wgBreath = 0.35f;
-    s.wgBright = 0.8f; s.wgPos = 0.2f;
-    s.atk = 0.06f; s.dec = 0.4f; s.sustain = 0.9f; s.release = 0.25f;
-    s.vibrato = 0.35f; s.drift = 0.25f;
-    modRoute(s, DC::MSModWheel, DC::MT_GRID_BASE + 2, 0.3f);    // wheel = blow harder
-    c.reverbSend = 0.3f; c.volume = 0.9f;
-}
-static void yBowedCello(DC& c) {   // WAVEGUIDE Bow: stick-slip string, slow bow start, singing hold
-    auto& s = mkSlot(c, DC::SrcWguide);
-    s.oscFreq = 130.81f; s.wgExcite = 2; s.wgPressure = 0.6f; s.wgBreath = 0.1f;
-    s.wgBright = 0.35f; s.wgPos = 0.22f;
-    s.atk = 0.12f; s.dec = 0.5f; s.sustain = 0.9f; s.release = 0.35f;
-    s.vibrato = 0.3f; s.drift = 0.25f;
-    s.filterType = DC::LowPass; s.filterCutoff = 3200.0f; s.filterReso = 0.8f;
-    modRoute(s, DC::MSModWheel, DC::MTVibrato, 0.4f);           // wheel = vibrato depth (a cellist's hand)
-    c.reverbSend = 0.35f; c.volume = 0.9f;
-}
-static void ySaxGrowl(DC& c) {     // WAVEGUIDE Reed OVERBLOWN into the amp: press hard = it growls
-    auto& s = mkSlot(c, DC::SrcWguide);
-    s.oscFreq = 196.0f; s.wgExcite = 0; s.wgPressure = 0.85f; s.wgBreath = 0.25f;
-    s.wgBright = 0.7f; s.wgPos = 0.4f;
-    s.atk = 0.03f; s.dec = 0.4f; s.sustain = 0.8f; s.release = 0.18f;
-    s.vibrato = 0.2f; s.drift = 0.3f;
-    s.fxDriveType = DC::DriveBassAmp; s.fxDrive = 0.35f;
-    modRoute(s, DC::MSModWheel, DC::MT_GRID_BASE + 2, 0.5f);    // wheel: soft blow -> full growl
-    chFx(c, DC::ChFxComp, 0.35f);
-    c.reverbSend = 0.2f; c.volume = 0.85f;
-}
+// ==== [2026-07-18] SOUND-EXPANSION showcases: the shape trio (Sync/Bend/Fold), the Resonator
+// channel FX and the Metal Cluster material. Mechanism-first per the ORIGINALS rule.
+// (The Waveguide engine + its 4 sounds were DELETED the same day - lost to the Oscillator on
+// sound, never released, so removed with zero compat debt. Do not rebuild blown/bowed models.)
 static void yScreamLead(DC& c) {   // HARD SYNC: the Mod Env sweeps the Sync ratio = the classic scream
     auto& s = mkSlot(c, DC::SrcOsc);
     s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
@@ -2795,13 +2756,9 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Ocean", mOcean, "Noise & Texture" },
     { "Ambient Wash", nAmbientWash, "Noise & Texture" },
     { "Evolver", sEvolver, "Noise & Texture" },
-    // ---- [2026-07-18] SOUND-EXPANSION batch (Waveguide / Sync / Bend / Resonator / Metal Cluster;
+    // ---- [2026-07-18] SOUND-EXPANSION batch (Sync / Bend / Resonator / Metal Cluster;
     //      the menu sorts alphabetically inside each category, the table stays batch-grouped) ----
-    { "Wood Reed", yWoodReed, "Leads" },              // WAVEGUIDE Reed: a real driven clarinet bore (wheel = breath)
-    { "Breath Flute", yBreathFlute, "Leads" },        // WAVEGUIDE Flute: air jet + breath, bright open bore
-    { "Sax Growl", ySaxGrowl, "Leads" },              // WAVEGUIDE Reed overblown into the Bass Amp
     { "Scream Lead", yScreamLead, "Leads" },          // HARD SYNC: Mod Env sweeps the ratio = the classic scream
-    { "Bowed Cello", yBowedCello, "Plucks & Strings" },// WAVEGUIDE Bow: stick-slip string, singing hold
     { "Sync Bass", ySyncBass, "Bass" },               // HARD SYNC: velocity tears the ratio open
     { "Halo Bass", yHaloBass, "Bass" },               // RESONATOR +12 st: a singing octave halo over a dark bass
     { "CZ Keys", yCzKeys, "Keys" },                   // PHASE DISTORTION: a resonant sweep with NO filter
@@ -2836,7 +2793,7 @@ juce::String mixSourceTag(int index)
     // Oscillator sounds are tagged by what they USE (engine renamed "Oscillator", 2026-07-10):
     // a slot playing the drawn Custom wave = "Additive"; any FM engaged = "Oscillator+FM"; pure =
     // "Oscillator". Two OSC slots (e.g. lead + sub) are still one engine family, NOT "Hybrid".
-    static const char* eng[] = { "Sample", "Noise", "Oscillator", "FM", "Karplus-Strong", "Synth", "Wave", "Modal", "Granular", "Waveguide" };
+    static const char* eng[] = { "Sample", "Noise", "Oscillator", "FM", "Karplus-Strong", "Synth", "Wave", "Modal", "Granular" };
     int firstEng = -1; bool sameEng = true, anyEng = false, allOsc = true, anyFM = false, anyAdd = false;
     for (auto& sl : tmp.slots)
         if (sl.engine >= 0 && sl.weight > 0.001f)

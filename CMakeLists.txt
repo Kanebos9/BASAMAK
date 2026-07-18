@@ -79,7 +79,7 @@ juce_generate_juce_header(BASAMAK)
 # builds are untouched. Run tests/run.sh BEFORE EVERY RELEASE - each test exits non-zero on FAIL.
 option(BASAMAK_TESTS "Build the offline DSP regression tests" OFF)
 if(BASAMAK_TESTS)
-    foreach(T PolyTest PRollTest MergeTest PresetTest DuckTest NudgeTest SlotNoteTest GlideTest ArpTest TunerTest GateWrapTest LiveRollTest RollAbsoluteTest WavetableTest AliveTest GrainTest ModMatrixTest WaveguideTest BankAudit UIAudit MixDump)
+    foreach(T PolyTest PRollTest MergeTest PresetTest DuckTest NudgeTest SlotNoteTest GlideTest ArpTest TunerTest GateWrapTest LiveRollTest RollAbsoluteTest WavetableTest AliveTest GrainTest ModMatrixTest BankAudit UIAudit MixDump)
         juce_add_console_app(${T})
         juce_generate_juce_header(${T})
         target_sources(${T} PRIVATE

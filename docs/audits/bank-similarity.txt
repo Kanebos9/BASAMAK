@@ -1,4 +1,4 @@
-BASAMAK factory-bank similarity scores (268 sounds)
+BASAMAK factory-bank similarity scores (264 sounds)
 ==================================================
 WHAT THE SCORE MEASURES (0..1, higher = more alike):
   55% attack spectrum   - 24 log-spaced bands over the first 5-150 ms (the hit's colour)
@@ -144,7 +144,6 @@ SATURATE the metric - 0.95+ in Keys/Pads/Leads is normal, not proof of a twin.
   0.990  Pulse Lead       ~  Quint Lead       (dec 0.59s/0.59s)
   0.990  Whistle          ~  Drift Lead       (dec 0.73s/0.80s)
 -- Plucks & Strings --
-  0.992  Dulcimer         ~  Bowed Cello      (dec 0.93s/1.00s)
   0.992  Harp             ~  Synth Pluck      (dec 0.43s/0.41s)
   0.985  Pluck            ~  Dream Pluck      (dec 0.64s/0.57s)
   0.981  Stab             ~  Pizzicato        (dec 0.26s/0.27s)
@@ -154,6 +153,7 @@ SATURATE the metric - 0.95+ in Keys/Pads/Leads is normal, not proof of a twin.
   0.978  Nylon Guitar     ~  Pizzicato        (dec 0.32s/0.27s)
   0.973  Harp             ~  Nasal Pluck      (dec 0.43s/0.35s)
   0.968  Harp             ~  Dream Pluck      (dec 0.43s/0.57s)
+  0.966  Pluck            ~  Filter Pluck     (dec 0.64s/0.59s)
 -- Bells & Mallets --
   1.000  Marimba Keys     ~  Mod Kalimba      (dec 1.00s/1.00s)
   1.000  Marimba Keys     ~  Music Box        (dec 1.00s/1.00s)

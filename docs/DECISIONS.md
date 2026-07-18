@@ -210,6 +210,8 @@
 | 146 | Exciter-curve domain widened to +-2.5 with 16-bit y ("wgCw" keys); the r3-era 8-bit +-1 curves are DROPPED to Formula on load, not migrated | +-1 was blind to the range the exciters actually swing = flat extrapolation = no amplitude brake = the universal buzz; the old curves only ever produced that defect, so preserving them preserves nothing | user bug report; drop-not-migrate = my call, disclosed |
 | 147 | Engine tags for picker search are computed once per session (factoryEngineTags cache) | mixSourceTag builds the sound to inspect its slots - 268 builds per keystroke is the heavy-construction lesson again | my call |
 
+| 148 | Waveguide engine deleted completely same-day (user order); engine id 9 reserved forever, readSlots maps stray eng 9 -> None; the 4 wind sounds + WaveguideTest died with it | never in a release = zero compat debt, and it lost to the Oscillator on sound; a one-line load guard is hygiene, not legacy | user decision; the eng-9 guard = my call |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

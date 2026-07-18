@@ -359,13 +359,6 @@ public:
     // timbre; plain waves render a uniform table where Position matters less, disclosed).
     static constexpr int SrcGrain = NUM_SOURCES + 3;   // = 8
     static constexpr int GRAIN_TBL = 65536, GRAIN_CYC = 1024, GRAINS_MAX = 12;
-    // SrcWguide [2026-07-18]: a SLOT-ONLY DIGITAL WAVEGUIDE engine (Smith/CCRMA lineage; menu name
-    // "Waveguide") - the CONTINUOUSLY-DRIVEN physical model the bank lacked: a bore/string delay
-    // loop excited every sample by a nonlinear Reed / Flute-jet / Bow model while the gate is open
-    // (held key / note length), so the note SUSTAINS as long as you blow/bow and decays on release.
-    // Distinct from Karplus-Strong (strike-then-decay: energy only at the pluck).
-    static constexpr int SrcWguide = NUM_SOURCES + 4;   // = 9
-    static constexpr int WG_UNI = 3;                    // up to 3 bores (unison/scale voicing cap, like Modal)
     static constexpr int MODAL_MODES = 16;             // max resonant modes per voice
     static constexpr int MODAL_NOTES = 3;              // Modal unison/chord: up to this many FULL banks (one per note)
     static int         modalMaterialCount();
@@ -566,26 +559,6 @@ public:
         // Pitch Spray (random per-grain detune up to +-12 st).
         float grainPos = 0.25f, grainSize = 0.35f, grainDens = 0.5f, grainSpray = 0.15f, grainPitch = 0.0f;
         int   physExcite = 0;            // excitation: 0 = Pluck (noise burst), 1 = Strike (impulse), 2 = Mallet (soft)
-        // -- WAVEGUIDE (SrcWguide) [2026-07-18]: a continuously-driven bore/string. Base pitch
-        //    reuses oscFreq (like Modal). wgPos/wgBright are edited on the WaveguideDisplay visual
-        //    (the StringDisplay precedent - the drawing IS the parameters, they have no knobs). --
-        int   wgExcite = 0;              // 0 Reed (clarinet-family, odd harmonics) / 1 Flute (air jet) / 2 Bow (stick-slip)
-        float wgPressure = 0.6f;         // how hard the bore is blown/bowed (drive into the nonlinearity)
-        float wgBreath   = 0.12f;        // breath turbulence mixed into the drive (a small floor always
-                                         // remains - a perfectly still reed latches silent, physics)
-        float wgPos      = 0.25f;        // pickup/coupling position along the bore (comb colour) - VISUAL handle
-                                         // (on BOW it is the BOWING POINT: the bridge/neck split)
-        float wgBright   = 0.6f;         // loop brightness (1 - damping) - VISUAL handle
-        // [2026-07-18 r3] DRAWABLE EXCITER CURVE, PER EXCITER (user design: no extra knob) -
-        // EACH exciter owns its drawing, so switching the Exciter always lands on THAT exciter's
-        // own state (its curve if drawn, else its formula). A curve can only ever play through
-        // the plumbing it was drawn on = the stale-curve "broken sound" is unreachable.
-        // [r4] y 0..65535 = -1..+1 over input -2.5..+2.5 - the drawing covers the FULL range the
-        // exciter can feel (the write clamps' range). r3's +-1 window went FLAT beyond +-1 =
-        // no amplitude brake = every drawing/preset buzzed against the clamps (user bug).
-        // 16-bit y kills the 8-bit staircase fizz inside the high-gain loop.
-        bool     wgCurveOn[3] = { false, false, false };
-        uint16_t wgCurve[3][64] = {};
         // -- Sample -- (the buffer lives per-slot in slotSample[]; these are this slot's playback params)
         float smpSpeed = 1.0f, smpCrush = 0.0f, smpPitch = 0.0f, smpPEnvAmt = 0.0f, smpPEnvTime = 0.04f, smpPOffset = 0.0f;
         bool  smpReverse = false, smpUseRegion = false;
@@ -874,30 +847,6 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
         for (const auto& gr : sv.grains)
             if (gr.age < gr.len && n < maxN)
                 out[n++] = (float) juce::jlimit(0.0, 1.0, (gr.pos - lo) / span);
-        return n;
-    }
-    // [2026-07-18] UI: the newest voice's LIVE WAVEGUIDE bore contents (string 0) - the visual's
-    // travelling wave is the literal delay-line buffer, decimated, never an animation (honest-
-    // visuals rule). Torn floats are acceptable (the sample-load tolerance precedent). Returns
-    // the number of points written (0 = nothing sounding / not a Waveguide slot / lines not ready).
-    int getWaveguideSnapshot(int s, float* out, int maxN) const
-    {
-        s = juce::jlimit(0, NUM_SLOTS - 1, s);
-        if (slots[s].engine != SrcWguide || ! ksReady.load(std::memory_order_acquire)) return 0;
-        if (slotFiltEnv[s] < 0.001f) return 0;   // audibility gate (the getWtPos precedent)
-        const Voice* nv = nullptr;
-        for (auto& v : voices) if (v.active() && (nv == nullptr || v.voiceSamples < nv->voiceSamples)) nv = &v;
-        if (nv == nullptr) return 0;
-        const auto& sv = nv->sv[s];
-        if ((int) sv.ksBuf.size() < KS_MAX) return 0;
-        const int L = juce::jlimit(8, KS_MAX - 4, (int) sv.wgLen);   // the current bore length (samples)
-        const int n = juce::jmin(maxN, 96);
-        for (int i = 0; i < n; ++i)
-        {
-            int idx = (int) sv.ksWrite[0] - 1 - (i * L) / juce::jmax(1, n - 1);
-            while (idx < 0) idx += KS_MAX;
-            out[i] = sv.ksBuf[(size_t) idx];   // string 0's region starts at offset 0
-        }
         return n;
     }
     // The newest voice's S&H cycle counter (seeded per note) - the editor draws the REAL rolled
@@ -1250,7 +1199,7 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
             double b = 0.0;
             switch (sl.engine)
             {
-                case SrcOsc: case SrcFM: case SrcModal: case SrcGrain: case SrcWguide: b = sl.oscFreq;  break;
+                case SrcOsc: case SrcFM: case SrcModal: case SrcGrain: b = sl.oscFreq;  break;
                 case SrcPhys:                                          b = sl.physFreq; break;
                 default: break;   // Noise / Sample: no known pitch
             }
@@ -1300,7 +1249,6 @@ private:
         std::vector<float> ksBuf;
         double   ksWrite[KS_UNI] = {};
         float    ksLp[KS_UNI]    = {};
-        float    wgLen = 0.0f;   // [2026-07-18] WAVEGUIDE: current bore length in samples (string 0; UI snapshot reads it)
         float    ksApSt[KS_UNI][12] = {};   // dispersion allpass state per string (up to 12 stages for Stiffness)
         double   smpHead = 0.0;          // this slot's sample playhead
         // === PER-SLOT EQ (begin) - filter state for HP(2)+bells(3)+LP(2); coeffs live in SC ===

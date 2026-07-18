@@ -721,19 +721,6 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("grPo", s.grainPos, nullptr); st.setProperty("grSz", s.grainSize, nullptr);
         st.setProperty("grDn", s.grainDens, nullptr); st.setProperty("grSp", s.grainSpray, nullptr);
         st.setProperty("grPi", s.grainPitch, nullptr);   // GRANULAR
-        st.setProperty("wgEx", s.wgExcite, nullptr); st.setProperty("wgPr", s.wgPressure, nullptr);   // [2026-07-18] WAVEGUIDE
-        st.setProperty("wgBr", s.wgBreath, nullptr); st.setProperty("wgPo", s.wgPos, nullptr);
-        st.setProperty("wgBt", s.wgBright, nullptr);
-        for (int ex = 0; ex < 3; ++ex)   // [r4] PER-EXCITER drawn curves (16-bit, +-2.5 domain)
-        {
-            st.setProperty("wgCvOn" + juce::String(ex), s.wgCurveOn[ex] ? 1 : 0, nullptr);
-            if (s.wgCurveOn[ex])
-            {
-                juce::String cvh; cvh.preallocateBytes(256);
-                for (int k = 0; k < 64; ++k) cvh << juce::String::toHexString(s.wgCurve[ex][k]).paddedLeft('0', 4);
-                st.setProperty("wgCw" + juce::String(ex), cvh, nullptr);
-            }
-        }
         st.setProperty("pEA", s.physPEnvAmt, nullptr); st.setProperty("pET", s.physPEnvTime, nullptr); st.setProperty("pOf", s.physPOffset, nullptr);
         st.setProperty("sSp", s.smpSpeed, nullptr); st.setProperty("sCr", s.smpCrush, nullptr); st.setProperty("sPi", s.smpPitch, nullptr);
         st.setProperty("sEA", s.smpPEnvAmt, nullptr); st.setProperty("sET", s.smpPEnvTime, nullptr); st.setProperty("sOf", s.smpPOffset, nullptr);
@@ -834,6 +821,7 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         if (st.getType() != juce::Identifier("Slot")) continue;
         Slot& s = slots[n];  s = Slot();
         s.engine = (int)  st.getProperty("eng", -1);
+        if (s.engine == 9) s.engine = -1;   // the DELETED dev-only Waveguide (never released): load as None
         // MIGRATE the retired slot engines (SrcSynth=5 / SrcWave=6, removed v1.2.x) onto Analog+FM so
         // OLD projects play a real sound instead of falling through to silence. SrcModal=7 is a live
         // engine and is left alone. After this, no current data ever holds SrcSynth/SrcWave.
@@ -877,21 +865,6 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         s.grainPos = (float)st.getProperty("grPo", d.grainPos); s.grainSize = (float)st.getProperty("grSz", d.grainSize);
         s.grainDens = (float)st.getProperty("grDn", d.grainDens); s.grainSpray = (float)st.getProperty("grSp", d.grainSpray);
         s.grainPitch = (float)st.getProperty("grPi", d.grainPitch);
-        s.wgExcite = (int)st.getProperty("wgEx", d.wgExcite); s.wgPressure = (float)st.getProperty("wgPr", d.wgPressure);   // [2026-07-18] WAVEGUIDE
-        s.wgBreath = (float)st.getProperty("wgBr", d.wgBreath); s.wgPos = (float)st.getProperty("wgPo", d.wgPos);
-        s.wgBright = (float)st.getProperty("wgBt", d.wgBright);
-        for (int ex = 0; ex < 3; ++ex)   // [r4] PER-EXCITER drawn curves (16-bit "wgCw", +-2.5 domain)
-        {
-            s.wgCurveOn[ex] = (int)st.getProperty("wgCvOn" + juce::String(ex), 0) != 0;
-            if (s.wgCurveOn[ex])
-            {
-                const juce::String cvh = st.getProperty("wgCw" + juce::String(ex), "").toString();
-                if (cvh.length() >= 256)
-                    for (int k = 0; k < 64; ++k)
-                        s.wgCurve[ex][k] = (uint16_t) cvh.substring(k * 4, k * 4 + 4).getHexValue32();
-                else s.wgCurveOn[ex] = false;   // malformed OR the r3-era 8-bit "wgCv" key: back to
-            }                                    // the formula (those curves only made the flat-window
-        }                                        // buzz - dropping them IS the fix; DECISIONS #146
         s.physPEnvAmt = (float)st.getProperty("pEA", d.physPEnvAmt); s.physPEnvTime = (float)st.getProperty("pET", d.physPEnvTime); s.physPOffset = (float)st.getProperty("pOf", d.physPOffset);
         s.smpSpeed = (float)st.getProperty("sSp", d.smpSpeed); s.smpCrush = (float)st.getProperty("sCr", d.smpCrush); s.smpPitch = (float)st.getProperty("sPi", d.smpPitch);
         s.smpPEnvAmt = (float)st.getProperty("sEA", d.smpPEnvAmt); s.smpPEnvTime = (float)st.getProperty("sET", d.smpPEnvTime); s.smpPOffset = (float)st.getProperty("sOf", d.smpPOffset);
@@ -1140,7 +1113,7 @@ void DrumChannel::ensureKsBuffers()
     if (ksReady.load(std::memory_order_acquire)) return;
     bool needs = false;
     for (auto& s : slots)
-        if (s.engine == SrcPhys || s.engine == SrcWguide) { needs = true; break; }   // [2026-07-18] Waveguide shares the KS lines
+        if (s.engine == SrcPhys) { needs = true; break; }
     if (! needs) return;
     for (auto& v : voices)
         for (auto& sv : v.sv)
@@ -1544,7 +1517,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         // each pitched slot at its own Base Freq knob via keySemis (user: "TEST should use the
         // Base Freq knob"). Step channels already use the knob - knobBase is a no-op there.
         if (knobBase && drawMode
-            && (sl.engine == SrcOsc || sl.engine == SrcPhys || sl.engine == SrcModal || sl.engine == SrcWguide))
+            && (sl.engine == SrcOsc || sl.engine == SrcPhys || sl.engine == SrcModal))
         {
             const double own = (sl.engine == SrcPhys) ? (double) sl.physFreq : (double) sl.oscFreq;
             const double base = slotBaseHz(s, sl);
@@ -1615,7 +1588,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         // SCALE mode (diatonic harmonizer): the chord depends on the played NOTE, so compute this voice's
         // per-note diatonic offsets now (keySemis is 0 for step/draw hits; keyDown recomputes for held keys).
         for (int u = 0; u < UNI_MAX; ++u) sv.uniSemis[u] = 0.0f;
-        if (sl.scaleOn && (sl.engine == SrcOsc || sl.engine == SrcModal || sl.engine == SrcPhys || sl.engine == SrcGrain || sl.engine == SrcWguide))
+        if (sl.scaleOn && (sl.engine == SrcOsc || sl.engine == SrcModal || sl.engine == SrcPhys || sl.engine == SrcGrain))
         {
             const double baseF = slotBaseHz(s, sl);
             const int playedMidi = (int) std::lround(69.0 + 12.0 * std::log2(juce::jmax(1.0, baseF) / 440.0) + (double) pitchSemis);
@@ -1633,7 +1606,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         // identical and a "strum" would just comb-filter. uniDelay[0] stays 0 (the root leads).
         const float sAmt = strumOverride >= 0.0f ? strumOverride : strumAmt;   // per-note override (piano roll)
         if (sAmt > 0.001f && sl.scaleOn
-            && (sl.engine == SrcOsc || sl.engine == SrcModal || sl.engine == SrcPhys || sl.engine == SrcGrain || sl.engine == SrcWguide))   // grain strums its cloud; bores strum too [2026-07-18]
+            && (sl.engine == SrcOsc || sl.engine == SrcModal || sl.engine == SrcPhys || sl.engine == SrcGrain))   // grain strums its cloud [2026-07-16]
         {
             const int nStr = juce::jlimit(1, UNI_MAX, sl.scaleType >= 10 ? 6 : sl.scaleUnison);
             if (nStr > 1)
@@ -1656,7 +1629,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         // the key transpose - glide/pitch-env excursions deliberately not chased, disclosed).
         if (! resoTracked && sl.weight > 0.001f
             && (sl.engine == SrcOsc || sl.engine == SrcFM || sl.engine == SrcPhys
-                || sl.engine == SrcModal || sl.engine == SrcGrain || sl.engine == SrcWguide))
+                || sl.engine == SrcModal || sl.engine == SrcGrain))
         {
             resoTracked = true;
             resoTrackHz = (float) juce::jlimit(20.0, 8000.0,
@@ -1700,11 +1673,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         for (auto& l : sv.ksLp) l = 0.0f;
         for (auto& row : sv.ksApSt) for (auto& a : row) a = 0.0f;
         const bool ksPluck = (ksReady.load(std::memory_order_acquire) && sl.engine == SrcPhys);
-        // [2026-07-18] WAVEGUIDE: the bore starts SILENT (no pluck fill - it is continuously
-        // driven by the exciter); stale content from the last note is cleared the same way.
-        const bool wgInit  = (ksReady.load(std::memory_order_acquire) && sl.engine == SrcWguide);
-        if (wgInit) sv.wgLen = 0.0f;
-        if (ksPluck || wgInit) std::fill(sv.ksBuf.begin(), sv.ksBuf.end(), 0.0f);
+        if (ksPluck) std::fill(sv.ksBuf.begin(), sv.ksBuf.end(), 0.0f);
         if (ksPluck)
         {
             const float ksFreq0 = (float) slotBaseHz(s, sl);
@@ -1892,7 +1861,6 @@ int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly,
             case SrcOsc:   base = (float) slotBaseHz(s, sl);  break;   // Analog+FM
             case SrcGrain: base = (float) slotBaseHz(s, sl);  break;   // grains transpose via keySemis
             case SrcModal: base = (float) slotBaseHz(s, sl);  break;   // Modal's Freq lives on oscFreq too
-            case SrcWguide: base = (float) slotBaseHz(s, sl); break;   // [2026-07-18] blown/bowed: fully keys-eligible
             case SrcPhys:  base = (float) slotBaseHz(s, sl); break;
             case SrcSample:   // Sample plays on keys: Preserve pitch = its own pitch (keySemis 0);
                               // else varispeed relative to C3 (MIDI 60), slot 2 transposed.
@@ -1965,8 +1933,6 @@ DrumChannel::GridKnob DrumChannel::modGridKnob(int engine, int idx)
         case SrcModal: switch (idx) { case 0: return none;   /* Base Freq: NOT modulatable (use Pitch) */  case 1: return none;   /* Material */
                                       case 2: return F(&S::modalMorph,0,1); case 3: return F(&S::modalTone,0,1);
                                       case 4: return F(&S::modalStruct,0,1); } break;
-        case SrcWguide: switch (idx) { case 0: return none;  /* Base Freq: NOT modulatable (use Pitch) */  case 1: return none;   /* Exciter = choice */
-                                      case 2: return F(&S::wgPressure,0,1); case 3: return F(&S::wgBreath,0,1); } break;   // [2026-07-18]
         default: break;
     }
     return none;
@@ -2243,10 +2209,6 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         int    waveTable = 0; float wavePos = 0;   // wavetable (SrcWave)
         int    modalN = 0; float modalA1[MODAL_MODES] = {}, modalA2[MODAL_MODES] = {}, modalGain[MODAL_MODES] = {};  // modal bank
         bool   modalFixed = false;   // [2026-07-18] Metal Cluster: partials are absolute Hz - note/env/vibrato never retune them
-        // [2026-07-18] WAVEGUIDE config
-        int    wgMode = 0;           // 0 Reed / 1 Flute / 2 Bow
-        float  wgPress = 0.6f, wgBreathC = 0.12f, wgPosC = 0.25f, wgLpK = 0.5f;
-        const uint16_t* wgCv = nullptr;   // drawn exciter curve (points into slots[s] - persistent, the arCv rule)
         float  modalDecaySec = 0.5f;   // base ring length (for voiceEnd)
         // -- 4-point pitch envelope (applies on top of the legacy per-engine env) --
         bool   pEnvOn = false; float pEnvP[Slot::NPE] = { 0, 0, 0, 0 }, pEnvT[Slot::NPE] = { 0.2f, 0.4f, 0.6f, 0.8f };
@@ -2577,20 +2539,6 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 c.grIncBase = (double) GRAIN_CYC * juce::jlimit(20.0, sr * 0.45, slotBaseHz(s, sl)) / sr;
                 c.atk = sl.atk; c.hold = sl.hold; c.dec = sl.dec;   // full AHDSR like SrcOsc
                 break; }
-            case SrcWguide: {   // [2026-07-18] WAVEGUIDE: continuously-driven bore/string
-                c.oscFreq   = (float) juce::jlimit(20.0, sr * 0.4, slotBaseHz(s, sl));
-                c.wgMode    = juce::jlimit(0, 2, sl.wgExcite);
-                c.wgPress   = juce::jlimit(0.0f, 1.0f, sl.wgPressure);
-                c.wgBreathC = juce::jmax(0.02f, juce::jlimit(0.0f, 1.0f, sl.wgBreath));   // floor: a perfectly
-                                        // still reed latches at a silent fixed point - physics, disclosed
-                c.wgPosC    = juce::jlimit(0.02f, 0.98f, sl.wgPos);
-                c.wgLpK     = 0.06f + 0.86f * juce::jlimit(0.0f, 1.0f, sl.wgBright);   // loop damping (dark..bright)
-                c.wgCv      = sl.wgCurveOn[c.wgMode] ? slots[s].wgCurve[c.wgMode] : nullptr;   // THIS exciter's own drawing (persistent ptr)
-                c.oscVibFac = 1.0f + juce::jlimit(0.0f, 1.0f, sl.vibrato) * 0.09f * vibLfo;
-                c.scaleOn   = sl.scaleOn;
-                c.uniVoices = juce::jlimit(1, WG_UNI, sl.scaleOn ? sl.scaleUnison : sl.oscUnison);   // up to 3 bores
-                c.uniCents  = juce::jlimit(0.0f, 1.0f, sl.oscDetune) * 100.0f;
-                break; }
             case SrcModal: {
                 // Build the resonator bank from the Material + base pitch + Decay/Tone/Structure.
                 // MORPH crossfades this material's mode table toward the NEXT material in the list
@@ -2744,7 +2692,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         }
         if (c.subAmt > 0.0f)
             switch (sl.engine) {
-                case SrcOsc: case SrcFM: case SrcGrain: case SrcPhys: case SrcModal: case SrcWguide:
+                case SrcOsc: case SrcFM: case SrcGrain: case SrcPhys: case SrcModal:
                     c.subHz = 0.5 * slotBaseHz(s, sl); break;
                 default: break;
             }
@@ -3701,139 +3649,6 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             gr.pos += gr.inc; ++gr.age;
                         }
                         sig = g * c.grNorm * env;
-                        break; }
-                    case SrcWguide: {
-                        // [2026-07-18] WAVEGUIDE render (v2 exciters, tuned against an offline
-                        // tone/noise metric): a delay-loop bore/string DRIVEN EVERY SAMPLE while
-                        // the envelope supplies the pressure; release drops the drive and the
-                        // damped loop rings out. STRUCTURES (full STK topologies):
-                        //  REED  = the STK Clarinet loop (table 0.7/-0.3 - steeper LATCHES SILENT),
-                        //          half-wavelength bore (odd harmonics);
-                        //  FLUTE = the STK Flute: a separate JET DELAY line (half the bore) feeding
-                        //          the cubic jet table + end reflection - the jet line is what makes
-                        //          it a tone instead of filtered breath noise;
-                        //  BOW   = the STK Bowed string: TWO lines (bridge + neck, split at wgPos =
-                        //          the bowing point), friction table between bow and string speed.
-                        // MEMORY: bore k = ksBuf region k; the flute jet / bow neck line = region
-                        // k+3 (KS_UNI=6 regions, waveguide bores cap at WG_UNI=3 - zero new RAM).
-                        // Writes clamped +-2.5; output clamped +-4 (anti-gunshot family).
-                        if (! ksOk || (int) sv.ksBuf.size() < KS_UNI * KS_MAX) break;
-                        if (v.isKey || (v.gateLen > 0 && c.sustain > 0.01f))
-                            env = keyAdsr(t, v.isKey ? v.keyOff : v.gateLen, c.atk, c.hold, c.dec, c.sustain, c.release);
-                        else
-                            env = ahdsEnv(t, c.atk, c.hold, sv.gateDec > 0.0f ? sv.gateDec : c.dec, c.sustain, c.release);
-                        const int nStr = juce::jlimit(1, (int) WG_UNI, c.uniVoices);
-                        float out = 0.0f;
-                        for (int k = 0; k < nStr; ++k)
-                        {
-                            double det = 1.0;   // per-bore pitch: scale interval + detune spread + drift
-                            if (nStr > 1)
-                            {
-                                const double sp = 2.0 * (double) k / (double)(nStr - 1) - 1.0;
-                                det = std::pow(2.0, sp * (double) c.uniCents / 1200.0);
-                            }
-                            if (c.scaleOn) { if (sv.uniSemis[k] < -90.0f) continue;   // guitar voicing: missing string
-                                             det *= std::pow(2.0, (double) sv.uniSemis[k] / 12.0); }
-                            det *= (double) sv.driftMul[juce::jmin(k, UNI_MAX)] * (double) sv.driftWobMul;
-                            if (t < sv.uniDelay[juce::jmin(k, UNI_MAX - 1)]) continue;   // strum: this bore enters later
-                            const double f = juce::jlimit(20.0, sr * 0.4,
-                                (double) c.oscFreq * det * noteMul * (double) c.oscVibFac * pe3Mul);
-                            // Reed = a closed-open cylinder: sounds an OCTAVE below its length, so the
-                            // loop is HALF a wavelength; Flute/Bow (open / string) = a full wavelength.
-                            double Lf = sr / (c.wgMode == 0 ? 2.0 * f : f);
-                            Lf = juce::jlimit(6.0, (double) KS_MAX - 4.0, Lf);
-                            if (k == 0) sv.wgLen = (float) Lf;   // UI snapshot: the live bore length
-                            const size_t base  = (size_t) k * (size_t) KS_MAX;
-                            const size_t base2 = (size_t) (k + WG_UNI) * (size_t) KS_MAX;   // jet / neck line
-                            const int    k2    = k + WG_UNI;
-                            auto rdLine = [&](size_t bs, int ki, double delay) -> float {   // fractional read
-                                double rp = sv.ksWrite[ki] - delay;
-                                while (rp < 0.0) rp += (double) KS_MAX;
-                                const int i0 = (int) rp; const float fr = (float)(rp - (double) i0);
-                                const int i1 = (i0 + 1 < KS_MAX) ? i0 + 1 : 0;
-                                return sv.ksBuf[bs + (size_t) i0]
-                                     + (sv.ksBuf[bs + (size_t) i1] - sv.ksBuf[bs + (size_t) i0]) * fr; };
-                            auto wrLine = [&](size_t bs, int ki, float val) {
-                                const int wi = (int) sv.ksWrite[ki];
-                                sv.ksBuf[bs + (size_t) wi] = juce::jlimit(-2.5f, 2.5f, val);   // KS write clamp
-                                sv.ksWrite[ki] = (wi + 1 < KS_MAX) ? wi + 1 : 0; };
-                            // [r3] REAL BREATH (user: "it feels like just volume" - he was right: pure
-                            // pressure jitter mostly becomes amplitude wobble and the loop filters the
-                            // hiss away). Now the knob is mostly AUDIBLE AIR: turbulence injected INTO
-                            // the bore (the tube colours it around the note - physical) + a small
-                            // radiated hiss at the output; only a whisper of pressure jitter remains.
-                            const float wn2 = whiteNoise(sv.noiseState); // deterministic per hit
-                            const float wn3 = whiteNoise(sv.noiseState);
-                            const float P   = env * c.wgPress * (1.0f + wn2 * c.wgBreathC * 0.1f);
-                            // bore injection stays TINY per mode (a high-gain loop amplifies it; the
-                            // reed's x20 output makeup turned 0.6 into a wall) - the RADIATED part
-                            // below is the air you actually hear.
-                            const float airB = wn3 * c.wgBreathC * P;
-                            // DRAWN EXCITER CURVE: replaces the built-in table (linear-interp read)
-                            auto lutCv = [&](float x) -> float {   // [r4] domain +-2.5 = the full felt range
-                                const float p = (juce::jlimit(-2.5f, 2.5f, x) * (0.2f) + 0.5f) * 63.0f;
-                                const int i0 = (int) p; const float fr = p - (float) i0;
-                                const float a2 = (float) c.wgCv[i0] * (1.0f / 32767.5f) - 1.0f;
-                                const float b2 = (float) c.wgCv[juce::jmin(63, i0 + 1)] * (1.0f / 32767.5f) - 1.0f;
-                                return a2 + (b2 - a2) * fr; };
-                            float yOut;
-                            switch (c.wgMode)
-                            {
-                                default:
-                                case 0: {   // REED (STK Clarinet)
-                                    const float y = rdLine(base, k, Lf);
-                                    float& lp = sv.ksLp[k];
-                                    lp += c.wgLpK * (y - lp);                 // loop damper (Brightness)
-                                    const float pd = -0.95f * lp - P;
-                                    const float rt = c.wgCv != nullptr ? lutCv(pd)
-                                                   : juce::jlimit(-1.0f, 1.0f, 0.7f - 0.3f * pd);
-                                    wrLine(base, k, P + pd * rt + wn3 * P * (0.008f + c.wgBreathC * 0.010f));
-                                    // ^ the reed keeps a FIXED tiny seed: its oscillation amplitude is
-                                    // hypersensitive to perturbation, so the seed stabilises the tone
-                                    // and Breath only ADDS air (radiated below) - not the operating point
-                                    // POSITION pickup tap combs the tone (like a guitar pickup)
-                                    yOut = (y - 0.7f * rdLine(base, k, Lf * (double) c.wgPosC)) * 16.0f;
-                                } break;
-                                case 1: {   // FLUTE (STK Flute: jet delay + cubic jet table + end reflection)
-                                    const float bore = rdLine(base, k, Lf);
-                                    float& lp = sv.ksLp[k];
-                                    lp += c.wgLpK * (bore - lp);              // reflection filter (Brightness)
-                                    const float pdiff = P * 1.1f - 0.5f * lp + airB * 0.12f;   // jet turbulence rides in
-                                    wrLine(base2, k2, pdiff);                 // into the JET line...
-                                    const float jtRaw = rdLine(base2, k2, juce::jmax(4.0, Lf * 0.5));   // ...half a bore later
-                                    const float jt = juce::jlimit(-1.0f, 1.0f, jtRaw);   // the formula's own limiter
-                                    const float jv = c.wgCv != nullptr ? lutCv(jtRaw)   // a drawing gets the full range
-                                                                       : jt * (jt * jt - 1.0f);
-                                    wrLine(base, k, jv + 0.55f * lp);   // jet table + end refl
-                                    yOut = (bore - 0.5f * rdLine(base, k, Lf * (double) c.wgPosC)) * 0.36f;
-                                } break;
-                                case 2: {   // BOW (STK Bowed: bridge + neck lines split at the bowing point)
-                                    const double posB = juce::jlimit(0.12, 0.88, (double) c.wgPosC);
-                                    const double Lbr = juce::jmax(4.0, Lf * (1.0 - posB));
-                                    const double Lnk = juce::jmax(4.0, Lf * posB);
-                                    const float brOut = rdLine(base,  k,  Lbr);
-                                    const float nkOut = rdLine(base2, k2, Lnk);
-                                    float& lp = sv.ksLp[k];
-                                    lp += c.wgLpK * (brOut - lp);             // bridge reflection filter
-                                    const float brRefl = -lp;
-                                    const float nkRefl = -nkOut;              // rigid nut
-                                    const float bowVel = 0.12f + 0.5f * P;
-                                    const float dv = bowVel - (brRefl + nkRefl);
-                                    const float bt = c.wgCv != nullptr
-                                        ? juce::jlimit(0.0f, 1.0f, lutCv(dv) * 0.5f + 0.5f)
-                                        : juce::jlimit(0.0f, 1.0f, std::pow(std::abs(dv * 3.0f) + 0.75f, -4.0f));
-                                    const float nv = dv * bt + airB * 0.25f;  // stick-slip + rosin grit
-                                    wrLine(base,  k,  nkRefl + nv);
-                                    wrLine(base2, k2, brRefl + nv);
-                                    yOut = brOut * 0.42f;
-                                } break;
-                            }
-                            out += yOut + wn3 * c.wgBreathC * P * 0.16f;   // radiated air (the part you hear)
-                        }
-                        sig = juce::jlimit(-4.0f, 4.0f, out / std::sqrt((float) juce::jmax(1, nStr)));
-                        // the envelope drives the PRESSURE, not the output - this trim only shapes the
-                        // very end so an undriven bore's residual never renders as an endless floor
-                        if (env < 0.02f) sig *= env * 50.0f;
                         break; }
                     case SrcModal: {
                         // Strike: feed ONE impulse into the resonator bank (a bank of 2-pole resonators =
