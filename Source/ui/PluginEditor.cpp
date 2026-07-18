@@ -8429,7 +8429,14 @@ void DrumSequencerEditor::setupComponents()
             m.addItem(310000 + b, tag + "Stop after... (" + juce::String(p.repeatTarget) + ")", true, p.playMode == Sequencer::StopAfterN);
             juce::PopupMenu chainAdd;   // CHAIN entries = (pattern, loops); play N loops then jump
             for (int i = 0; i < visiblePatterns; ++i) chainAdd.addItem(400000 + b * 100 + i, "Pattern " + juce::String(i + 1));
-            m.addSubMenu(tag + "Chain: add pattern", chainAdd, p.chainLen < Sequencer::CHAIN_MAX);
+            // [1.5.0 r4] "Chain to..." = SET: replaces this bar's WHOLE chain (every earlier attempt
+            // used to APPEND behind the merge default + previous tries = the leftover "next x1"
+            // entries always fired first = "plays the next merged pattern no matter what").
+            m.addSubMenu(tag + "Chain to pattern (replaces this bar's chain)", chainAdd, true);
+            juce::PopupMenu chainApp;
+            for (int i = 0; i < visiblePatterns; ++i) chainApp.addItem(500000 + b * 100 + i, "Pattern " + juce::String(i + 1));
+            m.addSubMenu(tag + "Chain: add ANOTHER step (sequence)", chainApp,
+                         p.playMode == Sequencer::Chain && p.chainLen > 0 && p.chainLen < Sequencer::CHAIN_MAX);
             if (p.chainLen > 0) {
                 juce::String cs;
                 for (int k = 0; k < p.chainLen; ++k)
@@ -8444,19 +8451,15 @@ void DrumSequencerEditor::setupComponents()
                 if (r <= 0) return;
                 auto& sq2 = proc.sequencer;
                 if (r >= 400000)
-                {   const int b = (r - 400000) / 100, pat = (r - 400000) % 100;
+                {   // 400000 = SET (replace the bar's WHOLE chain - wipes defaults + old attempts);
+                    // 500000 = append another step to an existing chain (explicit sequences only).
+                    const bool app = r >= 500000;
+                    const int base2 = app ? 500000 : 400000;
+                    const int b = (r - base2) / 100, pat = (r - base2) % 100;
                     askLoopCount("Play Pattern " + juce::String(pat + 1) + " after how many loops", 2,
-                        [this, b, pat](int n) {
-                            auto& sq3 = proc.sequencer;
-                            const int b2 = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, b);
-                            auto& q = sq3.patterns[b2];
-                            // [1.5.0 r3] the MERGE writes an invisible default entry ("next x1") -
-                            // appending AFTER it queued the user's chain behind it ("skips to P2
-                            // immediately, doesn't matter what I set"). An untouched default is
-                            // REPLACED by the user's explicit chain.
-                            const int defTgt = (b2 < sq3.groupEnd(b2)) ? b2 + 1 : sq3.groupHead(b2);
-                            if (q.chainLen == 1 && q.chainLoops[0] == 1 && q.chainSeq[0] == defTgt)
-                            { q.chainLen = 0; q.chainStep = 0; }
+                        [this, b, pat, app](int n) {
+                            auto& q = proc.sequencer.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, b)];
+                            if (! app) { q.chainLen = 0; q.chainStep = 0; }   // SET semantics [1.5.0 r4]
                             if (q.chainLen < Sequencer::CHAIN_MAX) {
                                 q.chainSeq[q.chainLen] = pat; q.chainLoops[q.chainLen] = n;
                                 ++q.chainLen; q.playMode = Sequencer::Chain; q.visitCount = 0; }
@@ -10643,7 +10646,7 @@ void DrumSequencerEditor::setupComponents()
         "bar = the group passes twice, THEN leaves.\n"
         "- In a MERGED group, EVERY bar has its own rows here (P4: Loop / P4: Stop / P4: Chain...): "
         "Loop = that bar repeats ITSELF forever; chain a bar to ITSELF for counted repeats.\n"
-        "- Adding a chain replaces the merge's automatic chain-to-next default.\n"
+        "- 'Chain to pattern' REPLACES that bar's whole chain (wipes the automatic merge default and any earlier attempts); 'add ANOTHER step' builds multi-step sequences.\n"
         "- Loop conditions count per BAR: 'every 2nd loop' = every 2nd play of that bar.\n"
         "- While RECORDING, the group always plays first-to-last (bar modes pause).");
 
