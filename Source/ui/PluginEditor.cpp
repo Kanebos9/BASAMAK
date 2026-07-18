@@ -7550,6 +7550,8 @@ void DrumSequencerEditor::setupComponents()
     content.addAndMakeVisible(btnPause);
     btnPause.getProperties().set("icon", "pause"); btnPause.setLookAndFeel(&iconBtnLNF);
     btnPause.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xffd9a13d));   // lit amber while paused
+    btnPause.setWantsKeyboardFocus(false);   // a clicked button KEEPS focus and the stock LNF draws
+                                             // focused buttons brighter = "always looks highlighted" (user)
     btnPause.setTooltip("PAUSE: freeze playback WHERE IT IS - press again (or Play) to resume from the "
                         "same spot. Stop still resets to the beginning.\n\n"
                         "- Ringing tails + reverb/delay decay naturally into the pause (nothing is cut).\n"
@@ -12449,10 +12451,11 @@ void DrumSequencerEditor::timerCallback()
         if (hb != lastHeartbeat) { lastHeartbeat = hb; heartbeatStaleTicks = 0; }
         else if (heartbeatStaleTicks <= 80) ++heartbeatStaleTicks;   // timer runs at 60 Hz
         const bool frozen = heartbeatStaleTicks > 60;
+        if (btnPause.getToggleState() != proc.sequencer.paused)               // lit amber ONLY while paused
+            btnPause.setToggleState(proc.sequencer.paused, juce::dontSendNotification);
         if (frozen != hostFrozen)
         {
             hostFrozen = frozen;
-            btnPause.setToggleState(proc.sequencer.paused, juce::dontSendNotification);   // lit amber while paused
             btnPlay.setTooltip(frozen
                 ? juce::String("NOT PLAYING? BASAMAK is not receiving audio from the host - everything is "
                                "paused (no sound, no sequencer movement, TEST does nothing).\n\n"
