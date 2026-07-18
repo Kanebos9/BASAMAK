@@ -273,7 +273,8 @@ juce::Array<SlotParam> slotParamsFor(int engine)
                      "brighter, and the nonlinearity starts to growl. A great matrix target (Mod Wheel or "
                      "Aftertouch -> Pressure = real breath control)."));
             p.add(F ("Breath", 0, 1, &S::wgBreath, "", true,
-                     "Breath/bow NOISE mixed into the drive - the air you hear around a real flute note. "
+                     "REAL AIR around the note: turbulence blown INTO the bore (the tube colours it around "
+                     "the pitch) plus a little radiated hiss - 0 = clean tone, up = breathy/raspy. "
                      "A small floor always remains (a perfectly still reed would latch silent - physics)."));
             break;   // 4 params = knob grid; Position/Brightness live on the bore visual
         case DrumChannel::SrcGrain:
@@ -1913,11 +1914,12 @@ void WaveguideDisplay::paint(juce::Graphics& g)
     }
     else { g.setColour(juce::Colour(0xff2a2a44)); g.drawLine(in.getX() + 3.0f, cy, in.getRight() - 3.0f, cy, 1.0f); }
 
-    // exciter glyph text at the mouth (left)
+    // exciter glyph text at the mouth (left) - says "(drawn)" while THIS exciter runs a hand curve
+    const bool drawn = s != nullptr && s->wgCurveOn[mode];
     g.setFont(juce::Font(8.5f, juce::Font::bold));
-    g.setColour(juce::Colour(0xff8aa0c8));
-    g.drawText(mode == 0 ? "REED" : mode == 1 ? "AIR" : "BOW",
-               (int) in.getX() + 2, (int) (cy - half) - 11, 34, 10, juce::Justification::centredLeft, false);
+    g.setColour(drawn ? accent : juce::Colour(0xff8aa0c8));
+    g.drawText(juce::String(mode == 0 ? "REED" : mode == 1 ? "AIR" : "BOW") + (drawn ? " (drawn)" : ""),
+               (int) in.getX() + 2, (int) (cy - half) - 11, 90, 10, juce::Justification::centredLeft, false);
 
     // PICKUP / BOW-POINT handle (drag LEFT/RIGHT = wgPos) on the bore's centre line
     const float hx = in.getX() + pos * (in.getWidth() - 8.0f);
@@ -1936,9 +1938,8 @@ void WaveguideDisplay::paint(juce::Graphics& g)
       g.fillEllipse(brightR.getCentreX() - 4.5f, hy - 4.5f, 9.0f, 9.0f);
       g.setColour(juce::Colours::white); g.drawEllipse(brightR.getCentreX() - 4.5f, hy - 4.5f, 9.0f, 9.0f, 1.1f); }
 
-    // EXCITATION CURVE inset (honest layer 2): the drawn curve when active, else the built-in
-    // formula the DSP evaluates. CLICK = open the DRAW EXCITER overlay.
-    const bool drawn = s != nullptr && s->wgCurveOn;
+    // EXCITATION CURVE inset (honest layer 2): THIS exciter's drawn curve when active, else its
+    // built-in formula. CLICK = open the DRAW EXCITER overlay.
     g.setColour(juce::Colour(0xff181830)); g.fillRoundedRectangle(curveR, 3.0f);
     g.setColour(drawn ? accent.withAlpha(0.8f) : juce::Colour(0xff2a2a48));
     g.drawRoundedRectangle(curveR.reduced(0.5f), 3.0f, 1.0f);
@@ -1952,8 +1953,8 @@ void WaveguideDisplay::paint(juce::Graphics& g)
             if (drawn)
             {
                 const float p = x01 * 63.0f; const int i0 = (int) p; const float fr = p - (float) i0;
-                const float a2 = (float) s->wgCurve[i0] * (1.0f / 127.5f) - 1.0f;
-                const float b2 = (float) s->wgCurve[juce::jmin(63, i0 + 1)] * (1.0f / 127.5f) - 1.0f;
+                const float a2 = (float) s->wgCurve[mode][i0] * (1.0f / 127.5f) - 1.0f;
+                const float b2 = (float) s->wgCurve[mode][juce::jmin(63, i0 + 1)] * (1.0f / 127.5f) - 1.0f;
                 yv = a2 + (b2 - a2) * fr;
             }
             else yv = WgCurveEditor::presetY(mode, xin);
@@ -2015,9 +2016,10 @@ void WgCurveEditor::paint(juce::Graphics& g)
     auto b = getLocalBounds().toFloat();
     g.setColour(juce::Colour(0xf0141428)); g.fillRoundedRectangle(b, 6.0f);
     g.setColour(accent);                   g.drawRoundedRectangle(b.reduced(1.0f), 6.0f, 1.4f);
-    g.setFont(juce::Font(12.0f, juce::Font::bold));
+    g.setFont(juce::Font(12.5f, juce::Font::bold));
     g.setColour(juce::Colours::white);
-    g.drawText("DRAW EXCITER CURVE", 12, 4, 240, 16, juce::Justification::centredLeft, false);
+    g.drawText("DRAW EXCITER CURVE - " + juce::String(mode == 0 ? "REED" : mode == 1 ? "FLUTE" : "BOW")
+               + " (this exciter's own drawing)", 12, 4, 400, 16, juce::Justification::centredLeft, false);
     static const char* pn[4] = { "Reed", "Flute", "Bow", "Formula" };
     for (int i = 0; i < 4; ++i)
     {
@@ -2042,15 +2044,15 @@ void WgCurveEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xff26263c));
     g.drawHorizontalLine((int) st.getCentreY(), st.getX(), st.getRight());
     g.drawVerticalLine((int) st.getCentreX(), st.getY(), st.getBottom());
-    // axis watermarks (the PitchEnv convention)
-    g.setFont(juce::Font(9.0f, juce::Font::bold));
-    g.setColour(juce::Colour(0xff5a5a80));
-    g.drawText("what the exciter FEELS", st.toNearestInt().removeFromBottom(12).reduced(4, 0),
+    // axis watermarks (the PitchEnv convention; 13px - the 9px version was unreadable, user)
+    g.setFont(juce::Font(13.0f, juce::Font::bold));
+    g.setColour(juce::Colour(0xff6a6a94));
+    g.drawText("what the exciter FEELS", st.toNearestInt().removeFromBottom(18).reduced(6, 0),
                juce::Justification::centredRight, false);
     { juce::Graphics::ScopedSaveState ss(g);
       g.addTransform(juce::AffineTransform::rotation(-juce::MathConstants<float>::halfPi,
-                                                     st.getX() + 10.0f, st.getCentreY()));
-      g.drawText("what it DOES BACK", (int) st.getX() - 40, (int) st.getCentreY() - 12, 110, 12,
+                                                     st.getX() + 14.0f, st.getCentreY()));
+      g.drawText("what it DOES BACK", (int) st.getX() - 60, (int) st.getCentreY() - 16, 160, 16,
                  juce::Justification::centred, false); }
     // the curve (drawn = accent; formula shown dim when off, so you see what you would replace)
     juce::Path cp;
@@ -2063,11 +2065,11 @@ void WgCurveEditor::paint(juce::Graphics& g)
     }
     g.setColour(on ? accent : accent.withAlpha(0.45f));
     g.strokePath(cp, juce::PathStrokeType(1.8f));
-    // the honest footer warning
-    g.setFont(juce::Font(9.5f, juce::Font::bold));
+    // the honest footer warning (12.5px - readable, user)
+    g.setFont(juce::Font(12.5f, juce::Font::bold));
     g.setColour(juce::Colour(0xffd9a13c));
     g.drawText("Some drawings will NOT oscillate (a jammed reed is SILENT - physics). Silent note = redraw or load a preset.",
-               10, getHeight() - 15, getWidth() - 20, 12, juce::Justification::centredLeft, false);
+               10, getHeight() - 18, getWidth() - 20, 15, juce::Justification::centredLeft, false);
 }
 void WgCurveEditor::mouseDown(const juce::MouseEvent& e)
 {
@@ -6553,8 +6555,9 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         h = mix(h, f(sl.fmPitch)); h = mix(h, f(sl.fmSpread)); h = mix(h, f(sl.fmDepth)); h = mix(h, f(sl.fmPEnvAmt)); h = mix(h, f(sl.fmPEnvTime)); h = mix(h, f(sl.fmPOffset)); h = mix(h, f(sl.fmFeedback)); h = mix(h, f(sl.fmSub));
         h = mix(h, f(sl.physFreq)); h = mix(h, f(sl.physTone)); h = mix(h, f(sl.physMaterial)); h = mix(h, f(sl.physPosition)); h = mix(h, f(sl.physPEnvAmt)); h = mix(h, f(sl.physPEnvTime)); h = mix(h, f(sl.physPOffset)); h = mix(h, f(sl.physStiff)); h = mix(h, sl.physExcite); h = mix(h, f(sl.grainPos)); h = mix(h, f(sl.grainSize)); h = mix(h, f(sl.grainDens)); h = mix(h, f(sl.grainSpray)); h = mix(h, f(sl.grainPitch));
         h = mix(h, sl.wgExcite); h = mix(h, f(sl.wgPressure)); h = mix(h, f(sl.wgBreath)); h = mix(h, f(sl.wgPos)); h = mix(h, f(sl.wgBright));   // [2026-07-18] WAVEGUIDE
-        h = mix(h, sl.wgCurveOn ? 1 : 0);
-        if (sl.wgCurveOn) for (int k = 0; k < 64; k += 4) h = mix(h, (int) sl.wgCurve[k]);   // drawn exciter (every 4th byte, the remap precedent)
+        for (int ex = 0; ex < 3; ++ex) {   // per-exciter drawn curves [r3]
+            h = mix(h, sl.wgCurveOn[ex] ? 1 : 0);
+            if (sl.wgCurveOn[ex]) for (int k = 0; k < 64; k += 4) h = mix(h, (int) sl.wgCurve[ex][k]); }
         h = mix(h, f(sl.smpSpeed)); h = mix(h, f(sl.smpCrush)); h = mix(h, f(sl.smpPitch)); h = mix(h, f(sl.smpPEnvAmt)); h = mix(h, f(sl.smpPEnvTime)); h = mix(h, f(sl.smpPOffset)); h = mix(h, sl.smpReverse ? 1 : 0); h = mix(h, sl.smpUseRegion ? 1 : 0);
         h = mix(h, f(sl.smpStart)); h = mix(h, f(sl.smpEnd)); h = mix(h, sl.smpSlices); h = mix(h, f(sl.smpStretch)); h = mix(h, f(sl.smpGain));
         h = mix(h, sl.smpEnvOn ? 1 : 0); h = mix(h, sl.smpPreservePitch ? 1 : 0); h = mix(h, sl.fmEnvFollow ? 1 : 0); h = mix(h, f(sl.modalMorph));
@@ -9832,9 +9835,10 @@ void DrumSequencerEditor::setupComponents()
     content.addChildComponent(wgCurveEd);
     wgCurveEd.onChange = [this](const float* cv, bool on) {
         auto& sl = proc.sequencer.channel(selectedChannel).slots[juce::jlimit(0, 1, wgCurveEdSlot)];
-        sl.wgCurveOn = on;
+        const int ex = juce::jlimit(0, 2, wgCurveEd.mode);   // the exciter this drawing BELONGS to [r3]
+        sl.wgCurveOn[ex] = on;
         for (int k = 0; k < WgCurveEditor::N; ++k)
-            sl.wgCurve[k] = (uint8_t) juce::jlimit(0, 255, (int) std::lround((cv[k] * 0.5f + 0.5f) * 255.0f));
+            sl.wgCurve[ex][k] = (uint8_t) juce::jlimit(0, 255, (int) std::lround((cv[k] * 0.5f + 0.5f) * 255.0f));
         proc.sequencer.channel(selectedChannel).markDspDirty();
         slotEd[juce::jlimit(0, 1, wgCurveEdSlot)].wgView.repaint();
     };
@@ -12262,10 +12266,10 @@ void DrumSequencerEditor::openWgCurveEditor(int slotIdx)
 {
     wgCurveEdSlot = juce::jlimit(0, 1, slotIdx);
     auto& sl = proc.sequencer.channel(selectedChannel).slots[wgCurveEdSlot];
-    wgCurveEd.mode = juce::jlimit(0, 2, sl.wgExcite);
-    wgCurveEd.on = sl.wgCurveOn;
+    wgCurveEd.mode = juce::jlimit(0, 2, sl.wgExcite);   // edits THIS exciter's own curve [r3]
+    wgCurveEd.on = sl.wgCurveOn[wgCurveEd.mode];
     for (int k = 0; k < WgCurveEditor::N; ++k)
-        wgCurveEd.curve[k] = sl.wgCurveOn ? (float) sl.wgCurve[k] * (1.0f / 127.5f) - 1.0f
+        wgCurveEd.curve[k] = wgCurveEd.on ? (float) sl.wgCurve[wgCurveEd.mode][k] * (1.0f / 127.5f) - 1.0f
                                           : WgCurveEditor::presetY(wgCurveEd.mode, (float) k / (float)(WgCurveEditor::N - 1) * 2.0f - 1.0f);
     wgCurveEd.accent = slotEd[wgCurveEdSlot].accent;
     wgCurveEd.clickIgnore = &slotEd[wgCurveEdSlot].wgView;

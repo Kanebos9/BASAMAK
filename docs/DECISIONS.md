@@ -204,6 +204,9 @@
 | 142 | Waveguide v2 [2026-07-18 r2]: STK jet-delay flute + bridge/neck bow reuse ksBuf regions k+3 (no new RAM); exciters level-matched to rms ~0.18 via an offline tone/noise bar; wgPos on Bow = the bowing point | the v1 condensed models measured as noise (user's ears confirmed by the metric); the spare KS regions were free; bow position is the physical meaning of the split | user report; topology + tuning mine |
 | 143 | Drawable exciter curve: presets = the exact built-in transfers, first stroke seeds from the active formula, malformed persistence falls back to Formula (never half-loads); footer warns that non-oscillating drawings are physics | nothing jumps when you start editing; a wrong curve must degrade to the built-in, not to garbage; the reed-latch lesson said the warning is owed | user idea ("clicking the curve could open a drawing mode"); mechanics mine |
 
+| 144 | Per-exciter drawn curves [2026-07-18 r3, user design]: no Formula/Drawn knob - each exciter owns its curve, Exciter switch = that exciter's own state, off-switch = the overlay's Formula button, visibility = the bore glyph "(drawn)" tag | the broken stale-curve combination becomes unreachable instead of warned-about; a knob would re-introduce a second control whose combination can lie | user picked no-knob; glyph tag = my call |
+| 145 | Reed keeps a FIXED 0.008*P noise seed independent of Breath | the reed's oscillation amplitude is hypersensitive to perturbation (probe: seed change alone tripled/killed the tone); Breath must add AIR, not move the operating point | my call, disclosed here + in code |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

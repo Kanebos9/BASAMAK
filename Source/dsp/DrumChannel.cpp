@@ -724,12 +724,15 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("wgEx", s.wgExcite, nullptr); st.setProperty("wgPr", s.wgPressure, nullptr);   // [2026-07-18] WAVEGUIDE
         st.setProperty("wgBr", s.wgBreath, nullptr); st.setProperty("wgPo", s.wgPos, nullptr);
         st.setProperty("wgBt", s.wgBright, nullptr);
-        st.setProperty("wgCvOn", s.wgCurveOn ? 1 : 0, nullptr);   // drawn exciter curve
-        if (s.wgCurveOn)
+        for (int ex = 0; ex < 3; ++ex)   // [r3] PER-EXCITER drawn curves
         {
-            juce::String cvh; cvh.preallocateBytes(128);
-            for (int k = 0; k < 64; ++k) cvh << juce::String::toHexString(s.wgCurve[k]).paddedLeft('0', 2);
-            st.setProperty("wgCv", cvh, nullptr);
+            st.setProperty("wgCvOn" + juce::String(ex), s.wgCurveOn[ex] ? 1 : 0, nullptr);
+            if (s.wgCurveOn[ex])
+            {
+                juce::String cvh; cvh.preallocateBytes(128);
+                for (int k = 0; k < 64; ++k) cvh << juce::String::toHexString(s.wgCurve[ex][k]).paddedLeft('0', 2);
+                st.setProperty("wgCv" + juce::String(ex), cvh, nullptr);
+            }
         }
         st.setProperty("pEA", s.physPEnvAmt, nullptr); st.setProperty("pET", s.physPEnvTime, nullptr); st.setProperty("pOf", s.physPOffset, nullptr);
         st.setProperty("sSp", s.smpSpeed, nullptr); st.setProperty("sCr", s.smpCrush, nullptr); st.setProperty("sPi", s.smpPitch, nullptr);
@@ -877,14 +880,28 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         s.wgExcite = (int)st.getProperty("wgEx", d.wgExcite); s.wgPressure = (float)st.getProperty("wgPr", d.wgPressure);   // [2026-07-18] WAVEGUIDE
         s.wgBreath = (float)st.getProperty("wgBr", d.wgBreath); s.wgPos = (float)st.getProperty("wgPo", d.wgPos);
         s.wgBright = (float)st.getProperty("wgBt", d.wgBright);
-        s.wgCurveOn = (int)st.getProperty("wgCvOn", 0) != 0;
-        if (s.wgCurveOn)
+        for (int ex = 0; ex < 3; ++ex)   // [r3] PER-EXCITER drawn curves
         {
+            s.wgCurveOn[ex] = (int)st.getProperty("wgCvOn" + juce::String(ex), 0) != 0;
+            if (s.wgCurveOn[ex])
+            {
+                const juce::String cvh = st.getProperty("wgCv" + juce::String(ex), "").toString();
+                if (cvh.length() >= 128)
+                    for (int k = 0; k < 64; ++k)
+                        s.wgCurve[ex][k] = (uint8_t) cvh.substring(k * 2, k * 2 + 2).getHexValue32();
+                else s.wgCurveOn[ex] = false;   // malformed = the formula (never half-load)
+            }
+        }
+        if ((int)st.getProperty("wgCvOn", 0) != 0)   // MIGRATE the short-lived single-curve key
+        {                                            // (r2, hours old): it becomes ITS exciter's curve
             const juce::String cvh = st.getProperty("wgCv", "").toString();
+            const int ex = juce::jlimit(0, 2, s.wgExcite);
             if (cvh.length() >= 128)
+            {
                 for (int k = 0; k < 64; ++k)
-                    s.wgCurve[k] = (uint8_t) cvh.substring(k * 2, k * 2 + 2).getHexValue32();
-            else s.wgCurveOn = false;   // malformed = fall back to the formula (never half-load)
+                    s.wgCurve[ex][k] = (uint8_t) cvh.substring(k * 2, k * 2 + 2).getHexValue32();
+                s.wgCurveOn[ex] = true;
+            }
         }
         s.physPEnvAmt = (float)st.getProperty("pEA", d.physPEnvAmt); s.physPEnvTime = (float)st.getProperty("pET", d.physPEnvTime); s.physPOffset = (float)st.getProperty("pOf", d.physPOffset);
         s.smpSpeed = (float)st.getProperty("sSp", d.smpSpeed); s.smpCrush = (float)st.getProperty("sCr", d.smpCrush); s.smpPitch = (float)st.getProperty("sPi", d.smpPitch);
@@ -2579,7 +2596,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                                         // still reed latches at a silent fixed point - physics, disclosed
                 c.wgPosC    = juce::jlimit(0.02f, 0.98f, sl.wgPos);
                 c.wgLpK     = 0.06f + 0.86f * juce::jlimit(0.0f, 1.0f, sl.wgBright);   // loop damping (dark..bright)
-                c.wgCv      = sl.wgCurveOn ? slots[s].wgCurve : nullptr;   // drawn exciter transfer (persistent ptr)
+                c.wgCv      = sl.wgCurveOn[c.wgMode] ? slots[s].wgCurve[c.wgMode] : nullptr;   // THIS exciter's own drawing (persistent ptr)
                 c.oscVibFac = 1.0f + juce::jlimit(0.0f, 1.0f, sl.vibrato) * 0.09f * vibLfo;
                 c.scaleOn   = sl.scaleOn;
                 c.uniVoices = juce::jlimit(1, WG_UNI, sl.scaleOn ? sl.scaleUnison : sl.oscUnison);   // up to 3 bores
@@ -3751,8 +3768,18 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                                 const int wi = (int) sv.ksWrite[ki];
                                 sv.ksBuf[bs + (size_t) wi] = juce::jlimit(-2.5f, 2.5f, val);   // KS write clamp
                                 sv.ksWrite[ki] = (wi + 1 < KS_MAX) ? wi + 1 : 0; };
-                            const float wn2 = whiteNoise(sv.noiseState); // breath turbulence (deterministic per hit)
-                            const float P = env * c.wgPress * (1.0f + wn2 * c.wgBreathC * 0.35f);
+                            // [r3] REAL BREATH (user: "it feels like just volume" - he was right: pure
+                            // pressure jitter mostly becomes amplitude wobble and the loop filters the
+                            // hiss away). Now the knob is mostly AUDIBLE AIR: turbulence injected INTO
+                            // the bore (the tube colours it around the note - physical) + a small
+                            // radiated hiss at the output; only a whisper of pressure jitter remains.
+                            const float wn2 = whiteNoise(sv.noiseState); // deterministic per hit
+                            const float wn3 = whiteNoise(sv.noiseState);
+                            const float P   = env * c.wgPress * (1.0f + wn2 * c.wgBreathC * 0.1f);
+                            // bore injection stays TINY per mode (a high-gain loop amplifies it; the
+                            // reed's x20 output makeup turned 0.6 into a wall) - the RADIATED part
+                            // below is the air you actually hear.
+                            const float airB = wn3 * c.wgBreathC * P;
                             // DRAWN EXCITER CURVE: replaces the built-in table (linear-interp read)
                             auto lutCv = [&](float x) -> float {
                                 const float p = (juce::jlimit(-1.0f, 1.0f, x) * 0.5f + 0.5f) * 63.0f;
@@ -3771,7 +3798,10 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                                     const float pd = -0.95f * lp - P;
                                     const float rt = c.wgCv != nullptr ? lutCv(pd)
                                                    : juce::jlimit(-1.0f, 1.0f, 0.7f - 0.3f * pd);
-                                    wrLine(base, k, P + pd * rt);
+                                    wrLine(base, k, P + pd * rt + wn3 * P * (0.008f + c.wgBreathC * 0.010f));
+                                    // ^ the reed keeps a FIXED tiny seed: its oscillation amplitude is
+                                    // hypersensitive to perturbation, so the seed stabilises the tone
+                                    // and Breath only ADDS air (radiated below) - not the operating point
                                     // POSITION pickup tap combs the tone (like a guitar pickup)
                                     yOut = (y - 0.7f * rdLine(base, k, Lf * (double) c.wgPosC)) * 16.0f;
                                 } break;
@@ -3779,7 +3809,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                                     const float bore = rdLine(base, k, Lf);
                                     float& lp = sv.ksLp[k];
                                     lp += c.wgLpK * (bore - lp);              // reflection filter (Brightness)
-                                    const float pdiff = P * 1.1f - 0.5f * lp; // jet senses mouth vs bore
+                                    const float pdiff = P * 1.1f - 0.5f * lp + airB * 0.12f;   // jet turbulence rides in
                                     wrLine(base2, k2, pdiff);                 // into the JET line...
                                     float jt = rdLine(base2, k2, juce::jmax(4.0, Lf * 0.5));   // ...half a bore later
                                     jt = juce::jlimit(-1.0f, 1.0f, jt);
@@ -3802,13 +3832,13 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                                     const float bt = c.wgCv != nullptr
                                         ? juce::jlimit(0.0f, 1.0f, lutCv(dv) * 0.5f + 0.5f)
                                         : juce::jlimit(0.0f, 1.0f, std::pow(std::abs(dv * 3.0f) + 0.75f, -4.0f));
-                                    const float nv = dv * bt;                 // the stick-slip velocity injection
+                                    const float nv = dv * bt + airB * 0.25f;  // stick-slip + rosin grit
                                     wrLine(base,  k,  nkRefl + nv);
                                     wrLine(base2, k2, brRefl + nv);
                                     yOut = brOut * 0.42f;
                                 } break;
                             }
-                            out += yOut;
+                            out += yOut + wn3 * c.wgBreathC * P * 0.16f;   // radiated air (the part you hear)
                         }
                         sig = juce::jlimit(-4.0f, 4.0f, out / std::sqrt((float) juce::jmax(1, nStr)));
                         // the envelope drives the PRESSURE, not the output - this trim only shapes the

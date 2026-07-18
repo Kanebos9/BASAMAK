@@ -2374,12 +2374,12 @@ static void oPumpBass(DC& c) {     // sidechain FEEL without a sidechain: a per-
 // because its mechanism can't be made any other way. ====
 static void yWoodReed(DC& c) {     // WAVEGUIDE Reed: a real driven clarinet-family bore
     auto& s = mkSlot(c, DC::SrcWguide);
-    s.oscFreq = 261.63f; s.wgExcite = 0; s.wgPressure = 0.55f; s.wgBreath = 0.18f;
-    s.wgBright = 0.45f; s.wgPos = 0.3f;
+    s.oscFreq = 261.63f; s.wgExcite = 0; s.wgPressure = 0.62f; s.wgBreath = 0.18f;
+    s.wgBright = 0.55f; s.wgPos = 0.3f;      // [r3] louder voicing - "barely hearable" (user)
     s.atk = 0.045f; s.dec = 0.4f; s.sustain = 0.85f; s.release = 0.2f;
     s.vibrato = 0.25f; s.drift = 0.2f;
     modRoute(s, DC::MSModWheel, DC::MT_GRID_BASE + 2, 0.35f);   // Mod Wheel -> Pressure = real breath control
-    c.reverbSend = 0.25f; c.volume = 0.9f;
+    c.reverbSend = 0.25f; c.volume = 1.1f;
 }
 static void yBreathFlute(DC& c) {  // WAVEGUIDE Flute: air jet + airy breath, bright open bore
     auto& s = mkSlot(c, DC::SrcWguide);
@@ -2499,8 +2499,8 @@ static void yHauntKeys(DC& c) {    // RESONATOR + LFO keys (user order): a soft 
     s.atk = 0.004f; s.dec = 1.4f; s.sustain = 0.3f; s.release = 0.4f;
     s.filterType = DC::LowPass; s.filterCutoff = 4200.0f; s.filterReso = 0.7f;
     chFx(c, DC::ChFxResonator, 0.55f, 0.5f);
-    s.lfoRate[0] = 0.22f; s.lfoAmt[0] = 0.6f; s.lfoFree[0] = true;   // slow FREE sine drift
-    modRoute(s, DC::MSLfoFilt, DC::MTChFxAChr, 0.18f);      // the body detunes around unison
+    s.lfoRate[0] = 1.0f; s.lfoAmt[0] = 0.6f;                // 1 Hz, RETRIG (user settings 2026-07-18)
+    modRoute(s, DC::MSLfoFilt, DC::MTChFxAChr, 0.035f);     // route amount 3.5% (user)
     c.reverbSend = 0.3f; c.volume = 0.9f;
 }
 

@@ -576,12 +576,13 @@ public:
         float wgPos      = 0.25f;        // pickup/coupling position along the bore (comb colour) - VISUAL handle
                                          // (on BOW it is the BOWING POINT: the bridge/neck split)
         float wgBright   = 0.6f;         // loop brightness (1 - damping) - VISUAL handle
-        // [2026-07-18] DRAWABLE EXCITER CURVE: replace the built-in reed/jet/bow table with a
-        // hand-drawn transfer (the WgCurveEditor overlay; y 0..255 = -1..+1 over input -1..+1).
-        // Honest warning shipped in the editor: many drawings simply won't oscillate - the same
-        // physics that makes a too-steep reed latch silent. Off = the built-in formulas.
-        bool    wgCurveOn = false;
-        uint8_t wgCurve[64] = {};
+        // [2026-07-18 r3] DRAWABLE EXCITER CURVE, PER EXCITER (user design: no extra knob) -
+        // EACH exciter owns its drawing, so switching the Exciter always lands on THAT exciter's
+        // own state (its curve if drawn, else its formula). A curve can only ever play through
+        // the plumbing it was drawn on = the stale-curve "broken sound" is unreachable.
+        // y 0..255 = -1..+1 over input -1..+1. The overlay warns: many drawings won't oscillate.
+        bool    wgCurveOn[3] = { false, false, false };
+        uint8_t wgCurve[3][64] = {};
         // -- Sample -- (the buffer lives per-slot in slotSample[]; these are this slot's playback params)
         float smpSpeed = 1.0f, smpCrush = 0.0f, smpPitch = 0.0f, smpPEnvAmt = 0.0f, smpPEnvTime = 0.04f, smpPOffset = 0.0f;
         bool  smpReverse = false, smpUseRegion = false;
