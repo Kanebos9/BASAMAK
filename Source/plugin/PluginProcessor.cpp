@@ -1336,6 +1336,7 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
     // Global controls (play/stop are global; switching patterns won't stop them)
     if (pid == "global_play")       { if (on && !sequencer.dawSync) sequencer.startStandalone(); return; }
     if (pid == "global_stop")       { if (on && !sequencer.dawSync) { sequencer.stopStandalone(); silenceRequest.store(true); } return; }
+    if (pid == "global_pause")      { if (on) standalonePause();                                  return; }
     if (pid == "global_dawsync")    { if (on) sequencer.dawSync = !sequencer.dawSync;             return; }
     // MASTER CCs: write ALL patterns (the UI knobs' preset-wide rule - a single-pattern write
     // gets silently overwritten the next time the knob moves) and flag the editor so the master

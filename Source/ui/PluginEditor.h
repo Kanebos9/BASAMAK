@@ -2147,6 +2147,8 @@ struct IconButtonLNF : juce::LookAndFeel_V4
         g.setColour(juce::Colours::white.withAlpha(b.isEnabled() ? 0.92f : 0.4f));
         if (id == "play")      { juce::Path p; p.addTriangle(cx - s * 0.8f, cy - s, cx - s * 0.8f, cy + s, cx + s, cy); g.fillPath(p); }
         else if (id == "stop") { g.fillRoundedRectangle(cx - s, cy - s, s * 2.0f, s * 2.0f, 1.0f); }
+        else if (id == "pause"){ g.fillRoundedRectangle(cx - s, cy - s, s * 0.7f, s * 2.0f, 1.0f);     // the classic II bars
+                                 g.fillRoundedRectangle(cx + s * 0.3f, cy - s, s * 0.7f, s * 2.0f, 1.0f); }
         else if (id == "undo" || id == "redo")
         {
             const bool redo = (id == "redo");
@@ -2462,6 +2464,7 @@ private:
     LearnableButton btnDawSync { "DAW Sync", "global_dawsync", proc.midiLearn };
     LearnableButton btnPlay    { "Play",     "global_play",    proc.midiLearn };
     LearnableButton btnStop    { "Stop",     "global_stop",    proc.midiLearn };
+    LearnableButton btnPause   { "Pause",    "global_pause",   proc.midiLearn };   // [2026-07-18] freeze in place (tails ring out); press again / Play = resume
     juce::Label     lblBpm     { {}, "BPM:" };
     juce::Slider    sliderBpm;
     juce::Label     lblSwing   { {}, "Swing:" };

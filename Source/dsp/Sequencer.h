@@ -107,6 +107,7 @@ public:
     int   timeSigNum     = 4;     // standalone time signature (used when not DAW-synced)
     int   timeSigDen     = 4;
     bool  playing        = false; // standalone mode only
+    bool paused  = false;   // [2026-07-18] standalone transport paused (position parked; resume via startStandalone)
     double blockBarSeconds = 2.0; // seconds per bar this block (for tempo-synced per-slot LFOs; DAW overrides)
     int    uiGridDiv       = 16;  // piano-roll Grid 1/N (the editor sets it) - for LFO/arp "Lock to grid"
     float  modWheel        = 0.0f;// live MIDI mod wheel (CC1) 0..1 (set by the processor; a shared mod source, forwarded to channels)
@@ -210,14 +211,20 @@ public:
 
     void reset();
     void resetChains()           { for (auto& p : patterns) { p.chainStep = 0; p.visitCount = 0; } }   // chain positions + per-bar visit counts back to the start
-    void startStandalone()       { playing = true; finished = false; patternRepeatCount = 0; loopCount = 0;
+    void startStandalone()       { if (paused) { paused = false; playing = true; return; }   // [2026-07-18] RESUME:
+                                                              // keep position/counters exactly as parked (no resets)
+                                   playing = true; finished = false; patternRepeatCount = 0; loopCount = 0;
                                    for (auto& b2 : barPlays) b2 = 0;
                                    resetChains();
                                    // Play from the viewed pattern - unless playPattern was parked on a BAR of the
                                    // viewed merged group (the user clicked a middle bar: start THERE, run on).
                                    if (groupHead(playPattern) != groupHead(currentPattern)) playPattern = currentPattern;
                                    resetTickDedupe(); }
-    void stopStandalone()        { playing = false; barPosition = 0.0; finished = false;
+    // [2026-07-18] PAUSE (user feature): freeze the transport WHERE IT IS - position, playing
+    // bar and all counters stay parked; ringing tails + FX decay naturally (nothing is killed).
+    // Resume = startStandalone (or pause again). Stop still resets to the beginning.
+    void pauseStandalone()       { if (playing) { playing = false; paused = true; isCurrentlyPlaying = false; } }
+    void stopStandalone()        { playing = false; paused = false; barPosition = 0.0; finished = false;
                                    patternRepeatCount = 0; loopCount = 0; resetChains(); isCurrentlyPlaying = false;
                                    for (auto& b2 : barPlays) b2 = 0;
                                    playPattern = groupHead(playPattern);   // stopping mid-group parks at the HEAD, so the
@@ -229,7 +236,7 @@ public:
 
     int getChannelStep(int ch) const
     {
-        if (!isCurrentlyPlaying || currentPattern != playPattern) return -1;  // only show the cursor on the playing pattern
+        if ((!isCurrentlyPlaying && ! paused) || currentPattern != playPattern) return -1;  // paused = FROZEN cursor stays visible
         int n = patterns[playPattern].channels[ch].numSteps;
         if (n <= 0) return -1;
         return (int)(barPosition * n) % n;

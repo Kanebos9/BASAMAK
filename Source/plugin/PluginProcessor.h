@@ -136,6 +136,15 @@ public:
     // ringing voice tails (handled on the audio thread via silenceRequest).
     void standalonePlay()  { sequencer.startStandalone(); }
     void standaloneStop()  { sequencer.stopStandalone(); silenceRequest.store(true); }
+    // [2026-07-18] PAUSE (user feature): freeze the transport in place; tails/FX ring out
+    // naturally (no silenceRequest). Toggles: paused -> resume. Inert in DAW-sync (the host's
+    // transport owns pause there) and while RECORDING (a rolling take must never be paused).
+    void standalonePause()
+    {
+        if (sequencer.dawSync || keysRecording.load()) return;
+        if (sequencer.paused)              sequencer.startStandalone();
+        else if (sequencer.playing)        sequencer.pauseStandalone();
+    }
 
     // Audition: fire one channel with its current settings (TEST button).
     std::atomic<int> testTriggerRequest { -1 };

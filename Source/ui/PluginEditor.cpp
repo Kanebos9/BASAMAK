@@ -5910,7 +5910,7 @@ DrumSequencerEditor::~DrumSequencerEditor()
     for (auto* k : allKnobs) k->setLookAndFeel(nullptr);
     blendFader.setLookAndFeel(nullptr);   // had a custom two-tone LNF
     patModeBtn.setLookAndFeel(nullptr);
-    for (juce::Button* b : { (juce::Button*)&btnPlay, (juce::Button*)&btnStop, (juce::Button*)&btnUndo,
+    for (juce::Button* b : { (juce::Button*)&btnPlay, (juce::Button*)&btnStop, (juce::Button*)&btnPause, (juce::Button*)&btnUndo,
                              (juce::Button*)&btnRedo, (juce::Button*)&btnRoute, (juce::Button*)&btnSaveMix,
                              (juce::Button*)&btnToggleDetail, (juce::Button*)&btnKeysView, (juce::Button*)&btnClearPat,
                              (juce::Button*)&btnInfluenceTop,
@@ -7546,6 +7546,16 @@ void DrumSequencerEditor::setupComponents()
     content.addAndMakeVisible(btnStop);
     btnStop.setEnabled(!proc.sequencer.dawSync);
     btnStop.onClick = [this] { proc.standaloneStop(); };
+    btnPause.onClick = [this] { proc.standalonePause(); };
+    content.addAndMakeVisible(btnPause);
+    btnPause.getProperties().set("icon", "pause"); btnPause.setLookAndFeel(&iconBtnLNF);
+    btnPause.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xffd9a13d));   // lit amber while paused
+    btnPause.setTooltip("PAUSE: freeze playback WHERE IT IS - press again (or Play) to resume from the "
+                        "same spot. Stop still resets to the beginning.\n\n"
+                        "- Ringing tails + reverb/delay decay naturally into the pause (nothing is cut).\n"
+                        "- A note that was still sounding will have rung out by the time you resume.\n"
+                        "- Inert while RECORDING (stop ends a take) and in DAW SYNC (the host's transport "
+                        "owns pause there).");
     btnStop.getProperties().set("icon", "stop"); btnStop.setLookAndFeel(&iconBtnLNF);
 
     content.addAndMakeVisible(lblBpm);
@@ -12433,6 +12443,7 @@ void DrumSequencerEditor::timerCallback()
         if (frozen != hostFrozen)
         {
             hostFrozen = frozen;
+            btnPause.setToggleState(proc.sequencer.paused, juce::dontSendNotification);   // lit amber while paused
             btnPlay.setTooltip(frozen
                 ? juce::String("NOT PLAYING? BASAMAK is not receiving audio from the host - everything is "
                                "paused (no sound, no sequencer movement, TEST does nothing).\n\n"
@@ -13260,11 +13271,12 @@ void DrumSequencerEditor::layoutContent()
     lblVersion.setBounds  (150, 3, 56, 14);    // v1.3.0  - centred
     lblCheckUpd.setBounds (150, 18, 56, 22);   // Check / Updates - centred on the SAME axis (tidy stack)
     btnDawSync.setBounds  (210, 7, 72,  26);
-    btnPlay.setBounds     (288, 7, 30,  26);   // ▶ icon
-    btnStop.setBounds     (320, 7, 30,  26);   // ■ icon
+    btnPlay.setBounds     (286, 7, 27,  26);   // ▶ icon
+    btnStop.setBounds     (315, 7, 27,  26);   // ■ icon
+    btnPause.setBounds    (344, 7, 27,  26);   // II icon [2026-07-18] - freeze in place, Stop resets
     // BPM + time signature kept TOGETHER.
-    lblBpm.setBounds      (358, 8, 30,  24);
-    sliderBpm.setBounds   (388, 7, 92,  26);
+    lblBpm.setBounds      (376, 8, 26,  24);
+    sliderBpm.setBounds   (402, 7, 78,  26);
     lblBarPre.setBounds   (486, 0, 56,  10);   // "TIME SIG" label ABOVE the numbers
     barSigX.setBounds     (492, 12, 20, 21);
     lblBarSlash.setBounds (512, 12, 8,  21);
