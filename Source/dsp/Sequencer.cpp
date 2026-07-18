@@ -279,7 +279,7 @@ void Sequencer::advanceDaw(juce::AudioPlayHead* dawHead, double sampleRate, int 
         patternRepeatCount = 0;
         loopCount = 0;
         wasPlaying = false;
-        playPattern = groupHead(playPattern);   // [1.5.0] park at the group HEAD like the standalone
+        playPattern = parkBar();                // [1.5.1] park at the START MARKER (default = head) like the standalone
                                                 // Stop (a mid-group stop used to leave playback parked
                                                 // on bar 2 = "starts from the second pattern sometimes")
         resetTickDedupe();
@@ -382,7 +382,7 @@ void Sequencer::onBarComplete()
         finished = true;
         p.visitCount = 0;
         fadeOutPattern = playPattern;           // the stopping bar's tails still ring out
-        playPattern = groupHead(playPattern);   // park at the head so the next Play starts the group
+        playPattern = parkBar();                // park at the START MARKER so the next Play starts the group
     }                                           // from its beginning (the Stop-button convention)
     else if (p.playMode == NextAfterN && p.visitCount >= target)
     {

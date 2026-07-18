@@ -8671,6 +8671,15 @@ void DrumSequencerEditor::setupComponents()
                 stepGrid.update(proc.sequencer, proc.anySolo);
             }), true);
     };
+    // [1.5.1] PLAYBACK-START tabs: clicking a bar's amber tab makes it the start of the merged
+    // group - the marker survives Stop (Stop parks there) and the next Play begins from it.
+    stepGrid.onStartBarClick = [this](int b) {
+        auto& sq = proc.sequencer;
+        const int gh = sq.groupHead(sq.currentPattern);
+        const int bar = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, gh + b);
+        sq.startMarker = bar;
+        if (! sq.isCurrentlyPlaying) sq.playPattern = bar;   // stopped: park playback there right away
+    };
     stepGrid.onDrawNotesChanged = [this](int ch, const DrumChannel::DrawNote* notes, int count) {
         // PIANO ROLL: the grid pushes its whole mirror list (CONCAT columns in a merged group) -
         // split it back into per-bar note lists (a note belongs to the bar its start column is in).

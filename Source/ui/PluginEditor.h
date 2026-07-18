@@ -27,6 +27,7 @@ public:
     std::function<void(int ch, int step, bool on)> onStepMergeChanged;
     // PIANO ROLL: any note-list edit pushes the grid's WHOLE mirror list back to the channel.
     std::function<void(int ch, const DrumChannel::DrawNote*, int count)> onDrawNotesChanged;
+    std::function<void(int)> onStartBarClick;   // [1.5.1] a playback-start tab was clicked (concat bar index)
     std::function<void(int ch, float vel, float pan)> onDrawVelPan;   // whole-channel Pan (+ default Vel) in piano-roll mode
     std::function<void(int ch)> onDrawModeMaybeChanged;               // ch's roll-vs-step may have changed (fade buttons)
     std::function<void()> onGridDivEdit;   // clicking the snap-grid header: type a value (1-64, 0 = off)
@@ -104,6 +105,10 @@ private:
     // piano roll spans grpBars * DRAW_RES columns. Edits go back to the right bar via the editor's
     // decode (concat step -> bar + local step; concat roll column -> bar + local column).
     int    grpBars = 1;
+    int    grpHeadPat = 0;      // [1.5.1] the group's head pattern id (labels the start tabs)
+    int    grpStartBar = 0;     // [1.5.1] which bar the START MARKER sits on (0 = head); fed by update()
+    juce::Rectangle<float> startTabRect(int b) const;   // [1.5.1] the clickable start tab of bar b
+    void paintStartTabs(juce::Graphics& g);
     int    barStep0[NCH][GRP_MAX + 1] = {};            // per channel: concat step where each bar begins (+ total)
     int    totalCols() const { return DrumChannel::DRAW_RES * grpBars; }
 

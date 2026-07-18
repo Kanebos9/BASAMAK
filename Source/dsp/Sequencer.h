@@ -161,6 +161,14 @@ public:
     // Set the VIEWED pattern. While stopped the view is also where playback will start,
     // so it moves playPattern too; while PLAYING it only changes the view (playback
     // continues on its own pattern - clicking a pattern never hijacks playback).
+    // [1.5.1] PLAYBACK-START MARKER (user feature): which bar of a merged group the next Play
+    // starts from (also set by the grid's clickable amber bar tabs). -1 = none = the group head.
+    // Session-runtime, NOT persisted (reload starts at bar 1 - disclosed).
+    int startMarker = -1;
+    int parkBar() const
+    { return (startMarker >= 0 && startMarker < NUM_PATTERNS
+              && groupHead(startMarker) == groupHead(playPattern)) ? startMarker
+                                                                   : groupHead(playPattern); }
     void setCurrentPattern(int p)
     {
         if (p < 0 || p >= NUM_PATTERNS) return;
@@ -168,6 +176,7 @@ public:
         if (! isCurrentlyPlaying)
         {
             playPattern = p;
+            startMarker = p;   // clicking a bar while stopped = the start marker moves there too
             patternRepeatCount = 0;
             finished = false;
         }
@@ -227,7 +236,8 @@ public:
     void stopStandalone()        { playing = false; paused = false; barPosition = 0.0; finished = false;
                                    patternRepeatCount = 0; loopCount = 0; resetChains(); isCurrentlyPlaying = false;
                                    for (auto& b2 : barPlays) b2 = 0;
-                                   playPattern = groupHead(playPattern);   // stopping mid-group parks at the HEAD, so the
+                                   playPattern = parkBar();               // stopping mid-group parks at the START MARKER
+                                                                           // (default = the group head), so the
                                                                            // next Play starts the group from its beginning
                                                                            // (an explicit middle-bar click AFTER stopping
                                                                            // still re-parks it there)
