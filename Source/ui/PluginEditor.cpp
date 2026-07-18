@@ -8429,10 +8429,11 @@ void DrumSequencerEditor::setupComponents()
             m.addItem(310000 + b, tag + "Stop after... (" + juce::String(p.repeatTarget) + ")", true, p.playMode == Sequencer::StopAfterN);
             juce::PopupMenu chainAdd;   // CHAIN entries = (pattern, loops); play N loops then jump
             for (int i = 0; i < visiblePatterns; ++i) chainAdd.addItem(400000 + b * 100 + i, "Pattern " + juce::String(i + 1));
-            // [1.5.0 FINAL] "Chain to..." = SET: replaces this bar's whole chain (wipes the merge
-            // default + any earlier attempts - leftover entries used to fire first). THREE options
-            // per bar, exactly like a single pattern (user).
-            m.addSubMenu(tag + "Chain to pattern", chainAdd, true);
+            // [1.5.0 FINAL r2] "Chain: add pattern" APPENDS like it always did (multi-entry chains
+            // are an original feature - user: "since when can I not create more than one chain?").
+            // Only the AUTOMATIC merge-default entry ("next x1") is replaced by the user's first
+            // real entry, so it can never fire ahead of what they set.
+            m.addSubMenu(tag + "Chain: add pattern", chainAdd, p.chainLen < Sequencer::CHAIN_MAX);
             if (p.chainLen > 0) {
                 juce::String cs;
                 for (int k = 0; k < p.chainLen; ++k)
@@ -8447,14 +8448,20 @@ void DrumSequencerEditor::setupComponents()
                 if (r <= 0) return;
                 auto& sq2 = proc.sequencer;
                 if (r >= 400000)
-                {   // SET: replace the bar's WHOLE chain (wipes the merge default + old attempts).
+                {   // APPEND a chain entry (multi-entry chains = original feature). The AUTOMATIC
+                    // merge-default entry ("next x1") is replaced by the user's first real entry.
                     const int b = (r - 400000) / 100, pat = (r - 400000) % 100;
                     askLoopCount("Play this pattern how many times, then jump", 2,
                         [this, b, pat](int n) {
-                            auto& q = proc.sequencer.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, b)];
-                            q.chainLen = 1; q.chainStep = 0; q.visitCount = 0;
-                            q.chainSeq[0] = pat; q.chainLoops[0] = n;
-                            q.playMode = Sequencer::Chain;
+                            auto& sq3 = proc.sequencer;
+                            const int b2 = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, b);
+                            auto& q = sq3.patterns[b2];
+                            const int defTgt = (b2 < sq3.groupEnd(b2)) ? b2 + 1 : sq3.groupHead(b2);
+                            if (q.chainLen == 1 && q.chainLoops[0] == 1 && q.chainSeq[0] == defTgt)
+                            { q.chainLen = 0; q.chainStep = 0; q.visitCount = 0; }   // the automatic default only
+                            if (q.chainLen < Sequencer::CHAIN_MAX) {
+                                q.chainSeq[q.chainLen] = pat; q.chainLoops[q.chainLen] = n;
+                                ++q.chainLen; q.playMode = Sequencer::Chain; }
                             refreshPatternOptions(); });
                     return;
                 }
@@ -10636,7 +10643,8 @@ void DrumSequencerEditor::setupComponents()
         "- N always counts THAT pattern's own loops - merged or not.\n"
         "- In a MERGED group, EVERY bar has its own rows here (P4: Loop / P4: Stop / P4: Chain...). "
         "Merging defaults each bar to chain-to-next after 1 loop, the last back to the first.\n"
-        "- 'Chain to pattern' REPLACES that bar's chain (wipes the default / earlier settings).\n"
+        "- 'Chain: add pattern' APPENDS (build multi-step routes, up to 8 entries); your first "
+        "entry replaces the automatic merge default. 'Delete last chain' trims the route.\n"
         "- Loop conditions count per BAR: 'every 2nd loop' = every 2nd play of that bar.\n"
         "- While RECORDING, the group always plays first-to-last (bar modes pause).");
 
