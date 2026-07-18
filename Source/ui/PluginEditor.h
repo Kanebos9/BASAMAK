@@ -512,6 +512,11 @@ public:
         if (proc != nullptr) proc->msTapOn = false;
         setVisible(false);
     }
+    void visibilityChanged() override             // click-outside closes (user order; a mid-take
+    {                                             // outside click abandons the take - deliberate)
+        if (isVisible() && ! closerHooked)      { juce::Desktop::getInstance().addGlobalMouseListener(&closer); closerHooked = true; }
+        else if (! isVisible() && closerHooked) { juce::Desktop::getInstance().removeGlobalMouseListener(&closer); closerHooked = false; }
+    }
 
     void resized() override
     {
@@ -640,6 +645,19 @@ private:
     juce::TextButton startBtn { "START" }, retryBtn { "RETRY" }, keepBtn { "KEEP" },
                      skipBtn { "SKIP" }, closeBtn { "X" }, finishBtn { "FINISH" };
     juce::TextEditor nameEd;
+    struct Closer : juce::MouseListener
+    {
+        MsRecordWizard& ed; explicit Closer(MsRecordWizard& e) : ed(e) {}
+        void mouseDown(const juce::MouseEvent& e) override
+        {
+            if (! ed.isVisible()) return;
+            if (juce::Component::getCurrentlyModalComponent() != nullptr) return;   // a menu is up
+            if (ed.getScreenBounds().contains(e.getScreenPosition())) return;
+            ed.close();
+        }
+    };
+    Closer closer { *this };
+    bool closerHooked = false;
 
     juce::Rectangle<int> loRect() const { return { getWidth() / 2 - 170, 80, 100, 26 }; }
     juce::Rectangle<int> hiRect() const { return { getWidth() / 2 - 50,  80, 100, 26 }; }
@@ -652,6 +670,8 @@ private:
 
     void syncButtons()
     {
+        closeBtn.setVisible(true);   // the X is ALWAYS there (it shipped invisible - addChildComponent
+                                     // hides, and this sync covered every button EXCEPT the X)
         startBtn.setVisible(phase == Setup); nameEd.setVisible(phase == Setup);
         retryBtn.setVisible(phase == Review); keepBtn.setVisible(phase == Review);
         skipBtn.setVisible(phase == Listen || phase == Capture || phase == Review);
