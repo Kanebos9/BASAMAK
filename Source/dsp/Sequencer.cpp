@@ -279,6 +279,9 @@ void Sequencer::advanceDaw(juce::AudioPlayHead* dawHead, double sampleRate, int 
         patternRepeatCount = 0;
         loopCount = 0;
         wasPlaying = false;
+        playPattern = groupHead(playPattern);   // [1.5.0] park at the group HEAD like the standalone
+                                                // Stop (a mid-group stop used to leave playback parked
+                                                // on bar 2 = "starts from the second pattern sometimes")
         resetTickDedupe();
         return;
     }
@@ -286,7 +289,11 @@ void Sequencer::advanceDaw(juce::AudioPlayHead* dawHead, double sampleRate, int 
     // Transport just (re)started → re-arm the play-mode counters + start from the viewed pattern
     if (!wasPlaying) { finished = false; patternRepeatCount = 0; loopCount = 0; resetChains(); wasPlaying = true;
                        for (auto& b2 : barPlays) b2 = 0;
-                       playPattern = currentPattern; resetTickDedupe(); }
+                       // Start from the viewed pattern - but if the view merely FOLLOWED playback onto
+                       // a middle bar of the same merged group (Follow on), keep the parked head instead
+                       // of restarting mid-group (the standalone guard, now shared by the DAW path).
+                       if (groupHead(playPattern) != groupHead(currentPattern)) playPattern = currentPattern;
+                       resetTickDedupe(); }
 
     if (finished) { isCurrentlyPlaying = false; return; } // StopAfterN reached
 
@@ -374,7 +381,9 @@ void Sequencer::onBarComplete()
     {
         finished = true;
         p.visitCount = 0;
-    }
+        fadeOutPattern = playPattern;           // the stopping bar's tails still ring out
+        playPattern = groupHead(playPattern);   // park at the head so the next Play starts the group
+    }                                           // from its beginning (the Stop-button convention)
     else if (p.playMode == NextAfterN && p.visitCount >= target)
     {
         fadeOutPattern = playPattern;   // let the outgoing pattern's voices ring out (no hard-cut click)
