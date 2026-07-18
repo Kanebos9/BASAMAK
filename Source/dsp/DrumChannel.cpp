@@ -724,6 +724,13 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("wgEx", s.wgExcite, nullptr); st.setProperty("wgPr", s.wgPressure, nullptr);   // [2026-07-18] WAVEGUIDE
         st.setProperty("wgBr", s.wgBreath, nullptr); st.setProperty("wgPo", s.wgPos, nullptr);
         st.setProperty("wgBt", s.wgBright, nullptr);
+        st.setProperty("wgCvOn", s.wgCurveOn ? 1 : 0, nullptr);   // drawn exciter curve
+        if (s.wgCurveOn)
+        {
+            juce::String cvh; cvh.preallocateBytes(128);
+            for (int k = 0; k < 64; ++k) cvh << juce::String::toHexString(s.wgCurve[k]).paddedLeft('0', 2);
+            st.setProperty("wgCv", cvh, nullptr);
+        }
         st.setProperty("pEA", s.physPEnvAmt, nullptr); st.setProperty("pET", s.physPEnvTime, nullptr); st.setProperty("pOf", s.physPOffset, nullptr);
         st.setProperty("sSp", s.smpSpeed, nullptr); st.setProperty("sCr", s.smpCrush, nullptr); st.setProperty("sPi", s.smpPitch, nullptr);
         st.setProperty("sEA", s.smpPEnvAmt, nullptr); st.setProperty("sET", s.smpPEnvTime, nullptr); st.setProperty("sOf", s.smpPOffset, nullptr);
@@ -870,6 +877,15 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         s.wgExcite = (int)st.getProperty("wgEx", d.wgExcite); s.wgPressure = (float)st.getProperty("wgPr", d.wgPressure);   // [2026-07-18] WAVEGUIDE
         s.wgBreath = (float)st.getProperty("wgBr", d.wgBreath); s.wgPos = (float)st.getProperty("wgPo", d.wgPos);
         s.wgBright = (float)st.getProperty("wgBt", d.wgBright);
+        s.wgCurveOn = (int)st.getProperty("wgCvOn", 0) != 0;
+        if (s.wgCurveOn)
+        {
+            const juce::String cvh = st.getProperty("wgCv", "").toString();
+            if (cvh.length() >= 128)
+                for (int k = 0; k < 64; ++k)
+                    s.wgCurve[k] = (uint8_t) cvh.substring(k * 2, k * 2 + 2).getHexValue32();
+            else s.wgCurveOn = false;   // malformed = fall back to the formula (never half-load)
+        }
         s.physPEnvAmt = (float)st.getProperty("pEA", d.physPEnvAmt); s.physPEnvTime = (float)st.getProperty("pET", d.physPEnvTime); s.physPOffset = (float)st.getProperty("pOf", d.physPOffset);
         s.smpSpeed = (float)st.getProperty("sSp", d.smpSpeed); s.smpCrush = (float)st.getProperty("sCr", d.smpCrush); s.smpPitch = (float)st.getProperty("sPi", d.smpPitch);
         s.smpPEnvAmt = (float)st.getProperty("sEA", d.smpPEnvAmt); s.smpPEnvTime = (float)st.getProperty("sET", d.smpPEnvTime); s.smpPOffset = (float)st.getProperty("sOf", d.smpPOffset);
@@ -2224,6 +2240,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         // [2026-07-18] WAVEGUIDE config
         int    wgMode = 0;           // 0 Reed / 1 Flute / 2 Bow
         float  wgPress = 0.6f, wgBreathC = 0.12f, wgPosC = 0.25f, wgLpK = 0.5f;
+        const uint8_t* wgCv = nullptr;   // drawn exciter curve (points into slots[s] - persistent, the arCv rule)
         float  modalDecaySec = 0.5f;   // base ring length (for voiceEnd)
         // -- 4-point pitch envelope (applies on top of the legacy per-engine env) --
         bool   pEnvOn = false; float pEnvP[Slot::NPE] = { 0, 0, 0, 0 }, pEnvT[Slot::NPE] = { 0.2f, 0.4f, 0.6f, 0.8f };
@@ -2562,6 +2579,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                                         // still reed latches at a silent fixed point - physics, disclosed
                 c.wgPosC    = juce::jlimit(0.02f, 0.98f, sl.wgPos);
                 c.wgLpK     = 0.06f + 0.86f * juce::jlimit(0.0f, 1.0f, sl.wgBright);   // loop damping (dark..bright)
+                c.wgCv      = sl.wgCurveOn ? slots[s].wgCurve : nullptr;   // drawn exciter transfer (persistent ptr)
                 c.oscVibFac = 1.0f + juce::jlimit(0.0f, 1.0f, sl.vibrato) * 0.09f * vibLfo;
                 c.scaleOn   = sl.scaleOn;
                 c.uniVoices = juce::jlimit(1, WG_UNI, sl.scaleOn ? sl.scaleUnison : sl.oscUnison);   // up to 3 bores
@@ -3679,12 +3697,20 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         sig = g * c.grNorm * env;
                         break; }
                     case SrcWguide: {
-                        // [2026-07-18] WAVEGUIDE render: a delay-line bore/string DRIVEN EVERY SAMPLE
-                        // by a nonlinear exciter (Reed / Flute jet / Bow friction - condensed STK
-                        // models) while the envelope supplies the pressure. Gate open (held key /
-                        // note length + sustain) = the note SUSTAINS as long as you blow/bow;
-                        // release drops the pressure and the damped loop rings itself out. Reuses
-                        // the KS lines (string k at offset k*KS_MAX); writes clamped +-2.5.
+                        // [2026-07-18] WAVEGUIDE render (v2 exciters, tuned against an offline
+                        // tone/noise metric): a delay-loop bore/string DRIVEN EVERY SAMPLE while
+                        // the envelope supplies the pressure; release drops the drive and the
+                        // damped loop rings out. STRUCTURES (full STK topologies):
+                        //  REED  = the STK Clarinet loop (table 0.7/-0.3 - steeper LATCHES SILENT),
+                        //          half-wavelength bore (odd harmonics);
+                        //  FLUTE = the STK Flute: a separate JET DELAY line (half the bore) feeding
+                        //          the cubic jet table + end reflection - the jet line is what makes
+                        //          it a tone instead of filtered breath noise;
+                        //  BOW   = the STK Bowed string: TWO lines (bridge + neck, split at wgPos =
+                        //          the bowing point), friction table between bow and string speed.
+                        // MEMORY: bore k = ksBuf region k; the flute jet / bow neck line = region
+                        // k+3 (KS_UNI=6 regions, waveguide bores cap at WG_UNI=3 - zero new RAM).
+                        // Writes clamped +-2.5; output clamped +-4 (anti-gunshot family).
                         if (! ksOk || (int) sv.ksBuf.size() < KS_UNI * KS_MAX) break;
                         if (v.isKey || (v.gateLen > 0 && c.sustain > 0.01f))
                             env = keyAdsr(t, v.isKey ? v.keyOff : v.gateLen, c.atk, c.hold, c.dec, c.sustain, c.release);
@@ -3709,56 +3735,82 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             // Reed = a closed-open cylinder: sounds an OCTAVE below its length, so the
                             // loop is HALF a wavelength; Flute/Bow (open / string) = a full wavelength.
                             double Lf = sr / (c.wgMode == 0 ? 2.0 * f : f);
-                            Lf = juce::jlimit(4.0, (double) KS_MAX - 4.0, Lf);
+                            Lf = juce::jlimit(6.0, (double) KS_MAX - 4.0, Lf);
                             if (k == 0) sv.wgLen = (float) Lf;   // UI snapshot: the live bore length
-                            const size_t base = (size_t) k * (size_t) KS_MAX;
-                            auto rdAt = [&](double delay) -> float {   // fractional delay read
-                                double rp = sv.ksWrite[k] - delay;
+                            const size_t base  = (size_t) k * (size_t) KS_MAX;
+                            const size_t base2 = (size_t) (k + WG_UNI) * (size_t) KS_MAX;   // jet / neck line
+                            const int    k2    = k + WG_UNI;
+                            auto rdLine = [&](size_t bs, int ki, double delay) -> float {   // fractional read
+                                double rp = sv.ksWrite[ki] - delay;
                                 while (rp < 0.0) rp += (double) KS_MAX;
                                 const int i0 = (int) rp; const float fr = (float)(rp - (double) i0);
                                 const int i1 = (i0 + 1 < KS_MAX) ? i0 + 1 : 0;
-                                return sv.ksBuf[base + (size_t) i0]
-                                     + (sv.ksBuf[base + (size_t) i1] - sv.ksBuf[base + (size_t) i0]) * fr; };
-                            const float y = rdAt(Lf);
-                            float& lp = sv.ksLp[k];
-                            lp += c.wgLpK * (y - lp);                    // loop damper (the Brightness handle)
+                                return sv.ksBuf[bs + (size_t) i0]
+                                     + (sv.ksBuf[bs + (size_t) i1] - sv.ksBuf[bs + (size_t) i0]) * fr; };
+                            auto wrLine = [&](size_t bs, int ki, float val) {
+                                const int wi = (int) sv.ksWrite[ki];
+                                sv.ksBuf[bs + (size_t) wi] = juce::jlimit(-2.5f, 2.5f, val);   // KS write clamp
+                                sv.ksWrite[ki] = (wi + 1 < KS_MAX) ? wi + 1 : 0; };
                             const float wn2 = whiteNoise(sv.noiseState); // breath turbulence (deterministic per hit)
                             const float P = env * c.wgPress * (1.0f + wn2 * c.wgBreathC * 0.35f);
-                            float inp;
+                            // DRAWN EXCITER CURVE: replaces the built-in table (linear-interp read)
+                            auto lutCv = [&](float x) -> float {
+                                const float p = (juce::jlimit(-1.0f, 1.0f, x) * 0.5f + 0.5f) * 63.0f;
+                                const int i0 = (int) p; const float fr = p - (float) i0;
+                                const float a2 = (float) c.wgCv[i0] * (1.0f / 127.5f) - 1.0f;
+                                const float b2 = (float) c.wgCv[juce::jmin(63, i0 + 1)] * (1.0f / 127.5f) - 1.0f;
+                                return a2 + (b2 - a2) * fr; };
+                            float yOut;
                             switch (c.wgMode)
                             {
                                 default:
-                                case 0: {   // REED - the STK Clarinet loop: reflection-coefficient table
-                                            // on the pressure difference; inverting end = odd harmonics.
-                                            // Table = STK's 0.7/-0.3 (a steeper slope clamps to a
-                                            // ZERO-injection fixed point = the reed latches silent).
+                                case 0: {   // REED (STK Clarinet)
+                                    const float y = rdLine(base, k, Lf);
+                                    float& lp = sv.ksLp[k];
+                                    lp += c.wgLpK * (y - lp);                 // loop damper (Brightness)
                                     const float pd = -0.95f * lp - P;
-                                    const float rt = juce::jlimit(-1.0f, 1.0f, 0.7f - 0.3f * pd);
-                                    inp = P + pd * rt;
+                                    const float rt = c.wgCv != nullptr ? lutCv(pd)
+                                                   : juce::jlimit(-1.0f, 1.0f, 0.7f - 0.3f * pd);
+                                    wrLine(base, k, P + pd * rt);
+                                    // POSITION pickup tap combs the tone (like a guitar pickup)
+                                    yOut = (y - 0.7f * rdLine(base, k, Lf * (double) c.wgPosC)) * 16.0f;
                                 } break;
-                                case 1: {   // FLUTE - air-jet cubic nonlinearity into an open (positive) bore
-                                    const float jet = juce::jlimit(-1.0f, 1.0f, P - lp);
-                                    inp = lp * 0.86f + (jet * (1.0f - jet * jet)) * 0.72f;
+                                case 1: {   // FLUTE (STK Flute: jet delay + cubic jet table + end reflection)
+                                    const float bore = rdLine(base, k, Lf);
+                                    float& lp = sv.ksLp[k];
+                                    lp += c.wgLpK * (bore - lp);              // reflection filter (Brightness)
+                                    const float pdiff = P * 1.1f - 0.5f * lp; // jet senses mouth vs bore
+                                    wrLine(base2, k2, pdiff);                 // into the JET line...
+                                    float jt = rdLine(base2, k2, juce::jmax(4.0, Lf * 0.5));   // ...half a bore later
+                                    jt = juce::jlimit(-1.0f, 1.0f, jt);
+                                    const float jv = c.wgCv != nullptr ? lutCv(jt) : jt * (jt * jt - 1.0f);
+                                    wrLine(base, k, jv + 0.55f * lp);   // jet table + end refl
+                                    yOut = (bore - 0.5f * rdLine(base, k, Lf * (double) c.wgPosC)) * 0.36f;
                                 } break;
-                                case 2: {   // BOW - stick-slip friction between bow speed and string speed
-                                    const float dv = 0.2f + 0.55f * P - lp;
-                                    const float fric = juce::jlimit(0.0f, 1.0f,
-                                        std::pow(std::abs(dv) * 5.0f + 0.75f, -4.0f));
-                                    inp = lp * 0.95f + dv * fric * (0.6f + 0.8f * P);
+                                case 2: {   // BOW (STK Bowed: bridge + neck lines split at the bowing point)
+                                    const double posB = juce::jlimit(0.12, 0.88, (double) c.wgPosC);
+                                    const double Lbr = juce::jmax(4.0, Lf * (1.0 - posB));
+                                    const double Lnk = juce::jmax(4.0, Lf * posB);
+                                    const float brOut = rdLine(base,  k,  Lbr);
+                                    const float nkOut = rdLine(base2, k2, Lnk);
+                                    float& lp = sv.ksLp[k];
+                                    lp += c.wgLpK * (brOut - lp);             // bridge reflection filter
+                                    const float brRefl = -lp;
+                                    const float nkRefl = -nkOut;              // rigid nut
+                                    const float bowVel = 0.12f + 0.5f * P;
+                                    const float dv = bowVel - (brRefl + nkRefl);
+                                    const float bt = c.wgCv != nullptr
+                                        ? juce::jlimit(0.0f, 1.0f, lutCv(dv) * 0.5f + 0.5f)
+                                        : juce::jlimit(0.0f, 1.0f, std::pow(std::abs(dv * 3.0f) + 0.75f, -4.0f));
+                                    const float nv = dv * bt;                 // the stick-slip velocity injection
+                                    wrLine(base,  k,  nkRefl + nv);
+                                    wrLine(base2, k2, brRefl + nv);
+                                    yOut = brOut * 0.42f;
                                 } break;
                             }
-                            const int wi = (int) sv.ksWrite[k];
-                            sv.ksBuf[base + (size_t) wi] = juce::jlimit(-2.5f, 2.5f, inp);   // KS write clamp (anti-gunshot)
-                            sv.ksWrite[k] = (wi + 1 < KS_MAX) ? wi + 1 : 0;
-                            // POSITION pickup: a second tap combs the tone (pickup-position colour)
-                            out += y - 0.7f * rdAt(Lf * (double) c.wgPosC);
+                            out += yOut;
                         }
-                        // per-exciter makeup: the reed's bore-pressure oscillation is physically small
-                        // next to the jet/bow loops - matched by ear-level, not by changing the model.
-                        // Output clamp +-4 = the Modal precedent (anti-gunshot family; full pressure x
-                        // full breath x 3 bores can legitimately stack past unity).
-                        sig = juce::jlimit(-4.0f, 4.0f,
-                                out * (c.wgMode == 0 ? 5.6f : 1.4f) / std::sqrt((float) juce::jmax(1, nStr)));
+                        sig = juce::jlimit(-4.0f, 4.0f, out / std::sqrt((float) juce::jmax(1, nStr)));
                         // the envelope drives the PRESSURE, not the output - this trim only shapes the
                         // very end so an undriven bore's residual never renders as an endless floor
                         if (env < 0.02f) sig *= env * 50.0f;

@@ -201,6 +201,9 @@
 | 140 | Metal Cluster = fixedHz modal material (absolute-Hz partials, note never retunes, must stay LAST in the table); measure-first passed before the user auditions | the 808 recipe's fixedness IS the sound; last = Morph-to-next self-neutralizes (Hz-vs-ratio morphs would be nonsense) | user approved the experiment + protocol; mechanics mine |
 | 141 | Mod Env ungated fix [2026-07-18]: gateLen 0 now reads as the HELD sentinel (natural A-H-D) at both MSModEnv sites - it was silently zero on every plain step | "no gate" never meant "released at t=0"; the amp env already used this convention; factory ModEnv sounds finally work on steps (defect-fix precedent, no compat flag) | my call, disclosed in notes |
 
+| 142 | Waveguide v2 [2026-07-18 r2]: STK jet-delay flute + bridge/neck bow reuse ksBuf regions k+3 (no new RAM); exciters level-matched to rms ~0.18 via an offline tone/noise bar; wgPos on Bow = the bowing point | the v1 condensed models measured as noise (user's ears confirmed by the metric); the spare KS regions were free; bow position is the physical meaning of the split | user report; topology + tuning mine |
+| 143 | Drawable exciter curve: presets = the exact built-in transfers, first stroke seeds from the active formula, malformed persistence falls back to Formula (never half-loads); footer warns that non-oscillating drawings are physics | nothing jumps when you start editing; a wrong curve must degrade to the built-in, not to garbage; the reed-latch lesson said the warning is owed | user idea ("clicking the curve could open a drawing mode"); mechanics mine |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

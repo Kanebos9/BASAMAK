@@ -377,12 +377,26 @@ void WaveMorphDisplay::paint(juce::Graphics& g)
     const float fmRatio = 1.0f + ratio * 5.0f;     // matches DSP fmModF = f*(1+spread*5)
     const float fmIndex = depth * 6.0f;            // radians of phase modulation (visual)
     const float warp = modWarp > -900.0f ? juce::jlimit(0.0f, 1.0f, modWarp)
-                                         : (s ? juce::jlimit(0.0f, 1.0f, s->oscWarp) : 0.0f);   // Warp = one-way WAVEFOLD (0 = off)
+                                         : (s ? juce::jlimit(0.0f, 1.0f, s->oscWarp) : 0.0f);   // Fold = one-way WAVEFOLD (0 = off)
     auto fold = [warp](float v) {                   // same fold as the DSP (adds harmonics as warp rises)
         if (warp < 0.001f) return v;
         const float folded = std::sin(v * (1.0f + warp * 4.0f) * 1.5707963f);
         return v + warp * (folded - v);
     };
+    // [2026-07-18] SHAPE TRIO in the preview (mirror rule - the drawing must match the sound):
+    // Sync + Bend warp the read phase exactly like the render (order Sync -> Bend -> Fold).
+    const float syncA = modSync > -900.0f ? juce::jlimit(0.0f, 1.0f, modSync)
+                                          : (s ? juce::jlimit(0.0f, 1.0f, s->oscSync) : 0.0f);
+    const float bendA = modBend > -900.0f ? juce::jlimit(0.0f, 1.0f, modBend)
+                                          : (s ? juce::jlimit(0.0f, 1.0f, s->oscBend) : 0.0f);
+    auto shapePh = [syncA, bendA](float ph01) {
+        ph01 -= std::floor(ph01);
+        if (syncA > 0.001f) { ph01 *= 1.0f + 3.0f * syncA; ph01 -= std::floor(ph01); }
+        if (bendA > 0.001f) { const float kn = 0.5f - 0.49f * bendA;
+                              ph01 = ph01 < kn ? ph01 * (0.5f / kn) : 0.5f + (ph01 - kn) * (0.5f / (1.0f - kn)); }
+        return ph01;
+    };
+    const bool shpOn = syncA > 0.001f || bendA > 0.001f;
     const bool custom = wave >= DrumChannel::WvCustom;
     const bool morphOn = custom && s != nullptr && getCustomFrame
                       && (s->addSeg[0] > 0.001f || s->lfoAmt[3] > 0.001f);   // in MOTION: glide or WAVE LFO
@@ -394,6 +408,7 @@ void WaveMorphDisplay::paint(juce::Graphics& g)
             const float fx = (float) i / (float)(NP - 1);
             float ph = fx * CYC;
             if (fmMode) ph += (fmIndex / twoPi) * std::sin(ph * fmRatio * twoPi);
+            if (shpOn) ph = std::floor(fx * CYC) + shapePh(ph);   // Sync/Bend warp WITHIN each drawn cycle
             const float v = fold(DrumChannel::oscShapeSample(wave, ph, tbl));
             const float x = r.getX() + fx * r.getWidth();
             const float y = rcy - juce::jlimit(-1.0f, 1.0f, v) * rhh;
@@ -1865,12 +1880,8 @@ void WaveguideDisplay::paint(juce::Graphics& g)
     const int   mode   = s ? juce::jlimit(0, 2, s->wgExcite) : 0;
     const float pos    = s ? juce::jlimit(0.02f, 0.98f, s->wgPos) : 0.25f;
     const float bright = s ? juce::jlimit(0.0f, 1.0f, s->wgBright) : 0.6f;
-    const float press  = s ? juce::jlimit(0.0f, 1.0f, s->wgPressure) : 0.6f;
-
-    // the excitation-curve inset lives on the right; the bore takes the rest
-    auto in    = b.reduced(8.0f, 5.0f);
-    auto curveR = in.removeFromRight(52.0f).reduced(3.0f, 1.0f);
-    in.removeFromRight(4.0f);
+    juce::Rectangle<float> in, brightR, curveR;
+    layoutRects(in, brightR, curveR);
 
     // BORE: a tube whose right end (the bell) opens with Brightness
     const float cy = in.getCentreY();
@@ -1908,36 +1919,54 @@ void WaveguideDisplay::paint(juce::Graphics& g)
     g.drawText(mode == 0 ? "REED" : mode == 1 ? "AIR" : "BOW",
                (int) in.getX() + 2, (int) (cy - half) - 11, 34, 10, juce::Justification::centredLeft, false);
 
-    // PICKUP handle (drag LEFT/RIGHT = wgPos) on the bore's centre line
+    // PICKUP / BOW-POINT handle (drag LEFT/RIGHT = wgPos) on the bore's centre line
     const float hx = in.getX() + pos * (in.getWidth() - 8.0f);
-    g.setColour(accent);               g.fillEllipse(hx - 4.0f, cy - 4.0f, 8.0f, 8.0f);
+    g.setColour(dragWhat == 1 ? juce::Colours::white : accent);
+    g.fillEllipse(hx - 4.0f, cy - 4.0f, 8.0f, 8.0f);
     g.setColour(juce::Colours::white); g.drawEllipse(hx - 4.0f, cy - 4.0f, 8.0f, 8.0f, 1.2f);
 
-    // BELL handle (drag UP/DOWN = wgBright) at the right end
-    g.setColour(dragWhat == 2 ? juce::Colours::white : accent.withAlpha(0.85f));
-    g.fillEllipse(in.getRight() - 4.0f, cy - bell - 3.0f, 7.0f, 7.0f);
+    // [2026-07-18 r2] BRIGHTNESS = its own FULL-HEIGHT vertical track (the bell dot was nearly
+    // ungrabbable and its travel was a few pixels - user). Whole column = its hit zone.
+    g.setColour(juce::Colour(0xff20203a));
+    g.fillRoundedRectangle(brightR, 3.0f);
+    { const float hy = brightR.getY() + (1.0f - bright) * brightR.getHeight();
+      g.setColour(accent.withAlpha(0.35f));
+      g.fillRoundedRectangle(brightR.withTop(hy), 3.0f);   // filled below the handle = the amount
+      g.setColour(dragWhat == 2 ? juce::Colours::white : accent);
+      g.fillEllipse(brightR.getCentreX() - 4.5f, hy - 4.5f, 9.0f, 9.0f);
+      g.setColour(juce::Colours::white); g.drawEllipse(brightR.getCentreX() - 4.5f, hy - 4.5f, 9.0f, 9.0f, 1.1f); }
 
-    // EXCITATION CURVE inset (honest layer 2): the exact nonlinearity the DSP evaluates.
+    // EXCITATION CURVE inset (honest layer 2): the drawn curve when active, else the built-in
+    // formula the DSP evaluates. CLICK = open the DRAW EXCITER overlay.
+    const bool drawn = s != nullptr && s->wgCurveOn;
     g.setColour(juce::Colour(0xff181830)); g.fillRoundedRectangle(curveR, 3.0f);
-    g.setColour(juce::Colour(0xff2a2a48)); g.drawRoundedRectangle(curveR.reduced(0.5f), 3.0f, 1.0f);
+    g.setColour(drawn ? accent.withAlpha(0.8f) : juce::Colour(0xff2a2a48));
+    g.drawRoundedRectangle(curveR.reduced(0.5f), 3.0f, 1.0f);
     {
         juce::Path cp; const int NP = 40;
         for (int i = 0; i < NP; ++i)
         {
             const float x01 = (float) i / (float)(NP - 1);
-            const float xin = x01 * 2.0f - 1.0f;   // the input axis (-1..1)
+            const float xin = x01 * 2.0f - 1.0f;
             float yv;
-            if (mode == 0)      yv = juce::jlimit(-1.0f, 1.0f, 0.6f - 0.8f * xin);          // reed table
-            else if (mode == 1) { const float j = juce::jlimit(-1.0f, 1.0f, xin * (0.5f + press));
-                                  yv = j * (1.0f - j * j); }                                 // jet cubic
-            else                yv = juce::jlimit(0.0f, 1.0f,
-                                     std::pow(std::abs(xin) * 5.0f + 0.75f, -4.0f)) * 2.0f - 1.0f;   // bow friction
+            if (drawn)
+            {
+                const float p = x01 * 63.0f; const int i0 = (int) p; const float fr = p - (float) i0;
+                const float a2 = (float) s->wgCurve[i0] * (1.0f / 127.5f) - 1.0f;
+                const float b2 = (float) s->wgCurve[juce::jmin(63, i0 + 1)] * (1.0f / 127.5f) - 1.0f;
+                yv = a2 + (b2 - a2) * fr;
+            }
+            else yv = WgCurveEditor::presetY(mode, xin);
             const float fx = curveR.getX() + 2.0f + x01 * (curveR.getWidth() - 4.0f);
-            const float fy = curveR.getCentreY() - yv * (curveR.getHeight() * 0.42f);
+            const float fy = curveR.getCentreY() - juce::jlimit(-1.0f, 1.0f, yv) * (curveR.getHeight() * 0.42f);
             if (i == 0) cp.startNewSubPath(fx, fy); else cp.lineTo(fx, fy);
         }
         g.setColour(accent.withAlpha(0.9f)); g.strokePath(cp, juce::PathStrokeType(1.1f));
     }
+    g.setFont(juce::Font(7.0f, juce::Font::bold));
+    g.setColour(juce::Colour(0xff8aa0c8));
+    g.drawText(drawn ? "drawn" : "draw", curveR.withTrimmedTop(curveR.getHeight() - 9.0f).toNearestInt(),
+               juce::Justification::centred, false);
 
     // read-out (StringDisplay convention)
     g.setFont(juce::Font(9.0f, juce::Font::bold));
@@ -1948,32 +1977,129 @@ void WaveguideDisplay::paint(juce::Graphics& g)
 }
 void WaveguideDisplay::mouseDown(const juce::MouseEvent& e)
 {
-    // grab the nearer handle: presses in the right sixth take the bell, the rest the pickup
-    dragWhat = (e.position.x > (float) getWidth() - 70.0f
-                && std::abs(e.position.y - (float) getHeight() * 0.5f) > (float) getHeight() * 0.18f) ? 2 : 1;
+    juce::Rectangle<float> in, brightR, curveR;
+    layoutRects(in, brightR, curveR);
+    if (curveR.expanded(2.0f).contains(e.position))          // click the inset = the draw overlay
+    { dragWhat = 0; if (onOpenCurve) onOpenCurve(); return; }
+    dragWhat = (e.position.x >= brightR.getX() - 4.0f) ? 2 : 1;   // the whole right column = brightness
     applyDrag(e);
 }
 void WaveguideDisplay::mouseDrag(const juce::MouseEvent& e) { applyDrag(e); }
 void WaveguideDisplay::applyDrag(const juce::MouseEvent& e)
 {
     auto* s = getSlot ? getSlot() : nullptr;
-    if (! s) return;
-    auto b = getLocalBounds().toFloat().reduced(8.0f, 5.0f);
-    b.removeFromRight(56.0f);
+    if (! s || dragWhat == 0) return;
+    juce::Rectangle<float> in, brightR, curveR;
+    layoutRects(in, brightR, curveR);
     if (dragWhat == 2)
-        s->wgBright = juce::jlimit(0.0f, 1.0f, 1.0f - (e.position.y - b.getY()) / juce::jmax(1.0f, b.getHeight()));
+        s->wgBright = juce::jlimit(0.0f, 1.0f, 1.0f - (e.position.y - brightR.getY()) / juce::jmax(1.0f, brightR.getHeight()));
     else
-        s->wgPos = juce::jlimit(0.02f, 0.98f, (e.position.x - b.getX()) / juce::jmax(1.0f, b.getWidth()));
+        s->wgPos = juce::jlimit(0.02f, 0.98f, (e.position.x - in.getX()) / juce::jmax(1.0f, in.getWidth()));
     if (onEdit) onEdit();
     repaint();
 }
 juce::String WaveguideDisplay::getTooltip()
 {
     return "The BORE, drawn for real.\n\n"
-           "- Drag the centre dot LEFT/RIGHT = pickup Position (combs the tone, like a guitar pickup).\n"
-           "- Drag the bell dot UP/DOWN = Brightness (how open the bore's end is - dark to singing).\n"
-           "- The small curve is the ACTUAL reed/jet/bow nonlinearity the engine computes each sample.\n"
+           "- Drag the centre dot LEFT/RIGHT = Position (pickup comb; on BOW it is the BOWING POINT).\n"
+           "- Drag the vertical TRACK on the right = Brightness (dark bore to singing open bell).\n"
+           "- CLICK the small curve = DRAW YOUR OWN EXCITER (the reed/jet/bow transfer, editable).\n"
            "- The wave inside the tube is the LIVE bore contents while a note sounds - real state, not an animation.";
+}
+
+//==============================================================================
+// [2026-07-18 r2] WgCurveEditor - the DRAW EXCITER overlay (see the header comment).
+//==============================================================================
+void WgCurveEditor::paint(juce::Graphics& g)
+{
+    auto b = getLocalBounds().toFloat();
+    g.setColour(juce::Colour(0xf0141428)); g.fillRoundedRectangle(b, 6.0f);
+    g.setColour(accent);                   g.drawRoundedRectangle(b.reduced(1.0f), 6.0f, 1.4f);
+    g.setFont(juce::Font(12.0f, juce::Font::bold));
+    g.setColour(juce::Colours::white);
+    g.drawText("DRAW EXCITER CURVE", 12, 4, 240, 16, juce::Justification::centredLeft, false);
+    static const char* pn[4] = { "Reed", "Flute", "Bow", "Formula" };
+    for (int i = 0; i < 4; ++i)
+    {
+        auto r = presetRect(i);
+        const bool lit = (i == 3 && ! on);
+        g.setColour(lit ? accent.withAlpha(0.35f) : juce::Colour(0xff222240));
+        g.fillRoundedRectangle(r, 3.0f);
+        g.setColour(lit ? accent : juce::Colour(0xff44446a));
+        g.drawRoundedRectangle(r.reduced(0.5f), 3.0f, 1.0f);
+        g.setFont(juce::Font(10.5f, juce::Font::bold));
+        g.setColour(juce::Colours::white);
+        g.drawText(pn[i], r.toNearestInt(), juce::Justification::centred, false);
+    }
+    { auto r = closeRect();
+      g.setColour(juce::Colour(0xff44446a)); g.drawRoundedRectangle(r, 3.0f, 1.0f);
+      g.setColour(juce::Colours::white);
+      g.drawLine(r.getX() + 6, r.getY() + 4, r.getRight() - 6, r.getBottom() - 4, 1.4f);
+      g.drawLine(r.getX() + 6, r.getBottom() - 4, r.getRight() - 6, r.getY() + 4, 1.4f); }
+    auto st = strip();
+    g.setColour(juce::Colour(0xff10101e)); g.fillRoundedRectangle(st, 4.0f);
+    g.setColour(juce::Colour(0xff2a2a48)); g.drawRoundedRectangle(st.reduced(0.5f), 4.0f, 1.0f);
+    g.setColour(juce::Colour(0xff26263c));
+    g.drawHorizontalLine((int) st.getCentreY(), st.getX(), st.getRight());
+    g.drawVerticalLine((int) st.getCentreX(), st.getY(), st.getBottom());
+    // axis watermarks (the PitchEnv convention)
+    g.setFont(juce::Font(9.0f, juce::Font::bold));
+    g.setColour(juce::Colour(0xff5a5a80));
+    g.drawText("what the exciter FEELS", st.toNearestInt().removeFromBottom(12).reduced(4, 0),
+               juce::Justification::centredRight, false);
+    { juce::Graphics::ScopedSaveState ss(g);
+      g.addTransform(juce::AffineTransform::rotation(-juce::MathConstants<float>::halfPi,
+                                                     st.getX() + 10.0f, st.getCentreY()));
+      g.drawText("what it DOES BACK", (int) st.getX() - 40, (int) st.getCentreY() - 12, 110, 12,
+                 juce::Justification::centred, false); }
+    // the curve (drawn = accent; formula shown dim when off, so you see what you would replace)
+    juce::Path cp;
+    for (int k = 0; k < N; ++k)
+    {
+        const float x = st.getX() + 3.0f + (float) k / (float)(N - 1) * (st.getWidth() - 6.0f);
+        const float yv = on ? curve[k] : presetY(mode, (float) k / (float)(N - 1) * 2.0f - 1.0f);
+        const float y = st.getCentreY() - juce::jlimit(-1.0f, 1.0f, yv) * (st.getHeight() * 0.46f);
+        if (k == 0) cp.startNewSubPath(x, y); else cp.lineTo(x, y);
+    }
+    g.setColour(on ? accent : accent.withAlpha(0.45f));
+    g.strokePath(cp, juce::PathStrokeType(1.8f));
+    // the honest footer warning
+    g.setFont(juce::Font(9.5f, juce::Font::bold));
+    g.setColour(juce::Colour(0xffd9a13c));
+    g.drawText("Some drawings will NOT oscillate (a jammed reed is SILENT - physics). Silent note = redraw or load a preset.",
+               10, getHeight() - 15, getWidth() - 20, 12, juce::Justification::centredLeft, false);
+}
+void WgCurveEditor::mouseDown(const juce::MouseEvent& e)
+{
+    if (closeRect().contains(e.position)) { setVisible(false); return; }
+    for (int i = 0; i < 4; ++i)
+        if (presetRect(i).contains(e.position))
+        {
+            if (i == 3) { on = false; repaint(); if (onChange) onChange(curve, on); }
+            else loadPreset(i);
+            return;
+        }
+    lastI = -1; mouseDrag(e);
+}
+void WgCurveEditor::mouseDrag(const juce::MouseEvent& e)
+{
+    auto st = strip();
+    if (! st.expanded(6.0f).contains(e.position)) return;
+    const int   i = juce::jlimit(0, N - 1, (int) std::lround((e.position.x - st.getX() - 3.0f)
+                                                             / juce::jmax(1.0f, st.getWidth() - 6.0f) * (float)(N - 1)));
+    const float v = juce::jlimit(-1.0f, 1.0f, (st.getCentreY() - e.position.y) / (st.getHeight() * 0.46f));
+    if (! on)   // first stroke on the formula view = seed from it, then edit (nothing jumps)
+    { for (int k = 0; k < N; ++k) curve[k] = presetY(mode, (float) k / (float)(N - 1) * 2.0f - 1.0f); on = true; }
+    if (lastI >= 0 && std::abs(i - lastI) > 1)   // span-connect fast strokes
+    {
+        const int a = juce::jmin(lastI, i), b2 = juce::jmax(lastI, i);
+        const float va = curve[a == i ? b2 : a], vb = v;
+        for (int k = a; k <= b2; ++k)
+            curve[k] = va + (vb - va) * (float)(k - a) / (float) juce::jmax(1, b2 - a);
+    }
+    curve[i] = v; lastI = i;
+    repaint();
+    if (onChange) onChange(curve, on);
 }
 
 //==============================================================================
@@ -6427,6 +6553,8 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         h = mix(h, f(sl.fmPitch)); h = mix(h, f(sl.fmSpread)); h = mix(h, f(sl.fmDepth)); h = mix(h, f(sl.fmPEnvAmt)); h = mix(h, f(sl.fmPEnvTime)); h = mix(h, f(sl.fmPOffset)); h = mix(h, f(sl.fmFeedback)); h = mix(h, f(sl.fmSub));
         h = mix(h, f(sl.physFreq)); h = mix(h, f(sl.physTone)); h = mix(h, f(sl.physMaterial)); h = mix(h, f(sl.physPosition)); h = mix(h, f(sl.physPEnvAmt)); h = mix(h, f(sl.physPEnvTime)); h = mix(h, f(sl.physPOffset)); h = mix(h, f(sl.physStiff)); h = mix(h, sl.physExcite); h = mix(h, f(sl.grainPos)); h = mix(h, f(sl.grainSize)); h = mix(h, f(sl.grainDens)); h = mix(h, f(sl.grainSpray)); h = mix(h, f(sl.grainPitch));
         h = mix(h, sl.wgExcite); h = mix(h, f(sl.wgPressure)); h = mix(h, f(sl.wgBreath)); h = mix(h, f(sl.wgPos)); h = mix(h, f(sl.wgBright));   // [2026-07-18] WAVEGUIDE
+        h = mix(h, sl.wgCurveOn ? 1 : 0);
+        if (sl.wgCurveOn) for (int k = 0; k < 64; k += 4) h = mix(h, (int) sl.wgCurve[k]);   // drawn exciter (every 4th byte, the remap precedent)
         h = mix(h, f(sl.smpSpeed)); h = mix(h, f(sl.smpCrush)); h = mix(h, f(sl.smpPitch)); h = mix(h, f(sl.smpPEnvAmt)); h = mix(h, f(sl.smpPEnvTime)); h = mix(h, f(sl.smpPOffset)); h = mix(h, sl.smpReverse ? 1 : 0); h = mix(h, sl.smpUseRegion ? 1 : 0);
         h = mix(h, f(sl.smpStart)); h = mix(h, f(sl.smpEnd)); h = mix(h, sl.smpSlices); h = mix(h, f(sl.smpStretch)); h = mix(h, f(sl.smpGain));
         h = mix(h, sl.smpEnvOn ? 1 : 0); h = mix(h, sl.smpPreservePitch ? 1 : 0); h = mix(h, sl.fmEnvFollow ? 1 : 0); h = mix(h, f(sl.modalMorph));
@@ -9700,6 +9828,16 @@ void DrumSequencerEditor::setupComponents()
     lfoDisplay.onOpenCurveEditor = [this](int dest) { openLfoCurveEditor(dest); };   // click the wave in Custom
     content.addChildComponent(lfoCurveEd);
     lfoCurveEd.clickIgnore = &lfoDisplay;
+    // [2026-07-18 r2] DRAW EXCITER overlay (waveguide): edits go straight onto the slot.
+    content.addChildComponent(wgCurveEd);
+    wgCurveEd.onChange = [this](const float* cv, bool on) {
+        auto& sl = proc.sequencer.channel(selectedChannel).slots[juce::jlimit(0, 1, wgCurveEdSlot)];
+        sl.wgCurveOn = on;
+        for (int k = 0; k < WgCurveEditor::N; ++k)
+            sl.wgCurve[k] = (uint8_t) juce::jlimit(0, 255, (int) std::lround((cv[k] * 0.5f + 0.5f) * 255.0f));
+        proc.sequencer.channel(selectedChannel).markDspDirty();
+        slotEd[juce::jlimit(0, 1, wgCurveEdSlot)].wgView.repaint();
+    };
     // [2026-07-16] Grid/Snap are saved WITH the sound (per LFO) - reopening shows it as it was made.
     lfoCurveEd.onToolsChange = [this](int g2, bool sn) {
         if (ignoreKnobCallbacks) return;
@@ -10319,6 +10457,7 @@ void DrumSequencerEditor::setupComponents()
         slotEd[b].morphView.getCustomFrame = [this, b](int f) -> const float* {
             return proc.sequencer.channel(selectedChannel)
                        .addTbl[b][juce::jlimit(0, DrumChannel::ADD_FRAMES - 1, f)]; };
+        slotEd[b].wgView.onOpenCurve = [this, b] { openWgCurveEditor(b); };   // [2026-07-18 r2]
         slotEd[b].morphView.onOpenCustom = [this, b] {
             {   // not on Custom yet? switch to it, seeding the 4 frames from the CURRENT shape's
                 // recipe (only when the frames are still the untouched default) - same tone, now drawable
@@ -12118,6 +12257,21 @@ void DrumSequencerEditor::updateFxFaders(const DrumChannel::Slot& sl)
     // (LFO tempo sync lives INSIDE the LfoDisplay now - setValues carries sl.lfoSync.)
 }
 
+// [2026-07-18 r2] DRAW EXCITER: open the waveguide transfer overlay for one slot.
+void DrumSequencerEditor::openWgCurveEditor(int slotIdx)
+{
+    wgCurveEdSlot = juce::jlimit(0, 1, slotIdx);
+    auto& sl = proc.sequencer.channel(selectedChannel).slots[wgCurveEdSlot];
+    wgCurveEd.mode = juce::jlimit(0, 2, sl.wgExcite);
+    wgCurveEd.on = sl.wgCurveOn;
+    for (int k = 0; k < WgCurveEditor::N; ++k)
+        wgCurveEd.curve[k] = sl.wgCurveOn ? (float) sl.wgCurve[k] * (1.0f / 127.5f) - 1.0f
+                                          : WgCurveEditor::presetY(wgCurveEd.mode, (float) k / (float)(WgCurveEditor::N - 1) * 2.0f - 1.0f);
+    wgCurveEd.accent = slotEd[wgCurveEdSlot].accent;
+    wgCurveEd.clickIgnore = &slotEd[wgCurveEdSlot].wgView;
+    wgCurveEd.setVisible(true); wgCurveEd.toFront(false);
+}
+
 // LFO SHAPER: open the draw overlay for one LFO tab, loaded with that tab's current curve.
 void DrumSequencerEditor::openLfoCurveEditor(int dest)
 {
@@ -13068,7 +13222,7 @@ void DrumSequencerEditor::zoomToGroup(juce::Rectangle<int> designRect)
     if (soundPicker != nullptr && soundPicker->isVisible())
         static_cast<SoundPickerPanel&>(*soundPicker).close();
     harmEd.setVisible(false);
-    lfoCurveEd.setVisible(false);
+    lfoCurveEd.setVisible(false); wgCurveEd.setVisible(false);
     routePicker.setVisible(false);
     remapEd.setVisible(false);
     fxTypeList.close();   // anchored under a combo that just moved (close() frees the combo latch)
@@ -13371,7 +13525,7 @@ void DrumSequencerEditor::layoutContent()
     if (! keepPickerOnLayout && soundPicker != nullptr && soundPicker->isVisible())
         static_cast<SoundPickerPanel&>(*soundPicker).close();
     harmEd.setVisible(false);   // same rule for the DRAW HARMONICS overlay
-    lfoCurveEd.setVisible(false);   // and the LFO SHAPER overlay
+    lfoCurveEd.setVisible(false); wgCurveEd.setVisible(false);   // and the LFO SHAPER overlay
     routePicker.setVisible(false);  // and the route source|target picker
     remapEd.setVisible(false);      // and its REMAP curve overlay
     fxTypeList.close();             // and the per-item-tooltip type dropdown
@@ -13848,6 +14002,7 @@ void DrumSequencerEditor::layoutContent()
     // hidden again at the top of every layoutContent like the sound picker).
     harmEd.setBounds(cxAmp, colTop, ampEqW + gp + pitchW + gp + fxColW, colH);   // covers amp..FX (user-outlined area)
     lfoCurveEd.setBounds(cxAmp, colTop, ampEqW + gp + pitchW + gp + fxColW, colH);   // LFO draw window = the wavetable menu's footprint (user 2026-07-16)
+    wgCurveEd.setBounds(cxAmp, colTop, ampEqW + gp + pitchW + gp + fxColW, colH);    // DRAW EXCITER = the same footprint [2026-07-18 r2]
     routePicker.setBounds(cxPitch, colTop + 24, pitchW + gp + fxColW, colH - 48);   // route source|target chooser (parked left of the faders)
 
     hdrDrive.setBounds(0, 0, 0, 0);

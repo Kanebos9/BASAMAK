@@ -2441,17 +2441,6 @@ static void yCzKeys(DC& c) {       // PHASE DISTORTION keys (the Casio CZ trick)
     s.atk = 0.003f; s.dec = 1.2f; s.sustain = 0.4f; s.release = 0.3f;
     c.reverbSend = 0.2f; c.volume = 0.9f;
 }
-static void yPdStrings(DC& c) {    // PD string machine: a slow free LFO breathes the Bend across a wide stack
-    auto& s = mkSlot(c, DC::SrcOsc);
-    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
-    s.oscUnison = 5; s.oscDetune = 0.2f; s.uniSpread = 0.7f;
-    s.oscBend = 0.4f;
-    s.lfoRate[0] = 0.25f; s.lfoAmt[0] = 0.5f; s.lfoFree[0] = true;
-    modRoute(s, DC::MSLfoFilt, DC::MTBendAmt, 0.35f);
-    s.atk = 0.4f; s.dec = 1.5f; s.sustain = 0.85f; s.release = 0.8f;
-    s.filterType = DC::LowPass; s.filterCutoff = 5200.0f; s.filterReso = 0.7f;
-    c.reverbSend = 0.4f; c.volume = 0.8f;
-}
 static void yTearPad(DC& c) {      // ALL THREE shape faders at once (Sync + Bend + Fold, freely combined)
     auto& s = mkSlot(c, DC::SrcOsc);                        // + a slow free LFO pulling the Sync = a
     s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 130.81f;   // pad that slowly tears itself open
@@ -2477,7 +2466,7 @@ static void yHaloBass(DC& c) {     // RESONATOR an octave UP over a dark bass = 
     s.atk = 0.004f; s.dec = 0.6f; s.sustain = 0.8f; s.release = 0.12f;
     s.filterType = DC::LowPass; s.filterCutoff = 1200.0f; s.filterReso = 1.0f;
     s.fxSub = 0.4f;
-    chFx(c, DC::ChFxResonator, 0.45f, 1.0f);                // Character 1.0 = +12 st = the octave halo
+    chFx(c, DC::ChFxResonator, 0.7f, 1.0f);                 // Character 1.0 = +12 st = the octave halo (0.45 was inaudible - user)
     c.volume = 0.9f;
 }
 static void yClusterCymbal(DC& c) {// METAL CLUSTER: the 808-cymbal recipe - six FIXED inharmonic
@@ -2492,6 +2481,27 @@ static void yClusterCymbal(DC& c) {// METAL CLUSTER: the 808-cymbal recipe - six
     n.noiseType = 0; n.atk = 0.001f; n.dec = 0.5f;
     n.filterType = DC::HighPass; n.filterCutoff = 6200.0f;
     c.volume = 0.85f;
+}
+
+static void yCometTom(DC& c) {     // RESONATOR + LFO drum (user order): a punchy tom whose metal ring
+    auto& s = mkSlot(c, DC::SrcModal);                      // DIVES after every hit - a fast retrig
+    s.oscFreq = 110.0f; s.modalMaterial = 3;                // saw-down LFO sweeps the Resonator's
+    s.modalDecay = 0.35f; s.modalTone = 0.6f;               // TUNE (FX A Character = +-12 st)
+    s.atk = 0.001f; s.dec = 0.5f;
+    chFx(c, DC::ChFxResonator, 0.7f, 0.62f);                // ring slightly sharp of the tom...
+    s.lfoRate[0] = 5.5f; s.lfoAmt[0] = 1.0f; s.lfoShape[0] = 2;   // ...then the retrig saw-down
+    modRoute(s, DC::MSLfoFilt, DC::MTChFxAChr, 0.45f);      // dives it = a comet tail per hit
+    c.volume = 0.9f;
+}
+static void yHauntKeys(DC& c) {    // RESONATOR + LFO keys (user order): a soft strike whose ringing
+    auto& s = mkSlot(c, DC::SrcOsc);                        // BODY slowly drifts around the note -
+    s.oscShape = s.oscShapeB = 10; s.oscFreq = 261.63f;     // wave 10 = Bell; a haunted, breathing halo
+    s.atk = 0.004f; s.dec = 1.4f; s.sustain = 0.3f; s.release = 0.4f;
+    s.filterType = DC::LowPass; s.filterCutoff = 4200.0f; s.filterReso = 0.7f;
+    chFx(c, DC::ChFxResonator, 0.55f, 0.5f);
+    s.lfoRate[0] = 0.22f; s.lfoAmt[0] = 0.6f; s.lfoFree[0] = true;   // slow FREE sine drift
+    modRoute(s, DC::MSLfoFilt, DC::MTChFxAChr, 0.18f);      // the body detunes around unison
+    c.reverbSend = 0.3f; c.volume = 0.9f;
 }
 
 static void oWobbleStep(DC& c) {   // a PROGRAMMED dubstep wobble: 8 drawn filter steps per bar, redraw at will
@@ -2795,9 +2805,10 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Sync Bass", ySyncBass, "Bass" },               // HARD SYNC: velocity tears the ratio open
     { "Halo Bass", yHaloBass, "Bass" },               // RESONATOR +12 st: a singing octave halo over a dark bass
     { "CZ Keys", yCzKeys, "Keys" },                   // PHASE DISTORTION: a resonant sweep with NO filter
-    { "PD Strings", yPdStrings, "Pads & Choirs" },    // PD string machine (free LFO breathes the Bend)
     { "Tear Pad", yTearPad, "Pads & Choirs" },        // Sync + Bend + Fold combined; slow LFO tears it open
     { "Wire Perc", yWirePerc, "Electro Perc" },       // RESONATOR: a noise tick becomes note-tracked metal
+    { "Comet Tom", yCometTom, "Toms" },               // RESONATOR + retrig LFO: the ring DIVES after every hit
+    { "Haunt Keys", yHauntKeys, "Keys" },             // RESONATOR + slow free LFO: the ringing body drifts around the note
     { "Cluster Cymbal", yClusterCymbal, "Cymbals" },  // METAL CLUSTER: the 808 fixed-partial recipe + sizzle
 };
 static constexpr int kNumMixes = (int) (sizeof(kMixes) / sizeof(kMixes[0]));

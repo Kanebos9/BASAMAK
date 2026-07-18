@@ -574,7 +574,14 @@ public:
         float wgBreath   = 0.12f;        // breath turbulence mixed into the drive (a small floor always
                                          // remains - a perfectly still reed latches silent, physics)
         float wgPos      = 0.25f;        // pickup/coupling position along the bore (comb colour) - VISUAL handle
+                                         // (on BOW it is the BOWING POINT: the bridge/neck split)
         float wgBright   = 0.6f;         // loop brightness (1 - damping) - VISUAL handle
+        // [2026-07-18] DRAWABLE EXCITER CURVE: replace the built-in reed/jet/bow table with a
+        // hand-drawn transfer (the WgCurveEditor overlay; y 0..255 = -1..+1 over input -1..+1).
+        // Honest warning shipped in the editor: many drawings simply won't oscillate - the same
+        // physics that makes a too-steep reed latch silent. Off = the built-in formulas.
+        bool    wgCurveOn = false;
+        uint8_t wgCurve[64] = {};
         // -- Sample -- (the buffer lives per-slot in slotSample[]; these are this slot's playback params)
         float smpSpeed = 1.0f, smpCrush = 0.0f, smpPitch = 0.0f, smpPEnvAmt = 0.0f, smpPEnvTime = 0.04f, smpPOffset = 0.0f;
         bool  smpReverse = false, smpUseRegion = false;
