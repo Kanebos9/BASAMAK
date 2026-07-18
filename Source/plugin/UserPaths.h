@@ -55,6 +55,10 @@ namespace UserPaths
 
     inline juce::File samples()    { return sub("Samples",    "Samples",     "DrumSequencer Samples"); }
     inline juce::File presets()    { return sub("Presets",    "Presets",     "DrumSequencer Presets"); }
+    // [2026-07-18] MULTISAMPLES: one SUBFOLDER per instrument, plain WAVs NAMED BY NOTE
+    // ("E1.wav", "C#3.wav" or a MIDI number "40.wav") - human-editable, shareable as a zip,
+    // hand-assemblable from any WAVs by renaming. No custom container (user flexibility call).
+    inline juce::File multisamples() { return sub("Multisamples", "", ""); }
     inline juce::File midiPatterns() { return sub("MIDI Patterns", "", ""); }   // saved *.basamakpattern note grids
 
     inline juce::File soundMixes()

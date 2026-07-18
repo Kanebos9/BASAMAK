@@ -470,6 +470,305 @@ public:
 // Position scans A -> D (the two neighbouring frames crossfade); the Glide box = per-note travel
 // 0 -> 1 over N seconds; the WAVE LFO (LFO visual, 4th tab) scans position live. An in-editor
 // overlay (a `content` child, never an OS popup - the popup rule), closed by its X or layoutContent.
+
+// [2026-07-18] MULTISAMPLE RECORDING WIZARD (content-child overlay). Walks the user through
+// recording their own instrument note by note through the plugin's INPUT: pick a range +
+// spacing + a name, then for each note it LISTENS (level-armed), RECORDS, verifies the pitch
+// with the tuner's NSDF detector, auto-trims, and saves a note-named WAV into a new subfolder
+// of ~/Documents/BASAMAK/Multisamples - which then loads straight into the slot as a
+// multisample. Does NOT close on outside clicks (a take may be running); X only.
+class MsRecordWizard : public juce::Component, private juce::Timer
+{
+public:
+    DrumSequencerProcessor* proc = nullptr;
+    juce::File baseDir;                                    // ~/Documents/BASAMAK/Multisamples (set by the editor)
+    std::function<void(int slot, const juce::File& folder)> onDone;
+
+    MsRecordWizard()
+    {
+        for (auto* b : { &startBtn, &retryBtn, &keepBtn, &skipBtn, &closeBtn, &finishBtn })
+            addChildComponent(*b);
+        addChildComponent(nameEd);
+        nameEd.setText("My Instrument", juce::dontSendNotification);
+        nameEd.setJustification(juce::Justification::centredLeft);
+        startBtn.onClick = [this] { beginSession(); };
+        closeBtn.onClick = [this] { close(); };
+        retryBtn.onClick = [this] { phase = Listen; readCur = tapNow(); capBuf.clear(); repaint(); syncButtons(); };
+        keepBtn.onClick  = [this] { saveCurrent(); };
+        skipBtn.onClick  = [this] { advance(false); };
+        finishBtn.onClick = [this] { finishSession(); };
+    }
+
+    void open(int slot)
+    {
+        slotIdx = slot; phase = Setup; savedAny = false; curIdx = 0; noteList.clear();
+        if (proc != nullptr) proc->msTapOn = true;
+        setVisible(true); toFront(true);
+        startTimerHz(30); syncButtons(); repaint();
+    }
+    void close()
+    {
+        stopTimer();
+        if (proc != nullptr) proc->msTapOn = false;
+        setVisible(false);
+    }
+
+    void resized() override
+    {
+        const auto b = getLocalBounds();
+        closeBtn.setBounds(b.getRight() - 26, b.getY() + 4, 22, 20);
+        nameEd.setBounds(b.getX() + 96, b.getY() + 40, 240, 22);
+        startBtn.setBounds(b.getCentreX() - 60, b.getBottom() - 40, 120, 28);
+        const int by = b.getBottom() - 40;
+        retryBtn.setBounds(b.getCentreX() - 150, by, 88, 28);
+        keepBtn.setBounds (b.getCentreX() - 44,  by, 88, 28);
+        skipBtn.setBounds (b.getCentreX() + 62,  by, 88, 28);
+        finishBtn.setBounds(b.getCentreX() - 60, by, 120, 28);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        auto b = getLocalBounds();
+        g.setColour(juce::Colour(0xf0141428)); g.fillRoundedRectangle(b.toFloat(), 8.0f);
+        g.setColour(juce::Colour(0xff35c0ff)); g.drawRoundedRectangle(b.toFloat().reduced(1.0f), 8.0f, 1.4f);
+        g.setColour(juce::Colours::white); g.setFont(juce::Font(15.0f, juce::Font::bold));
+        g.drawText("RECORD A MULTISAMPLE", b.getX() + 12, b.getY() + 6, b.getWidth() - 50, 18, juce::Justification::centredLeft);
+
+        // input meter (every phase - the first thing to debug is "no signal")
+        const float lvl = proc != nullptr ? proc->msTapLevel.load(std::memory_order_relaxed) : 0.0f;
+        const juce::Rectangle<int> mr(b.getX() + 12, b.getBottom() - 62, b.getWidth() - 24, 8);
+        g.setColour(juce::Colour(0xff20203a)); g.fillRoundedRectangle(mr.toFloat(), 3.0f);
+        const float mf = juce::jlimit(0.0f, 1.0f, (float)(std::log10(juce::jmax(1.0e-4f, lvl)) / 4.0 + 1.0));
+        g.setColour(lvl > 0.02f ? juce::Colour(0xff35b56a) : juce::Colour(0xff5a5a78));
+        g.fillRoundedRectangle(mr.toFloat().withWidth(mr.getWidth() * mf), 3.0f);
+        g.setColour(juce::Colour(0xffaebada)); g.setFont(10.5f);
+        g.drawText("input level", mr.getX(), mr.getY() - 13, 100, 12, juce::Justification::left);
+
+        if (phase == Setup)
+        {
+            g.setFont(juce::Font(12.5f, juce::Font::bold)); g.setColour(juce::Colour(0xffaebada));
+            g.drawText("Name:", b.getX() + 12, b.getY() + 42, 80, 18, juce::Justification::left);
+            auto box = [&](const juce::Rectangle<int>& r, const juce::String& cap, const juce::String& val)
+            {
+                g.setColour(juce::Colour(0xff20203a)); g.fillRoundedRectangle(r.toFloat(), 4.0f);
+                g.setColour(juce::Colour(0xff35c0ff)); g.drawRoundedRectangle(r.toFloat(), 4.0f, 1.0f);
+                g.setColour(juce::Colour(0xffaebada)); g.setFont(11.0f);
+                g.drawText(cap, r.getX(), r.getY() - 15, r.getWidth(), 13, juce::Justification::centred);
+                g.setColour(juce::Colours::white); g.setFont(juce::Font(14.0f, juce::Font::bold));
+                g.drawText(val, r, juce::Justification::centred);
+            };
+            box(loRect(),  "Lowest note",  juce::MidiMessage::getMidiNoteName(loNote, true, true, 4));
+            box(hiRect(),  "Highest note", juce::MidiMessage::getMidiNoteName(hiNote, true, true, 4));
+            box(spRect(),  "Record every", juce::String(spacing) + " st");
+            g.setColour(juce::Colour(0xffaebada)); g.setFont(11.5f);
+            g.drawFittedText("Play each note your instrument makes when asked - the wizard hears it, checks the "
+                             "pitch, trims it and saves it.\nDrag the boxes to set the range. "
+                             + juce::String(noteCountFor()) + " notes will be recorded.\n"
+                             "Standalone: enable your input device under Options (input starts muted). "
+                             "DAW: route audio into BASAMAK's optional input bus.",
+                             b.getX() + 12, b.getY() + 118, b.getWidth() - 24, 64, juce::Justification::topLeft, 5);
+        }
+        else if (phase == Listen || phase == Capture || phase == Review)
+        {
+            const int target = noteList[juce::jlimit(0, noteList.size() - 1, curIdx)];
+            g.setColour(juce::Colour(0xffaebada)); g.setFont(12.5f);
+            g.drawText("Note " + juce::String(curIdx + 1) + " of " + juce::String(noteList.size())
+                       + "  -  " + nameEd.getText().trim(), b.getX() + 12, b.getY() + 30, b.getWidth() - 24, 16, juce::Justification::centred);
+            g.setColour(phase == Capture ? juce::Colour(0xffd21f1f) : juce::Colours::white);
+            g.setFont(juce::Font(44.0f, juce::Font::bold));
+            g.drawText(juce::MidiMessage::getMidiNoteName(target, true, true, 4),
+                       b.getX(), b.getY() + 52, b.getWidth(), 50, juce::Justification::centred);
+            g.setFont(juce::Font(13.0f, juce::Font::bold));
+            if (phase == Listen)
+            { g.setColour(juce::Colour(0xff35b56a)); g.drawText("PLAY THE NOTE - recording arms itself when it hears you",
+                  b.getX(), b.getY() + 108, b.getWidth(), 18, juce::Justification::centred); }
+            else if (phase == Capture)
+            { g.setColour(juce::Colour(0xffd21f1f)); g.drawText("RECORDING... let the note ring, then stay silent",
+                  b.getX(), b.getY() + 108, b.getWidth(), 18, juce::Justification::centred); }
+            else
+            {
+                const bool match = heardNote == target;
+                g.setColour(match ? juce::Colour(0xff35b56a) : juce::Colour(0xffffc24a));
+                juce::String hs = heardHz > 0.0 ? ("Heard: " + juce::MidiMessage::getMidiNoteName(heardNote, true, true, 4)
+                                                    + (heardCents >= 0 ? " +" : " ") + juce::String(heardCents) + "c")
+                                                : juce::String("Heard: no clear pitch");
+                if (! match) hs << "  (expected " + juce::MidiMessage::getMidiNoteName(target, true, true, 4) + " - Retry, or Keep anyway)";
+                g.drawText(hs, b.getX(), b.getY() + 108, b.getWidth(), 18, juce::Justification::centred);
+                g.setColour(juce::Colour(0xffaebada)); g.setFont(11.5f);
+                g.drawText(juce::String(capBuf.size() / juce::jmax(1.0, rate()), 2) + " s recorded",
+                           b.getX(), b.getY() + 126, b.getWidth(), 14, juce::Justification::centred);
+            }
+        }
+        else if (phase == DoneAll)
+        {
+            g.setColour(juce::Colour(0xff35b56a)); g.setFont(juce::Font(16.0f, juce::Font::bold));
+            g.drawText("All notes recorded.", b.getX(), b.getY() + 70, b.getWidth(), 22, juce::Justification::centred);
+            g.setColour(juce::Colour(0xffaebada)); g.setFont(12.0f);
+            g.drawText("FINISH loads the new multisample onto the slot.", b.getX(), b.getY() + 94, b.getWidth(), 16, juce::Justification::centred);
+        }
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        dragBox = 0;
+        if (phase != Setup) return;
+        if (loRect().contains(e.getPosition())) dragBox = 1;
+        else if (hiRect().contains(e.getPosition())) dragBox = 2;
+        else if (spRect().contains(e.getPosition())) dragBox = 3;
+        dragBase = dragBox == 1 ? loNote : dragBox == 2 ? hiNote : spacing;
+    }
+    void mouseDrag(const juce::MouseEvent& e) override
+    {
+        if (dragBox == 0 || phase != Setup) return;
+        const int d = -e.getDistanceFromDragStartY() / 8;
+        if (dragBox == 1) loNote = juce::jlimit(12, hiNote, dragBase + d);
+        else if (dragBox == 2) hiNote = juce::jlimit(loNote, 108, dragBase + d);
+        else spacing = juce::jlimit(1, 6, dragBase + d);
+        repaint();
+    }
+
+private:
+    enum Phase { Setup, Listen, Capture, Review, DoneAll };
+    Phase phase = Setup;
+    int slotIdx = 0, loNote = 28, hiNote = 64, spacing = 2;   // default E1..E4 every 2 st (bass/guitar friendly)
+    juce::Array<int> noteList; int curIdx = 0; bool savedAny = false;
+    juce::int64 readCur = 0, capStartFrame = 0;
+    std::vector<float> capBuf;
+    double heardHz = 0.0; int heardNote = 0, heardCents = 0;
+    int dragBox = 0, dragBase = 0;
+    juce::File sessionDir;
+    juce::TextButton startBtn { "START" }, retryBtn { "RETRY" }, keepBtn { "KEEP" },
+                     skipBtn { "SKIP" }, closeBtn { "X" }, finishBtn { "FINISH" };
+    juce::TextEditor nameEd;
+
+    juce::Rectangle<int> loRect() const { return { getWidth() / 2 - 170, 80, 100, 26 }; }
+    juce::Rectangle<int> hiRect() const { return { getWidth() / 2 - 50,  80, 100, 26 }; }
+    juce::Rectangle<int> spRect() const { return { getWidth() / 2 + 70,  80, 100, 26 }; }
+    double rate() const { return proc != nullptr ? juce::jmax(8000.0, proc->getSampleRate()) : 48000.0; }
+    juce::int64 tapNow() const { return proc != nullptr ? proc->msTapWrite.load(std::memory_order_acquire) : 0; }
+    int noteCountFor() const
+    { int n = 0; for (int k = loNote; k <= hiNote; k += spacing) ++n;
+      if (((hiNote - loNote) % spacing) != 0) ++n; return n; }
+
+    void syncButtons()
+    {
+        startBtn.setVisible(phase == Setup); nameEd.setVisible(phase == Setup);
+        retryBtn.setVisible(phase == Review); keepBtn.setVisible(phase == Review);
+        skipBtn.setVisible(phase == Listen || phase == Capture || phase == Review);
+        finishBtn.setVisible(phase == DoneAll);
+    }
+    void beginSession()
+    {
+        noteList.clear();
+        for (int k = loNote; k <= hiNote; k += spacing) noteList.add(k);
+        if (noteList.isEmpty() || noteList.getLast() != hiNote) noteList.add(hiNote);
+        juce::String nm = juce::File::createLegalFileName(nameEd.getText().trim());
+        if (nm.isEmpty()) nm = "My Instrument";
+        sessionDir = baseDir.getChildFile(nm);
+        int suffix = 2;   // never overwrite an existing instrument folder
+        while (sessionDir.isDirectory() && sessionDir.getNumberOfChildFiles(juce::File::findFiles) > 0)
+            sessionDir = baseDir.getChildFile(nm + " " + juce::String(suffix++));
+        sessionDir.createDirectory();
+        curIdx = 0; savedAny = false; capBuf.clear();
+        readCur = tapNow(); phase = Listen; syncButtons(); repaint();
+    }
+    void timerCallback() override
+    {
+        repaint();   // meter always live
+        if (proc == nullptr || (phase != Listen && phase != Capture)) return;
+        const juce::int64 wr = tapNow();
+        if (wr <= readCur) return;
+        const int n = (int) juce::jmin<juce::int64>(wr - readCur, 32768);
+        std::vector<float> blk((size_t) n);
+        proc->readMsTap(readCur, blk.data(), n);
+        if (phase == Listen)
+        {
+            for (int i = 0; i < n; ++i)
+                if (std::abs(blk[(size_t) i]) > 0.02f)   // ~-34 dB arm threshold
+                {
+                    capStartFrame = readCur + i - 512;    // small pre-roll (still in the 8 s ring)
+                    capBuf.clear();
+                    const int pre = (int) juce::jmin<juce::int64>(512, juce::jmax((juce::int64) 0, readCur + i));
+                    capBuf.resize((size_t) pre);
+                    proc->readMsTap(readCur + i - pre, capBuf.data(), pre);
+                    capBuf.insert(capBuf.end(), blk.begin() + i, blk.begin() + n);
+                    phase = Capture; syncButtons();
+                    break;
+                }
+        }
+        else   // Capture: append + look for the end (trailing silence or the 6 s cap)
+        {
+            capBuf.insert(capBuf.end(), blk.begin(), blk.begin() + n);
+            const double sr = rate();
+            const size_t len = capBuf.size();
+            bool finish = len > (size_t)(sr * 6.0);
+            if (! finish && len > (size_t)(sr * 0.8))
+            {   // done when the LAST 0.5 s is silence (note released + rung out)
+                float pk = 0.0f;
+                for (size_t i = len - (size_t)(sr * 0.5); i < len; ++i) pk = juce::jmax(pk, std::abs(capBuf[i]));
+                finish = pk < 0.006f;
+            }
+            if (finish) analyzeTake();
+        }
+        readCur = wr;
+    }
+    void analyzeTake()
+    {
+        const double sr = rate();
+        // tail trim: last audible sample + a 50 ms fade
+        size_t last = capBuf.size();
+        while (last > 0 && std::abs(capBuf[last - 1]) < 0.004f) --last;
+        const size_t fade = (size_t)(sr * 0.05);
+        capBuf.resize(juce::jmin(capBuf.size(), last + fade));
+        for (size_t i = last; i < capBuf.size(); ++i)
+            capBuf[i] *= 1.0f - (float)(i - last) / (float) juce::jmax((size_t) 1, fade);
+        // pitch: a window past the attack (same NSDF detector as the tuner)
+        heardHz = 0.0;
+        const int W = juce::jmin((int) capBuf.size() / 2, 8192);
+        if (W > 2048)
+            heardHz = basamakDetectPitch(capBuf.data() + capBuf.size() / 4, W, sr);
+        if (heardHz > 0.0)
+        {
+            const double m = 69.0 + 12.0 * std::log2(heardHz / 440.0);
+            heardNote  = juce::roundToInt(m);
+            heardCents = juce::roundToInt((m - heardNote) * 100.0);
+        }
+        phase = Review; syncButtons(); repaint();
+    }
+    void saveCurrent()
+    {
+        const double sr = rate();
+        const int target = noteList[juce::jlimit(0, noteList.size() - 1, curIdx)];
+        juce::File f = sessionDir.getChildFile(
+            juce::MidiMessage::getMidiNoteName(target, true, true, 4) + ".wav");
+        f.deleteFile();
+        if (auto os = f.createOutputStream())
+        {
+            juce::WavAudioFormat wav;
+            if (std::unique_ptr<juce::AudioFormatWriter> w { wav.createWriterFor(os.get(), sr, 1, 24, {}, 0) })
+            {
+                os.release();   // the writer owns the stream now
+                const float* chans[1] = { capBuf.data() };
+                w->writeFromFloatArrays(chans, 1, (int) capBuf.size());
+                savedAny = true;
+            }
+        }
+        advance(true);
+    }
+    void advance(bool)
+    {
+        capBuf.clear();
+        if (++curIdx >= noteList.size()) { phase = DoneAll; }
+        else { phase = Listen; readCur = tapNow(); }
+        syncButtons(); repaint();
+    }
+    void finishSession()
+    {
+        close();
+        if (savedAny && onDone) onDone(slotIdx, sessionDir);
+    }
+};
+
 class HarmonicEditor : public juce::Component, public juce::SettableTooltipClient
 {
 public:
@@ -2819,6 +3118,7 @@ private:
     void openLfoCurveEditor(int dest);   // LFO SHAPER overlay
     void openRoutePicker(int route);     // two-column source|target picker for one matrix fader
     HarmonicEditor harmEd;    // ADDITIVE draw-harmonics overlay (content child)
+    MsRecordWizard msWizard;  // [2026-07-18] multisample recording wizard (content child; X-close only)
     LfoCurveEditor lfoCurveEd;             // LFO SHAPER overlay (draw the Custom LFO cycle)
     ModFaderMatrix  modFaders;             // 12 route faders (6x2) inline in the MODULATION box
     RoutePicker     routePicker;           // its right-click source|target chooser (overlay)
@@ -3041,6 +3341,8 @@ private:
 
     //-- Samples & sounds
     juce::Array<juce::File> sampleFiles;
+    juce::Array<juce::File> msFolders;   // [2026-07-18] multisample instrument folders (menu order)
+    void buildMsMenu(juce::PopupMenu& menu);
     juce::StringArray       categoryList; // built-in categories (alphabetical)
     static juce::File getSamplesFolder();
     void rescanSamples();

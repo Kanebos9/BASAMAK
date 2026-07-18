@@ -49,12 +49,14 @@ public:
         if (mode == 0) g *= 0.90f;
         else if (mode == 2) g = juce::jmin(0.95f, g * 1.02f);
         else if (mode == 3) g = juce::jmin(0.95f, g * 1.04f);
+        else if (mode == 4) g *= 0.96f;                          // Spring [2026-07-18]
         return g;
     }
     static float modeScale(float roomSize, int mode)
     {
         float s = 0.6f + 0.9f * juce::jlimit(0.0f, 1.0f, roomSize);
         if (mode == 0) s *= 0.32f; else if (mode == 2) s *= 0.7f;
+        else if (mode == 4) s *= 0.42f;                          // Spring: short lines [2026-07-18]
         return s;
     }
     static float meanLoopSec(float roomSize, int mode, double sampleRate)
@@ -73,12 +75,15 @@ public:
         if (mode == 0) g /= 0.90f;                       // undo the mode multiplier (caps make the
         else if (mode == 2) g /= 1.02f;                  //  inverse approximate near the top - fine,
         else if (mode == 3) g /= 1.04f;                  //  the whole figure is a ~)
+        else if (mode == 4) g /= 0.96f;
         return juce::jlimit(0.0f, 1.0f, (g - 0.5f) / 0.43f);
     }
 
     // Processes `n` samples IN-PLACE allowed (in==out). roomSize/decay/damp/width are 0..1.
     // mode: 0 Room / 1 Hall (= the ORIGINAL voicing, bit-identical) / 2 Plate / 3 Shimmer
-    // (Hall + an octave-up pitch shifter in the feedback = the glowing ambient halo).
+    // (Hall + an octave-up pitch shifter in the feedback = the glowing ambient halo) /
+    // 4 Spring [2026-07-18] (guitar-amp tank: short mono-fed lines, DEEP+FAST delay modulation =
+    // the boingy warble, band-passed tone, narrow image).
     void process(const float* inL, const float* inR, float* outL, float* outR, int n,
                  float roomSize, float decay, float damp, float width, int mode = 1) noexcept
     {
@@ -87,6 +92,7 @@ public:
         float scale = 0.6f + 0.9f  * juce::jlimit(0.0f, 1.0f, roomSize);   // delay-length scale
         float cutHz = 1200.0f + (1.0f - juce::jlimit(0.0f, 1.0f, damp)) * 8000.0f;  // damping LP
         float modD  = 1.5f;                                                // delay-line modulation depth
+        float lfoMul = 1.0f;                                               // modulation SPEED multiplier
         switch (mode)
         {   // re-voicings of the same safe network; Hall (1) = the untouched original numbers
             case 0: scale *= 0.32f; g *= 0.90f; cutHz *= 0.55f; modD = 0.6f; break;               // Room: small, boxy, dark
@@ -94,10 +100,12 @@ public:
                     cutHz = 2400.0f + (1.0f - juce::jlimit(0.0f, 1.0f, damp)) * 9000.0f; break;
             case 3: cutHz = juce::jmax(cutHz * 1.4f, 4500.0f);          // Shimmer: open the damping so the
                     g = juce::jmin(0.95f, g * 1.04f); break;            // octave-up passes survive + bloom
+            case 4: scale *= 0.42f; g *= 0.96f; modD = 5.0f; lfoMul = 14.0f;   // Spring [2026-07-18]:
+                    cutHz = 900.0f + (1.0f - juce::jlimit(0.0f, 1.0f, damp)) * 3200.0f; break;   // amp-tank boing
             default: break;                                                                        // Hall body
         }
         const float dampC = 1.0f - std::exp(-twoPi * cutHz / (float) sr);
-        const float w     = juce::jlimit(0.0f, 1.0f, width);
+        const float w     = juce::jlimit(0.0f, 1.0f, width) * (mode == 4 ? 0.35f : 1.0f);   // springs = near-mono
         const bool  shimmer = (mode == 3) && ! shBuf.empty();
         const int   shN   = (int) shBuf.size();
         const float shWin = (float) juce::jmax(256, shN / 2);              // pitch-shift grain window
@@ -127,10 +135,12 @@ public:
             float dout[N];
             for (int i = 0; i < N; ++i)
             {
-                lfo[i] += twoPi * (0.25f + 0.05f * (float) i) / (float) sr;   // slow, per-line
+                lfo[i] += twoPi * lfoMul * (0.25f + 0.05f * (float) i) / (float) sr;   // slow (Spring: fast warble)
                 if (lfo[i] > twoPi) lfo[i] -= twoPi;
                 const int sz = (int) buf[i].size();
-                float len = (float) base[i] * scale + 1.5f * std::sin(lfo[i]);   // gentle modulation
+                float len = (float) base[i] * scale + modD * std::sin(lfo[i]);   // modulation (depth per mode -
+                // [2026-07-18] modD was set per mode but a hard-coded 1.5 here IGNORED it; Hall's
+                // default IS 1.5 so Hall stays bit-identical - Room/Plate get their intended depths)
                 len = juce::jlimit(2.0f, (float) (sz - 2), len);
                 float rp = (float) widx[i] - len; while (rp < 0.0f) rp += (float) sz;
                 const int ri = juce::jlimit(0, sz - 1, (int) rp); const float fr = rp - (float) ri;
@@ -175,7 +185,7 @@ public:
                 // early field - a real character change, not just "small hall" (Size does small).
                 float inFeed = (i & 1) ? xin[1] : xin[0];                   // stereo: L = even, R = odd lines
                 float inG = 0.5f;
-                if (mode == 0) { if (i & 1) inG = 0.0f; inFeed = 0.5f * (xin[0] + xin[1]); }
+                if (mode == 0 || mode == 4) { if (i & 1) inG = 0.0f; inFeed = 0.5f * (xin[0] + xin[1]); }   // sparse MONO feed (Room box / Spring tank)
                 const float v = inFeed * sgn[i] * inG + fb;
                 buf[i][(size_t) widx[i]] = std::isfinite(v) ? juce::jlimit(-8.0f, 8.0f, v) : 0.0f;
                 widx[i] = (widx[i] + 1) % sz;

@@ -1116,6 +1116,17 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     // buildSlotsFromLegacy / the editor's engine-change path. Lazily allocating these cut the
     // idle memory of 32 patterns x 16 channels x 8 voices x 2 slots from ~130 MB to ~0.
     void ensureKsBuffers();
+    // [2026-07-18] MULTISAMPLE: a folder of WAVs NAMED BY NOTE ("E1.wav"/"C#3.wav"/"40.wav") =
+    // one instrument; each played note uses the zone with the NEAREST root (never more than a
+    // few semitones of varispeed). Loaded on the message thread; voices hold raw zone pointers,
+    // so the previous set is retired to msSetOld (not freed) until the next load - pointers of
+    // fading voices stay valid (the shared_ptr graveyard rule).
+    struct MsZone { juce::AudioBuffer<float> buf; int root = 60; };
+    struct MsSet  { std::vector<MsZone> zones; juce::String folder; };
+    std::shared_ptr<MsSet> msSet[NUM_SLOTS], msSetOld[NUM_SLOTS];
+    bool loadMultisample(int slot, const juce::File& folder);   // message thread; false = no usable WAVs
+    void clearMultisample(int slot) { msSetOld[slot] = msSet[slot]; msSet[slot] = nullptr; }
+    static int noteNameToMidi(const juce::String& name);        // "C#3"/"Db3"/"40" -> MIDI (-1 = no parse)
     // gateSamples > 0 = cut this hit after that many samples (soft 3 ms fade - the per-step Length).
     // glideSamples > 0 = SLIDE: the pitch starts at pitchSemis and glides to glideToSemis over that time.
     // Returns the voice index it used (keyDown patches key data onto it; other callers ignore it).
@@ -1257,6 +1268,8 @@ private:
         float    ksLp[KS_UNI]    = {};
         float    ksApSt[KS_UNI][12] = {};   // dispersion allpass state per string (up to 12 stages for Stiffness)
         double   smpHead = 0.0;          // this slot's sample playhead
+        const juce::AudioBuffer<float>* msBuf = nullptr;   // [2026-07-18] multisample: THIS voice's zone
+        float    msSemiAdj = 0.0f;       // 60 - zoneRoot (folds into the varispeed exponent)
         // === PER-SLOT EQ (begin) - filter state for HP(2)+bells(3)+LP(2); coeffs live in SC ===
         // === PER-SLOT EQ (end) ===
         // === PER-SLOT FILTER (begin) - resonant LP state (stereo); coeffs live in SC ===

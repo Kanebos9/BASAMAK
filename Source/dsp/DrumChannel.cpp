@@ -736,6 +736,7 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("sLp", s.smpLoopOn ? 1 : 0, nullptr);   // [2026-07-18] sample LOOP
         st.setProperty("sLl", s.smpLoopLo, nullptr); st.setProperty("sLh", s.smpLoopHi, nullptr);
         st.setProperty("sFile", slotSample[b].file.getFullPathName(), nullptr);   // per-slot sample (reloaded)
+        st.setProperty("msDir", msSet[b] != nullptr ? msSet[b]->folder : juce::String(), nullptr);   // [2026-07-18] multisample folder
         st.setProperty("yFo", s.oscFold, nullptr); st.setProperty("yOL", s.oscLevel, nullptr);
         st.setProperty("yNL", s.noiseLevel, nullptr);
         st.setProperty("wTb", s.waveTable, nullptr); st.setProperty("wPs", s.wavePos, nullptr);  // wavetable
@@ -1044,7 +1045,10 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         { juce::String sp = st.getProperty("sFile", "").toString();
           slotSample[n].buf.setSize(1, 0); slotSample[n].original.setSize(1, 0);
           slotSample[n].file = juce::File(); slotSample[n].usingUser = false;
-          if (sp.isNotEmpty()) { juce::File sf(sp); if (sf.existsAsFile()) loadUserSample(n, sf); } }
+          if (sp.isNotEmpty()) { juce::File sf(sp); if (sf.existsAsFile()) loadUserSample(n, sf); }
+          const juce::String md = st.getProperty("msDir", "").toString();   // [2026-07-18] multisample folder
+          msSetOld[n] = msSet[n]; msSet[n] = nullptr;
+          if (md.isNotEmpty()) { juce::File mf(md); if (mf.isDirectory()) loadMultisample(n, mf); } }
         ++n;
     }
     for (int b = n; b < NUM_SLOTS; ++b) { slots[b] = Slot(); slotSample[b] = SlotSample(); }   // clear unused slots
@@ -1214,6 +1218,68 @@ void DrumChannel::loadUserSample(int slot, const juce::File& file)
     slotSample[slot].file = file;
     slotSample[slot].loadedAtRate = hostRate;
     updateStretch(slot);   // builds slotSample[slot].buf from .original (= a copy when stretch == 1)
+    clearMultisample(slot);   // a single file replaces any multisample on this slot
+}
+
+// [2026-07-18] MULTISAMPLE: note-name filename -> MIDI ("C#3", "Db3", "c3", "40"; -1 = no parse).
+// Scientific pitch (middle C = C4 = 60), matching the plugin's display convention.
+int DrumChannel::noteNameToMidi(const juce::String& raw)
+{
+    const juce::String t = raw.trim();
+    if (t.isEmpty()) return -1;
+    if (t.containsOnly("0123456789"))
+    { const int n = t.getIntValue(); return (n >= 0 && n <= 127) ? n : -1; }
+    static const int base[7] = { 9, 11, 0, 2, 4, 5, 7 };   // A B C D E F G
+    const juce::juce_wchar c0 = t.toUpperCase()[0];
+    if (c0 < 'A' || c0 > 'G') return -1;
+    int semi = base[c0 - 'A'], i = 1;
+    if (i < t.length() && (t[i] == '#' || t[i] == 's')) { ++semi; ++i; }
+    else if (i < t.length() && (t[i] == 'b' && t.length() > i + 1
+             && (juce::CharacterFunctions::isDigit(t[i + 1]) || t[i + 1] == '-'))) { --semi; ++i; }
+    const juce::String oct = t.substring(i);
+    if (oct.isEmpty() || ! oct.retainCharacters("-0123456789").equalsIgnoreCase(oct)) return -1;
+    const int n = (oct.getIntValue() + 1) * 12 + semi;
+    return (n >= 0 && n <= 127) ? n : -1;
+}
+
+// Load a multisample FOLDER (WAVs named by note) into one slot. Also loads the zone nearest
+// middle C into the slot's MAIN buffer (waveform display + a sane fallback), and RETIRES the
+// previous zone set instead of freeing it (fading voices may still hold pointers into it).
+bool DrumChannel::loadMultisample(int slot, const juce::File& folder)
+{
+    if (slot < 0 || slot >= NUM_SLOTS || ! folder.isDirectory()) return false;
+    const double hostRate = engineOS > 0 ? sr / (double) engineOS : sr;
+    auto set = std::make_shared<MsSet>();
+    set->folder = folder.getFullPathName();
+    for (const auto& f : folder.findChildFiles(juce::File::findFiles, false, "*.wav;*.aif;*.aiff;*.flac"))
+    {
+        const int root = noteNameToMidi(f.getFileNameWithoutExtension());
+        if (root < 0) continue;
+        juce::AudioBuffer<float> buf;
+        if (! sampleFileCache().get(f, hostRate, buf) || buf.getNumSamples() < 64) continue;
+        set->zones.push_back({});
+        set->zones.back().buf = std::move(buf);
+        set->zones.back().root = root;
+    }
+    if (set->zones.empty()) return false;
+    std::sort(set->zones.begin(), set->zones.end(), [](const MsZone& a, const MsZone& b){ return a.root < b.root; });
+    // main buffer = the zone nearest middle C (display + non-zone paths)
+    int best = 0;
+    for (int i = 1; i < (int) set->zones.size(); ++i)
+        if (std::abs(set->zones[i].root - 60) < std::abs(set->zones[best].root - 60)) best = i;
+    fadeOutVoices(retrigFadeSec());   // fading voices keep the OLD set (graveyard below)
+    {
+        const juce::ScopedLock sl2(sampleLock);
+        slotSample[slot].original = set->zones[(size_t) best].buf;   // copy
+        for (auto& v : voices) v.playHead = -1.0;
+    }
+    slotSample[slot].usingUser = true;
+    slotSample[slot].file = folder;   // the FOLDER names the instrument
+    slotSample[slot].loadedAtRate = hostRate;
+    updateStretch(slot);
+    msSetOld[slot] = msSet[slot];     // graveyard: old pointers stay valid through the fade
+    msSet[slot] = set;
+    return true;
 }
 
 // Rebuild slotSample[slot].buf from its .original at slots[slot].smpStretch (pitch-preserving time-stretch).
@@ -1526,6 +1592,17 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         sv.grNoteIdx = 0;                          // chord/scale note cycling restarts (identical-hits rule)
         for (auto& gr : sv.grains) { gr.age = 0; gr.len = 0; }   // stale grains from the last note die
         sv.keySemis = 0.0f;
+        sv.msBuf = nullptr; sv.msSemiAdj = 0.0f;   // [2026-07-18] multisample zone re-picked per hit
+        if (sl.engine == SrcSample && msSet[s] != nullptr && ! msSet[s]->zones.empty())
+        {   // nearest zone to the played note (steps/roll: C4 + step pitch; keyDown re-picks below)
+            const auto& zs = msSet[s]->zones;
+            const int want = juce::jlimit(0, 127, 60 + juce::roundToInt(pitchSemis));
+            int best = 0;
+            for (int zi = 1; zi < (int) zs.size(); ++zi)
+                if (std::abs(zs[zi].root - want) < std::abs(zs[best].root - want)) best = zi;
+            sv.msBuf = &zs[(size_t) best].buf;
+            sv.msSemiAdj = (float)(60 - zs[(size_t) best].root);
+        }
         // TEST on a PIANO-ROLL channel: the block config is C4-absolute (slotBaseHz), so play
         // each pitched slot at its own Base Freq knob via keySemis (user: "TEST should use the
         // Base Freq knob"). Step channels already use the knob - knobBase is a no-op there.
@@ -1879,6 +1956,20 @@ int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly,
                               // else varispeed relative to C3 (MIDI 60), slot 2 transposed.
                 sv.keySemis = sl.smpPreservePitch ? 0.0f
                             : (float)(midiNote - 60 - (s == 1 ? slot2Down : 0));
+                // [2026-07-18] MULTISAMPLE: re-pick the zone from the REAL pressed note (trigger
+                // guessed from step pitch = 0 for keys). Preserve ON = nearest zone at ITS OWN
+                // pitch (multisampled drums); OFF = nearest zone + tiny varispeed to the note.
+                if (msSet[s] != nullptr && ! msSet[s]->zones.empty())
+                {
+                    const auto& zs = msSet[s]->zones;
+                    const int want = juce::jlimit(0, 127, midiNote - (s == 1 ? slot2Down : 0));
+                    int best = 0;
+                    for (int zi = 1; zi < (int) zs.size(); ++zi)
+                        if (std::abs(zs[zi].root - want) < std::abs(zs[best].root - want)) best = zi;
+                    sv.msBuf = &zs[(size_t) best].buf;
+                    sv.msSemiAdj = sl.smpPreservePitch ? 0.0f
+                                 : (float)(60 - zs[(size_t) best].root);
+                }
                 continue;
             case SrcNoise:    sv.keySemis = 0.0f; continue;   // noise is unpitched - just play it
             default: sv.keyMute = true; continue;             // legacy engines: not playable by keys
@@ -2214,6 +2305,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         bool   smpPreserve = true;   // Sample: ignore step/draw/key/env pitch (play at the sample's own pitch)
         const juce::AudioBuffer<float>* buf = nullptr; int srcLen = 0, regLo = 0, regHi = 0, slices = 1;  // per-slot sample
         bool   loopOn = false; double loopLoF = 0.0, loopHiF = 0.0, loopXfF = 0.0;   // [2026-07-18] sample LOOP (source frames)
+        float  loopLoFrac = 0.5f, loopHiFrac = 0.95f;   // fractions (multisample zones size their own frames)
         float  smpGain = 1.0f;   // sample output boost
         // -- section levels + fold (legacy unified-engine extras) --
         float  oscFold = 0, oscLevel = 1, noiseLevel = 0;
@@ -2518,6 +2610,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 // [2026-07-18] SAMPLE LOOP: region in source frames, clamped inside the playing
                 // range; crossfade = a fixed 25 ms of source audio (disclosed in the tooltip).
                 c.loopOn = sl.smpLoopOn && c.srcLen > 64;
+                c.loopLoFrac = sl.smpLoopLo; c.loopHiFrac = sl.smpLoopHi;
                 if (c.loopOn)
                 {
                     c.loopLoF = juce::jlimit((double) c.regLo, (double) c.regHi - 64.0, (double) sl.smpLoopLo * c.srcLen);
@@ -3523,9 +3616,27 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         // (smpEnvOn), the AHD env shapes the sample too (fade-in / tame a long tail).
                         // A per-step LENGTH gate applies the gated env even when the opt-in sample env is off,
                         // so Length can shorten a sample too (holds full, then releases at the gate).
-                        // [2026-07-18] LOOP engages on HELD/GATED notes only; it upgrades the sample
-                        // to the FULL synth envelope contract (sustain holds, release fades) - the
-                        // whole point of looping. One-shot steps keep the legacy path bit-identical.
+                        // [2026-07-18] MULTISAMPLE: this voice may play its ZONE buffer instead of
+                        // the slot's main one (zone = full-range; trim regions apply to plain
+                        // samples only; the loop travels as FRACTIONS so it fits every zone).
+                        const juce::AudioBuffer<float>* sbuf = c.buf;
+                        if (sv.msBuf != nullptr && sv.msBuf->getNumSamples() > 64) sbuf = sv.msBuf;
+                        if (sbuf == nullptr || sbuf->getNumSamples() == 0) { sv.smpHead += c.speed; break; }
+                        const int  sLen = sbuf->getNumSamples();
+                        const int  sCh  = sbuf->getNumChannels();
+                        const bool ms   = (sbuf == sv.msBuf && sbuf != c.buf);
+                        const int  regLoV = ms ? 0 : c.regLo;
+                        const int  regHiV = ms ? sLen : c.regHi;
+                        double lLo = c.loopLoF, lHi = c.loopHiF, lXf = c.loopXfF;
+                        if (ms && c.loopOn)
+                        {
+                            lLo = juce::jlimit(0.0, (double) sLen - 64.0, (double) c.loopLoFrac * sLen);
+                            lHi = juce::jlimit(lLo + 64.0, (double) sLen, (double) c.loopHiFrac * sLen);
+                            lXf = juce::jmin(lXf, (lHi - lLo) * 0.5);
+                        }
+                        // LOOP engages on HELD/GATED notes only; it upgrades the sample to the FULL
+                        // synth envelope contract (sustain holds, release fades) - the whole point
+                        // of looping. One-shot steps keep the legacy path bit-identical.
                         const bool loopEngaged = c.loopOn && (v.isKey || v.gateLen > 0);
                         if (loopEngaged)
                             env = keyAdsr(t, v.isKey ? v.keyOff : v.gateLen, c.atk, c.hold, c.dec, c.sustain, c.release);
@@ -3535,15 +3646,15 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         double headXf = -1.0; float xfW = 0.0f;   // crossfade partner read + its weight
                         if (loopEngaged)
                         {
-                            const double lLen = juce::jmax(64.0, c.loopHiF - c.loopLoF);
-                            if (head > c.loopHiF)                 // attack played once -> cycle the loop
-                                head = c.loopLoF + std::fmod(head - c.loopLoF, lLen);
-                            const double p = head - c.loopLoF;
-                            if (p >= 0.0 && c.loopXfF > 1.0 && p > lLen - c.loopXfF
-                                && c.loopLoF - c.loopXfF >= (double) c.regLo)
+                            const double lLen = juce::jmax(64.0, lHi - lLo);
+                            if (head > lHi)                       // attack played once -> cycle the loop
+                                head = lLo + std::fmod(head - lLo, lLen);
+                            const double p = head - lLo;
+                            if (p >= 0.0 && lXf > 1.0 && p > lLen - lXf
+                                && lLo - lXf >= (double) regLoV)
                             {   // approaching the wrap: blend IN the material just before the loop
-                                headXf = head - lLen;             // lands exactly on loopLo at the wrap
-                                xfW = juce::jlimit(0.0f, 1.0f, (float)((p - (lLen - c.loopXfF)) / c.loopXfF));
+                                headXf = head - lLen;             // lands exactly on the loop start at the wrap
+                                xfW = juce::jlimit(0.0f, 1.0f, (float)((p - (lLen - lXf)) / lXf));
                             }
                         }
                         const long fin = (long) (0.003 * sr);
@@ -3551,23 +3662,18 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         // Fade the last ~10 ms by POSITION (source frames left before the end), so a pitched-DOWN /
                         // varispeed sample reads ALL the way to its end instead of being cut at the natural-speed length.
                         const double foutSrc = juce::jmax(1.0, 0.010 * sr * juce::jmax(0.05, c.speed));
-                        const double toEnd   = (double) c.regHi - head;
+                        const double toEnd   = (double) regHiV - head;
                         if (! loopEngaged && toEnd < foutSrc) env *= juce::jmax(0.0f, (float)(toEnd / foutSrc));
-                        // Read from THIS slot's own buffer + trim region (per-slot samples).
-                        const juce::AudioBuffer<float>* sbuf = c.buf;
-                        if (sbuf == nullptr || sbuf->getNumSamples() == 0) { sv.smpHead += c.speed; break; }
-                        const int sLen = sbuf->getNumSamples();
-                        const int sCh  = sbuf->getNumChannels();
                         // The sinc read at a fractional position (the loop crossfade reads twice).
                         auto readAt = [&](double hpos, float& oL, float& oR)
                         {
                             const int idx = (int) hpos;
                             oL = 0.0f; oR = 0.0f;
-                            if (idx < c.regLo || idx >= juce::jmin(c.regHi, sLen)) return;
+                            if (idx < regLoV || idx >= juce::jmin(regHiV, sLen)) return;
                             const float fr = (float)(hpos - idx);
                             int rIdx = idx;
                             const int dir = c.reverse ? -1 : 1;          // playback direction
-                            if (c.reverse) rIdx = juce::jlimit(0, sLen - 1, c.regLo + (c.regHi - 1 - idx));
+                            if (c.reverse) rIdx = juce::jlimit(0, sLen - 1, regLoV + (regHiV - 1 - idx));
                             const auto* srcA = sbuf->getReadPointer(0);
                             const auto* srcB = sbuf->getReadPointer(juce::jmin(1, sCh - 1));
                             // [2026-07-13 20:45] 8-tap windowed-SINC interpolation (replaced 4-point Hermite).
@@ -3597,9 +3703,11 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         double smpSemis = 0.0;
                         if (c.smpPEnvAmt != 0.0f) smpSemis += (double) c.smpPEnvAmt * pitchEnvShape(t, c.smpPEnvTime, c.smpPOffset);
                         const double keyMul  = (sv.keySemis != 0.0f) ? std::pow(2.0, (double) sv.keySemis / 12.0) : 1.0;
+                        const double msMul   = (sv.msBuf != nullptr && sv.msSemiAdj != 0.0f)
+                                               ? std::pow(2.0, (double) sv.msSemiAdj / 12.0) : 1.0;   // zone-root compensation
                         const double envPart = std::pow(2.0, smpSemis / 12.0) * (double) c.oscVibFac * (pe3Mul / keyMul);   // env + vib + LFO (no note pitch)
                         const double advance = c.smpPreserve ? (c.speed * envPart)                        // note pitch blocked
-                                                             : (c.speed * envPart * keyMul * vStepMul);   // + keys + step/draw
+                                                             : (c.speed * envPart * keyMul * vStepMul * msMul);   // + keys + step/draw + zone root
                         sv.smpHead += advance / (double) engineOS;
                         stereo = true;
                         break; }

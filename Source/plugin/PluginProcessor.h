@@ -199,6 +199,23 @@ public:
         selQ[h] = { t, v }; selQHead.store(n, std::memory_order_release);
     }
 
+    // [2026-07-18] MULTISAMPLE RECORDING TAP: while the wizard is open the audio thread mirrors
+    // the INPUT BUS (mono sum) into this ring BEFORE the output clear; the wizard reads behind
+    // the write cursor on the message thread (huge ring + reader lag = no tearing in practice).
+    std::atomic<bool>        msTapOn { false };
+    juce::AudioBuffer<float> msTapRing;                  // mono, ~8 s, sized in prepareToPlay
+    std::atomic<juce::int64> msTapWrite { 0 };           // total frames ever written
+    std::atomic<float>       msTapLevel { 0.0f };        // last block's input peak (wizard meter)
+    // Message-thread read of n frames ending BEHIND the write cursor (wrap-aware copy).
+    void readMsTap(juce::int64 from, float* dst, int n) const
+    {
+        const int rn = msTapRing.getNumSamples();
+        if (rn <= 0 || n <= 0) { if (dst) std::fill(dst, dst + juce::jmax(0, n), 0.0f); return; }
+        const float* r = msTapRing.getReadPointer(0);
+        for (int i = 0; i < n; ++i)
+        { juce::int64 p = from + i; dst[i] = p >= 0 ? r[(int)(p % (juce::int64) rn)] : 0.0f; }
+    }
+
     // MIDI-in monitor (drives the on-screen "MIDI" indicator). midiInCount bumps
     // for EVERY incoming message so the UI can tell whether MIDI reaches us at all.
     std::atomic<uint32_t> midiInCount { 0 };

@@ -22,6 +22,10 @@ juce::AudioProcessor::BusesProperties DrumSequencerProcessor::makeBuses()
     auto b = BusesProperties().withOutput("Main", juce::AudioChannelSet::stereo(), true);
     for (int i = 1; i <= NUM_AUX_OUTS; ++i)
         b = b.withOutput("Out " + juce::String(i), juce::AudioChannelSet::stereo(), false);
+    // [2026-07-18] OPTIONAL audio INPUT (default-disabled): the multisample RECORDING WIZARD's
+    // microphone/instrument feed. Standalone: the app's input device arrives here; DAW: enable
+    // the input/sidechain on the track. Disabled = zero change for every existing session.
+    b = b.withInput("Audio In", juce::AudioChannelSet::stereo(), false);
     return b;
 }
 
@@ -29,6 +33,13 @@ bool DrumSequencerProcessor::isBusesLayoutSupported(const BusesLayout& layouts) 
 {
     if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
         return false;
+    // input bus: disabled or mono/stereo both fine (the wizard mixes to mono anyway)
+    if (layouts.inputBuses.size() > 0)
+    {
+        const auto in = layouts.getChannelSet(true, 0);
+        if (! in.isDisabled() && in != juce::AudioChannelSet::mono() && in != juce::AudioChannelSet::stereo())
+            return false;
+    }
     for (int i = 1; i < layouts.outputBuses.size(); ++i) {
         const auto& set = layouts.outputBuses.getReference(i);
         if (! set.isDisabled() && set != juce::AudioChannelSet::stereo())
@@ -101,6 +112,8 @@ void DrumSequencerProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     currentSampleRate = sampleRate;
     currentBlockSize  = samplesPerBlock;
     loadMeasurer.reset(sampleRate, samplesPerBlock);   // [2026-07-14 01:50] CPU readout
+    msTapRing.setSize(1, juce::jmax(1024, (int)(sampleRate * 8.0)));   // [2026-07-18] wizard input tap
+    msTapRing.clear();
 
     // The synth engine runs at kEngineOS x the host rate (anti-aliasing); channels are prepared
     // at that higher rate + block size. The processor down-samples back to the host rate below.
@@ -189,6 +202,29 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
 {
     juce::ScopedNoDenormals noDenormals;
     juce::AudioProcessLoadMeasurer::ScopedTimer cpuTimer(loadMeasurer, audio.getNumSamples());   // [2026-07-14 01:50]
+    // [2026-07-18] MULTISAMPLE RECORDING TAP: mirror the INPUT bus into the ring BEFORE the
+    // output clear wipes it (the input aliases these channels). Off = zero cost.
+    if (msTapOn.load(std::memory_order_relaxed) && getBusCount(true) > 0)
+    {
+        auto in = getBusBuffer(audio, true, 0);
+        const int rn = msTapRing.getNumSamples();
+        if (rn > 0 && in.getNumChannels() > 0)
+        {
+            juce::int64 w = msTapWrite.load(std::memory_order_relaxed);
+            float pk = 0.0f;
+            const float* i0 = in.getReadPointer(0);
+            const float* i1 = in.getNumChannels() > 1 ? in.getReadPointer(1) : nullptr;
+            float* ring = msTapRing.getWritePointer(0);
+            for (int s = 0; s < audio.getNumSamples(); ++s)
+            {
+                const float v = i1 != nullptr ? 0.5f * (i0[s] + i1[s]) : i0[s];
+                ring[(int)(w % (juce::int64) rn)] = std::isfinite(v) ? v : 0.0f;
+                pk = juce::jmax(pk, std::abs(v)); ++w;
+            }
+            msTapWrite.store(w, std::memory_order_release);
+            msTapLevel.store(pk, std::memory_order_relaxed);
+        }
+    }
     audio.clear();
     processHeartbeat.fetch_add(1, std::memory_order_relaxed);   // editor watches this to detect a frozen host
 
@@ -1590,7 +1626,7 @@ void DrumSequencerProcessor::processReverb(juce::AudioBuffer<float>& audio, juce
     {
         preSec  = juce::jlimit(0.0, 1.2, (double) (busB ? mfx.reverbPreBarsB : mfx.reverbPreBars) * barS);
         decay01 = FDNReverb::decayForT60((float) ((busB ? mfx.reverbDecBarsB : mfx.reverbDecBars) * barS),
-                                         pRoom, juce::jlimit(0, 3, pMode));
+                                         pRoom, juce::jlimit(0, 4, pMode));
     }
 
     // Pre-delay gap before the tail (the dry transient is heard first - drums love it), and the
@@ -1630,7 +1666,7 @@ void DrumSequencerProcessor::processReverb(juce::AudioBuffer<float>& audio, juce
               decay01,                             // Decay -> feedback time (knob or bars-derived)
               0.35f,                               // damping LP (smooth, musical)
               juce::jlimit(0.0f, 1.0f, pWidth),    // Width
-              juce::jlimit(0, 3, pMode));          // Room/Hall/Plate/Shimmer voicing
+              juce::jlimit(0, 4, pMode));          // Room/Hall/Plate/Shimmer/Spring voicing
 
     // MAKE-UP: the FDN attenuates ~12 dB internally - bring the wet up to a usable range.
     const float wet = juce::jlimit(0.0f, 1.0f, pWet) * 5.0f;
@@ -2737,14 +2773,14 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
             m.delayTime     = (float)child.getProperty("delTime", 0.375f);
             m.delayFeedback = (float)child.getProperty("delFB",   0.3f);
             m.delayWet      = (float)child.getProperty("delWet",  0.3f);   // 0.3 = the old fixed return level
-            m.reverbMode    = juce::jlimit(0, 3, (int) child.getProperty("revMode", 1));   // default Hall = original
+            m.reverbMode    = juce::jlimit(0, 4, (int) child.getProperty("revMode", 1));   // default Hall = original
             m.delayMode     = juce::jlimit(0, 4, (int) child.getProperty("delMode", 0));   // default Tape = original
             m.reverbRoomB     = (float)child.getProperty("mRoomB", 0.5f);   // BUS B (defaults = a tight Room)
             m.reverbDampB     = (float)child.getProperty("mDampB", 0.5f);
             m.reverbWetB      = (float)child.getProperty("mRWetB", 0.4f);
             m.reverbPreDelayB = (float)child.getProperty("mRPreB", 0.0f);
             m.reverbWidthB    = (float)child.getProperty("mRWidB", 1.0f);
-            m.reverbModeB     = juce::jlimit(0, 3, (int) child.getProperty("revModeB", 0));
+            m.reverbModeB     = juce::jlimit(0, 4, (int) child.getProperty("revModeB", 0));
             m.delayModeB      = juce::jlimit(0, 4, (int) child.getProperty("dModeB", 0));
             m.delayTimeB      = (float)child.getProperty("dTimeB", 0.375f);
             m.delayFeedbackB  = (float)child.getProperty("dFbB",   0.3f);

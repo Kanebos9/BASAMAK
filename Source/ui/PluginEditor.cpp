@@ -5618,6 +5618,10 @@ static constexpr int ID_INIT_PRESET   = 9003;
 static constexpr int ID_INIT_MIX      = 9996;
 static constexpr int ID_REFRESH_SAMPLES = 9990;  // rescan the Samples folder so newly-added files appear in the dropdown
 static constexpr int ID_SHOW_SAMPLES    = 9989;  // reveal the Samples folder in Finder/Explorer
+static constexpr int MS_ID_BASE         = 4500;  // [2026-07-18] multisample folders: 4500 + index (below FACTORY_MIX_BASE)
+static constexpr int ID_REFRESH_MS      = 9988;  // rescan the Multisamples folder
+static constexpr int ID_SHOW_MS         = 9987;  // reveal the Multisamples folder
+static constexpr int ID_RECORD_MS       = 9986;  // open the multisample recording wizard
 static constexpr int ID_REFRESH_BANK    = 9995;  // rescan the Sound Bank folder
 static constexpr int ID_SHOW_BANK       = 9993;  // reveal the Sound Bank folder
 static constexpr int ID_BROWSE        = 10001;   // open the sound-browser window (outside the sample-id range)
@@ -6010,6 +6014,26 @@ void DrumSequencerEditor::addFolderToMenu(juce::PopupMenu& menu, const juce::Fil
     }
 }
 
+// [2026-07-18] MULTISAMPLE picker: each SUBFOLDER of ~/Documents/BASAMAK/Multisamples is one
+// instrument (WAVs inside named by note: "E1.wav", "C#3.wav", "40.wav"). Rebuilds msFolders.
+void DrumSequencerEditor::buildMsMenu(juce::PopupMenu& menu)
+{
+    msFolders.clear();
+    auto dirs = UserPaths::multisamples().findChildFiles(juce::File::findDirectories, false);
+    dirs.sort();
+    for (auto& d : dirs)
+    {
+        if (d.getNumberOfChildFiles(juce::File::findFiles, "*.wav;*.aif;*.aiff;*.flac") == 0) continue;
+        menu.addItem(MS_ID_BASE + msFolders.size(), d.getFileName());
+        msFolders.add(d);
+    }
+    if (msFolders.isEmpty()) menu.addItem(-1, "(no multisample folders yet)", false);
+    menu.addSeparator();
+    menu.addItem(ID_RECORD_MS,  "Record a multisample (mic / line in)...");   // [2026-07-18] the wizard
+    menu.addItem(ID_REFRESH_MS, "Refresh multisamples folder");
+    menu.addItem(ID_SHOW_MS,    "Show Folder");   // drop a folder of note-named WAVs in
+}
+
 juce::Array<DrumSoundGenerator::Type>
 DrumSequencerEditor::sortedVariants(const juce::String& category) const
 {
@@ -6039,6 +6063,9 @@ void DrumSequencerEditor::rebuildSampleMenu()
     addFolderToMenu(*root, getSamplesFolder()); // only what's actually in the folder
 
     root->addSeparator();
+    { juce::PopupMenu msSub; buildMsMenu(msSub);            // [2026-07-18] multisample instruments
+      root->addSubMenu("Multisamples", msSub); }
+    root->addSeparator();
     root->addItem(ID_REFRESH_SAMPLES, "Refresh samples folder");   // rescan so newly-added files show up
     root->addItem(ID_SHOW_SAMPLES,    "Show Folder");              // open the Samples folder to drop files in
 
@@ -6050,7 +6077,13 @@ void DrumSequencerEditor::refreshSampleSel()
 {
     auto& dch = proc.sequencer.channel(selectedChannel);
     const auto& ss = dch.slotSample[envTargetSlot()];   // the selected slot's sample
-    if (ss.usingUser)
+    if (auto ms = dch.msSet[envTargetSlot()]; ms != nullptr && ! ms->zones.empty())
+    {   // [2026-07-18] multisample loaded: the FOLDER names the instrument
+        comboSampleSel.setSelectedId(0, juce::dontSendNotification);
+        comboSampleSel.setTextWhenNothingSelected(ss.file.getFileName()
+            + " (" + juce::String((int) ms->zones.size()) + " zones)");
+    }
+    else if (ss.usingUser)
     {
         int sel = -1;
         for (int i = 0; i < sampleFiles.size(); ++i)
@@ -6071,7 +6104,18 @@ void DrumSequencerEditor::handleSampleSelChange()
     int id = comboSampleSel.getSelectedId();
     auto& dch = proc.sequencer.channel(selectedChannel);
 
-    if (id >= SAMPLE_ID_BASE && id < ID_INIT_MIX)
+    if (id >= MS_ID_BASE && id < MS_ID_BASE + msFolders.size())   // [2026-07-18] a multisample folder
+    {
+        dch.slots[envTargetSlot()].engine = DrumChannel::SrcSample;
+        if (dch.loadMultisample(envTargetSlot(), msFolders[id - MS_ID_BASE]))
+        { cacheWaveform(selectedChannel); refreshSampleSel(); refreshDetailPanel(); }
+        dch.markDspDirty();
+    }
+    else if (id == ID_RECORD_MS) msWizard.open(envTargetSlot());
+    else if (id == ID_REFRESH_MS) rebuildSampleMenu();
+    else if (id == ID_SHOW_MS)
+    { auto f = UserPaths::multisamples(); f.createDirectory(); f.revealToUser(); }
+    else if (id >= SAMPLE_ID_BASE && id < ID_INIT_MIX)
     {
         int idx = id - SAMPLE_ID_BASE;
         if (idx >= 0 && idx < sampleFiles.size())
@@ -9026,7 +9070,7 @@ void DrumSequencerEditor::setupComponents()
             masterBusB = ! masterBusB; refreshReverbModeHeader(); refreshDetailPanel(); return;
         }
         auto& m0 = proc.masterFX();
-        const int next = (juce::jlimit(0, 3, masterBusB ? m0.reverbModeB : m0.reverbMode) + 1) % 4;
+        const int next = (juce::jlimit(0, 4, masterBusB ? m0.reverbModeB : m0.reverbMode) + 1) % 5;   // [2026-07-18] + Spring
         for (auto& p : proc.sequencer.patterns) (masterBusB ? p.master.reverbModeB : p.master.reverbMode) = next;   // flavour = all patterns
         refreshReverbModeHeader();
         if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel);   // hear the new mode
@@ -9063,7 +9107,8 @@ void DrumSequencerEditor::setupComponents()
         + "- Room: boxy and fluttery, dark walls (it also naturally plays smaller - part of the character) - drums.\n"
         + "- Hall: smooth and balanced, the neutral one (the original sound - the default).\n"
         + "- Plate: dense, bright, metallic sheen (vintage studios used literal steel plates) - snares, keys.\n"
-        + "- Shimmer: every echo pass is pitched UP an octave - a glowing halo for pads and ambient.\n\n"
+        + "- Shimmer: every echo pass is pitched UP an octave - a glowing halo for pads and ambient.\n"
+        + "- Spring: a guitar-amp spring tank - short, boingy, warbly and near-mono. Guitars and basses.\n\n"
         + "One mode for the whole preset (all sends share one reverb engine); each sound picks how much "
         + "goes in with its Rev Send knob.");
     setupGroupHeader(hdrDelayG,    "Delay");
@@ -10075,7 +10120,7 @@ void DrumSequencerEditor::setupComponents()
             auto& m = proc.masterFX();
             const float t = FDNReverb::estimateT60(1.0f - (masterBusB ? m.reverbDampB : m.reverbDamp),
                                                    masterBusB ? m.reverbRoomB : m.reverbRoom,
-                                                   juce::jlimit(0, 3, masterBusB ? m.reverbModeB : m.reverbMode));
+                                                   juce::jlimit(0, 4, masterBusB ? m.reverbModeB : m.reverbMode));
             return "~" + (t < 9.95f ? juce::String(t, 1) : juce::String(juce::roundToInt(t))) + " s";
         };
         masterVF[10].format = [this](float v01) {   // [2026-07-15 16:00] % + the EXACT dB step per echo
@@ -10298,6 +10343,19 @@ void DrumSequencerEditor::setupComponents()
     }
     // The DRAW HARMONICS overlay (shared by both slots; a content child, closed by X / layoutContent).
     content.addChildComponent(harmEd);
+    // [2026-07-18] multisample recording wizard: opened from the Multisamples submenu; loads
+    // the finished folder straight onto the slot it was opened for.
+    content.addChildComponent(msWizard);
+    msWizard.proc = &proc;
+    msWizard.baseDir = UserPaths::multisamples();
+    msWizard.onDone = [this](int slot, const juce::File& dir)
+    {
+        auto& dch = proc.sequencer.channel(selectedChannel);
+        dch.slots[slot].engine = DrumChannel::SrcSample;
+        if (dch.loadMultisample(slot, dir))
+        { cacheWaveform(selectedChannel); rebuildSampleMenu(); refreshDetailPanel(); }
+        dch.markDspDirty();
+    };
     harmEd.onChange = [this] {
         auto& ch = proc.sequencer.channel(selectedChannel);
         auto& sl = ch.slots[juce::jlimit(0, DrumChannel::NUM_SLOTS - 1, harmEdSlot)];
@@ -10906,6 +10964,9 @@ void DrumSequencerEditor::rebuildSlotMenus()
         root->addItem(1, "None");
         juce::PopupMenu sampleSub;
         addFolderToMenu(sampleSub, getSamplesFolder());
+        sampleSub.addSeparator();
+        { juce::PopupMenu msSub; buildMsMenu(msSub);        // [2026-07-18] multisample instruments
+          sampleSub.addSubMenu("Multisamples", msSub); }
         sampleSub.addSeparator();
         sampleSub.addItem(ID_REFRESH_SAMPLES, "Refresh samples folder");   // rescan so newly-added files show up
         sampleSub.addItem(ID_SHOW_SAMPLES,    "Show Folder");              // open the Samples folder to drop files in
@@ -11763,7 +11824,19 @@ void DrumSequencerEditor::onSlotEngineChange(int box)
         syncBoxesFromSrcOn();   // restore this combo's display (the action isn't an engine)
         return;
     }
-    if (id >= SAMPLE_ID_BASE && id < ID_INIT_MIX)   // a specific sample file
+    if (id >= MS_ID_BASE && id < MS_ID_BASE + msFolders.size())   // [2026-07-18] a multisample folder
+    {
+        boxEngine[box] = DrumChannel::SrcSample; ch.slots[box].engine = DrumChannel::SrcSample;
+        if (ch.loadMultisample(box, msFolders[id - MS_ID_BASE])) cacheWaveform(selectedChannel);
+    }
+    else if (id == ID_RECORD_MS)
+    { msWizard.open(box); syncBoxesFromSrcOn(); return; }
+    else if (id == ID_REFRESH_MS)
+    { rebuildSampleMenu(); syncBoxesFromSrcOn(); return; }
+    else if (id == ID_SHOW_MS)
+    { auto f = UserPaths::multisamples(); f.createDirectory(); f.revealToUser();
+      syncBoxesFromSrcOn(); return; }
+    else if (id >= SAMPLE_ID_BASE && id < ID_INIT_MIX)   // a specific sample file
     {
         boxEngine[box] = DrumChannel::SrcSample; ch.slots[box].engine = DrumChannel::SrcSample;
         const int idx = id - SAMPLE_ID_BASE;
@@ -12452,10 +12525,10 @@ void DrumSequencerEditor::updateVisuals()
 // only spectral tool (the static EQ is gone). eqEditTarget is 1 or 2 (slot index + 1).
 void DrumSequencerEditor::refreshReverbModeHeader()
 {
-    static const char* mn[4] = { "ROOM", "HALL", "PLATE", "SHIMMER" };
+    static const char* mn[5] = { "ROOM", "HALL", "PLATE", "SHIMMER", "SPRING" };   // [2026-07-18] Spring = guitar-amp tank
     static const char* dn[5] = { "TAPE", "DIGITAL", "DUB", "ANALOG", "SHIMMER" };   // [2026-07-15] delay modes
     auto& m = proc.masterFX();
-    const int mode  = juce::jlimit(0, 3, masterBusB ? m.reverbModeB : m.reverbMode);
+    const int mode  = juce::jlimit(0, 4, masterBusB ? m.reverbModeB : m.reverbMode);
     const int dMode = juce::jlimit(0, 4, masterBusB ? m.delayModeB  : m.delayMode);
     hdrReverb.setText(juce::String("REVERB ") + (masterBusB ? "B" : "A") + " - " + mn[mode], juce::dontSendNotification);
     hdrDelayG.setText(juce::String("DELAY ")  + (masterBusB ? "B" : "A") + " - " + dn[dMode], juce::dontSendNotification);
@@ -13811,6 +13884,7 @@ void DrumSequencerEditor::layoutContent()
     // DRAW HARMONICS overlay: parked over the amp/pitch columns (opened from the Custom wave preview;
     // hidden again at the top of every layoutContent like the sound picker).
     harmEd.setBounds(cxAmp, colTop, ampEqW + gp + pitchW + gp + fxColW, colH);   // covers amp..FX (user-outlined area)
+    msWizard.setBounds(cxAmp, colTop + 40, 560, 250);   // [2026-07-18] wizard keeps its spot across relayouts (never auto-closed - a take may be running)
     lfoCurveEd.setBounds(cxAmp, colTop, ampEqW + gp + pitchW + gp + fxColW, colH);   // LFO draw window = the wavetable menu's footprint (user 2026-07-16)
     routePicker.setBounds(cxPitch, colTop + 24, pitchW + gp + fxColW, colH - 48);   // route source|target chooser (parked left of the faders)
 
