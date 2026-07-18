@@ -87,6 +87,7 @@ public:
         int   chainLoops[CHAIN_MAX] = {  2, 2, 2, 2, 2, 2, 2, 2 };
         int   chainLen = 0;
         int   chainStep = 0;
+        int  visitCount = 0;   // [1.5.0 r3] runtime: completions of THIS bar since its last fired jump (drives Stop/Next/Chain counts)
         float swing        = 0.0f; // 0 = straight .. 1 = max (MPC 50%..75%: off-step at 0.5+swing*0.25 of the pair)
         // MERGE: this pattern is glued onto the PREVIOUS one (shift+click its button). A run of merged
         // patterns = ONE multi-bar EDITING/VIEW unit (concat grid, sounds mirror the head). PLAYBACK
@@ -208,7 +209,7 @@ public:
         juce::AudioBuffer<float>* delaySendBusB  = nullptr);
 
     void reset();
-    void resetChains()           { for (auto& p : patterns) p.chainStep = 0; }   // chain positions back to the start
+    void resetChains()           { for (auto& p : patterns) { p.chainStep = 0; p.visitCount = 0; } }   // chain positions + per-bar visit counts back to the start
     void startStandalone()       { playing = true; finished = false; patternRepeatCount = 0; loopCount = 0;
                                    for (auto& b2 : barPlays) b2 = 0;
                                    resetChains();

@@ -357,40 +357,62 @@ void Sequencer::onBarComplete()
         patternChanged.store(true);
         return;
     }
-    // [1.5.0, user design] EVERY bar follows its OWN play mode - merged groups included. The old
-    // "group = forced head..end sequence, only the last bar's mode counts" override is GONE: the
-    // MERGE now writes per-bar chain DEFAULTS that reproduce it (each bar chains to the next x1,
-    // the end chains back to the head), and every bar can be re-pointed anywhere - loop itself,
-    // stop mid-group, or chain in/out of the group.
+    // [1.5.0 r3, after the user's "skips immediately" bug] EVERY bar follows its OWN play mode -
+    // but counts + flow work the way a musician reads them:
+    //   - a mode's LOOP COUNT counts completions of THIS BAR (per-bar visitCount, reset when the
+    //     bar's jump fires) - never a shared counter that other bars' jumps reset;
+    //   - while the count is NOT yet reached, a bar inside a MERGED GROUP keeps the GROUP FLOWING
+    //     (next bar; end -> head) instead of repeating itself - so "chain to P3 after 2 loops" on
+    //     a group bar means the group passes twice, THEN leaves. Outside a group the unmet bar
+    //     simply plays again (the classic single-pattern chain).
+    //   - LoopForever = repeat THIS bar forever (the explicit self-loop - the flexibility).
+    //   - self-repeats are authored as chain entries TARGETING THE BAR ITSELF.
     auto& p = patterns[playPattern];
+    ++p.visitCount;
     const int target = juce::jmax(1, p.repeatTarget);
-    if (p.playMode == StopAfterN && patternRepeatCount >= target)
+    auto flowOn = [&]   // unmet count: keep the group moving (a single bar just plays again)
     {
-        finished = true;
-    }
-    else if (p.playMode == NextAfterN && patternRepeatCount >= target)
-    {
-        fadeOutPattern = playPattern;   // let the outgoing pattern's voices ring out (no hard-cut click)
-        playPattern = juce::jlimit(0, NUM_PATTERNS - 1, p.gotoPattern);   // exact bar, groups included
-        patternRepeatCount = 0;
-        finished = false;
-        patternChanged.store(true);   // editor follows playPattern if "Follow" is on
-    }
-    else if (p.playMode == Chain && p.chainLen > 0
-             && patternRepeatCount >= juce::jmax(1, p.chainLoops[p.chainStep % p.chainLen]))
-    {
-        // Advance through this bar's chain (cycling). Each entry has its OWN loop count (chainLoops):
-        // play this bar that many loops, then jump to chainSeq[step]. chainStep persists per visit.
-        const int tgt = juce::jlimit(0, NUM_PATTERNS - 1, p.chainSeq[p.chainStep % p.chainLen]);
-        p.chainStep = (p.chainStep + 1) % p.chainLen;
+        const int gH = groupHead(playPattern), gE = groupEnd(playPattern);
+        if (gH == gE) return;
         fadeOutPattern = playPattern;
-        playPattern = tgt;   // exact target bar - a middle group bar starts there and runs on (user rule)
-        patternRepeatCount = 0;
+        playPattern = (playPattern < gE) ? playPattern + 1 : gH;
         finished = false;
         patternChanged.store(true);
+    };
+    if (p.playMode == StopAfterN)
+    {
+        if (p.visitCount >= target) { finished = true; p.visitCount = 0; }
+        else flowOn();
     }
-    // LoopForever (or a count not reached yet): the bar simply plays again - the position already
-    // wrapped, no pattern change. A merged bar set to Loop repeats ITSELF (that's the flexibility).
+    else if (p.playMode == NextAfterN)
+    {
+        if (p.visitCount >= target)
+        {
+            fadeOutPattern = playPattern;   // let the outgoing pattern's voices ring out (no hard-cut click)
+            playPattern = juce::jlimit(0, NUM_PATTERNS - 1, p.gotoPattern);   // exact bar, groups included
+            p.visitCount = 0;
+            finished = false;
+            patternChanged.store(true);   // editor follows playPattern if "Follow" is on
+        }
+        else flowOn();
+    }
+    else if (p.playMode == Chain && p.chainLen > 0)
+    {
+        if (p.visitCount >= juce::jmax(1, p.chainLoops[p.chainStep % p.chainLen]))
+        {
+            // Advance through this bar's chain (cycling). Each entry: once THIS bar has completed
+            // its count, jump to chainSeq[step] (which may be the bar itself = an authored repeat).
+            const int tgt = juce::jlimit(0, NUM_PATTERNS - 1, p.chainSeq[p.chainStep % p.chainLen]);
+            p.chainStep = (p.chainStep + 1) % p.chainLen;
+            p.visitCount = 0;
+            fadeOutPattern = playPattern;
+            playPattern = tgt;   // exact target bar - a middle group bar starts there and runs on (user rule)
+            finished = false;
+            patternChanged.store(true);
+        }
+        else flowOn();
+    }
+    // LoopForever: the bar simply plays again - the position already wrapped, no pattern change.
 }
 
 //==============================================================================

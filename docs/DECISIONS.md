@@ -212,6 +212,8 @@
 
 | 148 | Waveguide engine deleted completely same-day (user order); engine id 9 reserved forever, readSlots maps stray eng 9 -> None; the 4 wind sounds + WaveguideTest died with it | never in a release = zero compat debt, and it lost to the Oscillator on sound; a one-line load guard is hygiene, not legacy | user decision; the eng-9 guard = my call |
 
+| 149 | Per-bar counts = VISIT counts with GROUP-FLOW fallback [1.5.0 r3]: unmet Stop/Next/Chain on a group bar advances the group; chain-add replaces an untouched merge default; counted self-repeats = self-targeting chain entries | the shared counter + invisible default made every group chain fire instantly (user bug); "after N loops" must read as the musician reads it | user bug report; semantics + fallback design mine, test-locked |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

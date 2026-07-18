@@ -2789,7 +2789,7 @@ private:
                 if (on) { g.setColour(juce::Colour(0xffd9a13d).withAlpha(0.25f)); g.fillRoundedRectangle(rr.reduced(2.0f, 1.5f), 3.0f); }
                 g.setColour(on ? juce::Colour(0xffffe9b0) : juce::Colour(0xff6a7290));
                 g.setFont(juce::Font(10.5f, on ? juce::Font::bold : juce::Font::plain));
-                g.drawText(txt, rr, juce::Justification::centred, false);
+                g.drawFittedText(txt, rr.toNearestInt(), juce::Justification::centred, 1, 0.6f);   // squeeze, never clip ("STEREO" was clipping to "STERE")
             };
             row(top, "STEREO", ! mono);
             row(bot, "MONO",   mono);

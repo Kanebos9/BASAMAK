@@ -8447,10 +8447,19 @@ void DrumSequencerEditor::setupComponents()
                 {   const int b = (r - 400000) / 100, pat = (r - 400000) % 100;
                     askLoopCount("Play Pattern " + juce::String(pat + 1) + " after how many loops", 2,
                         [this, b, pat](int n) {
-                            auto& q = proc.sequencer.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, b)];
+                            auto& sq3 = proc.sequencer;
+                            const int b2 = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, b);
+                            auto& q = sq3.patterns[b2];
+                            // [1.5.0 r3] the MERGE writes an invisible default entry ("next x1") -
+                            // appending AFTER it queued the user's chain behind it ("skips to P2
+                            // immediately, doesn't matter what I set"). An untouched default is
+                            // REPLACED by the user's explicit chain.
+                            const int defTgt = (b2 < sq3.groupEnd(b2)) ? b2 + 1 : sq3.groupHead(b2);
+                            if (q.chainLen == 1 && q.chainLoops[0] == 1 && q.chainSeq[0] == defTgt)
+                            { q.chainLen = 0; q.chainStep = 0; }
                             if (q.chainLen < Sequencer::CHAIN_MAX) {
                                 q.chainSeq[q.chainLen] = pat; q.chainLoops[q.chainLen] = n;
-                                ++q.chainLen; q.playMode = Sequencer::Chain; }
+                                ++q.chainLen; q.playMode = Sequencer::Chain; q.visitCount = 0; }
                             refreshPatternOptions(); });
                     return;
                 }
@@ -10629,10 +10638,12 @@ void DrumSequencerEditor::setupComponents()
                         "pitched slot's Base Freq as the 0-point; Scale slots export their full voicing.");
     patModeBtn.setTooltip("What happens after a pattern finishes: loop forever, stop after N loops, "
         "or CHAIN to another pattern (each chain entry = a target + how many loops first).\n\n"
+        "- 'After N loops' counts plays of THAT bar; until the count is reached, a MERGED group "
+        "KEEPS FLOWING (next bar, last back to first) - so 'chain to P3 after 2 loops' on a group "
+        "bar = the group passes twice, THEN leaves.\n"
         "- In a MERGED group, EVERY bar has its own rows here (P4: Loop / P4: Stop / P4: Chain...): "
-        "a bar can repeat itself, stop mid-group, or chain anywhere - in or out of the group.\n"
-        "- Merging defaults each bar to chain-to-next and the last back to the first (= the group "
-        "loops like before) - change any bar to reshape the flow.\n"
+        "Loop = that bar repeats ITSELF forever; chain a bar to ITSELF for counted repeats.\n"
+        "- Adding a chain replaces the merge's automatic chain-to-next default.\n"
         "- Loop conditions count per BAR: 'every 2nd loop' = every 2nd play of that bar.\n"
         "- While RECORDING, the group always plays first-to-last (bar modes pause).");
 
