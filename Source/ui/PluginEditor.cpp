@@ -5469,6 +5469,19 @@ void WaveformDisplay::paint(juce::Graphics& g)
         g.drawVerticalLine((int) px, in.getY(), in.getBottom());
     }
 
+    // [2026-07-18] LOOP region (cyan): the sustained cycle while a note is held. SHIFT+drag edits it.
+    if (loopOn)
+    {
+        const float x0 = in.getX() + loopLo * W, x1 = in.getX() + loopHi * W;
+        g.setColour(juce::Colour(0x2835c0ff));
+        g.fillRect(juce::Rectangle<float>(x0, in.getY(), juce::jmax(2.0f, x1 - x0), in.getHeight()));
+        g.setColour(juce::Colour(0xff35c0ff));
+        g.drawVerticalLine((int) x0, in.getY(), in.getBottom());
+        g.drawVerticalLine((int) x1, in.getY(), in.getBottom());
+        g.setFont(juce::Font(8.0f, juce::Font::bold));
+        g.drawText("LOOP", (int) x0 + 2, (int) in.getY(), 34, 9, juce::Justification::centredLeft, false);
+    }
+
     // Audio-file drop highlight.
     if (fileDragOver)
     {
@@ -5490,6 +5503,15 @@ void WaveformDisplay::filesDropped(const juce::StringArray& files, int, int)
 
 void WaveformDisplay::mouseDown(const juce::MouseEvent& e)
 {
+    // [2026-07-18] SHIFT+drag = edit the LOOP region (cyan) while Loop is on.
+    if (loopOn && e.mods.isShiftDown())
+    {
+        loopDragging = true;
+        dragAnchor = juce::jlimit(0.0f, 1.0f, (float) e.position.x / (float) juce::jmax(1, getWidth()));
+        loopLo = loopHi = dragAnchor;
+        repaint();
+        return;
+    }
     if (!selEnabled) return;
     auto in = getLocalBounds().toFloat().reduced(2.0f);
     const float x = juce::jlimit(0.0f, 1.0f, (e.position.x - in.getX()) / in.getWidth());
@@ -5500,6 +5522,13 @@ void WaveformDisplay::mouseDown(const juce::MouseEvent& e)
 
 void WaveformDisplay::mouseDrag(const juce::MouseEvent& e)
 {
+    if (loopDragging)
+    {
+        const float f = juce::jlimit(0.0f, 1.0f, (float) e.position.x / (float) juce::jmax(1, getWidth()));
+        loopLo = juce::jmin(dragAnchor, f); loopHi = juce::jmax(dragAnchor, f);
+        repaint();
+        return;
+    }
     if (!selEnabled || dragIdx < 0) return;
     auto in = getLocalBounds().toFloat().reduced(2.0f);
     const float x = juce::jlimit(0.0f, 1.0f, (e.position.x - in.getX()) / in.getWidth());
@@ -5510,6 +5539,14 @@ void WaveformDisplay::mouseDrag(const juce::MouseEvent& e)
 
 void WaveformDisplay::mouseUp(const juce::MouseEvent&)
 {
+    if (loopDragging)
+    {
+        loopDragging = false;
+        if (loopHi - loopLo < 0.01f) { loopLo = 0.5f; loopHi = 0.95f; }   // a click = too small, keep sane
+        if (onLoopChange) onLoopChange(loopLo, loopHi);
+        repaint();
+        return;
+    }
     if (dragIdx < 0) return;
     if (regHi[dragIdx] - regLo[dragIdx] < 0.01f) regN = juce::jmax(0, regN - 1);   // discard a tiny region
     dragIdx = -1;
@@ -6302,7 +6339,8 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         h = mix(h, f(sl.physFreq)); h = mix(h, f(sl.physTone)); h = mix(h, f(sl.physMaterial)); h = mix(h, f(sl.physPosition)); h = mix(h, f(sl.physPEnvAmt)); h = mix(h, f(sl.physPEnvTime)); h = mix(h, f(sl.physPOffset)); h = mix(h, f(sl.physStiff)); h = mix(h, sl.physExcite); h = mix(h, f(sl.grainPos)); h = mix(h, f(sl.grainSize)); h = mix(h, f(sl.grainDens)); h = mix(h, f(sl.grainSpray)); h = mix(h, f(sl.grainPitch));
         h = mix(h, f(sl.smpSpeed)); h = mix(h, f(sl.smpCrush)); h = mix(h, f(sl.smpPitch)); h = mix(h, f(sl.smpPEnvAmt)); h = mix(h, f(sl.smpPEnvTime)); h = mix(h, f(sl.smpPOffset)); h = mix(h, sl.smpReverse ? 1 : 0); h = mix(h, sl.smpUseRegion ? 1 : 0);
         h = mix(h, f(sl.smpStart)); h = mix(h, f(sl.smpEnd)); h = mix(h, sl.smpSlices); h = mix(h, f(sl.smpStretch)); h = mix(h, f(sl.smpGain));
-        h = mix(h, sl.smpEnvOn ? 1 : 0); h = mix(h, sl.smpPreservePitch ? 1 : 0); h = mix(h, sl.fmEnvFollow ? 1 : 0); h = mix(h, f(sl.modalMorph));
+        h = mix(h, sl.smpEnvOn ? 1 : 0); h = mix(h, sl.smpPreservePitch ? 1 : 0);
+        h = mix(h, sl.smpLoopOn ? 1 : 0); h = mix(h, f(sl.smpLoopLo)); h = mix(h, f(sl.smpLoopHi));   // [2026-07-18] LOOP h = mix(h, sl.fmEnvFollow ? 1 : 0); h = mix(h, f(sl.modalMorph));
         h = mix(h, sl.smpRegN); for (int r = 0; r < DrumChannel::Slot::MAXREG; ++r) { h = mix(h, f(sl.smpRegLo[r])); h = mix(h, f(sl.smpRegHi[r])); }
         h = mix(h, (juce::int64) c.slotSample[b].file.getFullPathName().hashCode64());   // this slot's sample
         h = mix(h, f(sl.oscFold)); h = mix(h, f(sl.oscLevel)); h = mix(h, f(sl.noiseLevel));
@@ -10428,6 +10466,31 @@ void DrumSequencerEditor::setupComponents()
     for (int b = 0; b < DrumChannel::NUM_SLOTS; ++b)
     {
         content.addAndMakeVisible(waveform[b]);
+        // [2026-07-18] sample LOOP toggle + the cyan region's write-back
+        content.addAndMakeVisible(lblSmpLoop[b]);
+        lblSmpLoop[b].setText("Loop", juce::dontSendNotification);
+        lblSmpLoop[b].setFont(juce::Font(11.5f)); lblSmpLoop[b].setColour(juce::Label::textColourId, juce::Colours::lightgrey);
+        lblSmpLoop[b].setMinimumHorizontalScale(0.8f);
+        content.addAndMakeVisible(swSmpLoop[b]);
+        swSmpLoop[b].onClick = [this, b] {
+            if (ignoreKnobCallbacks) return;
+            auto& sl = proc.sequencer.channel(selectedChannel).slots[b];
+            sl.smpLoopOn = swSmpLoop[b].getToggleState();
+            waveform[b].setLoop(sl.smpLoopOn, sl.smpLoopLo, sl.smpLoopHi);
+            proc.sequencer.channel(selectedChannel).markDspDirty();
+        };
+        swSmpLoop[b].setTooltip("LOOP: while a note is HELD (keys / gated piano-roll notes), playback CYCLES the "
+                                "cyan region with a fixed 25 ms crossfade - a short sample sustains like an "
+                                "instrument.\n\n"
+                                "- SHIFT+DRAG on the waveform draws/moves the loop region.\n"
+                                "- The attack before the region plays ONCE, then the loop holds.\n"
+                                "- Raise SUSTAIN in the amp envelope or the held note still decays.\n"
+                                "- One-shot steps ignore the loop and play through as always.");
+        waveform[b].onLoopChange = [this, b](float lo, float hi) {
+            auto& sl = proc.sequencer.channel(selectedChannel).slots[b];
+            sl.smpLoopLo = lo; sl.smpLoopHi = hi;
+            proc.sequencer.channel(selectedChannel).markDspDirty();
+        };
         waveform[b].onRegionsChange = [this, b](int n, const float* lo, const float* hi) {
             auto& sl = proc.sequencer.channel(selectedChannel).slots[b];
             sl.smpRegN = juce::jlimit(0, DrumChannel::Slot::MAXREG, n);
@@ -12185,6 +12248,8 @@ void DrumSequencerEditor::refreshDetailPanel()
         const auto& sl = ch.slots[b];
         swSampleReverse[b].setToggleState(sl.smpReverse, juce::dontSendNotification);
         swSmpPreserve[b].setToggleState(sl.smpPreservePitch, juce::dontSendNotification);
+        swSmpLoop[b].setToggleState(sl.smpLoopOn, juce::dontSendNotification);
+        waveform[b].setLoop(sl.smpLoopOn, sl.smpLoopLo, sl.smpLoopHi);
         swUseRegion[b].setToggleState(sl.smpUseRegion, juce::dontSendNotification);
         waveform[b].setSelectionEnabled(sl.smpUseRegion);
         waveform[b].setRegions(sl.smpRegN, sl.smpRegLo, sl.smpRegHi);
@@ -13603,6 +13668,7 @@ void DrumSequencerEditor::layoutContent()
             lblUseRegion[b].setVisible(false); swUseRegion[b].setVisible(false);
             lblSampleReverse[b].setVisible(false); swSampleReverse[b].setVisible(false);
             lblSmpPreserve[b].setVisible(false); swSmpPreserve[b].setVisible(false);
+            lblSmpLoop[b].setVisible(false); swSmpLoop[b].setVisible(false);
         }
 
         // Use NUM_SLOTS engine headers purely as box OUTLINES (empty text; the dropdown is the visible header).
@@ -13648,8 +13714,9 @@ void DrumSequencerEditor::layoutContent()
                     l.setBounds(tcx, yy, tcW, 11); sw.setBounds(tcx + (tcW - 28) / 2, yy + 12, 28, 14);
                 };
                 placeTog(lblUseRegion[b],     swUseRegion[b],     ty);
-                placeTog(lblSampleReverse[b], swSampleReverse[b], ty + 28);
-                placeTog(lblSmpPreserve[b],   swSmpPreserve[b],   ty + 56);   // bottom ~= sby+140, clears the 166px box
+                placeTog(lblSampleReverse[b], swSampleReverse[b], ty + 22);
+                placeTog(lblSmpPreserve[b],   swSmpPreserve[b],   ty + 44);
+                placeTog(lblSmpLoop[b],       swSmpLoop[b],       ty + 66);   // 4 toggles at 22px pitch fit the box
                 knobX = sbx[b] + tcW + 6; knobW = slotW - tcW - 6;   // knobs occupy the rest, right of the toggles
             }
             slotEd[b].place(knobX, knobTop, knobW, slotH - (knobTop - sby[b]) - 4);

@@ -1957,6 +1957,10 @@ public:
     { if (std::abs(frac - playhead) > 0.002f || (frac < 0.0f) != (playhead < 0.0f)) { playhead = frac; repaint(); } }
     // Called whenever the regions change (drag/clear). The editor writes them to the slot.
     std::function<void(int n, const float* lo, const float* hi)> onRegionsChange;
+    // [2026-07-18] SAMPLE LOOP: cyan region, edited by SHIFT+drag while Loop is on.
+    void setLoop(bool on, float lo, float hi)
+    { if (on != loopOn || lo != loopLo || hi != loopHi) { loopOn = on; loopLo = lo; loopHi = hi; repaint(); } }
+    std::function<void(float lo, float hi)> onLoopChange;
     // Drop an audio file on the waveform -> the editor loads it into this slot.
     std::function<void(const juce::File&)> onFileDropped;
 
@@ -1977,6 +1981,8 @@ private:
     float regLo[MAXREG] = {}, regHi[MAXREG] = {};
     float dragAnchor = 0.0f; int dragIdx = -1;   // the region being dragged out
     bool  selEnabled = false;
+    bool  loopOn = false; float loopLo = 0.5f, loopHi = 0.95f;   // [2026-07-18] loop region (cyan)
+    bool  loopDragging = false;
     float lengthSec = 0.0f;    // sample length (watermark)
     bool  reversed = false;    // draw a REV badge when the sample plays backwards
     float playhead = -1.0f;    // live play position (fraction; -1 = not playing)
@@ -2882,6 +2888,8 @@ private:
     juce::Label      lblSampleReverse[DrumChannel::NUM_SLOTS];
     ToggleSwitch     swSmpPreserve[DrumChannel::NUM_SLOTS];    // Sample: ignore step/draw/key pitch (default on)
     juce::Label      lblSmpPreserve[DrumChannel::NUM_SLOTS];
+    ToggleSwitch     swSmpLoop[DrumChannel::NUM_SLOTS];        // [2026-07-18] sample LOOP (held notes cycle the cyan region)
+    juce::Label      lblSmpLoop[DrumChannel::NUM_SLOTS];
     LearnableKnob    knobSpeed { "p0_ch0_speed", proc.midiLearn };
     juce::Label      lblSpeed;
     // Sample source: pitch offset + reverse (pitch/env/time reuse knobPitch/PEnvAmt/PEnvTime)

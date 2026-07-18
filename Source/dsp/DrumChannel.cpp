@@ -733,6 +733,8 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("sGn", s.smpGain, nullptr);
         st.setProperty("sEnv", s.smpEnvOn, nullptr);   // opt-in sample amp envelope
         st.setProperty("sPP", s.smpPreservePitch, nullptr);   // preserve pitch (ignore step/draw/key pitch)
+        st.setProperty("sLp", s.smpLoopOn ? 1 : 0, nullptr);   // [2026-07-18] sample LOOP
+        st.setProperty("sLl", s.smpLoopLo, nullptr); st.setProperty("sLh", s.smpLoopHi, nullptr);
         st.setProperty("sFile", slotSample[b].file.getFullPathName(), nullptr);   // per-slot sample (reloaded)
         st.setProperty("yFo", s.oscFold, nullptr); st.setProperty("yOL", s.oscLevel, nullptr);
         st.setProperty("yNL", s.noiseLevel, nullptr);
@@ -880,6 +882,8 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         s.smpGain = (float)st.getProperty("sGn", d.smpGain);
         s.smpEnvOn = (bool)st.getProperty("sEnv", d.smpEnvOn);
         s.smpPreservePitch = (bool)st.getProperty("sPP", d.smpPreservePitch);   // default true (old projects preserve pitch)
+        s.smpLoopOn = (int)st.getProperty("sLp", 0) != 0;   // [2026-07-18] sample LOOP
+        s.smpLoopLo = (float)st.getProperty("sLl", d.smpLoopLo); s.smpLoopHi = (float)st.getProperty("sLh", d.smpLoopHi);
         s.oscFold = (float)st.getProperty("yFo", d.oscFold); s.oscLevel = (float)st.getProperty("yOL", d.oscLevel);
         s.noiseLevel = (float)st.getProperty("yNL", d.noiseLevel);
         s.waveTable = (int)st.getProperty("wTb", d.waveTable); s.wavePos = (float)st.getProperty("wPs", d.wavePos);
@@ -1305,6 +1309,15 @@ float DrumChannel::getSamplePlayheadFrac(int slot) const
         if (v.active() && (newest < 0 || v.voiceSamples < newest)) { newest = v.voiceSamples; head = v.sv[slot].smpHead; }
     if (head < 0.0) return -1.0f;
     float frac = juce::jlimit(0.0f, 1.0f, (float)(head / (double) len));
+    // [2026-07-18] HONEST PLAYHEAD: the read head keeps advancing (silently) past the trim
+    // region's end - the marker used to sweep on to the END OF FILE while nothing sounded
+    // (user: "goes until the end of file"). Past the region = the marker dies with the sound.
+    if (slots[slot].smpUseRegion)
+    {
+        const float lo = slotSample[slot].curRegLo, hi = slotSample[slot].curRegHi;
+        if (frac > hi + 0.002f) return -1.0f;
+        frac = juce::jlimit(juce::jmin(lo, hi), juce::jmax(lo, hi), frac);
+    }
     if (slots[slot].smpReverse)   // the head advances forward; the READ position is mirrored in the region
         frac = juce::jlimit(0.0f, 1.0f, slotSample[slot].curRegLo + slotSample[slot].curRegHi - frac);
     return frac;
@@ -2200,6 +2213,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         bool   smpEnv = false;   // opt-in amp envelope on the sample (off = legacy full-length playback)
         bool   smpPreserve = true;   // Sample: ignore step/draw/key/env pitch (play at the sample's own pitch)
         const juce::AudioBuffer<float>* buf = nullptr; int srcLen = 0, regLo = 0, regHi = 0, slices = 1;  // per-slot sample
+        bool   loopOn = false; double loopLoF = 0.0, loopHiF = 0.0, loopXfF = 0.0;   // [2026-07-18] sample LOOP (source frames)
         float  smpGain = 1.0f;   // sample output boost
         // -- section levels + fold (legacy unified-engine extras) --
         float  oscFold = 0, oscLevel = 1, noiseLevel = 0;
@@ -2501,6 +2515,15 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                            ? juce::jlimit(0, c.srcLen - 1, (int)(slotSample[s].curRegLo * c.srcLen)) : 0;
                 c.regHi  = (sl.smpUseRegion && c.srcLen > 0)
                            ? juce::jlimit(1, c.srcLen, (int)(slotSample[s].curRegHi * c.srcLen)) : c.srcLen;
+                // [2026-07-18] SAMPLE LOOP: region in source frames, clamped inside the playing
+                // range; crossfade = a fixed 25 ms of source audio (disclosed in the tooltip).
+                c.loopOn = sl.smpLoopOn && c.srcLen > 64;
+                if (c.loopOn)
+                {
+                    c.loopLoF = juce::jlimit((double) c.regLo, (double) c.regHi - 64.0, (double) sl.smpLoopLo * c.srcLen);
+                    c.loopHiF = juce::jlimit(c.loopLoF + 64.0, (double) c.regHi, (double) sl.smpLoopHi * c.srcLen);
+                    c.loopXfF = juce::jmin(0.025 * sr / (double) engineOS, (c.loopHiF - c.loopLoF) * 0.5);
+                }
                 c.slices = 1;   // manual regions replace auto-slicing
                 c.smpGain = juce::jlimit(0.0f, 4.0f, sl.smpGain);
                 c.smpEnv  = sl.smpEnvOn;   // opt-in amp envelope (off = legacy full-length playback)
@@ -3500,38 +3523,72 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         // (smpEnvOn), the AHD env shapes the sample too (fade-in / tame a long tail).
                         // A per-step LENGTH gate applies the gated env even when the opt-in sample env is off,
                         // so Length can shorten a sample too (holds full, then releases at the gate).
-                        env = (c.smpEnv || sv.gateDec > 0.0f) ? ahdsEnv(t, c.atk, c.hold, sv.gateDec > 0.0f ? sv.gateDec : c.dec, c.sustain, c.release) : 1.0f;
-                        const double head = sv.smpHead;
+                        // [2026-07-18] LOOP engages on HELD/GATED notes only; it upgrades the sample
+                        // to the FULL synth envelope contract (sustain holds, release fades) - the
+                        // whole point of looping. One-shot steps keep the legacy path bit-identical.
+                        const bool loopEngaged = c.loopOn && (v.isKey || v.gateLen > 0);
+                        if (loopEngaged)
+                            env = keyAdsr(t, v.isKey ? v.keyOff : v.gateLen, c.atk, c.hold, c.dec, c.sustain, c.release);
+                        else
+                            env = (c.smpEnv || sv.gateDec > 0.0f) ? ahdsEnv(t, c.atk, c.hold, sv.gateDec > 0.0f ? sv.gateDec : c.dec, c.sustain, c.release) : 1.0f;
+                        double head = sv.smpHead;
+                        double headXf = -1.0; float xfW = 0.0f;   // crossfade partner read + its weight
+                        if (loopEngaged)
+                        {
+                            const double lLen = juce::jmax(64.0, c.loopHiF - c.loopLoF);
+                            if (head > c.loopHiF)                 // attack played once -> cycle the loop
+                                head = c.loopLoF + std::fmod(head - c.loopLoF, lLen);
+                            const double p = head - c.loopLoF;
+                            if (p >= 0.0 && c.loopXfF > 1.0 && p > lLen - c.loopXfF
+                                && c.loopLoF - c.loopXfF >= (double) c.regLo)
+                            {   // approaching the wrap: blend IN the material just before the loop
+                                headXf = head - lLen;             // lands exactly on loopLo at the wrap
+                                xfW = juce::jlimit(0.0f, 1.0f, (float)((p - (lLen - c.loopXfF)) / c.loopXfF));
+                            }
+                        }
                         const long fin = (long) (0.003 * sr);
                         if (fin > 0 && t < fin) env *= (float) t / (float) fin;
                         // Fade the last ~10 ms by POSITION (source frames left before the end), so a pitched-DOWN /
                         // varispeed sample reads ALL the way to its end instead of being cut at the natural-speed length.
                         const double foutSrc = juce::jmax(1.0, 0.010 * sr * juce::jmax(0.05, c.speed));
                         const double toEnd   = (double) c.regHi - head;
-                        if (toEnd < foutSrc) env *= juce::jmax(0.0f, (float)(toEnd / foutSrc));
-                        const int idx = (int) head;
+                        if (! loopEngaged && toEnd < foutSrc) env *= juce::jmax(0.0f, (float)(toEnd / foutSrc));
                         // Read from THIS slot's own buffer + trim region (per-slot samples).
                         const juce::AudioBuffer<float>* sbuf = c.buf;
                         if (sbuf == nullptr || sbuf->getNumSamples() == 0) { sv.smpHead += c.speed; break; }
                         const int sLen = sbuf->getNumSamples();
                         const int sCh  = sbuf->getNumChannels();
-                        if (idx >= c.regLo && idx < juce::jmin(c.regHi, sLen)) {
-                            const float fr = (float)(head - idx);
+                        // The sinc read at a fractional position (the loop crossfade reads twice).
+                        auto readAt = [&](double hpos, float& oL, float& oR)
+                        {
+                            const int idx = (int) hpos;
+                            oL = 0.0f; oR = 0.0f;
+                            if (idx < c.regLo || idx >= juce::jmin(c.regHi, sLen)) return;
+                            const float fr = (float)(hpos - idx);
                             int rIdx = idx;
                             const int dir = c.reverse ? -1 : 1;          // playback direction
                             if (c.reverse) rIdx = juce::jlimit(0, sLen - 1, c.regLo + (c.regHi - 1 - idx));
                             const auto* srcA = sbuf->getReadPointer(0);
                             const auto* srcB = sbuf->getReadPointer(juce::jmin(1, sCh - 1));
                             // [2026-07-13 20:45] 8-tap windowed-SINC interpolation (replaced 4-point Hermite).
-                            auto at = [&](const float* s, int k){ return s[juce::jlimit(0, sLen - 1, rIdx + dir * k)]; };
+                            auto at = [&](const float* s2, int k){ return s2[juce::jlimit(0, sLen - 1, rIdx + dir * k)]; };
                             const float* hp = gSincTable.t[juce::jlimit(0, SincTable::PHASES,
                                                                         (int) std::lround((double) fr * SincTable::PHASES))];
                             float accL = 0.0f, accR = 0.0f;
                             for (int j = 0; j < SincTable::TAPS; ++j)
                             { const float wj = hp[j]; accL += wj * at(srcA, j - (SincTable::HALF - 1)); accR += wj * at(srcB, j - (SincTable::HALF - 1)); }
-                            sL = accL; sR = accR;
-                            if (c.crushStep > 0.0f) { sL = std::round(sL / c.crushStep) * c.crushStep; sR = std::round(sR / c.crushStep) * c.crushStep; }
+                            oL = accL; oR = accR;
+                        };
+                        readAt(head, sL, sR);
+                        if (headXf >= 0.0 && xfW > 0.0f)
+                        {   // equal-power crossfade into the pre-loop material (click-free wrap)
+                            float xL = 0.0f, xR = 0.0f;
+                            readAt(headXf, xL, xR);
+                            const float gCur = std::cos(xfW * juce::MathConstants<float>::halfPi);
+                            const float gNew = std::sin(xfW * juce::MathConstants<float>::halfPi);
+                            sL = sL * gCur + xL * gNew; sR = sR * gCur + xR * gNew;
                         }
+                        if (c.crushStep > 0.0f) { sL = std::round(sL / c.crushStep) * c.crushStep; sR = std::round(sR / c.crushStep) * c.crushStep; }
                         sL *= env * c.smpGain; sR *= env * c.smpGain;   // sample output boost
                         // Static pitch (channel + slot) is baked into the buffer (SoundTouch). The pitch
                         // ENVELOPE (sample smpPEnv + the 4-dot pe3Mul), pitch LFO and vibrato ALWAYS apply.

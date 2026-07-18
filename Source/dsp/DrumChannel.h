@@ -573,6 +573,12 @@ public:
         int   smpSlices = 1;                    // 1 = whole; N = chop region into N slices, advance per hit
         float smpGain = 1.0f;                   // sample output boost (samples are quieter than the synth engines)
         bool  smpEnvOn = false;                 // OPT-IN amp envelope on the sample (off = play full length, legacy-identical)
+        // [2026-07-18] SAMPLE LOOP (the sampler-classic): while a note is HELD/GATED, playback
+        // cycles the loop region with a fixed 25 ms equal-power crossfade - the attack before
+        // the loop plays ONCE, then the sound sustains for as long as the gate is open and the
+        // envelope allows (raise Sustain!). One-shot steps play through unchanged.
+        bool  smpLoopOn = false;
+        float smpLoopLo = 0.5f, smpLoopHi = 0.95f;   // loop region (fractions of the file)
         bool  smpPreservePitch = true;          // Sample: IGNORE step/draw/key/env pitch (play at the sample's own pitch). Default ON.
                                          // (steps, piano roll, keys, slide) - always play the Base
                                          // Freq. Pitch env / vibrato / LFO still apply. Factory
