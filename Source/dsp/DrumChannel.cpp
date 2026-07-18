@@ -131,7 +131,8 @@ float       DrumChannel::wavetableSample(int table, float pos, float ph01)
 // percussion palette KS can't: bars, bells, glass, drumheads, plates, blocks.
 //==============================================================================
 namespace {
-struct ModalMaterial { const char* name; int n; float ratio[16]; float gain[16]; float decayMul[16]; };
+struct ModalMaterial { const char* name; int n; float ratio[16]; float gain[16]; float decayMul[16];
+                       bool fixedHz = false; };   // [2026-07-18] fixedHz: ratio[] holds ABSOLUTE Hz - the note does NOT retune the partials (Metal Cluster)
 // ratios/gains are approximations of real struck-object spectra (bar/bell/membrane/plate modes).
 static const ModalMaterial kModalMaterials[] = {
     { "Marimba", 4,
@@ -166,6 +167,15 @@ static const ModalMaterial kModalMaterials[] = {
       { 1.0f, 1.52f, 2.61f, 3.42f, 4.5f },
       { 1.0f, 0.85f, 0.6f, 0.4f, 0.26f },
       { 1.0f, 0.9f, 0.78f, 0.66f, 0.55f } },
+    { "Metal Cluster", 6,   // [2026-07-18] the 808-CYMBAL recipe: six FIXED inharmonic partials
+                            // (ABSOLUTE Hz - fixedHz true) that do NOT retune with the note; the
+                            // frozen beating grind IS the metal. Structure scales the whole cluster.
+                            // MUST stay LAST in this table (Morph "next material" = itself = no-op;
+                            // mixing Hz with ratios would be nonsense).
+      { 205.3f, 304.4f, 366.6f, 522.7f, 540.0f, 800.0f },
+      { 1.0f, 0.95f, 0.9f, 0.85f, 0.8f, 0.7f },
+      { 0.9f, 0.95f, 1.0f, 0.9f, 0.85f, 0.7f },
+      true },
 };
 static const int kNumModalMaterials = (int) (sizeof(kModalMaterials) / sizeof(kModalMaterials[0]));
 } // namespace
@@ -711,6 +721,9 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("grPo", s.grainPos, nullptr); st.setProperty("grSz", s.grainSize, nullptr);
         st.setProperty("grDn", s.grainDens, nullptr); st.setProperty("grSp", s.grainSpray, nullptr);
         st.setProperty("grPi", s.grainPitch, nullptr);   // GRANULAR
+        st.setProperty("wgEx", s.wgExcite, nullptr); st.setProperty("wgPr", s.wgPressure, nullptr);   // [2026-07-18] WAVEGUIDE
+        st.setProperty("wgBr", s.wgBreath, nullptr); st.setProperty("wgPo", s.wgPos, nullptr);
+        st.setProperty("wgBt", s.wgBright, nullptr);
         st.setProperty("pEA", s.physPEnvAmt, nullptr); st.setProperty("pET", s.physPEnvTime, nullptr); st.setProperty("pOf", s.physPOffset, nullptr);
         st.setProperty("sSp", s.smpSpeed, nullptr); st.setProperty("sCr", s.smpCrush, nullptr); st.setProperty("sPi", s.smpPitch, nullptr);
         st.setProperty("sEA", s.smpPEnvAmt, nullptr); st.setProperty("sET", s.smpPEnvTime, nullptr); st.setProperty("sOf", s.smpPOffset, nullptr);
@@ -727,7 +740,9 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("yFo", s.oscFold, nullptr); st.setProperty("yOL", s.oscLevel, nullptr);
         st.setProperty("yNL", s.noiseLevel, nullptr);
         st.setProperty("wTb", s.waveTable, nullptr); st.setProperty("wPs", s.wavePos, nullptr);  // wavetable
-        st.setProperty("oWp", s.oscWarp, nullptr);   // oscillator wave warp
+        st.setProperty("oWp", s.oscWarp, nullptr);   // oscillator wave warp (UI: Fold)
+        st.setProperty("oSy", s.oscSync, nullptr);   // [2026-07-18] shape trio: hard sync amount
+        st.setProperty("oBd", s.oscBend, nullptr);   // [2026-07-18] shape trio: phase-distortion (Bend) amount
         st.setProperty("mMa", s.modalMaterial, nullptr); st.setProperty("mDe", s.modalDecay, nullptr);   // modal
         st.setProperty("mTo", s.modalTone, nullptr); st.setProperty("mSt", s.modalStruct, nullptr);
         st.setProperty("mHi", s.modalHit, nullptr); st.setProperty("mDp", s.modalDamp, nullptr);
@@ -852,6 +867,9 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         s.grainPos = (float)st.getProperty("grPo", d.grainPos); s.grainSize = (float)st.getProperty("grSz", d.grainSize);
         s.grainDens = (float)st.getProperty("grDn", d.grainDens); s.grainSpray = (float)st.getProperty("grSp", d.grainSpray);
         s.grainPitch = (float)st.getProperty("grPi", d.grainPitch);
+        s.wgExcite = (int)st.getProperty("wgEx", d.wgExcite); s.wgPressure = (float)st.getProperty("wgPr", d.wgPressure);   // [2026-07-18] WAVEGUIDE
+        s.wgBreath = (float)st.getProperty("wgBr", d.wgBreath); s.wgPos = (float)st.getProperty("wgPo", d.wgPos);
+        s.wgBright = (float)st.getProperty("wgBt", d.wgBright);
         s.physPEnvAmt = (float)st.getProperty("pEA", d.physPEnvAmt); s.physPEnvTime = (float)st.getProperty("pET", d.physPEnvTime); s.physPOffset = (float)st.getProperty("pOf", d.physPOffset);
         s.smpSpeed = (float)st.getProperty("sSp", d.smpSpeed); s.smpCrush = (float)st.getProperty("sCr", d.smpCrush); s.smpPitch = (float)st.getProperty("sPi", d.smpPitch);
         s.smpPEnvAmt = (float)st.getProperty("sEA", d.smpPEnvAmt); s.smpPEnvTime = (float)st.getProperty("sET", d.smpPEnvTime); s.smpPOffset = (float)st.getProperty("sOf", d.smpPOffset);
@@ -872,6 +890,8 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         s.waveTable = (int)st.getProperty("wTb", d.waveTable); s.wavePos = (float)st.getProperty("wPs", d.wavePos);
         s.oscWarp = (float)st.getProperty("oWp", d.oscWarp);
         if (! st.hasProperty("v3")) s.oscWarp = 0.0f;   // pre-wavefold: drop the old phase-skew warp (different effect)
+        s.oscSync = (float)st.getProperty("oSy", d.oscSync);   // [2026-07-18] shape trio (old files -> 0 = off)
+        s.oscBend = (float)st.getProperty("oBd", d.oscBend);
         s.modalMaterial = (int)st.getProperty("mMa", d.modalMaterial); s.modalDecay = (float)st.getProperty("mDe", d.modalDecay);
         s.modalTone = (float)st.getProperty("mTo", d.modalTone); s.modalStruct = (float)st.getProperty("mSt", d.modalStruct);
         s.modalHit = (float)st.getProperty("mHi", d.modalHit); s.modalDamp = (float)st.getProperty("mDp", d.modalDamp);
@@ -1098,7 +1118,7 @@ void DrumChannel::ensureKsBuffers()
     if (ksReady.load(std::memory_order_acquire)) return;
     bool needs = false;
     for (auto& s : slots)
-        if (s.engine == SrcPhys) { needs = true; break; }
+        if (s.engine == SrcPhys || s.engine == SrcWguide) { needs = true; break; }   // [2026-07-18] Waveguide shares the KS lines
     if (! needs) return;
     for (auto& v : voices)
         for (auto& sv : v.sv)
@@ -1469,6 +1489,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
     // AFTER slot 1, for a layering flam/thickening. Slot 1 is the on-time anchor. 0 = bit-identical.
     const int slotOffsetSamples = (int) std::lround((double) humanizeAmt * 0.100 * (double) sr);   // 0..100 ms
 
+    bool resoTracked = false;   // [2026-07-18] Resonator channel FX: first pitched audible slot names the note
     for (int s = 0; s < NUM_SLOTS; ++s)
     {
         SlotVoice& sv = v.sv[s];
@@ -1501,7 +1522,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         // each pitched slot at its own Base Freq knob via keySemis (user: "TEST should use the
         // Base Freq knob"). Step channels already use the knob - knobBase is a no-op there.
         if (knobBase && drawMode
-            && (sl.engine == SrcOsc || sl.engine == SrcPhys || sl.engine == SrcModal))
+            && (sl.engine == SrcOsc || sl.engine == SrcPhys || sl.engine == SrcModal || sl.engine == SrcWguide))
         {
             const double own = (sl.engine == SrcPhys) ? (double) sl.physFreq : (double) sl.oscFreq;
             const double base = slotBaseHz(s, sl);
@@ -1572,7 +1593,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         // SCALE mode (diatonic harmonizer): the chord depends on the played NOTE, so compute this voice's
         // per-note diatonic offsets now (keySemis is 0 for step/draw hits; keyDown recomputes for held keys).
         for (int u = 0; u < UNI_MAX; ++u) sv.uniSemis[u] = 0.0f;
-        if (sl.scaleOn && (sl.engine == SrcOsc || sl.engine == SrcModal || sl.engine == SrcPhys || sl.engine == SrcGrain))
+        if (sl.scaleOn && (sl.engine == SrcOsc || sl.engine == SrcModal || sl.engine == SrcPhys || sl.engine == SrcGrain || sl.engine == SrcWguide))
         {
             const double baseF = slotBaseHz(s, sl);
             const int playedMidi = (int) std::lround(69.0 + 12.0 * std::log2(juce::jmax(1.0, baseF) / 440.0) + (double) pitchSemis);
@@ -1590,7 +1611,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         // identical and a "strum" would just comb-filter. uniDelay[0] stays 0 (the root leads).
         const float sAmt = strumOverride >= 0.0f ? strumOverride : strumAmt;   // per-note override (piano roll)
         if (sAmt > 0.001f && sl.scaleOn
-            && (sl.engine == SrcOsc || sl.engine == SrcModal || sl.engine == SrcPhys || sl.engine == SrcGrain))   // grain strums its cloud [2026-07-16]
+            && (sl.engine == SrcOsc || sl.engine == SrcModal || sl.engine == SrcPhys || sl.engine == SrcGrain || sl.engine == SrcWguide))   // grain strums its cloud; bores strum too [2026-07-18]
         {
             const int nStr = juce::jlimit(1, UNI_MAX, sl.scaleType >= 10 ? 6 : sl.scaleUnison);
             if (nStr > 1)
@@ -1608,6 +1629,17 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         }
         if (s == NUM_SLOTS - 1) { strumFlip = false; strumOverride = -1.0f; }   // one-shot flags: live sets them
                                                      // per strum; playback must never inherit stale values
+        // [2026-07-18] RESONATOR pitch tracking: the channel-FX Resonator tunes its comb to the
+        // NEWEST hit's fundamental (first pitched audible slot; includes the step/roll pitch and
+        // the key transpose - glide/pitch-env excursions deliberately not chased, disclosed).
+        if (! resoTracked && sl.weight > 0.001f
+            && (sl.engine == SrcOsc || sl.engine == SrcFM || sl.engine == SrcPhys
+                || sl.engine == SrcModal || sl.engine == SrcGrain || sl.engine == SrcWguide))
+        {
+            resoTracked = true;
+            resoTrackHz = (float) juce::jlimit(20.0, 8000.0,
+                slotBaseHz(s, sl) * std::pow(2.0, ((double) v.voicePitch + (double) sv.keySemis) / 12.0));
+        }
 
         // Sample slot: this hit plays the NEXT slice of THIS slot's own sample, from its slice start
         // (= region start when slicing is off). Each Sample slot has independent slices/region/buffer.
@@ -1646,7 +1678,11 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         for (auto& l : sv.ksLp) l = 0.0f;
         for (auto& row : sv.ksApSt) for (auto& a : row) a = 0.0f;
         const bool ksPluck = (ksReady.load(std::memory_order_acquire) && sl.engine == SrcPhys);
-        if (ksPluck) std::fill(sv.ksBuf.begin(), sv.ksBuf.end(), 0.0f);
+        // [2026-07-18] WAVEGUIDE: the bore starts SILENT (no pluck fill - it is continuously
+        // driven by the exciter); stale content from the last note is cleared the same way.
+        const bool wgInit  = (ksReady.load(std::memory_order_acquire) && sl.engine == SrcWguide);
+        if (wgInit) sv.wgLen = 0.0f;
+        if (ksPluck || wgInit) std::fill(sv.ksBuf.begin(), sv.ksBuf.end(), 0.0f);
         if (ksPluck)
         {
             const float ksFreq0 = (float) slotBaseHz(s, sl);
@@ -1756,6 +1792,10 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         if (v.keyOff  >= 0) v.keyOff  += legatoInherit;
         if (v.gateLen >  0) v.gateLen += legatoInherit;
     }
+    // [2026-07-18] Resonator fallback: an UNPITCHED channel (noise/sample) still names its note
+    // from the step/roll pitch relative to C4 - so "Wire Perc" style sounds track the sequence.
+    if (! resoTracked)
+        resoTrackHz = (float) juce::jlimit(20.0, 8000.0, 261.6255653 * std::pow(2.0, (double) v.voicePitch / 12.0));
     return vi;
 }
 
@@ -1830,6 +1870,7 @@ int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly,
             case SrcOsc:   base = (float) slotBaseHz(s, sl);  break;   // Analog+FM
             case SrcGrain: base = (float) slotBaseHz(s, sl);  break;   // grains transpose via keySemis
             case SrcModal: base = (float) slotBaseHz(s, sl);  break;   // Modal's Freq lives on oscFreq too
+            case SrcWguide: base = (float) slotBaseHz(s, sl); break;   // [2026-07-18] blown/bowed: fully keys-eligible
             case SrcPhys:  base = (float) slotBaseHz(s, sl); break;
             case SrcSample:   // Sample plays on keys: Preserve pitch = its own pitch (keySemis 0);
                               // else varispeed relative to C3 (MIDI 60), slot 2 transposed.
@@ -1852,6 +1893,9 @@ int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly,
             for (int u = 0; u < nv; ++u) sv.uniSemis[u] = (float) scaleSemis(sl.scaleType, sl.scaleKey, effNote, u);
         }
     }
+    // [2026-07-18] Resonator: the pressed key ALWAYS names the note (covers unpitched engines too -
+    // a noise channel through the Resonator plays real pitches from the keyboard).
+    resoTrackHz = (float) juce::jlimit(20.0, 8000.0, targetHz);
     return vi;
 }
 
@@ -1899,6 +1943,8 @@ DrumChannel::GridKnob DrumChannel::modGridKnob(int engine, int idx)
         case SrcModal: switch (idx) { case 0: return none;   /* Base Freq: NOT modulatable (use Pitch) */  case 1: return none;   /* Material */
                                       case 2: return F(&S::modalMorph,0,1); case 3: return F(&S::modalTone,0,1);
                                       case 4: return F(&S::modalStruct,0,1); } break;
+        case SrcWguide: switch (idx) { case 0: return none;  /* Base Freq: NOT modulatable (use Pitch) */  case 1: return none;   /* Exciter = choice */
+                                      case 2: return F(&S::wgPressure,0,1); case 3: return F(&S::wgBreath,0,1); } break;   // [2026-07-18]
         default: break;
     }
     return none;
@@ -1922,8 +1968,12 @@ void DrumChannel::computeModSources(int s, const Slot& sl, float* out, const Voi
 
     // Mod Env: a full A-H-D-S-R (same evaluator + gate as the amp env, so Sustain HOLDS while the note
     // is held and Release falls after it ends), read from the newest voice's age.
+    // [2026-07-18] an UNGATED step (gateLen 0) means "no gate", NOT "released at t=0" - pass the
+    // held sentinel so the Mod Env runs its natural A-H-D course (the amp env's ungated convention;
+    // before this, Mod Env routes were silently ZERO on plain steps and only worked on keys/roll).
     if (nv != nullptr)
-        out[MSModEnv] = juce::jlimit(0.0f, 1.0f, keyAdsr(nv->voiceSamples, nv->isKey ? nv->keyOff : nv->gateLen,
+        out[MSModEnv] = juce::jlimit(0.0f, 1.0f, keyAdsr(nv->voiceSamples,
+                                                          nv->isKey ? nv->keyOff : (nv->gateLen > 0 ? nv->gateLen : -1),
                                                           sl.modEnvA, sl.modEnvH, sl.modEnvD, sl.modEnvS, sl.modEnvR));
 
     // The per-slot LFOs, read at the newest voice's block-start phase (retrig) or the timeline-anchored
@@ -1997,6 +2047,7 @@ void DrumChannel::applyModMatrix(Slot& tmp, const float* srcVals, SlotVoice* lat
             case MTWidth:    add(tmp.uniSpread, 0, 1); break;
             case MTDrift:    add(tmp.drift, 0, 1); break;
             case MTVol: case MTWarp: break;   // HOT (per-sample AM / wavefold)
+            case MTSyncAmt: case MTBendAmt: break;   // [2026-07-18] HOT (per-sample hard sync / phase distortion)
             case MTChFxAChr: case MTChFxBChr: case MTChFxCAmt: case MTChFxCChr: break;   // CHANNEL FX C + Characters: accumulated separately (channelMod)
             case MTRing: case MTRingHz: case MTSlotPan: break;   // HOT (per-sample)
             // [2026-07-14 00:30] filter ENV AMOUNTS + UNISON COUNT: block-rate (they feed the bake,
@@ -2069,6 +2120,8 @@ void DrumChannel::applyHotBlock(Slot& tmp, const float* srcVals, const float* la
             case MTSub:      add(tmp.fxSub, 0, 1); break;
             case MTPunch:    add(tmp.fxPunch, -1, 1); break;
             case MTWarp:     add(tmp.oscWarp, 0, 1); break;
+            case MTSyncAmt:  add(tmp.oscSync, 0, 1); break;   // [2026-07-18] shape trio display copy
+            case MTBendAmt:  add(tmp.oscBend, 0, 1); break;
             case MTWavePos:  tmp.addPos = juce::jlimit(0.0f, 1.0f, tmp.addPos + m); break;
             case MTRingHz:   tmp.fxRingHz = juce::jlimit(25.0f, 4000.0f, tmp.fxRingHz * std::pow(2.0f, m * 3.0f)); break;
             case MTSlotPan:  add(tmp.pan, -1, 1); break;
@@ -2162,10 +2215,15 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         float  smpGain = 1.0f;   // sample output boost
         // -- section levels + fold (legacy unified-engine extras) --
         float  oscFold = 0, oscLevel = 1, noiseLevel = 0;
-        float  oscWarp = 0.0f;                      // wave WARP = one-way wavefold (0 = off)
+        float  oscWarp = 0.0f;                      // wave FOLD (was Warp) = one-way wavefold (0 = off)
+        float  oscSync = 0.0f, oscBend = 0.0f;      // [2026-07-18] shape trio: hard-sync ratio amt + CZ phase-distortion amt
         int    fxDriveType = 0; float fxDrive = 0;  // per-slot Drive (insert; sends are CHANNEL-level now)
         int    waveTable = 0; float wavePos = 0;   // wavetable (SrcWave)
         int    modalN = 0; float modalA1[MODAL_MODES] = {}, modalA2[MODAL_MODES] = {}, modalGain[MODAL_MODES] = {};  // modal bank
+        bool   modalFixed = false;   // [2026-07-18] Metal Cluster: partials are absolute Hz - note/env/vibrato never retune them
+        // [2026-07-18] WAVEGUIDE config
+        int    wgMode = 0;           // 0 Reed / 1 Flute / 2 Bow
+        float  wgPress = 0.6f, wgBreathC = 0.12f, wgPosC = 0.25f, wgLpK = 0.5f;
         float  modalDecaySec = 0.5f;   // base ring length (for voiceEnd)
         // -- 4-point pitch envelope (applies on top of the legacy per-engine env) --
         bool   pEnvOn = false; float pEnvP[Slot::NPE] = { 0, 0, 0, 0 }, pEnvT[Slot::NPE] = { 0.2f, 0.4f, 0.6f, 0.8f };
@@ -2286,6 +2344,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     case MTDrive: return 6;    case MTRing: return 7;    case MTSub: return 8;
                     case MTPunch: return 9;    case MTWarp: return 10;   case MTWavePos: return 11;
                     case MTRingHz: return 13;  case MTSlotPan: return 14;   // [2026-07-13 22:45]
+                    case MTSyncAmt: return 15; case MTBendAmt: return 16;   // [2026-07-18] shape trio (per-sample sweeps scream properly)
                     default: break;
                 }
                 if (tgt >= MT_GRID_BASE && tgt < MT_GRID_END
@@ -2347,6 +2406,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 c.oscVibFac = 1.0f + juce::jlimit(0.0f, 1.0f, sl.vibrato) * 0.09f * vibLfo;
                 // Merged FM section (Depth 0 = pure analog). Modulator = sine at carrier*ratio.
                 c.oscWarp    = sl.oscWarp;
+                c.oscSync    = sl.oscSync; c.oscBend = sl.oscBend;   // [2026-07-18] shape trio
                 c.fmRatio    = 1.0f + (float) sl.fmSpread * 5.0f;
                 c.fmIndex    = sl.fmDepth * 12.0f;
                 c.uniSpread  = juce::jlimit(0.0f, 1.0f, sl.uniSpread);
@@ -2494,6 +2554,19 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 c.grIncBase = (double) GRAIN_CYC * juce::jlimit(20.0, sr * 0.45, slotBaseHz(s, sl)) / sr;
                 c.atk = sl.atk; c.hold = sl.hold; c.dec = sl.dec;   // full AHDSR like SrcOsc
                 break; }
+            case SrcWguide: {   // [2026-07-18] WAVEGUIDE: continuously-driven bore/string
+                c.oscFreq   = (float) juce::jlimit(20.0, sr * 0.4, slotBaseHz(s, sl));
+                c.wgMode    = juce::jlimit(0, 2, sl.wgExcite);
+                c.wgPress   = juce::jlimit(0.0f, 1.0f, sl.wgPressure);
+                c.wgBreathC = juce::jmax(0.02f, juce::jlimit(0.0f, 1.0f, sl.wgBreath));   // floor: a perfectly
+                                        // still reed latches at a silent fixed point - physics, disclosed
+                c.wgPosC    = juce::jlimit(0.02f, 0.98f, sl.wgPos);
+                c.wgLpK     = 0.06f + 0.86f * juce::jlimit(0.0f, 1.0f, sl.wgBright);   // loop damping (dark..bright)
+                c.oscVibFac = 1.0f + juce::jlimit(0.0f, 1.0f, sl.vibrato) * 0.09f * vibLfo;
+                c.scaleOn   = sl.scaleOn;
+                c.uniVoices = juce::jlimit(1, WG_UNI, sl.scaleOn ? sl.scaleUnison : sl.oscUnison);   // up to 3 bores
+                c.uniCents  = juce::jlimit(0.0f, 1.0f, sl.oscDetune) * 100.0f;
+                break; }
             case SrcModal: {
                 // Build the resonator bank from the Material + base pitch + Decay/Tone/Structure.
                 // MORPH crossfades this material's mode table toward the NEXT material in the list
@@ -2510,6 +2583,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 const float  hit  = juce::jlimit(0.0f, 1.0f, sl.modalHit);    // strike-position comb amount (0 = none)
                 const float  damp = juce::jlimit(0.0f, 1.0f, sl.modalDamp);   // extra ring damping (0 = none)
                 const float  hitPos = 0.5f * hit;                            // strike point moves edge -> centre
+                c.modalFixed = A.fixedHz;   // [2026-07-18] Metal Cluster: the note never retunes the partials
                 c.modalN = 0;
                 for (int i = 0; i < nModes && i < MODAL_MODES; ++i) {
                     const bool inA = i < A.n, inB = i < B.n;
@@ -2522,8 +2596,14 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     const float mRatio = rA + (rB - rA) * mo;
                     const float mGain  = gA + (gB - gA) * mo;
                     const float mDec   = dA + (dB - dA) * mo;
-                    double ratio = 1.0 + ((double) mRatio - 1.0) * stretch;                            // inharmonicity
-                    double f = baseF * ratio;
+                    double f;
+                    if (A.fixedHz)   // [2026-07-18] Metal Cluster: mRatio IS the partial's Hz;
+                        f = (double) mRatio * (double) stretch;   // Structure scales the whole cluster
+                    else
+                    {
+                        const double ratio = 1.0 + ((double) mRatio - 1.0) * stretch;                  // inharmonicity
+                        f = baseF * ratio;
+                    }
                     if (f >= sr * 0.48) continue;                                                      // skip modes above Nyquist
                     const float hi = (float) i / (float) juce::jmax(1, nModes - 1);                    // 0..1 mode height
                     // decay: per-material, shortened for higher modes - more so when dark (low tone), more with Damp.
@@ -2640,7 +2720,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         }
         if (c.subAmt > 0.0f)
             switch (sl.engine) {
-                case SrcOsc: case SrcFM: case SrcGrain: case SrcPhys: case SrcModal:
+                case SrcOsc: case SrcFM: case SrcGrain: case SrcPhys: case SrcModal: case SrcWguide:
                     c.subHz = 0.5 * slotBaseHz(s, sl); break;
                 default: break;
             }
@@ -2729,6 +2809,9 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             slotModLiveFx[s][29] = uniTgt(MTFilt1Env) ? modTmp.filterEnvAmt   : -1000.0f;
             slotModLiveFx[s][30] = uniTgt(MTFilt2Env) ? modTmp.filterEnvAmt2  : -1000.0f;
             slotModLiveFx[s][31] = uniTgt(MTUniCount) ? (float) modTmp.oscUnison : -1000.0f;
+            // [2026-07-18] shape trio rings (Osc only, like the Fold ring at [17])
+            slotModLiveFx[s][32] = (modTmp.engine == SrcOsc && uniTgt(MTSyncAmt)) ? modTmp.oscSync : -1000.0f;
+            slotModLiveFx[s][33] = (modTmp.engine == SrcOsc && uniTgt(MTBendAmt)) ? modTmp.oscBend : -1000.0f;
             // Keep any LFO used as a matrix SOURCE advancing even if its own Amount is 0.
             for (auto& r : modTmp.mod)
                 if (r.tgt != MTOff && std::abs(r.amt) > 1.0e-4f
@@ -3037,13 +3120,14 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 // is smooth. The env-time LATCH + FORMANT glide + DRIVE dry-blend remain.)
                 // =====================================================================================
                 float mDrv = c.fxDrive, mRing = c.ring, mSub = c.subAmt, mPunch = c.punch,
-                      mWarp = c.oscWarp, mFm = c.fmIndex, mWt = c.wtPosOfs;
+                      mWarp = c.oscWarp, mFm = c.fmIndex, mWt = c.wtPosOfs,
+                      mSync = c.oscSync, mBend = c.oscBend;   // [2026-07-18] shape trio (hot)
                 double mRingHzMul = 1.0; float mPanL = c.panL, mPanR = c.panR;
                 double arPitchMul = 1.0; float arVolG = 1.0f;
                 double arGmMul[2] = { 1.0, 1.0 }; double arKTgt[2] = { -1.0, -1.0 };
                 if (c.arN > 0)
                 {
-                    float sums[15] = {};
+                    float sums[17] = {};
                     float cache[24]; uint32_t got = 0;
                     auto S = [&](int sid) -> float {
                         sid = juce::jlimit(0, 23, sid);
@@ -3055,8 +3139,9 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                                                (((v.keyNote >= 0) ? (float) v.keyNote : 60.0f + v.voicePitch) - 60.0f) / 24.0f); break;
                             case MSAmpEnv: val = sv.lastEnv; break;
                             case MSRandom: val = sv.modRand; break;
-                            case MSModEnv: val = juce::jlimit(0.0f, 1.0f,
-                                               keyAdsr(tv, v.isKey ? v.keyOff : v.gateLen, c.mEA, c.mEH, c.mED, c.mES, c.mER)); break;
+                            case MSModEnv: val = juce::jlimit(0.0f, 1.0f,   // gateLen 0 = ungated = natural course [2026-07-18]
+                                               keyAdsr(tv, v.isKey ? v.keyOff : (v.gateLen > 0 ? v.gateLen : -1),
+                                                       c.mEA, c.mEH, c.mED, c.mES, c.mER)); break;
                             case MSModLfo: { const double pt = c.modLfoPh0 + c.modLfoInc * (double) i;
                                              const uint32_t cy = (uint32_t) juce::jmax(0.0, pt / (2.0 * kPi));
                                              val = lfoShapeVal(c.mLfoShape, pt - (double) cy * 2.0 * kPi, cy); } break;
@@ -3106,6 +3191,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     mWarp  = juce::jlimit(0.0f, 1.0f, mWarp  + sums[10]);
                     mWt    = mWt + sums[11];                                       // clamped where consumed
                     mFm    = juce::jlimit(0.0f, 24.0f, mFm + sums[12] * 12.0f);    // fmDepth 0..1 -> index x12
+                    mSync  = juce::jlimit(0.0f, 1.0f, mSync + sums[15]);           // [2026-07-18] shape trio (per-sample sweeps)
+                    mBend  = juce::jlimit(0.0f, 1.0f, mBend + sums[16]);
                     if (sums[13] != 0.0f) mRingHzMul = std::exp2((double) juce::jlimit(-6.0f, 6.0f, sums[13] * 3.0f));   // ring carrier +-3 oct
                     if (sums[14] != 0.0f) {   // SLOT PAN: equal-power recomputed per sample (Note/Random/Velocity -> per-hit placement)
                         const float pp2 = juce::jlimit(-1.0f, 1.0f, c.panBase + sums[14] * 2.0f);
@@ -3175,6 +3262,23 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             if (sv.fmMod > 2.0 * kPi) sv.fmMod -= 2.0 * kPi;
                         }
                         const bool fmActive = mFm > 0.0001f;
+                        // [2026-07-18] SHAPE TRIO phase warps (order: Sync -> Bend; Fold acts on the OUTPUT
+                        // below). SYNC = the classic hard sync: the accumulator IS the note-pitch master;
+                        // the audible wave reads at ratio x that phase and restarts every master cycle
+                        // (ratio 1..4 = up to +2 octaves). BEND = CZ phase distortion: the read phase runs
+                        // fast to a knee then slow (or vice versa) = a resonant, filter-sweep-like formant.
+                        // Both go through morphWave (the FM precedent: warped-phase reads skip PolyBLEP;
+                        // the 2x oversampling absorbs the edge, exactly like FM). Off = the old exact path.
+                        const bool  shpOn     = mSync > 0.001f || mBend > 0.001f;
+                        const double syncRatio = 1.0 + 3.0 * (double) mSync;
+                        const double bendKnee  = 0.5 - 0.49 * (double) mBend;
+                        auto shapePhase = [&](double ph) -> double {
+                            double p01 = ph * (0.5 / kPi); p01 -= std::floor(p01);
+                            if (mSync > 0.001f) { p01 *= syncRatio; p01 -= std::floor(p01); }
+                            if (mBend > 0.001f) p01 = (p01 < bendKnee) ? p01 * (0.5 / bendKnee)
+                                                                       : 0.5 + (p01 - bendKnee) * (0.5 / (1.0 - bendKnee));
+                            return p01 * (2.0 * kPi);
+                        };
                         float wsum = 0.0f, wL = 0.0f, wR = 0.0f;
                         const bool sprd = c.uniSpread > 0.001f && c.uniVoices > 1;   // STEREO WIDTH active
                         const int totalV = c.uniVoices + (c.uniCenter ? 1 : 0);   // +1 dry/centre voice
@@ -3223,7 +3327,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             {   // ADDITIVE WAVETABLE: read the two frames around the current position and
                                 // crossfade (FM phase-mod still applies; band-limiting matches the factory
                                 // bank shapes: 32 harmonics + the 2x oversampling).
-                                const double phx = fmActive ? wph + fmAdd : wph;
+                                double phx = fmActive ? wph + fmAdd : wph;
+                                if (shpOn) phx = shapePhase(phx);   // Sync -> Bend before the table read
                                 const float ph01 = (float)(phx / (2.0 * kPi) - std::floor(phx / (2.0 * kPi)));
                                 const float spx = ph01 * (float) ADD_TBL;
                                 const int j0 = ((int) spx) & (ADD_TBL - 1), j1 = (j0 + 1) & (ADD_TBL - 1);
@@ -3259,6 +3364,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                                 const float vB = tB[j0] + (tB[j1] - tB[j0]) * fr;
                                 vout = gU * (vA + (vB - vA) * fmix);
                             }
+                            else if (shpOn)   // Sync/Bend = warped-phase read (morphWave, the FM precedent)
+                                vout = gU * morphWave(shapePhase(fmActive ? wph + (double) fmAdd : wph), pos);
                             else
                                 vout = gU * (fmActive ? morphWave(wph + fmAdd, pos)
                                                       : morphWaveBL(wph, pos, dt));
@@ -3571,6 +3678,91 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         }
                         sig = g * c.grNorm * env;
                         break; }
+                    case SrcWguide: {
+                        // [2026-07-18] WAVEGUIDE render: a delay-line bore/string DRIVEN EVERY SAMPLE
+                        // by a nonlinear exciter (Reed / Flute jet / Bow friction - condensed STK
+                        // models) while the envelope supplies the pressure. Gate open (held key /
+                        // note length + sustain) = the note SUSTAINS as long as you blow/bow;
+                        // release drops the pressure and the damped loop rings itself out. Reuses
+                        // the KS lines (string k at offset k*KS_MAX); writes clamped +-2.5.
+                        if (! ksOk || (int) sv.ksBuf.size() < KS_UNI * KS_MAX) break;
+                        if (v.isKey || (v.gateLen > 0 && c.sustain > 0.01f))
+                            env = keyAdsr(t, v.isKey ? v.keyOff : v.gateLen, c.atk, c.hold, c.dec, c.sustain, c.release);
+                        else
+                            env = ahdsEnv(t, c.atk, c.hold, sv.gateDec > 0.0f ? sv.gateDec : c.dec, c.sustain, c.release);
+                        const int nStr = juce::jlimit(1, (int) WG_UNI, c.uniVoices);
+                        float out = 0.0f;
+                        for (int k = 0; k < nStr; ++k)
+                        {
+                            double det = 1.0;   // per-bore pitch: scale interval + detune spread + drift
+                            if (nStr > 1)
+                            {
+                                const double sp = 2.0 * (double) k / (double)(nStr - 1) - 1.0;
+                                det = std::pow(2.0, sp * (double) c.uniCents / 1200.0);
+                            }
+                            if (c.scaleOn) { if (sv.uniSemis[k] < -90.0f) continue;   // guitar voicing: missing string
+                                             det *= std::pow(2.0, (double) sv.uniSemis[k] / 12.0); }
+                            det *= (double) sv.driftMul[juce::jmin(k, UNI_MAX)] * (double) sv.driftWobMul;
+                            if (t < sv.uniDelay[juce::jmin(k, UNI_MAX - 1)]) continue;   // strum: this bore enters later
+                            const double f = juce::jlimit(20.0, sr * 0.4,
+                                (double) c.oscFreq * det * noteMul * (double) c.oscVibFac * pe3Mul);
+                            // Reed = a closed-open cylinder: sounds an OCTAVE below its length, so the
+                            // loop is HALF a wavelength; Flute/Bow (open / string) = a full wavelength.
+                            double Lf = sr / (c.wgMode == 0 ? 2.0 * f : f);
+                            Lf = juce::jlimit(4.0, (double) KS_MAX - 4.0, Lf);
+                            if (k == 0) sv.wgLen = (float) Lf;   // UI snapshot: the live bore length
+                            const size_t base = (size_t) k * (size_t) KS_MAX;
+                            auto rdAt = [&](double delay) -> float {   // fractional delay read
+                                double rp = sv.ksWrite[k] - delay;
+                                while (rp < 0.0) rp += (double) KS_MAX;
+                                const int i0 = (int) rp; const float fr = (float)(rp - (double) i0);
+                                const int i1 = (i0 + 1 < KS_MAX) ? i0 + 1 : 0;
+                                return sv.ksBuf[base + (size_t) i0]
+                                     + (sv.ksBuf[base + (size_t) i1] - sv.ksBuf[base + (size_t) i0]) * fr; };
+                            const float y = rdAt(Lf);
+                            float& lp = sv.ksLp[k];
+                            lp += c.wgLpK * (y - lp);                    // loop damper (the Brightness handle)
+                            const float wn2 = whiteNoise(sv.noiseState); // breath turbulence (deterministic per hit)
+                            const float P = env * c.wgPress * (1.0f + wn2 * c.wgBreathC * 0.35f);
+                            float inp;
+                            switch (c.wgMode)
+                            {
+                                default:
+                                case 0: {   // REED - the STK Clarinet loop: reflection-coefficient table
+                                            // on the pressure difference; inverting end = odd harmonics.
+                                            // Table = STK's 0.7/-0.3 (a steeper slope clamps to a
+                                            // ZERO-injection fixed point = the reed latches silent).
+                                    const float pd = -0.95f * lp - P;
+                                    const float rt = juce::jlimit(-1.0f, 1.0f, 0.7f - 0.3f * pd);
+                                    inp = P + pd * rt;
+                                } break;
+                                case 1: {   // FLUTE - air-jet cubic nonlinearity into an open (positive) bore
+                                    const float jet = juce::jlimit(-1.0f, 1.0f, P - lp);
+                                    inp = lp * 0.86f + (jet * (1.0f - jet * jet)) * 0.72f;
+                                } break;
+                                case 2: {   // BOW - stick-slip friction between bow speed and string speed
+                                    const float dv = 0.2f + 0.55f * P - lp;
+                                    const float fric = juce::jlimit(0.0f, 1.0f,
+                                        std::pow(std::abs(dv) * 5.0f + 0.75f, -4.0f));
+                                    inp = lp * 0.95f + dv * fric * (0.6f + 0.8f * P);
+                                } break;
+                            }
+                            const int wi = (int) sv.ksWrite[k];
+                            sv.ksBuf[base + (size_t) wi] = juce::jlimit(-2.5f, 2.5f, inp);   // KS write clamp (anti-gunshot)
+                            sv.ksWrite[k] = (wi + 1 < KS_MAX) ? wi + 1 : 0;
+                            // POSITION pickup: a second tap combs the tone (pickup-position colour)
+                            out += y - 0.7f * rdAt(Lf * (double) c.wgPosC);
+                        }
+                        // per-exciter makeup: the reed's bore-pressure oscillation is physically small
+                        // next to the jet/bow loops - matched by ear-level, not by changing the model.
+                        // Output clamp +-4 = the Modal precedent (anti-gunshot family; full pressure x
+                        // full breath x 3 bores can legitimately stack past unity).
+                        sig = juce::jlimit(-4.0f, 4.0f,
+                                out * (c.wgMode == 0 ? 5.6f : 1.4f) / std::sqrt((float) juce::jmax(1, nStr)));
+                        // the envelope drives the PRESSURE, not the output - this trim only shapes the
+                        // very end so an undriven bore's residual never renders as an endless floor
+                        if (env < 0.02f) sig *= env * 50.0f;
+                        break; }
                     case SrcModal: {
                         // Strike: feed ONE impulse into the resonator bank (a bank of 2-pole resonators =
                         // decaying sines). Each mode rings + decays on its own from there.
@@ -3592,7 +3784,10 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         const int nNotes = juce::jlimit(1, MODAL_NOTES, c.uniVoices);
                         if (strike || ((c.pEnvOn || c.oscVibFac != 1.0f || modalGate || sv.modalHold) && i == 0)) {
                             sv.modalHold = modalGate;
-                            const double pmBase = noteMul * pe3Mul * (double) c.oscVibFac;   // vibrato = block-rate pole-angle wobble
+                            // [2026-07-18] Metal Cluster (modalFixed): the note/pitch-env/vibrato never
+                            // retune the fixed partials - the frozen inharmonic grind IS the 808 metal.
+                            const double pmBase = c.modalFixed ? 1.0
+                                                : noteMul * pe3Mul * (double) c.oscVibFac;   // vibrato = block-rate pole-angle wobble
                             if (strike) sv.modalNV = c.modalN;   // bank size fixed at the strike (immune to a mid-ring Material change)
                             double uniMul[MODAL_NOTES];
                             bool noteOn[MODAL_NOTES];
@@ -3935,7 +4130,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             // [2026-07-15 13:30] "(sync)" variants: Character = counted CYCLES PER BAR via the
             // shared kChFxCpb stops (rate follows lfoBarSeconds = live tempo); the free Character's
             // depth/feedback half is pinned at its 0.5 default. Free types = the exact old code.
-            const bool typeSync = type >= ChFxChorusS;
+            const bool typeSync = type >= ChFxChorusS && type <= ChFxRotaryS;   // [2026-07-18] Resonator (17) is NOT a sync variant
             const int  baseType = ! typeSync ? type
                                 : type == ChFxChorusS  ? ChFxChorus
                                 : type == ChFxFlangerS ? ChFxFlanger
@@ -3967,6 +4162,43 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         outL[i] *= gr * mk; outR[i] *= gr * mk;
                     }
                     chFxCompEnv[fx] = env; sm = a;
+                } break;
+                case ChFxResonator:
+                {   // [2026-07-18] RESONATOR: a tuned feedback comb ringing at the channel's newest
+                    // note (resoTrackHz, set at every trigger). CHARACTER = tune offset -12..+12 st
+                    // around the tracked note (0.5 = unison). The read offset GLIDES (<= 0.5
+                    // samples/sample, the delay-line precedent) so note changes swoop, never click.
+                    // Loop = fb through a ~4 kHz damper = string-like ring; anti-gunshot clamps kept.
+                    const int rlen = juce::jmax(64, (int) (sr / 25.0));   // reaches ~25 Hz
+                    if ((int) chFxDL[fx].size() != rlen) { chFxDL[fx].assign((size_t) rlen, 0.0f); chFxDR[fx].assign((size_t) rlen, 0.0f); chFxW[fx] = 0; chFxPhs[fx] = 0.0; }
+                    const double f0r  = juce::jlimit(30.0, 4000.0, (double) resoTrackHz * std::pow(2.0, ((double) ch1 - 0.5) * 2.0));
+                    const double dTgt = juce::jlimit(2.0, (double) rlen - 4.0, sr / f0r);
+                    double dCur = chFxPhs[fx] <= 0.0 ? dTgt : chFxPhs[fx];   // chFxPhs = the smoothed delay here
+                    const float lpK = 1.0f - std::exp(-2.0f * (float) kPi * 4000.0f / (float) sr);
+                    int w = chFxW[fx];
+                    float lpL = chFxFbL[fx], lpR = chFxFbR[fx];
+                    float amt = sm;
+                    auto rd = [&](const std::vector<float>& buf, double delay) -> float {
+                        double rp = (double) w - delay; while (rp < 0.0) rp += (double) rlen;
+                        const int i0 = (int) rp; const float fr = (float)(rp - (double) i0);
+                        const int i1 = (i0 + 1 < rlen) ? i0 + 1 : 0;
+                        return buf[(size_t) i0] + (buf[(size_t) i1] - buf[(size_t) i0]) * fr; };
+                    for (int i = 0; i < numSamples; ++i)
+                    {
+                        amt += smK * (aTgt[fx] - amt);
+                        dCur += juce::jlimit(-0.5, 0.5, dTgt - dCur);   // pitch glide (tape swoop, never a click)
+                        const float wetL = rd(chFxDL[fx], dCur), wetR = rd(chFxDR[fx], dCur);
+                        lpL += lpK * (wetL - lpL); lpR += lpK * (wetR - lpR);   // loop damper
+                        const float fb = 0.90f + 0.075f * amt;                  // amount deepens the ring too
+                        chFxDL[fx][(size_t) w] = juce::jlimit(-4.0f, 4.0f, outL[i] + lpL * fb);   // anti-gunshot clamp
+                        chFxDR[fx][(size_t) w] = juce::jlimit(-4.0f, 4.0f, outR[i] + lpR * fb);
+                        outL[i] = outL[i] * (1.0f - 0.5f * amt) + wetL * (0.5f * amt);   // unity-safe blend
+                        outR[i] = outR[i] * (1.0f - 0.5f * amt) + wetR * (0.5f * amt);
+                        if (++w >= rlen) w = 0;
+                    }
+                    chFxW[fx] = w; chFxPhs[fx] = dCur;
+                    chFxFbL[fx] = juce::jlimit(-4.0f, 4.0f, lpL); chFxFbR[fx] = juce::jlimit(-4.0f, 4.0f, lpR);
+                    sm = amt;
                 } break;
                 case ChFxFlanger:
                 {   // swept short delay + feedback (jet sweep); CHARACTER = speed + bite (0.5 = old 0.20 Hz / 0.7 fb)

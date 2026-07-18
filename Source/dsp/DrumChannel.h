@@ -359,6 +359,13 @@ public:
     // timbre; plain waves render a uniform table where Position matters less, disclosed).
     static constexpr int SrcGrain = NUM_SOURCES + 3;   // = 8
     static constexpr int GRAIN_TBL = 65536, GRAIN_CYC = 1024, GRAINS_MAX = 12;
+    // SrcWguide [2026-07-18]: a SLOT-ONLY DIGITAL WAVEGUIDE engine (Smith/CCRMA lineage; menu name
+    // "Waveguide") - the CONTINUOUSLY-DRIVEN physical model the bank lacked: a bore/string delay
+    // loop excited every sample by a nonlinear Reed / Flute-jet / Bow model while the gate is open
+    // (held key / note length), so the note SUSTAINS as long as you blow/bow and decays on release.
+    // Distinct from Karplus-Strong (strike-then-decay: energy only at the pluck).
+    static constexpr int SrcWguide = NUM_SOURCES + 4;   // = 9
+    static constexpr int WG_UNI = 3;                    // up to 3 bores (unison/scale voicing cap, like Modal)
     static constexpr int MODAL_MODES = 16;             // max resonant modes per voice
     static constexpr int MODAL_NOTES = 3;              // Modal unison/chord: up to this many FULL banks (one per note)
     static int         modalMaterialCount();
@@ -404,10 +411,11 @@ public:
                   MTSub = MT_GRID_BASE + 8, MTFormant, MTChFxCAmt, MTChFxCChr,   // slot C Amount/Character (Channel)
                   MTRingHz, MTSlotPan,     // [2026-07-13 22:45] ring carrier (octaves) + slot pan (user request)
                   MTFilt1Env, MTFilt2Env, MTUniCount,      // [2026-07-14 00:30] filter env amounts + unison voice count
-                  MTChFilt1Cut, MTChFilt1Res, MTChFilt2Cut, MTChFilt2Res };   // [2026-07-16] the CHANNEL FILTER/EQ pair (post-FX; "(Channel)" targets)
+                  MTChFilt1Cut, MTChFilt1Res, MTChFilt2Cut, MTChFilt2Res,   // [2026-07-16] the CHANNEL FILTER/EQ pair (post-FX; "(Channel)" targets)
+                  MTSyncAmt, MTBendAmt };   // [2026-07-18] the shape trio's Sync + Bend amounts (Oscillator-only, HOT/audio-rate like Fold=MTWarp)
     static constexpr int MOD_TGT_GRID = 8;   // grid knobs MT_GRID_BASE .. MT_GRID_BASE+7
     static constexpr int MT_GRID_END = MT_GRID_BASE + MOD_TGT_GRID;   // grid range check: >= BASE && < END
-    static constexpr int MT_COUNT = MTChFilt2Res + 1;
+    static constexpr int MT_COUNT = MTBendAmt + 1;
     // (GridKnob + the mod-matrix DSP helpers are declared after the Slot struct, below.)
     // DRIFT visual honesty: the newest voice's REAL rolled detunes (cents) for the editor's unison
     // view - the drawn lines move with what actually played. Returns voice count (0 = none active).
@@ -513,7 +521,13 @@ public:
         //    note. Equal (default) = the old static single waveform.
         int   oscShape = OscSine, oscShapeB = OscSine;   // oscShape = the single "Wave" selector (0..16). oscShapeB
                                                          // kept only for legacy/factory From/To morph (now retired).
-        float oscWarp = 0.0f;            // wave WARP = one-way wavefold (0 = off/clean, 1 = max fold)
+        float oscWarp = 0.0f;            // wave FOLD (UI name; was "Warp") = one-way wavefold (0 = off/clean, 1 = max fold)
+        // [2026-07-18] the SHAPE TRIO round-out (user design): Fold/Sync/Bend = three INDEPENDENT,
+        // freely-combinable phase/shape mangles. Processing order: Sync -> Bend -> Fold.
+        float oscSync = 0.0f;            // HARD SYNC: a hidden master at the note pitch restarts the wave;
+                                         // amount = the audible wave's ratio above it (0 = off, 1 = +2 octaves)
+        float oscBend = 0.0f;            // PHASE DISTORTION (CZ): bends the wave's time axis - a resonant,
+                                         // filter-sweep-like formant without a filter (0 = off)
         float oscFreq = 60.0f, oscPEnvAmt = 0.0f, oscPEnvTime = 0.04f, oscPOffset = 0.0f;
         int   oscUnison = 1; float oscDetune = 0.0f; bool oscUniCenter = false;   // dry/centre voice alongside detuned copies
         float uniSpread = 0.0f;   // STEREO WIDTH: unison/chord voices pan across the field (0 = mono = bit-identical)
@@ -552,6 +566,15 @@ public:
         // Pitch Spray (random per-grain detune up to +-12 st).
         float grainPos = 0.25f, grainSize = 0.35f, grainDens = 0.5f, grainSpray = 0.15f, grainPitch = 0.0f;
         int   physExcite = 0;            // excitation: 0 = Pluck (noise burst), 1 = Strike (impulse), 2 = Mallet (soft)
+        // -- WAVEGUIDE (SrcWguide) [2026-07-18]: a continuously-driven bore/string. Base pitch
+        //    reuses oscFreq (like Modal). wgPos/wgBright are edited on the WaveguideDisplay visual
+        //    (the StringDisplay precedent - the drawing IS the parameters, they have no knobs). --
+        int   wgExcite = 0;              // 0 Reed (clarinet-family, odd harmonics) / 1 Flute (air jet) / 2 Bow (stick-slip)
+        float wgPressure = 0.6f;         // how hard the bore is blown/bowed (drive into the nonlinearity)
+        float wgBreath   = 0.12f;        // breath turbulence mixed into the drive (a small floor always
+                                         // remains - a perfectly still reed latches silent, physics)
+        float wgPos      = 0.25f;        // pickup/coupling position along the bore (comb colour) - VISUAL handle
+        float wgBright   = 0.6f;         // loop brightness (1 - damping) - VISUAL handle
         // -- Sample -- (the buffer lives per-slot in slotSample[]; these are this slot's playback params)
         float smpSpeed = 1.0f, smpCrush = 0.0f, smpPitch = 0.0f, smpPEnvAmt = 0.0f, smpPEnvTime = 0.04f, smpPOffset = 0.0f;
         bool  smpReverse = false, smpUseRegion = false;
@@ -745,7 +768,7 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     // target this block (0-6 = Rev/Del/Chorus/Tone/Punch/Comp/Drive; 7-8 = Filter1/Filter2 cutoff Hz).
     // -1000 = matrix inactive (no ring). Written on the audio thread, read by the editor timer (torn-read
     // tolerant, like the other UI reads).
-    static constexpr int MOD_LIVE_N = 32;   // 0-8 FX/filters, 9-16 grid, 17 oscWarp, 18-20 Flanger/Phaser/Ring, 21-24 detune/vib/width/drift, 25 RingHz, 26 SlotPan, 27/28 Reso1/2, 29/30 EnvAmt1/2, 31 UniCount
+    static constexpr int MOD_LIVE_N = 34;   // 0-8 FX/filters, 9-16 grid, 17 oscWarp/Fold, 18-20 Flanger/Phaser/Ring, 21-24 detune/vib/width/drift, 25 RingHz, 26 SlotPan, 27/28 Reso1/2, 29/30 EnvAmt1/2, 31 UniCount, 32/33 Sync/Bend
     float slotModLiveFx[NUM_SLOTS][MOD_LIVE_N] = {
         { -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000 },
         { -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000 } };
@@ -840,6 +863,30 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
         for (const auto& gr : sv.grains)
             if (gr.age < gr.len && n < maxN)
                 out[n++] = (float) juce::jlimit(0.0, 1.0, (gr.pos - lo) / span);
+        return n;
+    }
+    // [2026-07-18] UI: the newest voice's LIVE WAVEGUIDE bore contents (string 0) - the visual's
+    // travelling wave is the literal delay-line buffer, decimated, never an animation (honest-
+    // visuals rule). Torn floats are acceptable (the sample-load tolerance precedent). Returns
+    // the number of points written (0 = nothing sounding / not a Waveguide slot / lines not ready).
+    int getWaveguideSnapshot(int s, float* out, int maxN) const
+    {
+        s = juce::jlimit(0, NUM_SLOTS - 1, s);
+        if (slots[s].engine != SrcWguide || ! ksReady.load(std::memory_order_acquire)) return 0;
+        if (slotFiltEnv[s] < 0.001f) return 0;   // audibility gate (the getWtPos precedent)
+        const Voice* nv = nullptr;
+        for (auto& v : voices) if (v.active() && (nv == nullptr || v.voiceSamples < nv->voiceSamples)) nv = &v;
+        if (nv == nullptr) return 0;
+        const auto& sv = nv->sv[s];
+        if ((int) sv.ksBuf.size() < KS_MAX) return 0;
+        const int L = juce::jlimit(8, KS_MAX - 4, (int) sv.wgLen);   // the current bore length (samples)
+        const int n = juce::jmin(maxN, 96);
+        for (int i = 0; i < n; ++i)
+        {
+            int idx = (int) sv.ksWrite[0] - 1 - (i * L) / juce::jmax(1, n - 1);
+            while (idx < 0) idx += KS_MAX;
+            out[i] = sv.ksBuf[(size_t) idx];   // string 0's region starts at offset 0
+        }
         return n;
     }
     // The newest voice's S&H cycle counter (seeded per note) - the editor draws the REAL rolled
@@ -959,7 +1006,11 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
                     // [2026-07-15 13:30] "(sync)" VARIANTS (user design): same DSP as the free
                     // sibling, but CHARACTER = counted CYCLES PER BAR (follows tempo live) instead
                     // of free Hz; the free types stay byte-identical. APPEND-ONLY as always.
-                    ChFxChorusS, ChFxFlangerS, ChFxPhaserS, ChFxTapeS, ChFxAutoPanS, ChFxRotaryS };
+                    ChFxChorusS, ChFxFlangerS, ChFxPhaserS, ChFxTapeS, ChFxAutoPanS, ChFxRotaryS,
+                    // [2026-07-18] RESONATOR (user pick): a tuned feedback comb that RINGS at the
+                    // channel's newest note (resoTrackHz, set per trigger). Amount = wet + ring
+                    // depth; Character = tune offset -12..+12 st around the tracked note.
+                    ChFxResonator };
     // [2026-07-15 14:20] THE cycles-per-bar ladder: sub-1 fractions for slow sweeps, then EVERY
     // whole number to 21 (user: "it should include every number" - no more 12->16 jumps). ONE
     // source shared by the synced channel-FX Character, the LFO Bar-sync detents and any future
@@ -1024,6 +1075,8 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
                                   // piano-roll playback from the note's strumPct; consumed like strumFlip.
     bool   legatoNext = false;    // [2026-07-16] runtime: the next trigger INHERITS the newest ringing voice's
                                   // envelope age (per-note LEGATO playback = the live legato trick); consumed.
+    float  resoTrackHz = 110.0f;  // [2026-07-18] runtime: the newest hit's fundamental (first pitched audible
+                                  // slot) - the channel-FX RESONATOR tunes its comb to it. Not persisted.
     bool   arpHold  = false;
     float  arpGate  = 1.0f;
     static constexpr int ARP_SYNCS[6] = { 7, 8, 9, 10, 11, 13 };   // the fader's detents
@@ -1186,7 +1239,7 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
             double b = 0.0;
             switch (sl.engine)
             {
-                case SrcOsc: case SrcFM: case SrcModal: case SrcGrain: b = sl.oscFreq;  break;
+                case SrcOsc: case SrcFM: case SrcModal: case SrcGrain: case SrcWguide: b = sl.oscFreq;  break;
                 case SrcPhys:                                          b = sl.physFreq; break;
                 default: break;   // Noise / Sample: no known pitch
             }
@@ -1236,6 +1289,7 @@ private:
         std::vector<float> ksBuf;
         double   ksWrite[KS_UNI] = {};
         float    ksLp[KS_UNI]    = {};
+        float    wgLen = 0.0f;   // [2026-07-18] WAVEGUIDE: current bore length in samples (string 0; UI snapshot reads it)
         float    ksApSt[KS_UNI][12] = {};   // dispersion allpass state per string (up to 12 stages for Stiffness)
         double   smpHead = 0.0;          // this slot's sample playhead
         // === PER-SLOT EQ (begin) - filter state for HP(2)+bells(3)+LP(2); coeffs live in SC ===

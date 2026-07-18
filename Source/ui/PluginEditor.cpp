@@ -255,6 +255,27 @@ juce::Array<SlotParam> slotParamsFor(int engine)
                      "- Mallet: a soft padded push - dark and thumpy. A smooth push has few overtones, "
                      "so materials naturally sound closer together with it (real mallets do this too)."));
             break;   // pitch-env/Vibrato moved to the shared shape groups (4 params = knob grid)
+        case DrumChannel::SrcWguide:
+            // [2026-07-18] WAVEGUIDE: 4 knobs; the pickup POSITION + loop BRIGHTNESS are edited on
+            // the interactive BORE visual (WaveguideDisplay - the drawing IS the parameters).
+            p.add(F ("Base Freq", 20, 4186, &S::oscFreq, "nHz", false,
+                     "Base pitch of the blown/bowed bore. CLICK the value read-out to switch Hz <-> NOTE mode. "
+                     "Follows per-step pitch; fully playable on the KEYS (the note holds as long as the key does "
+                     "when Sustain is up)."));
+            p.add(Ic("Exciter", 0, 2, &S::wgExcite, { "Reed","Flute","Bow" },
+                     "What DRIVES the bore, every sample, as long as the note runs.\n\n"
+                     "- Reed: clarinet family - hollow, odd harmonics, woody bite.\n"
+                     "- Flute: an air jet - breathy, pure, airy top.\n"
+                     "- Bow: stick-slip friction - a bowed string's grainy singing edge.\n\n"
+                     "Tip: raise SUSTAIN in the amp envelope - a blown/bowed note holds while the key is down."));
+            p.add(F ("Pressure", 0, 1, &S::wgPressure, "", true,
+                     "How hard the bore is blown / bowed. Low = soft, almost underblown; high = louder and "
+                     "brighter, and the nonlinearity starts to growl. A great matrix target (Mod Wheel or "
+                     "Aftertouch -> Pressure = real breath control)."));
+            p.add(F ("Breath", 0, 1, &S::wgBreath, "", true,
+                     "Breath/bow NOISE mixed into the drive - the air you hear around a real flute note. "
+                     "A small floor always remains (a perfectly still reed would latch silent - physics)."));
+            break;   // 4 params = knob grid; Position/Brightness live on the bore visual
         case DrumChannel::SrcGrain:
             p.add(F ("Position", 0, 1, &S::grainPos, "", true,
                      "WHERE in the source the grains read.\n\n"
@@ -294,7 +315,10 @@ juce::Array<SlotParam> slotParamsFor(int engine)
             p.add(F ("Base Freq", 20, 4186, &S::oscFreq, "nHz", false, "Base pitch of the struck body - the 0-point of step Pitch mode. CLICK the value read-out to switch Hz <-> NOTE mode (snaps to semitones there, SHIFT = free). Follows per-step pitch + the pitch envelope. Double-click = C4. The keyboard plays real notes and never changes this."));
             p.add(Ic("Material", 0, juce::jmax(0, DrumChannel::modalMaterialCount() - 1), &S::modalMaterial, mats,
                      "The struck body - sets each mode's frequency, gain + decay (Marimba/Tubular Bell/Glass/Membrane/"
-                     "Metal Plate/Wood Block/Kalimba/Cowbell). The starting point Decay/Tone/Struct then shape."));
+                     "Metal Plate/Wood Block/Kalimba/Cowbell/Metal Cluster). The starting point Decay/Tone/Struct then shape.\n\n"
+                     "- METAL CLUSTER [2026-07-18] = the 808-cymbal recipe: six FIXED inharmonic partials that do NOT "
+                     "retune with the note (the frozen beating grind IS the metal). Structure scales the whole cluster; "
+                     "Morph is inert on it (it is the last entry)."));
             // Decay moved OUT to the shared amp-env editor's RING handle (Strike/Ring, like Physical).
             // Hit Pos + Damp are edited on the interactive struck-body visual (drag the hammer dot).
             p.add(F ("Morph", 0, 1, &S::modalMorph, "", true,
@@ -1124,7 +1148,7 @@ static const char* kModSrcName[DrumChannel::MS_COUNT] =   // the LFOs are GENERI
 static const char* kModTgtFixedName[DrumChannel::MT_GRID_BASE] =
 { "Off", "Filter 1 Cutoff", "Filter 1 Reso", "Filter 2 Cutoff", "Filter 2 Reso", "Drive",
   "Reverb Send", "Delay Send", "FX A Amount (Channel)", "Tone (retired)", "Punch", "FX B Amount (Channel)", "Attack", "Decay", "Sustain",
-  "Release", "Pitch", "Wave Position", "Detune", "Vibrato", "Width", "Drift", "Volume", "Warp",
+  "Release", "Pitch", "Wave Position", "Detune", "Vibrato", "Width", "Drift", "Volume", "Fold",
   "FX A Character (Channel)", "FX B Character (Channel)", "Ring" };
 static juce::String kModTgtHiName(int t)   // fixed targets ABOVE the grid range
 { return t == DrumChannel::MTSub ? "Sub" : t == DrumChannel::MTFormant ? "Formant"
@@ -1134,6 +1158,7 @@ static juce::String kModTgtHiName(int t)   // fixed targets ABOVE the grid range
        : t == DrumChannel::MTUniCount ? "Unison Count"
        : t == DrumChannel::MTChFilt1Cut ? "Filter 1 Cutoff (Channel)" : t == DrumChannel::MTChFilt1Res ? "Filter 1 Reso (Channel)"
        : t == DrumChannel::MTChFilt2Cut ? "Filter 2 Cutoff (Channel)" : t == DrumChannel::MTChFilt2Res ? "Filter 2 Reso (Channel)"
+       : t == DrumChannel::MTSyncAmt ? "Sync" : t == DrumChannel::MTBendAmt ? "Bend"   // [2026-07-18] shape trio
        : juce::String(); }
 // ================================================================================================
 // MOD SOURCE / TARGET TOOLTIPS [2026-07-13 22:50] (user: "we need tips like that as tooltips") -
@@ -1197,7 +1222,9 @@ static juce::String modTgtTip(int t, int engine)
         case DC::MTWidth:    return "Unison stereo width (block-rate).";
         case DC::MTDrift:    return "Drift amount - the per-hit analog looseness (block-rate).";
         case DC::MTVol:      return "This slot's level. AUDIO-RATE: slow = tremolo, audio-speed = AM / ring-mod sidebands.";
-        case DC::MTWarp:     return "The oscillator's wavefold amount. AUDIO-RATE, anti-aliased.";
+        case DC::MTWarp:     return "The oscillator's FOLD (wavefold) amount. AUDIO-RATE, anti-aliased.";
+        case DC::MTSyncAmt:  return "The oscillator's SYNC amount (hard sync ratio, up to +2 octaves). AUDIO-RATE - sweep it with an envelope/LFO for the classic screaming sync lead.";
+        case DC::MTBendAmt:  return "The oscillator's BEND amount (CZ phase distortion). AUDIO-RATE - sweeping it sounds like a resonant filter sweep without a filter.";
         case DC::MTRing:     return "Ring modulator amount (dry -> ring-modulated). AUDIO-RATE.";
         case DC::MTRingHz:   return "The ring modulator's CARRIER frequency, +-3 octaves. AUDIO-RATE: sweeping it = sci-fi sideband sweeps; audio-rate sources = chaos (the good kind).";
         case DC::MTSlotPan:  return "This layer's pan. Note -> Pan = keyboard spread, Random -> Pan = per-hit scatter, Velocity -> Pan = accent lean. (Whole-channel MOTION = Channel FX Auto-Pan.)";
@@ -1226,7 +1253,7 @@ static juce::String modTgtTip(int t, int engine)
 // Engine display name (matches the slot engine dropdown) for the mod-target parentheses "(Oscillator)" etc.
 static juce::String engineDisplayName(int engine)
 {
-    static const char* eng[9] = { "Sample", "Noise", "Oscillator", "FM", "Karplus-Strong", "Synth", "Wavetable", "Modal", "Granular" };
+    static const char* eng[10] = { "Sample", "Noise", "Oscillator", "FM", "Karplus-Strong", "Synth", "Wavetable", "Modal", "Granular", "Waveguide" };
     return (engine >= 0 && engine < 9) ? juce::String(eng[engine]) : juce::String();
 }
 // Which of the 4 LFOs (index 0..3) feed at least one mod-matrix route (for the LFO "not routed" hint).
@@ -1414,7 +1441,7 @@ void RoutePicker::openFor(int cs, int ct, float amt, float lagMs)
     for (int t = 0; t < DrumChannel::MT_GRID_BASE; ++t)
     {   // ENGINE-GATED targets: only offer what this slot's engine can actually do (no dead routes).
         if (t == DrumChannel::MTTone) continue;                                       // RETIRED (Tone removed)
-        if (t == DrumChannel::MTWarp    && engine != DrumChannel::SrcOsc) continue;   // wavefold = Oscillator only
+        if (t == DrumChannel::MTWarp    && engine != DrumChannel::SrcOsc) continue;   // Fold (wavefold) = Oscillator only
         if (t == DrumChannel::MTWavePos && engine != DrumChannel::SrcOsc) continue;   // Osc wavetable frame only (granular position = the "Position" grid knob)
         if (t == DrumChannel::MTUniCount && engine != DrumChannel::SrcOsc) continue;  // [2026-07-14 02:50] count-morph = Osc only (a KS string / Modal strike can't join mid-note; Grain/Noise/Sample have no unison)
         juce::String nm = kModTgtFixedName[t];
@@ -1441,6 +1468,9 @@ void RoutePicker::openFor(int cs, int ct, float amt, float lagMs)
     tgtModel.rows.push_back({ DrumChannel::MTChFilt1Res, "Filter 1 Reso (Channel)" });
     tgtModel.rows.push_back({ DrumChannel::MTChFilt2Cut, "Filter 2 Cutoff (Channel)" });
     tgtModel.rows.push_back({ DrumChannel::MTChFilt2Res, "Filter 2 Reso (Channel)" });
+    if (engine == DrumChannel::SrcOsc)   // [2026-07-18] shape trio Sync/Bend (Osc only, like Fold)
+    { tgtModel.rows.push_back({ DrumChannel::MTSyncAmt, "Sync (Oscillator)" });
+      tgtModel.rows.push_back({ DrumChannel::MTBendAmt, "Bend (Oscillator)" }); }
     // ALPHABETICAL, "Off" pinned first (user) - one flat A..Z list per column, so the three
     // FX A/B/C pairs cluster together instead of FX C hiding under the engine-knob rows.
     auto alphabetize = [](std::vector<std::pair<int, juce::String>>& rows) {
@@ -1821,6 +1851,132 @@ juce::String StringDisplay::getTooltip()
 }
 
 //==============================================================================
+// [2026-07-18] WaveguideDisplay - the Waveguide engine's interactive bore. Three honest layers:
+// the drawing IS the parameters (pickup dot = wgPos, bell = wgBright), the excitation inset is
+// the EXACT per-sample nonlinearity (mirror of DrumChannel.cpp's SrcWguide formulas - keep in
+// sync), and the wave inside the bore is the LITERAL delay-line contents (getWaveguideSnapshot).
+//==============================================================================
+void WaveguideDisplay::paint(juce::Graphics& g)
+{
+    auto b = getLocalBounds().toFloat();
+    g.setColour(juce::Colour(0xff101022));      g.fillRoundedRectangle(b, 4.0f);
+    g.setColour(juce::Colour(0xff33335a)); g.drawRoundedRectangle(b.reduced(0.5f), 4.0f, 1.0f);
+    auto* s = getSlot ? getSlot() : nullptr;
+    const int   mode   = s ? juce::jlimit(0, 2, s->wgExcite) : 0;
+    const float pos    = s ? juce::jlimit(0.02f, 0.98f, s->wgPos) : 0.25f;
+    const float bright = s ? juce::jlimit(0.0f, 1.0f, s->wgBright) : 0.6f;
+    const float press  = s ? juce::jlimit(0.0f, 1.0f, s->wgPressure) : 0.6f;
+
+    // the excitation-curve inset lives on the right; the bore takes the rest
+    auto in    = b.reduced(8.0f, 5.0f);
+    auto curveR = in.removeFromRight(52.0f).reduced(3.0f, 1.0f);
+    in.removeFromRight(4.0f);
+
+    // BORE: a tube whose right end (the bell) opens with Brightness
+    const float cy = in.getCentreY();
+    const float half = juce::jmax(5.0f, in.getHeight() * 0.24f);
+    const float bell = half * (1.0f + 0.9f * bright);          // bright = a more open bell
+    juce::Path tube;
+    tube.startNewSubPath(in.getX(), cy - half);
+    tube.lineTo(in.getRight() - 8.0f, cy - half);
+    tube.quadraticTo(in.getRight(), cy - half, in.getRight(), cy - bell);
+    tube.lineTo(in.getRight(), cy + bell);
+    tube.quadraticTo(in.getRight(), cy + half, in.getRight() - 8.0f, cy + half);
+    tube.lineTo(in.getX(), cy + half);
+    tube.closeSubPath();
+    g.setColour(juce::Colour(0xff1b1b33)); g.fillPath(tube);
+    g.setColour(accent.withAlpha(0.35f + 0.45f * bright)); g.strokePath(tube, juce::PathStrokeType(1.2f));
+
+    // LIVE travelling wave inside the bore = the real delay-line contents (honest layer 3)
+    if (liveN > 1)
+    {
+        juce::Path w;
+        for (int i = 0; i < liveN; ++i)
+        {
+            const float fx = in.getX() + 3.0f + ((float) i / (float)(liveN - 1)) * (in.getWidth() - 6.0f);
+            const float fy = cy - juce::jlimit(-1.0f, 1.0f, live[i]) * (half - 1.5f);
+            if (i == 0) w.startNewSubPath(fx, fy); else w.lineTo(fx, fy);
+        }
+        g.setColour(juce::Colours::white.withAlpha(0.75f));
+        g.strokePath(w, juce::PathStrokeType(1.1f));
+    }
+    else { g.setColour(juce::Colour(0xff2a2a44)); g.drawLine(in.getX() + 3.0f, cy, in.getRight() - 3.0f, cy, 1.0f); }
+
+    // exciter glyph text at the mouth (left)
+    g.setFont(juce::Font(8.5f, juce::Font::bold));
+    g.setColour(juce::Colour(0xff8aa0c8));
+    g.drawText(mode == 0 ? "REED" : mode == 1 ? "AIR" : "BOW",
+               (int) in.getX() + 2, (int) (cy - half) - 11, 34, 10, juce::Justification::centredLeft, false);
+
+    // PICKUP handle (drag LEFT/RIGHT = wgPos) on the bore's centre line
+    const float hx = in.getX() + pos * (in.getWidth() - 8.0f);
+    g.setColour(accent);               g.fillEllipse(hx - 4.0f, cy - 4.0f, 8.0f, 8.0f);
+    g.setColour(juce::Colours::white); g.drawEllipse(hx - 4.0f, cy - 4.0f, 8.0f, 8.0f, 1.2f);
+
+    // BELL handle (drag UP/DOWN = wgBright) at the right end
+    g.setColour(dragWhat == 2 ? juce::Colours::white : accent.withAlpha(0.85f));
+    g.fillEllipse(in.getRight() - 4.0f, cy - bell - 3.0f, 7.0f, 7.0f);
+
+    // EXCITATION CURVE inset (honest layer 2): the exact nonlinearity the DSP evaluates.
+    g.setColour(juce::Colour(0xff181830)); g.fillRoundedRectangle(curveR, 3.0f);
+    g.setColour(juce::Colour(0xff2a2a48)); g.drawRoundedRectangle(curveR.reduced(0.5f), 3.0f, 1.0f);
+    {
+        juce::Path cp; const int NP = 40;
+        for (int i = 0; i < NP; ++i)
+        {
+            const float x01 = (float) i / (float)(NP - 1);
+            const float xin = x01 * 2.0f - 1.0f;   // the input axis (-1..1)
+            float yv;
+            if (mode == 0)      yv = juce::jlimit(-1.0f, 1.0f, 0.6f - 0.8f * xin);          // reed table
+            else if (mode == 1) { const float j = juce::jlimit(-1.0f, 1.0f, xin * (0.5f + press));
+                                  yv = j * (1.0f - j * j); }                                 // jet cubic
+            else                yv = juce::jlimit(0.0f, 1.0f,
+                                     std::pow(std::abs(xin) * 5.0f + 0.75f, -4.0f)) * 2.0f - 1.0f;   // bow friction
+            const float fx = curveR.getX() + 2.0f + x01 * (curveR.getWidth() - 4.0f);
+            const float fy = curveR.getCentreY() - yv * (curveR.getHeight() * 0.42f);
+            if (i == 0) cp.startNewSubPath(fx, fy); else cp.lineTo(fx, fy);
+        }
+        g.setColour(accent.withAlpha(0.9f)); g.strokePath(cp, juce::PathStrokeType(1.1f));
+    }
+
+    // read-out (StringDisplay convention)
+    g.setFont(juce::Font(9.0f, juce::Font::bold));
+    g.setColour(dragWhat != 0 ? juce::Colours::white : juce::Colour(0xff8aa0c8));
+    g.drawText("Pos " + juce::String(juce::roundToInt(pos * 100)) + "%  Bright "
+                   + juce::String(juce::roundToInt(bright * 100)) + "%",
+               getLocalBounds().reduced(5, 1), juce::Justification::bottomLeft, false);
+}
+void WaveguideDisplay::mouseDown(const juce::MouseEvent& e)
+{
+    // grab the nearer handle: presses in the right sixth take the bell, the rest the pickup
+    dragWhat = (e.position.x > (float) getWidth() - 70.0f
+                && std::abs(e.position.y - (float) getHeight() * 0.5f) > (float) getHeight() * 0.18f) ? 2 : 1;
+    applyDrag(e);
+}
+void WaveguideDisplay::mouseDrag(const juce::MouseEvent& e) { applyDrag(e); }
+void WaveguideDisplay::applyDrag(const juce::MouseEvent& e)
+{
+    auto* s = getSlot ? getSlot() : nullptr;
+    if (! s) return;
+    auto b = getLocalBounds().toFloat().reduced(8.0f, 5.0f);
+    b.removeFromRight(56.0f);
+    if (dragWhat == 2)
+        s->wgBright = juce::jlimit(0.0f, 1.0f, 1.0f - (e.position.y - b.getY()) / juce::jmax(1.0f, b.getHeight()));
+    else
+        s->wgPos = juce::jlimit(0.02f, 0.98f, (e.position.x - b.getX()) / juce::jmax(1.0f, b.getWidth()));
+    if (onEdit) onEdit();
+    repaint();
+}
+juce::String WaveguideDisplay::getTooltip()
+{
+    return "The BORE, drawn for real.\n\n"
+           "- Drag the centre dot LEFT/RIGHT = pickup Position (combs the tone, like a guitar pickup).\n"
+           "- Drag the bell dot UP/DOWN = Brightness (how open the bore's end is - dark to singing).\n"
+           "- The small curve is the ACTUAL reed/jet/bow nonlinearity the engine computes each sample.\n"
+           "- The wave inside the tube is the LIVE bore contents while a note sounds - real state, not an animation.";
+}
+
+//==============================================================================
 // ModalDisplay - the Modal engine's interactive controller, same philosophy as the
 // Physical string: THE DRAWN SHAPE IS THE SOUND. It plots the struck body's actual
 // standing wave - the sum of the REAL mode shapes (sin((i+1)*pi*x)) weighted by the
@@ -2006,7 +2162,7 @@ void SlotEditor::init(int idx, MidiLearnManager& mlm, juce::LookAndFeel* knobLNF
                     params[kid].set(*s, v);
                     if (params[kid].reBake) pendingRebake = true;   // Stretch -> needs a re-bake on release
                     if (onEdit) onEdit();
-                    morphView.repaint(); waveView.repaint(); physView.repaint(); modalView.repaint();
+                    morphView.repaint(); waveView.repaint(); physView.repaint(); modalView.repaint(); wgView.repaint();
                     if (activeParamCount() != lastActiveCount) relayoutSelf();
                 }
         };
@@ -2031,6 +2187,10 @@ void SlotEditor::init(int idx, MidiLearnManager& mlm, juce::LookAndFeel* knobLNF
     physView.getSlot   = slotFn;
     physView.onEdit    = [this] { if (onEdit) onEdit(); };
     physView.onDragEnd = [this] { if (onAudition) onAudition(); };
+    addChildComponent(wgView);                    // [2026-07-18] Waveguide: interactive bore
+    wgView.getSlot   = slotFn;
+    wgView.onEdit    = [this] { if (onEdit) onEdit(); };
+    wgView.onDragEnd = [this] { if (onAudition) onAudition(); };
     addChildComponent(modalView);                 // Modal: interactive struck body (Hit Pos/Damp)
     modalView.getSlot   = slotFn;
     modalView.onEdit    = [this] { if (onEdit) onEdit(); };
@@ -2110,12 +2270,48 @@ void SlotEditor::init(int idx, MidiLearnManager& mlm, juce::LookAndFeel* knobLNF
     warpFader->setRange(0.0, 1.0, 0.0);
     warpFader->setColour(juce::Slider::trackColourId, juce::Colour(0xff8a7adf));
     warpFader->textFromValueFunction = [](double v) { return juce::String(juce::roundToInt(v * 100.0)) + "%"; };
-    warpFader->setTooltip("Warp: a one-way WAVEFOLD - folds the wave back on itself, adding harmonics + grit as you "
-                          "raise it (0 = off, clean). Audible on every wave. Distinct from FM (which adds sidebands).");
+    warpFader->setTooltip("Fold: a one-way WAVEFOLD - folds the wave back on itself, adding harmonics + grit as you "
+                          "raise it (0 = off, clean). Audible on every wave. Distinct from FM (which adds sidebands).\n\n"
+                          "- The SHAPE TRIO: Sync, Bend and Fold are independent + freely combinable.\n"
+                          "- Processing order: Sync then Bend then Fold.");
     warpFader->onValueChange = [this] {
         if (auto* s = getSlot ? getSlot() : nullptr) { s->oscWarp = (float) warpFader->getValue(); if (onEdit) onEdit(); morphView.repaint(); }
     };
     warpFader->onDragEnd = [this] { if (onAudition) onAudition(); };
+
+    // [2026-07-18] SHAPE TRIO: Sync + Bend faders (right column beside the FM trio; Fold above).
+    syncFader = mkFader("sync");
+    syncFader->paramId = "ui_sel_slotSync";
+    syncFader->setRange(0.0, 1.0, 0.0);
+    syncFader->setColour(juce::Slider::trackColourId, juce::Colour(0xff8a7adf));
+    syncFader->textFromValueFunction = [](double v) { return v <= 0.0005 ? juce::String("Off")
+                                                        : juce::String(juce::roundToInt(v * 100.0)) + "%"; };
+    syncFader->setTooltip("Sync: classic HARD SYNC - a hidden master oscillator at the note's pitch restarts "
+                          "the wave you hear every cycle; the fader tunes the audible wave up to +2 octaves "
+                          "above it (0 = off).\n\n"
+                          "- The ripping, screaming sync-lead sound; SWEEP it (or route an envelope/LFO to "
+                          "the Sync target in the matrix) and it screams through pitches while the note holds.\n"
+                          "- Processing order: Sync then Bend then Fold.");
+    syncFader->onValueChange = [this] {
+        if (auto* s = getSlot ? getSlot() : nullptr) { s->oscSync = (float) syncFader->getValue(); if (onEdit) onEdit(); morphView.repaint(); }
+    };
+    syncFader->onDragEnd = [this] { if (onAudition) onAudition(); };
+
+    bendFader = mkFader("bend");
+    bendFader->paramId = "ui_sel_slotBend";
+    bendFader->setRange(0.0, 1.0, 0.0);
+    bendFader->setColour(juce::Slider::trackColourId, juce::Colour(0xff8a7adf));
+    bendFader->textFromValueFunction = [](double v) { return v <= 0.0005 ? juce::String("Off")
+                                                        : juce::String(juce::roundToInt(v * 100.0)) + "%"; };
+    bendFader->setTooltip("Bend: PHASE DISTORTION (the Casio CZ trick) - bends the wave's time axis so one "
+                          "half of the cycle runs fast and the other slow (0 = off).\n\n"
+                          "- Sounds like a resonant filter sweep WITHOUT a filter - a vocal/formant edge.\n"
+                          "- Sweep it from the matrix (Bend target) for the classic PD wow.\n"
+                          "- Processing order: Sync then Bend then Fold.");
+    bendFader->onValueChange = [this] {
+        if (auto* s = getSlot ? getSlot() : nullptr) { s->oscBend = (float) bendFader->getValue(); if (onEdit) onEdit(); morphView.repaint(); }
+    };
+    bendFader->onDragEnd = [this] { if (onAudition) onAudition(); };
 
     // Single "Wave" selector: ONE horizontal fader ABOVE the visual that scans every shape (snaps to each;
     // shows "n-Name"). Replaces the old From/To vertical faders + the over-the-note morph (which sounded harsh).
@@ -2152,6 +2348,7 @@ void SlotEditor::setEngine(int eng)
     morphView.setVisible(morph);   // GRAIN reuses the wave preview: it shows the grain SOURCE
     waveView.setVisible(eng == DrumChannel::SrcWave);   // wavetable visual
     physView.setVisible(eng == DrumChannel::SrcPhys);   // interactive string (Position/Tone)
+    wgView.setVisible(eng == DrumChannel::SrcWguide);   // [2026-07-18] interactive bore (Position/Brightness)
     modalView.setVisible(eng == DrumChannel::SrcModal); // interactive struck body (Hit Pos/Damp)
     fmEnvSw.setVisible(eng == DrumChannel::SrcOsc);     // FM Amount env-follow (placed by placeOsc)
     morphView.fmMode = morph && ! grain;   // grain preview = the raw source (no FM applied to grains)
@@ -2159,6 +2356,8 @@ void SlotEditor::setEngine(int eng)
     freqFader->setVisible(oscLayout);
     depthFader->setVisible(false);          // FM amount is now the "Amount" KNOB (params[0]), not a fader
     warpFader->setVisible(oscLayout);
+    syncFader->setVisible(oscLayout);       // [2026-07-18] shape trio
+    bendFader->setVisible(oscLayout);
     fromFader->setVisible(oscLayout || grain);   // the "Wave" fader = the grain SOURCE picker too
     if (toFader) toFader->setVisible(false);   // retired
     for (int i = 0; i < MAXK; ++i)
@@ -2228,13 +2427,15 @@ void SlotEditor::pushValues()
         freqFader->setValue (s->oscFreq,  juce::dontSendNotification); freqFader->updateText();
         depthFader->setValue(s->fmDepth,  juce::dontSendNotification); depthFader->updateText();
         warpFader->setValue (s->oscWarp,  juce::dontSendNotification); warpFader->updateText();
+        syncFader->setValue (s->oscSync,  juce::dontSendNotification); syncFader->updateText();
+        bendFader->setValue (s->oscBend,  juce::dontSendNotification); bendFader->updateText();
         fmEnvSw.setToggleState(s->fmEnvFollow, juce::dontSendNotification);
     }
     if (oscLayout || engine == DrumChannel::SrcGrain) {   // the Wave fader is shown for Osc AND Granular (the grain source)
         fromFader->setValue (s->oscShape, juce::dontSendNotification); fromFader->updateText();
     }
     morphView.repaint();          // reflect this slot's wave (+ warp + FM)
-    physView.repaint(); modalView.repaint();   // reflect Position/Tone / Hit Pos/Damp + material looks
+    physView.repaint(); modalView.repaint(); wgView.repaint();   // reflect Position/Tone / Hit Pos/Damp / bore looks
     applyFreqLock();              // transpose lock follows the channel on every refresh
 }
 
@@ -2348,6 +2549,12 @@ void SlotEditor::placeGeneric(int boxW)
         modalView.repaint();
         yTop += mh + 4;
     }
+    if (wgView.isVisible()) {                             // [2026-07-18] Waveguide: interactive bore across the top
+        const int mh = 56;
+        wgView.setBounds(mL, yTop, innerW, mh);
+        wgView.repaint();
+        yTop += mh + 4;
+    }
     if (n == 0) return;
 
     // 5+ params (Physical / Modal / Noise): stacked FULL-WIDTH faders - readable + uses the height well
@@ -2411,42 +2618,47 @@ void SlotEditor::placeOsc(int boxW)
       y += 16 + 2; }
     // -- Wave visual: as TALL as possible (FM names sit BESIDE the knobs, so no name row below them). --
     {
-        const int reserve = 18 /*Freq+Warp row*/ + 56 /*FM = 3 stacked fader rows*/ + 4;
+        const int reserve = 18 /*Base Freq row*/ + 56 /*FM | shape trio = 3 two-column rows*/ + 4;
         const int mh = juce::jlimit(24, 110, getHeight() - y - reserve);
         morphView.compact = (mh < 50);
         morphView.setBounds(mL, y, innerW, mh);
         morphView.repaint();
         y += mh + 3;
     }
-    // -- Freq + Warp faders share ONE row (each half-width with its tag). --
-    { const int tag = 34, halfW = innerW / 2;
+    // -- Base Freq gets its FULL row back (the most-grabbed fader; Fold moved into the trio column). --
+    { const int tag = 56;
       freqLabelR = juce::Rectangle<int>(mL, y, tag - 2, 16);
-      freqFader->setBounds(mL + tag, y, halfW - tag - 4, 16);
-      warpLabelR = juce::Rectangle<int>(mL + halfW, y, tag - 2, 16);
-      warpFader->setBounds(mL + halfW + tag, y, halfW - tag, 16);
+      freqFader->setBounds(mL + tag, y, innerW - tag, 16);
       y += 16 + 2; }
-    // -- FM: "FM" tag (with the Env-follow switch under it) on the left, then the 3 FM KNOBS
-    //    (Amount, Ratio, Feedback), each with its NAME BESIDE it. --
+    // -- [2026-07-18] TWO COLUMNS (user design): LEFT = the FM trio (Amount / Ratio+ENV / Feedback),
+    //    RIGHT = the SHAPE trio (Fold / Sync / Bend). All six half-width stacked faders; every
+    //    combination of the shape trio is just raising two or three faders (no modes, nothing shared).
     fmLineY = y;
     { const int tag = 30;                                  // "FM" tag drawn at fmLabelR (paint); Env switch under it
       fmLabelR = juce::Rectangle<int>(mL, y + 2, tag, 14);
       fmEnvSw.setBounds(mL, y + 22, 26, 13);               // FM Amount follows the amp env (tooltip explains)
-      // The 3 FM controls are STACKED HORIZONTAL FADERS (user order - the shrunken knobs were
-      // unreadable): name on the left, value read-out on the right, same row recipe as the
-      // Modal/Noise boxes.
       const int fx0 = mL + tag;
+      const int colW = (innerW - tag) / 2;                 // each column's width
       const int nfm = juce::jmin(3, (int) params.size());  // Amount, Ratio, Feedback
-      const int reserve = 0;
-      const int nameW = 60, rowH = 18, valW = 46;
+      const int nameW = 50, rowH = 18, valW = 40;
       for (int gi = 0; gi < nfm; ++gi) {
           const int yy = y + gi * rowH;
           knobs[gi]->setSliderStyle(juce::Slider::LinearHorizontal);
           knobs[gi]->setTextBoxStyle(juce::Slider::TextBoxRight, true, valW, rowH - 4);
-          knobs[gi]->setBounds(fx0 + nameW, yy, innerW - tag - nameW - reserve, rowH - 2);
+          knobs[gi]->setBounds(fx0 + nameW, yy, colW - nameW - 4, rowH - 2);
           labels[gi]->setJustificationType(juce::Justification::centredLeft);
           labels[gi]->setBounds(fx0, yy, nameW - 2, rowH - 2);
       }
-      y += nfm * rowH + 2; }
+      // right column: Fold / Sync / Bend (tags drawn in paint, like the old Warp tag)
+      const int sx0 = fx0 + colW + 2, stag = 30;
+      const int sw = innerW - (sx0 - mL) - stag;
+      warpLabelR = juce::Rectangle<int>(sx0, y,            stag - 2, 16);
+      warpFader->setBounds(sx0 + stag, y,            sw, 16);
+      syncLabelR = juce::Rectangle<int>(sx0, y + rowH,     stag - 2, 16);
+      syncFader->setBounds(sx0 + stag, y + rowH,     sw, 16);
+      bendLabelR = juce::Rectangle<int>(sx0, y + 2 * rowH, stag - 2, 16);
+      bendFader->setBounds(sx0 + stag, y + 2 * rowH, sw, 16);
+      y += 3 * rowH + 2; }
 }
 
 // Section divider lines + names for the SrcOsc sectioned layout (drawn behind the children).
@@ -2483,7 +2695,9 @@ void SlotEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xff9a9ac0));
     g.drawText("Wave", oscLabelR,  juce::Justification::centredLeft, false);
     g.drawText("Base Freq", freqLabelR, juce::Justification::centredLeft, false);
-    g.drawText("Warp", warpLabelR, juce::Justification::centredLeft, false);
+    g.drawText("Fold", warpLabelR, juce::Justification::centredLeft, false);   // [2026-07-18] Warp renamed on screen
+    g.drawText("Sync", syncLabelR, juce::Justification::centredLeft, false);
+    g.drawText("Bend", bendLabelR, juce::Justification::centredLeft, false);
 
     // FM: a rule, then an "FM" tag + the Env-follow switch's caption.
     if (fmLineY >= 0) {
@@ -6212,6 +6426,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         h = mix(h, sl.noiseType); h = mix(h, f(sl.noiseCenter)); h = mix(h, f(sl.noiseWidth)); h = mix(h, f(sl.noiseRes)); h = mix(h, f(sl.noiseDrive)); h = mix(h, f(sl.noiseCrackle));
         h = mix(h, f(sl.fmPitch)); h = mix(h, f(sl.fmSpread)); h = mix(h, f(sl.fmDepth)); h = mix(h, f(sl.fmPEnvAmt)); h = mix(h, f(sl.fmPEnvTime)); h = mix(h, f(sl.fmPOffset)); h = mix(h, f(sl.fmFeedback)); h = mix(h, f(sl.fmSub));
         h = mix(h, f(sl.physFreq)); h = mix(h, f(sl.physTone)); h = mix(h, f(sl.physMaterial)); h = mix(h, f(sl.physPosition)); h = mix(h, f(sl.physPEnvAmt)); h = mix(h, f(sl.physPEnvTime)); h = mix(h, f(sl.physPOffset)); h = mix(h, f(sl.physStiff)); h = mix(h, sl.physExcite); h = mix(h, f(sl.grainPos)); h = mix(h, f(sl.grainSize)); h = mix(h, f(sl.grainDens)); h = mix(h, f(sl.grainSpray)); h = mix(h, f(sl.grainPitch));
+        h = mix(h, sl.wgExcite); h = mix(h, f(sl.wgPressure)); h = mix(h, f(sl.wgBreath)); h = mix(h, f(sl.wgPos)); h = mix(h, f(sl.wgBright));   // [2026-07-18] WAVEGUIDE
         h = mix(h, f(sl.smpSpeed)); h = mix(h, f(sl.smpCrush)); h = mix(h, f(sl.smpPitch)); h = mix(h, f(sl.smpPEnvAmt)); h = mix(h, f(sl.smpPEnvTime)); h = mix(h, f(sl.smpPOffset)); h = mix(h, sl.smpReverse ? 1 : 0); h = mix(h, sl.smpUseRegion ? 1 : 0);
         h = mix(h, f(sl.smpStart)); h = mix(h, f(sl.smpEnd)); h = mix(h, sl.smpSlices); h = mix(h, f(sl.smpStretch)); h = mix(h, f(sl.smpGain));
         h = mix(h, sl.smpEnvOn ? 1 : 0); h = mix(h, sl.smpPreservePitch ? 1 : 0); h = mix(h, sl.fmEnvFollow ? 1 : 0); h = mix(h, f(sl.modalMorph));
@@ -6219,6 +6434,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         h = mix(h, (juce::int64) c.slotSample[b].file.getFullPathName().hashCode64());   // this slot's sample
         h = mix(h, f(sl.oscFold)); h = mix(h, f(sl.oscLevel)); h = mix(h, f(sl.noiseLevel));
         h = mix(h, sl.waveTable); h = mix(h, f(sl.wavePos)); h = mix(h, f(sl.oscWarp));
+        h = mix(h, f(sl.oscSync)); h = mix(h, f(sl.oscBend));   // [2026-07-18] shape trio
         h = mix(h, sl.modalMaterial); h = mix(h, f(sl.modalDecay)); h = mix(h, f(sl.modalTone)); h = mix(h, f(sl.modalStruct)); h = mix(h, f(sl.modalHit)); h = mix(h, f(sl.modalDamp));
         for (int k = 0; k < DrumChannel::Slot::NPE; ++k) { h = mix(h, f(sl.pEnvP[k])); h = mix(h, f(sl.pEnvT[k])); }
         h = mix(h, sl.filterType); h = mix(h, f(sl.filterCutoff)); h = mix(h, f(sl.filterReso)); h = mix(h, f(sl.filterEnvAmt));   // per-slot filter 1
@@ -6539,7 +6755,7 @@ void DrumSequencerEditor::readChannelMix(const juce::ValueTree& t, DrumChannel& 
     ch.strumAmt = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("strum", 0.0f));   // per-sound strum (0 for old files)
     for (int fx = 0; fx < 3; ++fx)   // CHANNEL FX slots (readSlots migrates pre-slot-system files after this)
     { const juce::String k(fx);
-      ch.chFxType[fx] = juce::jlimit(0, 16, (int) t.getProperty("cfxT" + k, 0));
+      ch.chFxType[fx] = juce::jlimit(0, 17, (int) t.getProperty("cfxT" + k, 0));
       ch.chFxAmt[fx]  = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("cfxA" + k, 0.0f));
       ch.chFxChar[fx] = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("cfxC" + k, 0.5f)); }
     for (int f = 0; f < 2; ++f)   // [2026-07-16] CHANNEL FILTER/EQ pair (0/defaults for old files)
@@ -7375,6 +7591,8 @@ void DrumSequencerEditor::applySelCC(int t, float v, bool& slotDirty, bool& keys
         case P::SelSlotFreq:  sl.oscFreq = (float)(20.0 * std::pow(4186.0 / 20.0, (double) v)); break;   // log 20..4186 Hz
         case P::SelSlotFmAmt: sl.fmDepth = v; break;
         case P::SelSlotWarp:  sl.oscWarp = v; break;
+        case P::SelSlotSync:  sl.oscSync = v; break;   // [2026-07-18] shape trio
+        case P::SelSlotBend:  sl.oscBend = v; break;
         default: return;
     }
     ch.markDspDirty();
@@ -8426,7 +8644,8 @@ void DrumSequencerEditor::setupComponents()
         const auto& c  = proc.sequencer.patterns[proc.sequencer.currentPattern].channels[ch];
         const auto& sl = c.slots[juce::jlimit(0, DrumChannel::NUM_SLOTS - 1, slot)];
         const bool pitched = sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal
-                          || sl.engine == DrumChannel::SrcPhys || sl.engine == DrumChannel::SrcGrain;   // grain voices chords too [2026-07-16]
+                          || sl.engine == DrumChannel::SrcPhys || sl.engine == DrumChannel::SrcGrain
+                          || sl.engine == DrumChannel::SrcWguide;   // grain voices chords too; waveguide is pitched [2026-07-18]
         if (! pitched || sl.weight <= 0.001f) return 0;
         const int down = (slot == 1) ? c.keysSlot2Down : 0;   // positive = semitones DOWN (baked into slot 2's Freq)
         const int base = semi - down;
@@ -9279,7 +9498,8 @@ void DrumSequencerEditor::setupComponents()
                 { 9,  "OTT",       "3-band UP + DOWN compression: quiet details and tails are dragged UP per band = the hyped modern wall (tone-changing, unlike Comp). Amount = depth.\n\nCharacter = compression speed (0.25x..4x; 1x = the classic)." },
                 { 10, "FreqShift", "Single-sideband frequency shifter - moves every harmonic by the SAME Hz, so the sound turns inharmonic.\n\nCharacter = the shift in Hz: centre = 0 Hz, right = up, left = down. A few Hz = barber-pole detune, hundreds = alien metal." },
                 { 11, "Rotary",    "Leslie speaker: horn doppler + tremolo + rotor pan.\n\nCharacter = rotor speed in Hz (0.7 = slow chorale, 7 = fast tremolo)." },
-                { 17, "Rotary (sync)",  "Leslie locked to the tempo: Character = rotations per bar." } };
+                { 17, "Rotary (sync)",  "Leslie locked to the tempo: Character = rotations per bar." },
+                { 18, "Resonator", "A tuned string-like body that RINGS at the note you play - it tracks the newest note automatically (steps, roll, keys, arp).\n\nAmount = how much ring. Character = tune offset in semitones around the tracked note (centre = unison; +12/-12 = an octave). Turn any drum or noise into pitched metal, or double a bass with a singing body." } };
         };
         for (int i = 0; i < 3; ++i)
         {
@@ -9295,6 +9515,7 @@ void DrumSequencerEditor::setupComponents()
             cb.addItem("Auto-Pan", 7); cb.addItem("Auto-Pan (sync)", 16);
             cb.addItem("Widener", 8); cb.addItem("OTT", 9); cb.addItem("FreqShift", 10);
             cb.addItem("Rotary", 11); cb.addItem("Rotary (sync)", 17);
+            cb.addItem("Resonator", 18);   // [2026-07-18]
             cb.setSelectedId(1, juce::dontSendNotification);
             cb.setTooltip(juce::String("CHANNEL FX slot ") + (i == 0 ? "A" : i == 1 ? "B" : "C") + ": pick an effect for the WHOLE instrument "
                           "(both sound slots combined; runs A -> B -> C in series).\n\n"
@@ -9305,7 +9526,7 @@ void DrumSequencerEditor::setupComponents()
             cb.onChange = [this, i] {
                 if (ignoreKnobCallbacks) return;
                 auto& ch = proc.sequencer.channel(selectedChannel);
-                ch.chFxType[i] = juce::jlimit(0, 16, comboChFx[i].getSelectedId() - 1);
+                ch.chFxType[i] = juce::jlimit(0, 17, comboChFx[i].getSelectedId() - 1);
                 if (ch.chFxType[i] != DrumChannel::ChFxOff && ch.chFxAmt[i] <= 0.001f)
                     ch.chFxAmt[i] = 0.5f;   // picking an effect with amount 0 would be silent - start audible (disclosed)
                 ch.markDspDirty(); refreshDetailPanel();
@@ -9370,6 +9591,9 @@ void DrumSequencerEditor::setupComponents()
                       return s9 == 0 ? juce::String("0 Hz") : (s9 > 0 ? "+" : "") + juce::String(s9) + " Hz"; }
                     case DC::ChFxWiden:                                                      // bass-mono crossover
                       return juce::String(juce::roundToInt(60.0 * std::pow(10.0, (double) v))) + " Hz";
+                    case DC::ChFxResonator:                                                  // tune offset (st around the tracked note)
+                    { const int st = juce::roundToInt((v - 0.5f) * 24.0f);
+                      return st == 0 ? juce::String("Unison") : (st > 0 ? "+" : "") + juce::String(st) + " st"; }
                     default: return juce::String(juce::roundToInt(v * 100.0f)) + "%";
                 }
             };
@@ -10666,6 +10890,10 @@ static juce::String engineDescription(int eng)
         case DrumChannel::SrcGrain:  return "GRANULAR - clouds of tiny windowed grains. Source = this slot's SAMPLE when "
                                             "one is loaded, else a rendered journey of the slot's wave (Custom's 4 frames "
                                             "= the Position scan). Pads, textures, stutters, frozen moments.";
+        case DrumChannel::SrcWguide: return "WAVEGUIDE - a blown/bowed physical model (Reed / Flute / Bow): the note is "
+                                            "CONTINUOUSLY DRIVEN as long as the key is held (raise Sustain!), then rings "
+                                            "out on release. Winds, bowed strings, breathy sustains - drag the bore "
+                                            "visual's handles for pickup position + brightness.";
         default:                     return "Pick this slot's sound engine (or a sample). Two slots blend into one sound.";
     }
 }
@@ -10722,6 +10950,7 @@ void DrumSequencerEditor::rebuildSlotMenus()
                                         // projects); the Oscillator now covers wavetable-style shaping (more shapes + Warp).
         root->addItem(9, "Modal");      // id = engine+2 -> SrcModal (7); maps automatically (struck resonant body)
         root->addItem(10, "Granular");  // id = engine+2 -> SrcGrain (8): grains of a wave journey or the slot's sample
+        root->addItem(11, "Waveguide"); // id = engine+2 -> SrcWguide (9): continuously-driven blown/bowed bore [2026-07-18]
     }
     syncBoxesFromSrcOn();   // restore the current channel's displayed text
 }
@@ -10734,9 +10963,9 @@ void DrumSequencerEditor::rebuildSlotMenus()
 void DrumSequencerEditor::syncPadFromSlots(bool recenter)
 {
     auto& ch = proc.sequencer.channel(selectedChannel);
-    static const char* eng[DrumChannel::NUM_SOURCES + 4] = { "Sample", "Noise", "Oscillator", "FM", "Karplus-Strong", "Synth", "Wavetable", "Modal", "Granular" };
+    static const char* eng[DrumChannel::NUM_SOURCES + 5] = { "Sample", "Noise", "Oscillator", "FM", "Karplus-Strong", "Synth", "Wavetable", "Modal", "Granular", "Waveguide" };
     bool a[DrumChannel::NUM_SLOTS];
-    int total[DrumChannel::NUM_SOURCES + 4] = {}, seen[DrumChannel::NUM_SOURCES + 4] = {};
+    int total[DrumChannel::NUM_SOURCES + 5] = {}, seen[DrumChannel::NUM_SOURCES + 5] = {};
     for (int b = 0; b < DrumChannel::NUM_SLOTS; ++b)
     { a[b] = (ch.slots[b].engine >= 0); if (a[b]) total[ch.slots[b].engine]++; }
 
@@ -11313,7 +11542,8 @@ void DrumSequencerEditor::updateKeyboardHighlight()
             const auto& sl = c.slots[s];
             if (sl.engine < 0 || sl.weight <= 0.001f) return;   // empty/muted slot
             const bool pitched = (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal
-                                  || sl.engine == DrumChannel::SrcPhys || sl.engine == DrumChannel::SrcGrain);   // [2026-07-16]
+                                  || sl.engine == DrumChannel::SrcPhys || sl.engine == DrumChannel::SrcGrain
+                                  || sl.engine == DrumChannel::SrcWguide);   // [2026-07-18]
             const bool transposes = pitched || (sl.engine == DrumChannel::SrcSample && ! sl.smpPreservePitch);
             const int base = held - (s == 1 && transposes ? c.keysSlot2Down : 0);
             auto add = [&](int off) { if (off < -90) return;   // guitar voicing: missing string
@@ -11578,7 +11808,7 @@ void DrumSequencerEditor::onSlotEngineChange(int box)
     }
     else
     {
-        boxEngine[box] = (id <= 1) ? -1 : id - 2;   // None / Noise / Analog+FM / FM / Physical / Synth / Wave / Modal / Granular
+        boxEngine[box] = (id <= 1) ? -1 : id - 2;   // None / Noise / Analog+FM / FM / Physical / Synth / Wave / Modal / Granular / Waveguide
         ch.slots[box].engine = boxEngine[box];
         ch.silenceAllVoices();   // don't let a voice ringing on the OLD engine get re-read as the new one (= noise)
         ch.ensureKsBuffers();    // KS lines are lazily allocated; a KS engine just got assigned (message thread)
@@ -11593,7 +11823,8 @@ void DrumSequencerEditor::onSlotEngineChange(int box)
         for (auto& r : ch.slots[box].mod)
         {
             const bool gridTgt = (r.tgt >= DrumChannel::MT_GRID_BASE && r.tgt < DrumChannel::MT_GRID_END);   // engine knobs only (Sub/Formant sit above + survive)
-            const bool warpTgt = (r.tgt == DrumChannel::MTWarp    && ne != DrumChannel::SrcOsc);
+            const bool warpTgt = ((r.tgt == DrumChannel::MTWarp || r.tgt == DrumChannel::MTSyncAmt
+                                   || r.tgt == DrumChannel::MTBendAmt) && ne != DrumChannel::SrcOsc);   // shape trio = Osc only
             const bool wposTgt = (r.tgt == DrumChannel::MTWavePos && ne != DrumChannel::SrcOsc);   // Wave Position = Osc-only now
             const bool cntTgt  = (r.tgt == DrumChannel::MTUniCount && ne != DrumChannel::SrcOsc);   // [2026-07-14 02:50] count-morph = Osc only
             if (gridTgt || warpTgt || wposTgt || cntTgt) { r.src = DrumChannel::MSOff; r.tgt = DrumChannel::MTOff; r.amt = 0.0f; }
@@ -11876,7 +12107,7 @@ void DrumSequencerEditor::updateFxFaders(const DrumChannel::Slot& sl)
     // CHANNEL FX + sends read the CHANNEL (both slots combined) - they never follow the slot selector.
     { const auto& ch = proc.sequencer.channel(selectedChannel);
       for (int i = 0; i < 3; ++i)
-      { comboChFx[i].setSelectedId(juce::jlimit(0, 16, ch.chFxType[i]) + 1, juce::dontSendNotification);
+      { comboChFx[i].setSelectedId(juce::jlimit(0, 17, ch.chFxType[i]) + 1, juce::dontSendNotification);
         chFxChrF[i].repaint();   // the Character read-out depends on the TYPE - repaint even when the value didn't move [2026-07-15 15:00]
         chFxAmtF[i].setValue01(ch.chFxAmt[i]);
         chFxChrF[i].setValue01(ch.chFxChar[i]);
@@ -12724,7 +12955,7 @@ void DrumSequencerEditor::timerCallback()
             float grid[DrumChannel::MOD_TGT_GRID];
             for (int i = 0; i < DrumChannel::MOD_TGT_GRID; ++i) grid[i] = liveFx(s, 9 + i);
             slotEd[s].setGridModRings(grid, DrumChannel::MOD_TGT_GRID);
-            slotEd[s].setOscModLive(liveFx(s, 17), liveFx(s, 9), liveFx(s, 10));
+            slotEd[s].setOscModLive(liveFx(s, 17), liveFx(s, 9), liveFx(s, 10), liveFx(s, 32), liveFx(s, 33));
         }
         // UNISON visual: rings on detune/vib/width/drift when a route targets them (-1000 -> no ring).
         auto uf = [&](int i) { const float r = liveFx(ms, i); return r < -900.0f ? -1.0f : r; };
@@ -12754,6 +12985,12 @@ void DrumSequencerEditor::timerCallback()
                                           : juce::String());
             }
             else if (mv.grainN >= 0) mv.setGrainLive(nullptr, -1, {});
+            // [2026-07-18] WAVEGUIDE live bore wave: the literal delay-line contents (honest layer 3)
+            if (dc.slots[b2].engine == DrumChannel::SrcWguide)
+            {
+                float wp[96];
+                slotEd[b2].wgView.setLive(wp, dc.getWaveguideSnapshot(b2, wp, 96));
+            }
             // LIVE wavetable position marker on the slot preview [2026-07-16 round-5]: same
             // engine value as the draw window's amber marker (honest; -1 clears when idle).
             mv.setWtPosLive(dc.slots[b2].engine == DrumChannel::SrcOsc

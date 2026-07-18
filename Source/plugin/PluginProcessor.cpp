@@ -1407,6 +1407,7 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
             { "ui_sel_chVol", SelChVol }, { "ui_sel_swing", SelSwing }, { "ui_sel_bpm", SelBpm },
             { "ui_sel_slotFreq", SelSlotFreq }, { "ui_sel_slotFmAmt", SelSlotFmAmt },
             { "ui_sel_slotWarp", SelSlotWarp },
+            { "ui_sel_slotSync", SelSlotSync }, { "ui_sel_slotBend", SelSlotBend },   // [2026-07-18] shape trio
             { "ui_sel_others", SelOthersVol },     // Others trim (+-6 dB on unselected channels) [2026-07-15 22:30]
             { "ui_sel_scaleNotes", SelScaleNotes }, { "ui_sel_scaleType", SelScaleType },   // ScaleBox [2026-07-16]
             { "ui_sel_scaleKey", SelScaleKey } };
@@ -1903,7 +1904,8 @@ juce::File DrumSequencerProcessor::exportMidiFile(int channel)
                 if (sl.weight <= 0.001f) continue;
                 double hz = 0.0;
                 if      (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal
-                      || sl.engine == DrumChannel::SrcGrain) hz = sl.oscFreq;   // grain is pitched too [2026-07-16]
+                      || sl.engine == DrumChannel::SrcGrain
+                      || sl.engine == DrumChannel::SrcWguide) hz = sl.oscFreq;   // grain + waveguide are pitched too
                 else if (sl.engine == DrumChannel::SrcPhys)                                      hz = sl.physFreq;
                 else continue;   // Sample / Noise: unpitched -> contributes no notes
                 PSlot p; p.slotIdx = si;
@@ -2262,7 +2264,7 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
     ch.strumAmt    = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("strum",    0.0f));   // STRUM
     for (int f = 0; f < 3; ++f)   // CHANNEL FX slots (readSlots migrates a pre-slot-system file after this)
     { const juce::String k(f);
-      ch.chFxType[f] = juce::jlimit(0, 16, (int) child.getProperty("cfxT" + k, 0));   // 16 = the "(sync)" variants [2026-07-15]
+      ch.chFxType[f] = juce::jlimit(0, 17, (int) child.getProperty("cfxT" + k, 0));   // 16 = "(sync)" variants; 17 = Resonator [2026-07-18]
       ch.chFxAmt[f]  = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("cfxA" + k, 0.0f));
       ch.chFxChar[f] = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("cfxC" + k, 0.5f)); }
     {   // MIGRATION: last week's 4-fixed-effect files ("chFxCho"...) -> the strongest two FX slots

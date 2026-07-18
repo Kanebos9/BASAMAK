@@ -911,6 +911,38 @@ private:
 };
 
 //==============================================================================
+// [2026-07-18] WAVEGUIDE bore controller - three HONEST layers (user-approved concept):
+// (1) the drawing IS the parameters (StringDisplay precedent): drag the PICKUP dot along the
+//     bore = wgPos; drag the BELL (right end) up/down = wgBright;
+// (2) the small excitation-curve inset is data-as-drawing: the EXACT nonlinearity the DSP
+//     evaluates per sample (Reed table / jet cubic / bow friction - mirror rule);
+// (3) the travelling wave INSIDE the bore is real state: the literal delay-line contents
+//     (setLive, fed by the editor timer from getWaveguideSnapshot - the grain-dot precedent).
+class WaveguideDisplay : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    std::function<DrumChannel::Slot*()> getSlot;
+    std::function<void()> onEdit;
+    std::function<void()> onDragEnd;
+    juce::Colour accent { 0xffe8bf4d };
+    void setLive(const float* pts, int n)
+    {
+        liveN = juce::jmin(n, 96);
+        for (int i = 0; i < liveN; ++i) live[i] = pts[i];
+        repaint();
+    }
+    void paint(juce::Graphics& g) override;
+    void mouseDown(const juce::MouseEvent& e) override;
+    void mouseDrag(const juce::MouseEvent& e) override;
+    void mouseUp(const juce::MouseEvent&) override { dragWhat = 0; if (onDragEnd) onDragEnd(); }
+    juce::String getTooltip() override;
+private:
+    void applyDrag(const juce::MouseEvent& e);
+    int   dragWhat = 0;   // 1 = pickup dot (x -> wgPos), 2 = bell (y -> wgBright)
+    float live[96] = {}; int liveN = 0;
+};
+
+//==============================================================================
 // WavetableDisplay - shows the SrcWave engine's current single-cycle waveform (read from the
 // real wavetable bank at the slot's Table + Position). Faint neighbour frames behind give the
 // "table" feel; the bright wave morphs as you turn Position. Read-only (no click editing).
@@ -1385,8 +1417,10 @@ public:
     { for (int i = 0; i < (int) knobs.size() && i < n; ++i)
         knobs[i]->setModRing(v[i] < -900.0f ? -1.0f : (float) knobs[i]->valueToProportionOfLength(v[i])); }
     // Warp fader ring + the LIVE WAVE PREVIEW (the drawing follows the modulated FM/Warp, not just the knobs).
-    void setOscModLive(float warpRaw, float fmRaw, float ratioRaw)
+    void setOscModLive(float warpRaw, float fmRaw, float ratioRaw, float syncRaw = -1000.0f, float bendRaw = -1000.0f)
     { if (warpFader != nullptr) warpFader->setModRing(warpRaw < -900.0f ? -1.0f : (float) warpFader->valueToProportionOfLength(warpRaw));
+      if (syncFader != nullptr) syncFader->setModRing(syncRaw < -900.0f ? -1.0f : (float) syncFader->valueToProportionOfLength(syncRaw));
+      if (bendFader != nullptr) bendFader->setModRing(bendRaw < -900.0f ? -1.0f : (float) bendFader->valueToProportionOfLength(bendRaw));
       morphView.setModLive(fmRaw, ratioRaw, warpRaw); }
     std::function<void(int srcSlot)> onCopyFromSlot;   // the other slot's box was dropped on this one
     // DRAG-COPY SOURCE (user: "drag from where im not controlling knobs/faders", no handle/text): the
@@ -1457,6 +1491,7 @@ public:
     WaveMorphDisplay morphView;                     // Analog/FM only: Wave A->B morph (replaces 2 knobs)
     WavetableDisplay waveView;                       // SrcWave only: the current wavetable waveform
     StringDisplay    physView;                       // Physical only: interactive string (Position/Tone on the visual)
+    WaveguideDisplay wgView;                         // [2026-07-18] Waveguide only: interactive bore (Position/Brightness + live wave)
     ModalDisplay     modalView;                      // Modal only: interactive struck-body (Hit Pos/Damp on the visual)
     ToggleSwitch     fmEnvSw;                        // SrcOsc only: FM Amount follows the amp envelope
     // Drop an audio file on the box -> the editor switches this slot to Sample + loads it.
@@ -1480,6 +1515,9 @@ public:
     // SrcOsc wave pickers: From / To vertical faders flanking the wave (replace click-to-cycle) + a
     // horizontal Warp fader (phase skew / PWM) in the ANALOG section.
     std::unique_ptr<LearnableKnob> fromFader, toFader, warpFader;
+    // [2026-07-18] the SHAPE TRIO's other two faders (right column beside the FM trio):
+    // warpFader = Fold (renamed on screen), syncFader = hard sync, bendFader = CZ phase distortion.
+    std::unique_ptr<LearnableKnob> syncFader, bendFader;
 
     void init(int idx, MidiLearnManager& mlm, juce::LookAndFeel* knobLNF,
               std::function<DrumChannel::Slot*()> slotFn, std::function<void()> editFn);
@@ -1492,8 +1530,10 @@ public:
         for (auto& k : knobs) { k->setColour(juce::Slider::rotarySliderFillColourId, c);
                                 k->setColour(juce::Slider::thumbColourId, c);
                                 k->setColour(juce::Slider::trackColourId, c); }   // filled side of the engine FADERS = slot colour
-        for (auto* f : { freqFader.get(), depthFader.get(), fromFader.get(), warpFader.get() })
+        for (auto* f : { freqFader.get(), depthFader.get(), fromFader.get(), warpFader.get(),
+                         syncFader.get(), bendFader.get() })
             if (f) f->setColour(juce::Slider::trackColourId, c);
+        wgView.accent = c;   // [2026-07-18] the bore visual wears the slot colour too
     }
     void setEngine(int eng);     // rebuild params + show/hide knobs
     void pushValues();           // slot -> knobs (no notification)
@@ -1512,7 +1552,7 @@ private:
     int lastActiveCount = -1;      // detect when the reson reveal changes -> relayout
     // SrcOsc section markers (set in placeOsc, drawn in paint): divider line Ys + label strips.
     bool oscLayout = false; int fmLineY = -1, resLineY = -1;
-    juce::Rectangle<int> fmLabelR, resLabelR, oscLabelR, warpLabelR, freqLabelR;
+    juce::Rectangle<int> fmLabelR, resLabelR, oscLabelR, warpLabelR, freqLabelR, syncLabelR, bendLabelR;
 };
 
 //==============================================================================

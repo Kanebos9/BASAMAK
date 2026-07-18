@@ -168,6 +168,7 @@ public:
                        SelChNext, SelChPrev, SelPatNext, SelPatPrev,
                        SelFollow, SelTest, SelChVol, SelSwing, SelBpm, SelUndo, SelRedo,
                        SelSlotFreq, SelSlotFmAmt, SelSlotWarp,   // the selected slot's Osc faders
+                       SelSlotSync, SelSlotBend,                 // [2026-07-18] the shape trio's Sync/Bend faders
                        SelChFxChrA, SelChFxChrB, SelFxRing, SelFxFormant, SelFxRingHz,   // CHANNEL FX A/B Character + slot Ring/Formant/RingHz
                        SelChFxAmtC, SelChFxChrC,                 // CHANNEL FX slot C
                        SelSlotPan,                               // static slot pan (selected slot)

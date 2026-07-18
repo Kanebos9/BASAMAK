@@ -2368,6 +2368,132 @@ static void oPumpBass(DC& c) {     // sidechain FEEL without a sidechain: a per-
     modRoute(s, DC::MSLfoFilt, DC::MTVol, 0.8f);
     chFx(c, DC::ChFxComp, 0.3f); c.volume = 0.9f;
 }
+// ==== [2026-07-18] SOUND-EXPANSION showcases: the WAVEGUIDE engine (Reed/Flute/Bow = the bank's
+// first CONTINUOUSLY-DRIVEN family), the shape trio (Sync/Bend/Fold), the Resonator channel FX
+// and the Metal Cluster material. Mechanism-first per the ORIGINALS rule - each sound exists
+// because its mechanism can't be made any other way. ====
+static void yWoodReed(DC& c) {     // WAVEGUIDE Reed: a real driven clarinet-family bore
+    auto& s = mkSlot(c, DC::SrcWguide);
+    s.oscFreq = 261.63f; s.wgExcite = 0; s.wgPressure = 0.55f; s.wgBreath = 0.18f;
+    s.wgBright = 0.45f; s.wgPos = 0.3f;
+    s.atk = 0.045f; s.dec = 0.4f; s.sustain = 0.85f; s.release = 0.2f;
+    s.vibrato = 0.25f; s.drift = 0.2f;
+    modRoute(s, DC::MSModWheel, DC::MT_GRID_BASE + 2, 0.35f);   // Mod Wheel -> Pressure = real breath control
+    c.reverbSend = 0.25f; c.volume = 0.9f;
+}
+static void yBreathFlute(DC& c) {  // WAVEGUIDE Flute: air jet + airy breath, bright open bore
+    auto& s = mkSlot(c, DC::SrcWguide);
+    s.oscFreq = 523.25f; s.wgExcite = 1; s.wgPressure = 0.5f; s.wgBreath = 0.35f;
+    s.wgBright = 0.8f; s.wgPos = 0.2f;
+    s.atk = 0.06f; s.dec = 0.4f; s.sustain = 0.9f; s.release = 0.25f;
+    s.vibrato = 0.35f; s.drift = 0.25f;
+    modRoute(s, DC::MSModWheel, DC::MT_GRID_BASE + 2, 0.3f);    // wheel = blow harder
+    c.reverbSend = 0.3f; c.volume = 0.9f;
+}
+static void yBowedCello(DC& c) {   // WAVEGUIDE Bow: stick-slip string, slow bow start, singing hold
+    auto& s = mkSlot(c, DC::SrcWguide);
+    s.oscFreq = 130.81f; s.wgExcite = 2; s.wgPressure = 0.6f; s.wgBreath = 0.1f;
+    s.wgBright = 0.35f; s.wgPos = 0.22f;
+    s.atk = 0.12f; s.dec = 0.5f; s.sustain = 0.9f; s.release = 0.35f;
+    s.vibrato = 0.3f; s.drift = 0.25f;
+    s.filterType = DC::LowPass; s.filterCutoff = 3200.0f; s.filterReso = 0.8f;
+    modRoute(s, DC::MSModWheel, DC::MTVibrato, 0.4f);           // wheel = vibrato depth (a cellist's hand)
+    c.reverbSend = 0.35f; c.volume = 0.9f;
+}
+static void ySaxGrowl(DC& c) {     // WAVEGUIDE Reed OVERBLOWN into the amp: press hard = it growls
+    auto& s = mkSlot(c, DC::SrcWguide);
+    s.oscFreq = 196.0f; s.wgExcite = 0; s.wgPressure = 0.85f; s.wgBreath = 0.25f;
+    s.wgBright = 0.7f; s.wgPos = 0.4f;
+    s.atk = 0.03f; s.dec = 0.4f; s.sustain = 0.8f; s.release = 0.18f;
+    s.vibrato = 0.2f; s.drift = 0.3f;
+    s.fxDriveType = DC::DriveBassAmp; s.fxDrive = 0.35f;
+    modRoute(s, DC::MSModWheel, DC::MT_GRID_BASE + 2, 0.5f);    // wheel: soft blow -> full growl
+    chFx(c, DC::ChFxComp, 0.35f);
+    c.reverbSend = 0.2f; c.volume = 0.85f;
+}
+static void yScreamLead(DC& c) {   // HARD SYNC: the Mod Env sweeps the Sync ratio = the classic scream
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
+    s.oscUnison = 2; s.oscDetune = 0.12f;
+    s.oscSync = 0.2f;
+    s.modEnvA = 0.005f; s.modEnvD = 0.5f; s.modEnvS = 0.0f;
+    modRoute(s, DC::MSModEnv, DC::MTSyncAmt, 0.75f);            // ratio rips down over the note
+    s.atk = 0.003f; s.dec = 0.8f; s.sustain = 0.7f; s.release = 0.15f;
+    s.fxDriveType = DC::Tube; s.fxDrive = 0.25f;
+    c.reverbSend = 0.18f; c.volume = 0.85f;
+}
+static void ySyncBass(DC& c) {     // HARD SYNC bass: velocity tears the ratio open - play it harder
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 55.0f;
+    s.oscSync = 0.3f;
+    modRoute(s, DC::MSVel, DC::MTSyncAmt, 0.5f);
+    s.atk = 0.004f; s.dec = 0.5f; s.sustain = 0.75f; s.release = 0.1f;
+    s.filterType = DC::LowPass; s.filterCutoff = 950.0f; s.filterReso = 1.4f;
+    s.fxSub = 0.5f;
+    c.volume = 0.9f;
+}
+static void yCzKeys(DC& c) {       // PHASE DISTORTION keys (the Casio CZ trick): the Bend opens at the
+    auto& s = mkSlot(c, DC::SrcOsc);                        // strike and closes over the decay - a
+    s.oscShape = s.oscShapeB = DC::WvSine; s.oscFreq = 261.63f;   // resonant sweep with NO filter
+    s.oscBend = 0.65f;
+    s.modEnvA = 0.003f; s.modEnvD = 0.7f; s.modEnvS = 0.0f;
+    modRoute(s, DC::MSModEnv, DC::MTBendAmt, -0.5f);
+    s.atk = 0.003f; s.dec = 1.2f; s.sustain = 0.4f; s.release = 0.3f;
+    c.reverbSend = 0.2f; c.volume = 0.9f;
+}
+static void yPdStrings(DC& c) {    // PD string machine: a slow free LFO breathes the Bend across a wide stack
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;
+    s.oscUnison = 5; s.oscDetune = 0.2f; s.uniSpread = 0.7f;
+    s.oscBend = 0.4f;
+    s.lfoRate[0] = 0.25f; s.lfoAmt[0] = 0.5f; s.lfoFree[0] = true;
+    modRoute(s, DC::MSLfoFilt, DC::MTBendAmt, 0.35f);
+    s.atk = 0.4f; s.dec = 1.5f; s.sustain = 0.85f; s.release = 0.8f;
+    s.filterType = DC::LowPass; s.filterCutoff = 5200.0f; s.filterReso = 0.7f;
+    c.reverbSend = 0.4f; c.volume = 0.8f;
+}
+static void yTearPad(DC& c) {      // ALL THREE shape faders at once (Sync + Bend + Fold, freely combined)
+    auto& s = mkSlot(c, DC::SrcOsc);                        // + a slow free LFO pulling the Sync = a
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 130.81f;   // pad that slowly tears itself open
+    s.oscUnison = 3; s.oscDetune = 0.15f; s.uniSpread = 0.6f;
+    s.oscSync = 0.3f; s.oscBend = 0.3f; s.oscWarp = 0.25f;
+    s.lfoRate[0] = 0.18f; s.lfoAmt[0] = 0.6f; s.lfoFree[0] = true;
+    modRoute(s, DC::MSLfoFilt, DC::MTSyncAmt, 0.4f);
+    s.atk = 0.3f; s.dec = 1.8f; s.sustain = 0.8f; s.release = 0.9f;
+    s.filterType = DC::LowPass; s.filterCutoff = 2600.0f; s.filterReso = 0.9f;
+    c.reverbSend = 0.45f; c.volume = 0.75f;
+}
+static void yWirePerc(DC& c) {     // RESONATOR showcase: a plain noise tick through the note-tracked
+    auto& s = mkSlot(c, DC::SrcNoise);                      // comb = pitched metal percussion that
+    s.noiseType = 0;                                        // follows whatever note you play
+    s.atk = 0.001f; s.hold = 0.0f; s.dec = 0.12f;
+    s.filterType = DC::HighPass; s.filterCutoff = 300.0f;
+    chFx(c, DC::ChFxResonator, 0.85f, 0.5f);                // Character 0.5 = ring AT the played note
+    c.volume = 0.9f;
+}
+static void yHaloBass(DC& c) {     // RESONATOR an octave UP over a dark bass = a singing halo the
+    auto& s = mkSlot(c, DC::SrcOsc);                        // note drags along with itself
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 55.0f;
+    s.atk = 0.004f; s.dec = 0.6f; s.sustain = 0.8f; s.release = 0.12f;
+    s.filterType = DC::LowPass; s.filterCutoff = 1200.0f; s.filterReso = 1.0f;
+    s.fxSub = 0.4f;
+    chFx(c, DC::ChFxResonator, 0.45f, 1.0f);                // Character 1.0 = +12 st = the octave halo
+    c.volume = 0.9f;
+}
+static void yClusterCymbal(DC& c) {// METAL CLUSTER: the 808-cymbal recipe - six FIXED inharmonic
+    auto& s = mkSlot(c, DC::SrcModal);                      // partials (they never retune = the metal)
+    s.oscFreq = 205.3f;                                     // + a sizzle layer, HP'd + clipped
+    s.modalMaterial = DC::modalMaterialCount() - 1;         // Metal Cluster (last entry, fixedHz)
+    s.modalDecay = 0.55f; s.modalTone = 0.85f; s.modalStruct = 0.5f;
+    s.atk = 0.001f; s.dec = 1.2f;
+    s.fxDriveType = DC::HardClip; s.fxDrive = 0.2f;
+    s.filterType = DC::HighPass; s.filterCutoff = 320.0f;
+    auto& n = mkSlot2(c, DC::SrcNoise, 0.68f);              // the sizzle (white, HP'd high)
+    n.noiseType = 0; n.atk = 0.001f; n.dec = 0.5f;
+    n.filterType = DC::HighPass; n.filterCutoff = 6200.0f;
+    c.volume = 0.85f;
+}
+
 static void oWobbleStep(DC& c) {   // a PROGRAMMED dubstep wobble: 8 drawn filter steps per bar, redraw at will
     auto& s = mkSlot(c, DC::SrcOsc);
     s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 55.0f;
@@ -2659,6 +2785,20 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Ocean", mOcean, "Noise & Texture" },
     { "Ambient Wash", nAmbientWash, "Noise & Texture" },
     { "Evolver", sEvolver, "Noise & Texture" },
+    // ---- [2026-07-18] SOUND-EXPANSION batch (Waveguide / Sync / Bend / Resonator / Metal Cluster;
+    //      the menu sorts alphabetically inside each category, the table stays batch-grouped) ----
+    { "Wood Reed", yWoodReed, "Leads" },              // WAVEGUIDE Reed: a real driven clarinet bore (wheel = breath)
+    { "Breath Flute", yBreathFlute, "Leads" },        // WAVEGUIDE Flute: air jet + breath, bright open bore
+    { "Sax Growl", ySaxGrowl, "Leads" },              // WAVEGUIDE Reed overblown into the Bass Amp
+    { "Scream Lead", yScreamLead, "Leads" },          // HARD SYNC: Mod Env sweeps the ratio = the classic scream
+    { "Bowed Cello", yBowedCello, "Plucks & Strings" },// WAVEGUIDE Bow: stick-slip string, singing hold
+    { "Sync Bass", ySyncBass, "Bass" },               // HARD SYNC: velocity tears the ratio open
+    { "Halo Bass", yHaloBass, "Bass" },               // RESONATOR +12 st: a singing octave halo over a dark bass
+    { "CZ Keys", yCzKeys, "Keys" },                   // PHASE DISTORTION: a resonant sweep with NO filter
+    { "PD Strings", yPdStrings, "Pads & Choirs" },    // PD string machine (free LFO breathes the Bend)
+    { "Tear Pad", yTearPad, "Pads & Choirs" },        // Sync + Bend + Fold combined; slow LFO tears it open
+    { "Wire Perc", yWirePerc, "Electro Perc" },       // RESONATOR: a noise tick becomes note-tracked metal
+    { "Cluster Cymbal", yClusterCymbal, "Cymbals" },  // METAL CLUSTER: the 808 fixed-partial recipe + sizzle
 };
 static constexpr int kNumMixes = (int) (sizeof(kMixes) / sizeof(kMixes[0]));
 
@@ -2685,7 +2825,7 @@ juce::String mixSourceTag(int index)
     // Oscillator sounds are tagged by what they USE (engine renamed "Oscillator", 2026-07-10):
     // a slot playing the drawn Custom wave = "Additive"; any FM engaged = "Oscillator+FM"; pure =
     // "Oscillator". Two OSC slots (e.g. lead + sub) are still one engine family, NOT "Hybrid".
-    static const char* eng[] = { "Sample", "Noise", "Oscillator", "FM", "Karplus-Strong", "Synth", "Wave", "Modal", "Granular" };
+    static const char* eng[] = { "Sample", "Noise", "Oscillator", "FM", "Karplus-Strong", "Synth", "Wave", "Modal", "Granular", "Waveguide" };
     int firstEng = -1; bool sameEng = true, anyEng = false, allOsc = true, anyFM = false, anyAdd = false;
     for (auto& sl : tmp.slots)
         if (sl.engine >= 0 && sl.weight > 0.001f)

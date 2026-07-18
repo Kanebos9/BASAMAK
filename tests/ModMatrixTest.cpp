@@ -622,6 +622,67 @@ int main()
                maxdiff(off1, off2), h8off, h8lp, h8lp > 1e-9 ? h8off / h8lp : 999.0, maxdiff(lp, md),
                CHK(maxdiff(off1, off2) < 1.0e-9f && h8off > 8.0 * (h8lp + 1e-9) && maxdiff(lp, md) > 0.01f && finite(lp)) ? "OK" : "FAIL");
     }
+    {   // [26] SHAPE TRIO [2026-07-18]: Sync + Bend faders are audible; both are HOT matrix
+        // targets (Mod Env -> Sync = the screaming sweep); off = handled by every older check
+        // in this suite still passing bit-identical.
+        auto sine = [](DrumChannel& c){ for (auto& sl : c.slots) sl = DrumChannel::Slot();
+            auto& s = c.slots[0]; s.engine = DrumChannel::SrcOsc; s.weight = 1.0f;
+            s.oscShape = s.oscShapeB = 0; s.oscFreq = 220.0f;
+            s.atk = 0.002f; s.hold = 0.3f; s.dec = 0.3f; };
+        auto dry  = render(sine, 0.9f, 0.5);
+        auto sy   = render([&](DrumChannel& c){ sine(c); c.slots[0].oscSync = 0.6f; }, 0.9f, 0.5);
+        auto bd   = render([&](DrumChannel& c){ sine(c); c.slots[0].oscBend = 0.6f; }, 0.9f, 0.5);
+        auto both = render([&](DrumChannel& c){ sine(c); c.slots[0].oscSync = 0.5f; c.slots[0].oscBend = 0.5f;
+                                                c.slots[0].oscWarp = 0.4f; }, 0.9f, 0.5);
+        auto rt   = render([&](DrumChannel& c){ sine(c);
+            c.slots[0].modEnvA = 0.005f; c.slots[0].modEnvD = 0.3f; c.slots[0].modEnvS = 0.0f;
+            c.slots[0].mod[0].src = DrumChannel::MSModEnv; c.slots[0].mod[0].tgt = DrumChannel::MTSyncAmt;
+            c.slots[0].mod[0].amt = 0.8f; }, 0.9f, 0.5);
+        printf("[26] shape trio: sync maxdiff=%.3f bend=%.3f all-three=%.3f modenv-route=%.3f (all >0.05, finite) -> %s\n",
+               maxdiff(dry, sy), maxdiff(dry, bd), maxdiff(dry, both), maxdiff(dry, rt),
+               CHK(maxdiff(dry, sy) > 0.05f && maxdiff(dry, bd) > 0.05f && maxdiff(dry, both) > 0.05f
+                   && maxdiff(dry, rt) > 0.05f && finite(sy) && finite(bd) && finite(both) && finite(rt)) ? "OK" : "FAIL");
+    }
+    {   // [27] RESONATOR channel FX [2026-07-18]: off = bit-identical; on = the noise tick rings
+        // AT the tracked note (a +12 st step moves the ring an octave up = real note tracking)
+        auto tick = [](DrumChannel& c){ for (auto& sl : c.slots) sl = DrumChannel::Slot();
+            auto& s = c.slots[0]; s.engine = DrumChannel::SrcNoise; s.weight = 1.0f;
+            s.atk = 0.001f; s.dec = 0.08f; };
+        auto dry  = render(tick, 0.9f, 0.6);
+        auto off0 = render([&](DrumChannel& c){ tick(c); c.chFxType[0] = DrumChannel::ChFxResonator;
+                                                c.chFxAmt[0] = 0.0f; }, 0.9f, 0.6);
+        auto on0  = render([&](DrumChannel& c){ tick(c); c.chFxType[0] = DrumChannel::ChFxResonator;
+                                                c.chFxAmt[0] = 0.85f; }, 0.9f, 0.6);
+        auto up12 = render([&](DrumChannel& c){ tick(c); c.chFxType[0] = DrumChannel::ChFxResonator;
+                                                c.chFxAmt[0] = 0.85f; }, 0.9f, 0.6, 12);
+        auto gz = [](const std::vector<float>& x, double f){
+            const double w = 2.0 * juce::MathConstants<double>::pi * f / SR, cw = 2.0 * std::cos(w);
+            double s0 = 0, s1 = 0, s2 = 0;
+            for (size_t i = (size_t)(0.15 * SR); i < x.size() && i < (size_t)(0.55 * SR); ++i)
+            { s0 = (double) x[i] + cw * s1 - s2; s2 = s1; s1 = s0; }
+            return std::sqrt(std::max(0.0, s1 * s1 + s2 * s2 - cw * s1 * s2)); };
+        // C4 fallback: an unpitched channel's step pitch names the note relative to C4 (261.63)
+        const double base = gz(on0, 261.63), baseUp = gz(up12, 523.25), wrongUp = gz(up12, 261.63);
+        printf("[27] resonator: amt0 maxdiff=%.6f (expect 0) | ring g(262)=%.1f (>5x dry %.1f) | +12st g(523)=%.1f > g(262)=%.1f -> %s\n",
+               maxdiff(dry, off0), base, gz(dry, 261.63), baseUp, wrongUp,
+               CHK(maxdiff(dry, off0) == 0.0f && base > 5.0 * gz(dry, 261.63)
+                   && baseUp > wrongUp && finite(on0) && finite(up12)) ? "OK" : "FAIL");
+    }
+    {   // [28] METAL CLUSTER [2026-07-18]: the fixed partials do NOT retune - a +12 st step is
+        // (near) bit-identical to the root render, while a normal material shifts audibly
+        auto clus = [](DrumChannel& c){ for (auto& sl : c.slots) sl = DrumChannel::Slot();
+            auto& s = c.slots[0]; s.engine = DrumChannel::SrcModal; s.weight = 1.0f;
+            s.oscFreq = 205.3f; s.modalMaterial = DrumChannel::modalMaterialCount() - 1;
+            s.modalDecay = 0.4f; s.atk = 0.001f; s.dec = 0.6f; };
+        auto a  = render(clus, 0.9f, 0.6);
+        auto b  = render(clus, 0.9f, 0.6, 12);
+        auto m0 = render([&](DrumChannel& c){ clus(c); c.slots[0].modalMaterial = 1; }, 0.9f, 0.6);
+        auto m1 = render([&](DrumChannel& c){ clus(c); c.slots[0].modalMaterial = 1; }, 0.9f, 0.6, 12);
+        printf("[28] metal cluster: fixed +12st maxdiff=%.4f (expect <0.01) | tubular +12st maxdiff=%.3f (expect >0.05) -> %s\n",
+               maxdiff(a, b), maxdiff(m0, m1),
+               CHK(maxdiff(a, b) < 0.01f && maxdiff(m0, m1) > 0.05f && rms(a) > 0.005) ? "OK" : "FAIL");
+    }
+
     printf(fails == 0 ? ">>> ModMatrixTest PASS\n" : ">>> ModMatrixTest FAIL (%d)\n", fails);
     return fails;
 }
