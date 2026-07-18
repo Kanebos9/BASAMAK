@@ -216,6 +216,15 @@ public:
         { juce::int64 p = from + i; dst[i] = p >= 0 ? r[(int)(p % (juce::int64) rn)] : 0.0f; }
     }
 
+    // [2026-07-19] WIZARD TAKE PREVIEW: the recorded-notes list auditions a saved WAV straight
+    // into the Main output (mixed in before the master soft-clip). Message thread loads + owns
+    // (Hold/Old graveyard); the audio thread reads only the atomic pointer + cursor (-1 = idle).
+    std::shared_ptr<juce::AudioBuffer<float>> msPrevHold, msPrevOld;
+    std::atomic<juce::AudioBuffer<float>*> msPrevLive { nullptr };
+    std::atomic<juce::int64> msPrevPos { -1 };
+    void previewFile(const juce::File& f);            // MESSAGE THREAD
+    void previewStop() { msPrevPos.store(-1, std::memory_order_relaxed); }
+
     // MIDI-in monitor (drives the on-screen "MIDI" indicator). midiInCount bumps
     // for EVERY incoming message so the UI can tell whether MIDI reaches us at all.
     std::atomic<uint32_t> midiInCount { 0 };

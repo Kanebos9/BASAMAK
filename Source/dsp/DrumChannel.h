@@ -580,7 +580,8 @@ public:
         // envelope allows (raise Sustain!). One-shot steps play through unchanged.
         bool  smpLoopOn = false;
         float smpLoopLo = 0.5f, smpLoopHi = 0.95f;   // loop region (fractions of the file)
-        bool  smpPreservePitch = true;          // Sample: IGNORE step/draw/key/env pitch (play at the sample's own pitch). Default ON.
+        bool  smpPreservePitch = false;         // Sample: IGNORE step/draw/key/env pitch (play at the sample's own pitch).
+                                                // [2026-07-19] default OFF (user order - notes should pitch samples; flip ON for drums)
                                          // (steps, piano roll, keys, slide) - always play the Base
                                          // Freq. Pitch env / vibrato / LFO still apply. Factory
                                          // default: ON for drum-type categories, OFF for melodic.

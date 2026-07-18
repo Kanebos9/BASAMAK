@@ -5947,6 +5947,7 @@ DrumSequencerEditor::~DrumSequencerEditor()
     for (auto& c : slotCombo) c.setLookAndFeel(nullptr);
     for (auto& c : comboChFx) c.setLookAndFeel(nullptr);   // TinyComboLNF
     for (auto& b : btnChFxFile) b.setLookAndFeel(nullptr);  // dropBtnLNF [2026-07-18]
+    for (auto& row : btnSmpTog) for (auto& b : row) b.setLookAndFeel(nullptr);   // tinyBtnLNF [2026-07-19]
     swDelaySync.setLookAndFeel(nullptr); swDelayPingPong.setLookAndFeel(nullptr);   // [2026-07-15] lit buttons (tinyBtnLNF)
     swReverbSync.setLookAndFeel(nullptr);
     for (auto* k : allKnobs) k->setLookAndFeel(nullptr);
@@ -10665,11 +10666,34 @@ void DrumSequencerEditor::setupComponents()
         swSmpPreserve[b].onClick = [this, b] { if (!ignoreKnobCallbacks) {
             proc.sequencer.channel(selectedChannel).slots[b].smpPreservePitch = swSmpPreserve[b].getToggleState();
             proc.sequencer.channel(selectedChannel).markDspDirty(); } };
-        swSmpPreserve[b].setTooltip("Keep pitch (ON by default): played NOTES never transpose this sample.\n\n"
+        swSmpPreserve[b].setTooltip("Keep pitch: played NOTES never transpose this sample (OFF by default; loading a MULTISAMPLE also switches it off - instruments pitch to the note).\n\n"
             "- The keyboard and per-step/roll pitch leave it alone - recording a melody can't detune it.\n"
             "- The pitch envelope, vibrato and pitch LFO STILL work (applied separately).\n"
             "- Turn OFF to play it as a pitched sampler: notes below C4 play slower (and always "
             "finish the whole sample).");
+        // [2026-07-19] the 4 sample toggles are a 2x2 BUTTON grid now (user: the stacked switches
+        // overlapped the box). Each button PROXIES its ToggleSwitch - state, handler logic and
+        // tooltip stay on the switch; refreshDetailPanel syncs the lit faces.
+        {
+            ToggleSwitch* sws[4] = { &swUseRegion[b], &swSampleReverse[b], &swSmpPreserve[b], &swSmpLoop[b] };
+            const char* nm[4] = { "Trim", "Reverse", "Keep pitch", "Loop" };
+            for (int t = 0; t < 4; ++t)
+            {
+                auto& btn = btnSmpTog[b][t];
+                content.addChildComponent(btn);
+                btn.setButtonText(nm[t]);
+                btn.setLookAndFeel(&tinyBtnLNF);
+                btn.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff2f9e57));
+                btn.setClickingTogglesState(true);
+                btn.setTooltip(sws[t]->getTooltip());
+                btn.onClick = [this, b, t] {
+                    if (ignoreKnobCallbacks) return;
+                    ToggleSwitch* sw2[4] = { &swUseRegion[b], &swSampleReverse[b], &swSmpPreserve[b], &swSmpLoop[b] };
+                    sw2[t]->setToggleState(btnSmpTog[b][t].getToggleState(), juce::dontSendNotification);
+                    if (sw2[t]->onClick) sw2[t]->onClick();
+                };
+            }
+        }
     }
     // PITCH (semitones) = transpose the WHOLE channel - works for every engine (synth freq + sample
     // varispeed), applied via vPitchMul in the render. Same unit as the pitch envelope. Per-channel.
@@ -12394,6 +12418,10 @@ void DrumSequencerEditor::refreshDetailPanel()
         swSampleReverse[b].setToggleState(sl.smpReverse, juce::dontSendNotification);
         swSmpPreserve[b].setToggleState(sl.smpPreservePitch, juce::dontSendNotification);
         swSmpLoop[b].setToggleState(sl.smpLoopOn, juce::dontSendNotification);
+        {   // [2026-07-19] the 2x2 proxy buttons mirror the switches
+            ToggleSwitch* sws[4] = { &swUseRegion[b], &swSampleReverse[b], &swSmpPreserve[b], &swSmpLoop[b] };
+            for (int t = 0; t < 4; ++t) btnSmpTog[b][t].setToggleState(sws[t]->getToggleState(), juce::dontSendNotification);
+        }
         waveform[b].setLoop(sl.smpLoopOn, sl.smpLoopLo, sl.smpLoopHi);
         swUseRegion[b].setToggleState(sl.smpUseRegion, juce::dontSendNotification);
         waveform[b].setSelectionEnabled(sl.smpUseRegion);
@@ -13814,6 +13842,7 @@ void DrumSequencerEditor::layoutContent()
             lblSampleReverse[b].setVisible(false); swSampleReverse[b].setVisible(false);
             lblSmpPreserve[b].setVisible(false); swSmpPreserve[b].setVisible(false);
             lblSmpLoop[b].setVisible(false); swSmpLoop[b].setVisible(false);
+            for (int t = 0; t < 4; ++t) btnSmpTog[b][t].setVisible(false);   // [2026-07-19] the 2x2 grid
         }
 
         // Use NUM_SLOTS engine headers purely as box OUTLINES (empty text; the dropdown is the visible header).
@@ -13851,18 +13880,21 @@ void DrumSequencerEditor::layoutContent()
                 waveform[b].setBounds(sbx[b] + 6, sby[b] + 20, slotW - 12, 46);   // slightly shorter -> room for 3 toggles
                 lblSampleLen[b].setVisible(false);                               // length is a watermark in the waveform now
                 knobTop = sby[b] + 70;                                            // knobs a bit higher (user)
-                // Trim + Reverse + Keep-pitch toggles stacked LEFT of the knobs - spaced so all 3 fit the box.
-                const int tcW = 52;
-                const int tcx = sbx[b] + 6, ty = knobTop + 2;
-                auto placeTog = [&](juce::Label& l, ToggleSwitch& sw, int yy) {
-                    l.setVisible(true); sw.setVisible(true); l.setJustificationType(juce::Justification::centred);
-                    l.setBounds(tcx, yy, tcW, 11); sw.setBounds(tcx + (tcW - 28) / 2, yy + 12, 28, 14);
-                };
-                placeTog(lblUseRegion[b],     swUseRegion[b],     ty);
-                placeTog(lblSampleReverse[b], swSampleReverse[b], ty + 22);
-                placeTog(lblSmpPreserve[b],   swSmpPreserve[b],   ty + 44);
-                placeTog(lblSmpLoop[b],       swSmpLoop[b],       ty + 66);   // 4 toggles at 22px pitch fit the box
-                knobX = sbx[b] + tcW + 6; knobW = slotW - tcW - 6;   // knobs occupy the rest, right of the toggles
+                // [2026-07-19] Trim/Reverse/Keep pitch/Loop = a 2x2 BUTTON grid (user design - the
+                // 4 stacked switches overlapped the box bottom). Old labels/switches stay hidden
+                // (the buttons proxy them); the knobs just start a little further right.
+                const int tcW = 118, tcx = sbx[b] + 6, ty = knobTop + 4;
+                const int bw = (tcW - 4) / 2, bh = 23;
+                for (int t = 0; t < 4; ++t)
+                {
+                    btnSmpTog[b][t].setVisible(true);
+                    btnSmpTog[b][t].setBounds(tcx + (t % 2) * (bw + 4), ty + (t / 2) * (bh + 6), bw, bh);
+                }
+                lblUseRegion[b].setVisible(false);     swUseRegion[b].setVisible(false);
+                lblSampleReverse[b].setVisible(false); swSampleReverse[b].setVisible(false);
+                lblSmpPreserve[b].setVisible(false);   swSmpPreserve[b].setVisible(false);
+                lblSmpLoop[b].setVisible(false);       swSmpLoop[b].setVisible(false);
+                knobX = sbx[b] + tcW + 8; knobW = slotW - tcW - 8;   // knobs right of the grid
             }
             slotEd[b].place(knobX, knobTop, knobW, slotH - (knobTop - sby[b]) - 4);
         }
@@ -13960,7 +13992,7 @@ void DrumSequencerEditor::layoutContent()
     // DRAW HARMONICS overlay: parked over the amp/pitch columns (opened from the Custom wave preview;
     // hidden again at the top of every layoutContent like the sound picker).
     harmEd.setBounds(cxAmp, colTop, ampEqW + gp + pitchW + gp + fxColW, colH);   // covers amp..FX (user-outlined area)
-    msWizard.setBounds(cxAmp, colTop + 20, 560, 292);   // [2026-07-18] wizard keeps its spot across relayouts (never auto-closed - a take may be running)
+    msWizard.setBounds(cxAmp, colTop + 6, 760, 326);   // [2026-07-19] wider = the RECORDED list column; keeps its spot across relayouts (never auto-closed - a take may be running)
     lfoCurveEd.setBounds(cxAmp, colTop, ampEqW + gp + pitchW + gp + fxColW, colH);   // LFO draw window = the wavetable menu's footprint (user 2026-07-16)
     routePicker.setBounds(cxPitch, colTop + 24, pitchW + gp + fxColW, colH - 48);   // route source|target chooser (parked left of the faders)
 

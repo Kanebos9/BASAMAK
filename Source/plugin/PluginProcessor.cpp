@@ -197,6 +197,20 @@ void DrumSequencerProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
 
 void DrumSequencerProcessor::releaseResources() {}
 
+// [2026-07-19] Load a saved take (mono WAV at OUR rate - the wizard wrote it) and start playback.
+void DrumSequencerProcessor::previewFile(const juce::File& f)
+{
+    msPrevPos.store(-1, std::memory_order_relaxed);
+    juce::AudioFormatManager fm; fm.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> r(fm.createReaderFor(f));
+    if (r == nullptr || r->lengthInSamples <= 0) return;
+    auto buf = std::make_shared<juce::AudioBuffer<float>>(1, (int) juce::jmin<juce::int64>(r->lengthInSamples, (juce::int64)(currentSampleRate * 12)));
+    r->read(buf.get(), 0, buf->getNumSamples(), 0, true, false);
+    msPrevOld = msPrevHold; msPrevHold = buf;         // graveyard: audio may still read the old one
+    msPrevLive.store(buf.get(), std::memory_order_release);
+    msPrevPos.store(0, std::memory_order_release);
+}
+
 void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                                            juce::MidiBuffer& midi)
 {
@@ -1293,6 +1307,20 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         //   0 dBFS. Any stray spike (10, 50, whatever) is bounded to at most ONE full-scale sample (a faint
         //   tick, never a loud burst); legit signal below 0.85 is untouched; hot mixes saturate musically.
         //   This is the standard "you cannot exceed full-scale" master ceiling every plugin has.
+        // [2026-07-19] WIZARD TAKE PREVIEW mix-in (before the soft-clip so it's bounded too)
+        if (auto* pb = msPrevLive.load(std::memory_order_acquire))
+        {
+            juce::int64 pos = msPrevPos.load(std::memory_order_relaxed);
+            if (pos >= 0 && audio.getNumChannels() >= 2)
+            {
+                const juce::int64 len = pb->getNumSamples();
+                const float* src = pb->getReadPointer(0);
+                float* o0 = audio.getWritePointer(0); float* o1 = audio.getWritePointer(1);
+                const int n = (int) juce::jmin<juce::int64>(numSamples, len - pos);
+                for (int i = 0; i < n; ++i) { const float v = src[pos + i]; o0[i] += v; o1[i] += v; }
+                msPrevPos.store(pos + n >= len ? -1 : pos + n, std::memory_order_relaxed);
+            }
+        }
         auto softclip = [](float x) -> float {
             if (! std::isfinite(x)) return 0.0f;
             constexpr float t = 0.85f;                                   // transparent below this

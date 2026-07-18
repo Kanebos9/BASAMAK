@@ -882,7 +882,8 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         s.smpSlices = (int)st.getProperty("sSl", d.smpSlices); s.smpStretch = (float)st.getProperty("sStr", d.smpStretch);
         s.smpGain = (float)st.getProperty("sGn", d.smpGain);
         s.smpEnvOn = (bool)st.getProperty("sEnv", d.smpEnvOn);
-        s.smpPreservePitch = (bool)st.getProperty("sPP", d.smpPreservePitch);   // default true (old projects preserve pitch)
+        s.smpPreservePitch = (bool)st.getProperty("sPP", true);   // READER default stays true: pre-sPP files were authored under the old ON default
+                                                                  // (the STRUCT default is false now - fresh slots pitch with the note [2026-07-19])
         s.smpLoopOn = (int)st.getProperty("sLp", 0) != 0;   // [2026-07-18] sample LOOP
         s.smpLoopLo = (float)st.getProperty("sLl", d.smpLoopLo); s.smpLoopHi = (float)st.getProperty("sLh", d.smpLoopHi);
         s.oscFold = (float)st.getProperty("yFo", d.oscFold); s.oscLevel = (float)st.getProperty("yOL", d.oscLevel);
@@ -1281,6 +1282,9 @@ bool DrumChannel::loadMultisample(int slot, const juce::File& folder)
     }
     slotSample[slot].usingUser = true;
     slotSample[slot].file = folder;   // the FOLDER names the instrument
+    slots[slot].smpPreservePitch = false;   // [2026-07-19] a multisample is an INSTRUMENT - always
+                                            // pitch to the note (user order; re-enable by hand for
+                                            // a drum-kit folder mapped across keys)
     slotSample[slot].loadedAtRate = hostRate;
     updateStretch(slot);
     msSetOld[slot] = msSet[slot];     // graveyard: old pointers stay valid through the fade
