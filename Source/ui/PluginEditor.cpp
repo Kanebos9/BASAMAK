@@ -13271,12 +13271,12 @@ void DrumSequencerEditor::layoutContent()
     lblVersion.setBounds  (150, 3, 56, 14);    // v1.3.0  - centred
     lblCheckUpd.setBounds (150, 18, 56, 22);   // Check / Updates - centred on the SAME axis (tidy stack)
     btnDawSync.setBounds  (210, 7, 72,  26);
-    btnPlay.setBounds     (286, 7, 24,  26);   // ▶ icon (icons stay readable at 24 wide;
-    btnStop.setBounds     (312, 7, 24,  26);   // ■      the BPM READ-OUT does not - it keeps
-    btnPause.setBounds    (338, 7, 24,  26);   // II     its full width, never squeezed)
+    btnPlay.setBounds     (286, 7, 22,  26);   // ▶ icon - the three icons alone paid for the
+    btnStop.setBounds     (310, 7, 22,  26);   // ■      Pause button; the BPM label + value keep
+    btnPause.setBounds    (334, 7, 22,  26);   // II     their EXACT original geometry (text never shrinks)
     // BPM + time signature kept TOGETHER.
-    lblBpm.setBounds      (364, 8, 26,  24);
-    sliderBpm.setBounds   (390, 7, 90,  26);
+    lblBpm.setBounds      (358, 8, 30,  24);
+    sliderBpm.setBounds   (388, 7, 92,  26);
     lblBarPre.setBounds   (486, 0, 56,  10);   // "TIME SIG" label ABOVE the numbers
     barSigX.setBounds     (492, 12, 20, 21);
     lblBarSlash.setBounds (512, 12, 8,  21);
