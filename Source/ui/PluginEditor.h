@@ -3060,6 +3060,8 @@ private:
     void copyChannelSound(int srcPat, int dstPat, int ch);
     void syncMergedGroupSounds();
     int  lastStepCap = -1;   // last applied step-count cap (64 / group bars) for the dropdowns
+    int  lastStepMenuKey[Sequencer::NUM_CHANNELS] = { };   // [1.5.0] change-gate for the per-bar step-count menus
+    void rebuildStepMenu(int strip);                        // per-bar "Pattern N >" submenus when merged
     // MERGED-GROUP view: the grid hands out CONCAT step indices - resolve to the right bar's channel
     // (step is rewritten to the bar-local index). Not in a group = the current pattern's channel.
     DrumChannel& groupStepChannel(int ch, int& step);

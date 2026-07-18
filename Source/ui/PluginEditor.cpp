@@ -7708,25 +7708,28 @@ void DrumSequencerEditor::setupComponents()
             auto& sq = proc.sequencer;
             const bool turnOn = ! sq.patterns[p].mergeWithPrev;
             if (turnOn)
-            {   // LIMITS so the merged view always FITS: max 8 bars, and - since a channel's step
-                // count is UNIFORM across the group (merging normalizes every bar to the HEAD's
-                // count, below) - the head's worst count x bars must fit the 64-cell row
-                // (15 steps x 5 bars = 75 -> refused; max 12 steps for 5 bars).
+            {   // LIMITS so the merged view always FITS: max 8 bars, and each channel's SUMMED step
+                // counts across the bars must fit the 64-cell row. [1.5.0] counts are PER BAR now
+                // (merging KEEPS each bar's pre-merge count - user design), so the check sums the
+                // ACTUAL counts instead of assuming a normalized uniform one.
                 const int head = sq.groupHead(p - 1);
                 const int pEnd = sq.groupEnd(p);          // p may already head its own run
                 const int bars = pEnd - head + 1;
-                int worst = 1;
+                int worstSum = 0, worstCh = 0;
                 for (int c = 0; c < Sequencer::NUM_CHANNELS; ++c)
-                    worst = juce::jmax(worst, sq.patterns[head].channels[c].numSteps);
-                if (bars > StepGridComponent::GRP_MAX || worst * bars > DrumChannel::MAX_STEPS)
+                {
+                    int sum = 0;
+                    for (int b = head; b <= pEnd; ++b) sum += juce::jmax(1, sq.patterns[b].channels[c].numSteps);
+                    if (sum > worstSum) { worstSum = sum; worstCh = c; }
+                }
+                if (bars > StepGridComponent::GRP_MAX || worstSum > DrumChannel::MAX_STEPS)
                 {
                     juce::PopupMenu mm;
                     mm.addSectionHeader(bars > StepGridComponent::GRP_MAX
                         ? "Can't merge: at most " + juce::String(StepGridComponent::GRP_MAX) + " patterns can be merged."
-                        : "Can't merge: a channel has " + juce::String(worst) + " steps, and " + juce::String(bars)
-                          + " bars of that need " + juce::String(worst * bars) + " cells - the row shows at most "
-                          + juce::String(DrumChannel::MAX_STEPS) + ". Lower the step count first (max "
-                          + juce::String(DrumChannel::MAX_STEPS / bars) + " steps for " + juce::String(bars) + " bars).");
+                        : "Can't merge: Channel " + juce::String(worstCh + 1) + "'s step counts add up to "
+                          + juce::String(worstSum) + " cells across these bars - the row shows at most "
+                          + juce::String(DrumChannel::MAX_STEPS) + ". Lower a bar's step count first.");
                     mm.addItem(1, "OK");
                     mm.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&patternBtns[p]), [](int){});
                     return;
@@ -7812,7 +7815,8 @@ void DrumSequencerEditor::setupComponents()
                     for (int c = 0; c < Sequencer::NUM_CHANNELS; ++c) {
                         copyChannelSound(mHead, m, c);
                         auto& hc = sq2.patterns[mHead].channels[c]; auto& mc = sq2.patterns[m].channels[c];
-                        mc.numSteps = hc.numSteps; mc.drawMode = hc.drawMode;
+                        mc.drawMode = hc.drawMode;   // roll/steps MODE stays uniform; [1.5.0] each bar
+                                                     // KEEPS its own step COUNT (user design)
                         mc.drawTuneCents = hc.drawTuneCents;   // Tune uniform across the group (head's value)
                     }
                 selectPattern(mHead); refreshDetailPanel(); repaint();
@@ -8714,7 +8718,42 @@ void DrumSequencerEditor::setupComponents()
             const int id = strips[ci].comboSteps.getSelectedId();
             auto& sq = proc.sequencer;
             const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
-            // guard: a step count that can't fit the 64-cell group view is ignored (items are also disabled)
+            if (id == 999) return;   // the "Mixed" face row - informational, never an action [1.5.0]
+            if (id >= 2000)
+            {   // [1.5.0] PER-BAR count (a "Pattern N" submenu pick): only THAT bar changes.
+                const int b = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, (id - 2000) / 100);
+                const int sc = (id - 2000) % 100;
+                if (b < head || b > end || sc < 1) return;
+                int sumOthers = 0;
+                for (int b2 = head; b2 <= end; ++b2)
+                    if (b2 != b) sumOthers += juce::jmax(1, sq.patterns[b2].channels[ci].numSteps);
+                if (sumOthers + sc > DrumChannel::MAX_STEPS) return;   // wouldn't fit the concat row
+                auto finishB = [this, ci] { lastStepMenuKey[ci] = 0; selectChannel(ci); refreshDrawModeButtons(); stepGrid.update(proc.sequencer, proc.anySolo); };
+                auto& cb = sq.patterns[b].channels[ci];
+                if (! cb.drawMode) { cb.numSteps = sc; finishB(); return; }   // steps: just this bar's count
+                // Roll channel: a count pick = the roll -> steps switch for the WHOLE group (the
+                // mode stays uniform); this bar gets the picked count, the others keep their own.
+                bool hasNotes = false;
+                for (int b2 = head; b2 <= end; ++b2) hasNotes |= sq.patterns[b2].channels[ci].drawNoteCount > 0;
+                auto go2 = [this, ci, head, end, b, sc, finishB]() {
+                    commitUndoNow();
+                    auto& sq2 = proc.sequencer;
+                    for (int b2 = head; b2 <= end; ++b2) { auto& cc = sq2.patterns[b2].channels[ci];
+                        cc.clearDrawNotes(); cc.drawVel = 1.0f; cc.drawPan = 0.0f; cc.drawTuneCents = 0.0f;
+                        cc.drawMode = false; if (b2 == b) cc.numSteps = sc; }
+                    finishB();
+                };
+                if (! hasNotes) { go2(); return; }
+                juce::PopupMenu mm;
+                mm.addSectionHeader("Switch to steps (Pattern " + juce::String(b + 1) + " = " + juce::String(sc) + ")?");
+                mm.addSectionHeader("This CLEARS this channel's piano-roll notes (you can Undo).");
+                mm.addItem(1, "Clear notes and switch to steps");
+                mm.addItem(2, "Cancel - stay in Piano Roll");
+                mm.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&strips[ci].comboSteps),
+                                 [go2](int r) { if (r == 1) go2(); });
+                return;
+            }
+            // guard: an all-bars count that can't fit the 64-cell group view is ignored (items disabled too)
             if (id != StepGridComponent::DRAW_ITEM_ID && id * (end - head + 1) > DrumChannel::MAX_STEPS) return;
             auto& c = sq.patterns[head].channels[ci];
             auto finish = [this, ci] { selectChannel(ci); refreshDrawModeButtons(); stepGrid.update(proc.sequencer, proc.anySolo); };
@@ -8793,6 +8832,9 @@ void DrumSequencerEditor::setupComponents()
                                     "(draw/record melodies and chords; the lens opens the full editor).\n\n"
                                     "- Steps and Piano Roll are SEPARATE: switching CLEARS this channel's content and "
                                     "starts the other side fresh (it warns first; Undo restores).\n"
+                                    "- MERGED patterns: each bar can have its OWN step count - \"All bars\" sets them "
+                                    "together, the \"Pattern N\" submenus set one bar (e.g. a triplet or fill bar). "
+                                    "Counts that would not fit the 64-cell row are greyed; differing bars read \"Mixed\".\n"
                                     "- To quantise notes WITHOUT leaving the roll, use the Quantize button in the "
                                     "roll editor's header.");
     }
@@ -12044,23 +12086,67 @@ void DrumSequencerEditor::refreshRouting()
     btnRoute.repaint();
 }
 
+// [1.5.0] The step-count dropdown, rebuilt per strip. Single pattern = the flat list (Piano Roll +
+// counts, as always). Merged view = "All bars" + one "Pattern N" submenu per bar (dropdown-within-
+// dropdown, user design): a bar's count is set alone; counts that would overflow the 64-cell concat
+// row are disabled. Id scheme: flat/all-bars = the count itself; per-bar = 2000 + bar*100 + count;
+// 999 = the "Mixed" face row (shown when bars differ; picking it is a no-op).
+void DrumSequencerEditor::rebuildStepMenu(int i)
+{
+    auto& sq = proc.sequencer;
+    const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
+    auto& combo = strips[i].comboSteps;
+    const int keep = combo.getSelectedId();
+    auto* root = combo.getRootMenu();
+    root->clear();
+    root->addItem(StepGridComponent::DRAW_ITEM_ID, "Piano Roll");
+    if (end > head)
+    {
+        root->addItem(999, "Mixed (bars differ)");   // face row; onChange ignores it
+        const int bars = end - head + 1;
+        juce::PopupMenu all;
+        for (int si = 0; si < DrumChannel::NUM_VALID_STEP_COUNTS; ++si)
+        {   const int sc = DrumChannel::VALID_STEP_COUNTS[si];
+            all.addItem(sc, juce::String(sc) + (sc == 1 ? " step" : " steps"),
+                        sc * bars <= DrumChannel::MAX_STEPS,
+                        false); }
+        root->addSubMenu("All bars", all);
+        for (int b = head; b <= end; ++b)
+        {
+            int sumOthers = 0;
+            for (int b2 = head; b2 <= end; ++b2)
+                if (b2 != b) sumOthers += juce::jmax(1, sq.patterns[b2].channels[i].numSteps);
+            juce::PopupMenu bm;
+            for (int si = 0; si < DrumChannel::NUM_VALID_STEP_COUNTS; ++si)
+            {   const int sc = DrumChannel::VALID_STEP_COUNTS[si];
+                bm.addItem(2000 + b * 100 + sc, juce::String(sc) + (sc == 1 ? " step" : " steps"),
+                           sumOthers + sc <= DrumChannel::MAX_STEPS,
+                           sq.patterns[b].channels[i].numSteps == sc); }
+            root->addSubMenu("Pattern " + juce::String(b + 1), bm);
+        }
+    }
+    else
+        for (int si = 0; si < DrumChannel::NUM_VALID_STEP_COUNTS; ++si)
+        {   const int sc = DrumChannel::VALID_STEP_COUNTS[si];
+            root->addItem(sc, juce::String(sc) + (sc == 1 ? " step" : " steps")); }
+    if (keep > 0) combo.setSelectedId(keep, juce::dontSendNotification);   // menu rebuild must not fire onChange
+}
+
 void DrumSequencerEditor::refreshChannelStrips()
 {
-    // MERGED GROUP: only offer step counts that FIT the 64-cell concat row (8 steps max for 8 bars,
-    // 13 steps would break a 5-bar view -> disabled). Change-only (item churn fights open dropdowns).
+    // [1.5.0] PER-BAR STEP COUNTS: each strip's dropdown is rebuilt (change-gated, never while its
+    // popup is open) - merged view = "All bars" + one "Pattern N" submenu per bar; single = flat.
     {
         auto& sq = proc.sequencer;
-        const int bars = sq.groupEnd(currentPattern()) - sq.groupHead(currentPattern()) + 1;
-        const int cap  = DrumChannel::MAX_STEPS / juce::jmax(1, bars);
-        if (cap != lastStepCap)
+        const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
+        for (int i = 0; i < Sequencer::NUM_CHANNELS; ++i)
         {
-            lastStepCap = cap;
-            for (int i = 0; i < Sequencer::NUM_CHANNELS; ++i)
-                for (int si = 0; si < DrumChannel::NUM_VALID_STEP_COUNTS; ++si)
-                {
-                    const int s = DrumChannel::VALID_STEP_COUNTS[si];
-                    strips[i].comboSteps.setItemEnabled(s, s <= cap);
-                }
+            int key = (head << 20) ^ (end << 14);
+            for (int b = head; b <= end; ++b)
+                key = key * 31 + juce::jmax(1, sq.patterns[b].channels[i].numSteps);
+            key ^= sq.patterns[head].channels[i].drawMode ? (1 << 27) : 0;
+            if (key != lastStepMenuKey[i] && ! strips[i].comboSteps.isPopupActive())
+            { lastStepMenuKey[i] = key; rebuildStepMenu(i); }
         }
     }
     for (int i = 0; i < Sequencer::NUM_CHANNELS; ++i)
@@ -12074,7 +12160,14 @@ void DrumSequencerEditor::refreshChannelStrips()
           if (strips[i].btnPoly.isEnabled() == roll) { strips[i].btnPoly.setEnabled(! roll);
                                                        strips[i].btnPoly.setAlpha(roll ? 0.4f : 1.0f); } }
         { auto& cc = proc.sequencer.channel(i);
-          const int tgt = cc.drawMode ? StepGridComponent::DRAW_ITEM_ID : cc.numSteps;
+          int tgt = cc.drawMode ? StepGridComponent::DRAW_ITEM_ID : cc.numSteps;
+          if (! cc.drawMode)
+          {   // merged group with DIFFERENT per-bar counts -> the face reads "Mixed" [1.5.0]
+              auto& sq3 = proc.sequencer;
+              const int h3 = sq3.groupHead(currentPattern()), e3 = sq3.groupEnd(currentPattern());
+              for (int b = h3 + 1; b <= e3; ++b)
+                  if (sq3.patterns[b].channels[i].numSteps != sq3.patterns[h3].channels[i].numSteps) { tgt = 999; break; }
+          }
           // NEVER touch the combo while its popup is OPEN (that fought the user's selection = the
           // recurring "dropdown ignores my pick" bug) - structural guard, on top of the change-only
           // check, so it can't regress even if someone drops the change-only test later.
