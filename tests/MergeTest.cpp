@@ -1,10 +1,9 @@
-// PATTERN MERGE verification [1.5.0 r3 = PER-BAR play modes, VISIT counts + group-flow fallback].
-// A mode's loop count counts THAT BAR's completions; an unmet count keeps the GROUP FLOWING
-// (the user's "after 2 loops" bug: a shared counter + an invisible default entry made chains
-// fire immediately). [1] merge defaults = the classic group loop: P0, P1, P0. [2] self-repeat =
-// a chain entry TARGETING THE BAR ITSELF: P0, P0, P1. [3] a bar chains OUT: P0, P1, P2.
-// [4] THE USER'S CASE: end bar "to P2 after 2 loops" = the group passes TWICE, then leaves:
-// P0, P1, P0, P1, P2.
+// PATTERN MERGE verification [1.5.0 FINAL = the user's spec verbatim: "N shows the loops count
+// of THAT pattern, period"]. Every bar counts its OWN consecutive plays; unmet = the bar plays
+// AGAIN (no group-flow invention). Merge defaults: each bar -> next x1, last -> head x1.
+// [1] defaults = the classic group loop: P0, P1, P0. [2] a bar set "next after 2" plays ITSELF
+// twice: P0, P0, P1. [3] a bar chains OUT: P0, P1, P2. [4] end bar "to P2 after 2 loops" =
+// the END BAR plays twice, then leaves: P0, P1, P1, P2.
 #include "Sequencer.h"
 #include <cstdio>
 #include <cmath>
@@ -50,9 +49,9 @@ int main() {
         // the merge DEFAULTS the editor writes: each bar -> next x1, end -> head x1
         chainTo(s->patterns[0], 1, 1);
         chainTo(s->patterns[1], 0, 1);
-        if (scen == 1) chainTo2(s->patterns[0], 0, 1, 1, 1);   // P0 -> ITSELF once, then -> P1 (authored self-repeat)
-        if (scen == 2) chainTo(s->patterns[1], 2, 1);          // P1 escapes the group -> P2
-        if (scen == 3) chainTo(s->patterns[1], 2, 2);          // THE USER'S CASE: end bar -> P2 after 2 loops
+        if (scen == 1) chainTo(s->patterns[0], 1, 2);   // P0 plays ITSELF twice, then -> P1
+        if (scen == 2) chainTo(s->patterns[1], 2, 1);   // P1 escapes the group -> P2
+        if (scen == 3) chainTo(s->patterns[1], 2, 2);   // end bar: plays ITSELF twice, then -> P2
         for (auto& p : s->patterns) for (auto& c2 : p.channels) c2.prepareToPlay(SR, bs);
         s->startStandalone();
         std::vector<float> out;
@@ -74,11 +73,11 @@ int main() {
         }
         return ok;
     };
-    int e0[3] = { 0, 1, 0 }, e1[3] = { 0, 0, 1 }, e2[3] = { 0, 1, 2 }, e3[5] = { 0, 1, 0, 1, 2 };
-    printf("[1] merge defaults (group loop):\n");        if (! CHK(run(0, e0, 3))) printf("  FAIL\n");
-    printf("[2] bar repeats ITSELF via a self-entry:\n"); if (! CHK(run(1, e1, 3))) printf("  FAIL\n");
-    printf("[3] bar chains OUT of the group:\n");        if (! CHK(run(2, e2, 3))) printf("  FAIL\n");
-    printf("[4] USER CASE: out after 2 GROUP loops:\n"); if (! CHK(run(3, e3, 5))) printf("  FAIL\n");
+    int e0[3] = { 0, 1, 0 }, e1[3] = { 0, 0, 1 }, e2[3] = { 0, 1, 2 }, e3[4] = { 0, 1, 1, 2 };
+    printf("[1] merge defaults (group loop):\n");            if (! CHK(run(0, e0, 3))) printf("  FAIL\n");
+    printf("[2] bar 'next after 2' plays itself twice:\n");  if (! CHK(run(1, e1, 3))) printf("  FAIL\n");
+    printf("[3] bar chains OUT of the group:\n");            if (! CHK(run(2, e2, 3))) printf("  FAIL\n");
+    printf("[4] end bar 'P2 after 2': plays twice, out:\n"); if (! CHK(run(3, e3, 4))) printf("  FAIL\n");
     printf(fails ? ">>> MergeTest FAIL (%d)\n" : ">>> MergeTest PASS\n", fails);
     return fails;
 }
