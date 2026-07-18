@@ -724,14 +724,14 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("wgEx", s.wgExcite, nullptr); st.setProperty("wgPr", s.wgPressure, nullptr);   // [2026-07-18] WAVEGUIDE
         st.setProperty("wgBr", s.wgBreath, nullptr); st.setProperty("wgPo", s.wgPos, nullptr);
         st.setProperty("wgBt", s.wgBright, nullptr);
-        for (int ex = 0; ex < 3; ++ex)   // [r3] PER-EXCITER drawn curves
+        for (int ex = 0; ex < 3; ++ex)   // [r4] PER-EXCITER drawn curves (16-bit, +-2.5 domain)
         {
             st.setProperty("wgCvOn" + juce::String(ex), s.wgCurveOn[ex] ? 1 : 0, nullptr);
             if (s.wgCurveOn[ex])
             {
-                juce::String cvh; cvh.preallocateBytes(128);
-                for (int k = 0; k < 64; ++k) cvh << juce::String::toHexString(s.wgCurve[ex][k]).paddedLeft('0', 2);
-                st.setProperty("wgCv" + juce::String(ex), cvh, nullptr);
+                juce::String cvh; cvh.preallocateBytes(256);
+                for (int k = 0; k < 64; ++k) cvh << juce::String::toHexString(s.wgCurve[ex][k]).paddedLeft('0', 4);
+                st.setProperty("wgCw" + juce::String(ex), cvh, nullptr);
             }
         }
         st.setProperty("pEA", s.physPEnvAmt, nullptr); st.setProperty("pET", s.physPEnvTime, nullptr); st.setProperty("pOf", s.physPOffset, nullptr);
@@ -880,29 +880,18 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         s.wgExcite = (int)st.getProperty("wgEx", d.wgExcite); s.wgPressure = (float)st.getProperty("wgPr", d.wgPressure);   // [2026-07-18] WAVEGUIDE
         s.wgBreath = (float)st.getProperty("wgBr", d.wgBreath); s.wgPos = (float)st.getProperty("wgPo", d.wgPos);
         s.wgBright = (float)st.getProperty("wgBt", d.wgBright);
-        for (int ex = 0; ex < 3; ++ex)   // [r3] PER-EXCITER drawn curves
+        for (int ex = 0; ex < 3; ++ex)   // [r4] PER-EXCITER drawn curves (16-bit "wgCw", +-2.5 domain)
         {
             s.wgCurveOn[ex] = (int)st.getProperty("wgCvOn" + juce::String(ex), 0) != 0;
             if (s.wgCurveOn[ex])
             {
-                const juce::String cvh = st.getProperty("wgCv" + juce::String(ex), "").toString();
-                if (cvh.length() >= 128)
+                const juce::String cvh = st.getProperty("wgCw" + juce::String(ex), "").toString();
+                if (cvh.length() >= 256)
                     for (int k = 0; k < 64; ++k)
-                        s.wgCurve[ex][k] = (uint8_t) cvh.substring(k * 2, k * 2 + 2).getHexValue32();
-                else s.wgCurveOn[ex] = false;   // malformed = the formula (never half-load)
-            }
-        }
-        if ((int)st.getProperty("wgCvOn", 0) != 0)   // MIGRATE the short-lived single-curve key
-        {                                            // (r2, hours old): it becomes ITS exciter's curve
-            const juce::String cvh = st.getProperty("wgCv", "").toString();
-            const int ex = juce::jlimit(0, 2, s.wgExcite);
-            if (cvh.length() >= 128)
-            {
-                for (int k = 0; k < 64; ++k)
-                    s.wgCurve[ex][k] = (uint8_t) cvh.substring(k * 2, k * 2 + 2).getHexValue32();
-                s.wgCurveOn[ex] = true;
-            }
-        }
+                        s.wgCurve[ex][k] = (uint16_t) cvh.substring(k * 4, k * 4 + 4).getHexValue32();
+                else s.wgCurveOn[ex] = false;   // malformed OR the r3-era 8-bit "wgCv" key: back to
+            }                                    // the formula (those curves only made the flat-window
+        }                                        // buzz - dropping them IS the fix; DECISIONS #146
         s.physPEnvAmt = (float)st.getProperty("pEA", d.physPEnvAmt); s.physPEnvTime = (float)st.getProperty("pET", d.physPEnvTime); s.physPOffset = (float)st.getProperty("pOf", d.physPOffset);
         s.smpSpeed = (float)st.getProperty("sSp", d.smpSpeed); s.smpCrush = (float)st.getProperty("sCr", d.smpCrush); s.smpPitch = (float)st.getProperty("sPi", d.smpPitch);
         s.smpPEnvAmt = (float)st.getProperty("sEA", d.smpPEnvAmt); s.smpPEnvTime = (float)st.getProperty("sET", d.smpPEnvTime); s.smpPOffset = (float)st.getProperty("sOf", d.smpPOffset);
@@ -2257,7 +2246,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         // [2026-07-18] WAVEGUIDE config
         int    wgMode = 0;           // 0 Reed / 1 Flute / 2 Bow
         float  wgPress = 0.6f, wgBreathC = 0.12f, wgPosC = 0.25f, wgLpK = 0.5f;
-        const uint8_t* wgCv = nullptr;   // drawn exciter curve (points into slots[s] - persistent, the arCv rule)
+        const uint16_t* wgCv = nullptr;   // drawn exciter curve (points into slots[s] - persistent, the arCv rule)
         float  modalDecaySec = 0.5f;   // base ring length (for voiceEnd)
         // -- 4-point pitch envelope (applies on top of the legacy per-engine env) --
         bool   pEnvOn = false; float pEnvP[Slot::NPE] = { 0, 0, 0, 0 }, pEnvT[Slot::NPE] = { 0.2f, 0.4f, 0.6f, 0.8f };
@@ -3781,11 +3770,11 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             // below is the air you actually hear.
                             const float airB = wn3 * c.wgBreathC * P;
                             // DRAWN EXCITER CURVE: replaces the built-in table (linear-interp read)
-                            auto lutCv = [&](float x) -> float {
-                                const float p = (juce::jlimit(-1.0f, 1.0f, x) * 0.5f + 0.5f) * 63.0f;
+                            auto lutCv = [&](float x) -> float {   // [r4] domain +-2.5 = the full felt range
+                                const float p = (juce::jlimit(-2.5f, 2.5f, x) * (0.2f) + 0.5f) * 63.0f;
                                 const int i0 = (int) p; const float fr = p - (float) i0;
-                                const float a2 = (float) c.wgCv[i0] * (1.0f / 127.5f) - 1.0f;
-                                const float b2 = (float) c.wgCv[juce::jmin(63, i0 + 1)] * (1.0f / 127.5f) - 1.0f;
+                                const float a2 = (float) c.wgCv[i0] * (1.0f / 32767.5f) - 1.0f;
+                                const float b2 = (float) c.wgCv[juce::jmin(63, i0 + 1)] * (1.0f / 32767.5f) - 1.0f;
                                 return a2 + (b2 - a2) * fr; };
                             float yOut;
                             switch (c.wgMode)
@@ -3811,9 +3800,10 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                                     lp += c.wgLpK * (bore - lp);              // reflection filter (Brightness)
                                     const float pdiff = P * 1.1f - 0.5f * lp + airB * 0.12f;   // jet turbulence rides in
                                     wrLine(base2, k2, pdiff);                 // into the JET line...
-                                    float jt = rdLine(base2, k2, juce::jmax(4.0, Lf * 0.5));   // ...half a bore later
-                                    jt = juce::jlimit(-1.0f, 1.0f, jt);
-                                    const float jv = c.wgCv != nullptr ? lutCv(jt) : jt * (jt * jt - 1.0f);
+                                    const float jtRaw = rdLine(base2, k2, juce::jmax(4.0, Lf * 0.5));   // ...half a bore later
+                                    const float jt = juce::jlimit(-1.0f, 1.0f, jtRaw);   // the formula's own limiter
+                                    const float jv = c.wgCv != nullptr ? lutCv(jtRaw)   // a drawing gets the full range
+                                                                       : jt * (jt * jt - 1.0f);
                                     wrLine(base, k, jv + 0.55f * lp);   // jet table + end refl
                                     yOut = (bore - 0.5f * rdLine(base, k, Lf * (double) c.wgPosC)) * 0.36f;
                                 } break;

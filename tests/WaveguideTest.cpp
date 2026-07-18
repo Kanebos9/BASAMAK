@@ -16,7 +16,15 @@
 static const double SR = 48000.0; static const int BS = 480;
 
 struct Cfg { int mode = 0; float press = 0.6f, breath = 0.12f, bright = 0.6f, sus = 0.9f;
-             float freq = 220.0f; bool scale3 = false; };
+             float freq = 220.0f; bool scale3 = false; bool drawPreset = false; };
+
+// the WgCurveEditor's preset seeds (mirror of the UI's presetY over the +-2.5 domain)
+static float presetY(int which, float x)
+{
+    if (which == 0) return juce::jlimit(-1.0f, 1.0f, 0.7f - 0.3f * x);
+    if (which == 1) { const float j = juce::jlimit(-1.0f, 1.0f, x); return j * (j * j - 1.0f); }
+    return juce::jlimit(0.0f, 1.0f, std::pow(std::abs(x * 3.0f) + 0.75f, -4.0f)) * 2.0f - 1.0f;
+}
 
 struct Run { Sequencer* q; DrumChannel* c; };
 static Run makeRun(const Cfg& cfg)
@@ -31,6 +39,16 @@ static Run makeRun(const Cfg& cfg)
     s.wgExcite = cfg.mode; s.wgPressure = cfg.press; s.wgBreath = cfg.breath; s.wgBright = cfg.bright;
     s.atk = 0.01f; s.hold = 0.0f; s.dec = 0.3f; s.sustain = cfg.sus; s.release = 0.12f;
     if (cfg.scale3) { s.scaleOn = true; s.scaleType = 0; s.scaleKey = 0; s.scaleUnison = 3; }
+    if (cfg.drawPreset)   // load the matching preset AS A DRAWING (must behave like the formula now)
+    {
+        s.wgCurveOn[cfg.mode] = true;
+        for (int k = 0; k < 64; ++k)
+        {
+            const float x = ((float) k / 63.0f * 2.0f - 1.0f) * 2.5f;
+            s.wgCurve[cfg.mode][k] = (uint16_t) juce::jlimit(0, 65535,
+                (int) std::lround((presetY(cfg.mode, x) * 0.5f + 0.5f) * 65535.0f));
+        }
+    }
     c.numSteps = 8;
     for (auto& p : q->patterns) for (auto& c2 : p.channels) c2.prepareToPlay(SR, BS);
     c.ensureKsBuffers();
@@ -125,6 +143,22 @@ int main()
         delete r.q;
         printf("[7] sequenced: rms=%.4f (expect >0.002) -> %s\n",
                rmsWin(x, 0.0, 0.6), CHK(rmsWin(x, 0.0, 0.6) > 0.002) ? "OK" : "FAIL");
+    }
+
+    {   // [8] DRAWN PRESET == FORMULA-LIKE [2026-07-18 r4]: the drawing's +-2.5 domain covers the
+        // full felt range now, so tracing the built-in curve must sound like the built-in (level
+        // within 40%, still tonal) - r3's +-1 window buzzed against the clamps here.
+        bool ok = true;
+        for (int m = 0; m < 3; ++m)
+        {
+            Cfg f0; f0.mode = m; Cfg d0 = f0; d0.drawPreset = true;
+            auto xf = renderKey(f0, 0.9, 0.0), xd = renderKey(d0, 0.9, 0.0);
+            const double rf = rmsWin(xf, 0.3, 0.9), rd = rmsWin(xd, 0.3, 0.9);
+            const bool okm = rd > 0.5 * rf && rd < 2.0 * rf && finiteBounded(xd, 4.0f);
+            printf("    mode %d: formula rms=%.4f drawn-preset rms=%.4f -> %s\n", m, rf, rd, okm ? "ok" : "BAD");
+            ok = ok && okm;
+        }
+        printf("[8] drawn preset ~ formula -> %s\n", CHK(ok) ? "OK" : "FAIL");
     }
 
     printf(fails == 0 ? "WaveguideTest: ALL PASS\n" : "WaveguideTest: %d FAIL\n", fails);

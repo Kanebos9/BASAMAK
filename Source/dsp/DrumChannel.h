@@ -580,9 +580,12 @@ public:
         // EACH exciter owns its drawing, so switching the Exciter always lands on THAT exciter's
         // own state (its curve if drawn, else its formula). A curve can only ever play through
         // the plumbing it was drawn on = the stale-curve "broken sound" is unreachable.
-        // y 0..255 = -1..+1 over input -1..+1. The overlay warns: many drawings won't oscillate.
-        bool    wgCurveOn[3] = { false, false, false };
-        uint8_t wgCurve[3][64] = {};
+        // [r4] y 0..65535 = -1..+1 over input -2.5..+2.5 - the drawing covers the FULL range the
+        // exciter can feel (the write clamps' range). r3's +-1 window went FLAT beyond +-1 =
+        // no amplitude brake = every drawing/preset buzzed against the clamps (user bug).
+        // 16-bit y kills the 8-bit staircase fizz inside the high-gain loop.
+        bool     wgCurveOn[3] = { false, false, false };
+        uint16_t wgCurve[3][64] = {};
         // -- Sample -- (the buffer lives per-slot in slotSample[]; these are this slot's playback params)
         float smpSpeed = 1.0f, smpCrush = 0.0f, smpPitch = 0.0f, smpPEnvAmt = 0.0f, smpPEnvTime = 0.04f, smpPOffset = 0.0f;
         bool  smpReverse = false, smpUseRegion = false;

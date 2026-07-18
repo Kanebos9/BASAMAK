@@ -979,14 +979,18 @@ public:
         if (isVisible() && ! closerHooked)      { juce::Desktop::getInstance().addGlobalMouseListener(&closer); closerHooked = true; }
         else if (! isVisible() && closerHooked) { juce::Desktop::getInstance().removeGlobalMouseListener(&closer); closerHooked = false; }
     }
-    static float presetY(int which, float x)      // the EXACT built-in transfers (mirror rule)
+    // [r4] the drawing's INPUT DOMAIN = +-2.5 (everything the exciter can feel - the write
+    // clamps' range). r3's +-1 window went flat beyond +-1 = no amplitude brake = buzz.
+    static constexpr float XR = 2.5f;
+    static float presetY(int which, float x)      // the EXACT built-in transfers (mirror rule), x in +-XR
     {
         if (which == 0) return juce::jlimit(-1.0f, 1.0f, 0.7f - 0.3f * x);                    // Reed table
-        if (which == 1) { const float j = juce::jlimit(-1.0f, 1.0f, x); return j * (j * j - 1.0f); }   // jet cubic
+        if (which == 1) { const float j = juce::jlimit(-1.0f, 1.0f, x); return j * (j * j - 1.0f); }   // jet cubic (its own input limiter)
         return juce::jlimit(0.0f, 1.0f, std::pow(std::abs(x * 3.0f) + 0.75f, -4.0f)) * 2.0f - 1.0f;    // bow friction
     }
+    static float xAt(int k) { return ((float) k / (float)(N - 1) * 2.0f - 1.0f) * XR; }
     void loadPreset(int which)
-    { for (int k = 0; k < N; ++k) curve[k] = presetY(which, (float) k / (float)(N - 1) * 2.0f - 1.0f);
+    { for (int k = 0; k < N; ++k) curve[k] = presetY(which, xAt(k));
       on = true; repaint(); if (onChange) onChange(curve, on); }
     void paint(juce::Graphics& g) override;
     void mouseDown(const juce::MouseEvent& e) override;
@@ -995,7 +999,7 @@ public:
     juce::String getTooltip() override
     {
         return "DRAW YOUR OWN EXCITER (the reed/jet/bow transfer the engine evaluates every sample).\n\n"
-               "- X = what the exciter FEELS (pressure difference / jet deflection / bow-string speed).\n"
+               "- X = what the exciter FEELS (pressure difference / jet deflection / bow-string speed), across the FULL +-2.5 range it can swing (the faint lines mark +-1).\n"
                "- Y = what it does back (reflection / spill / grip).\n"
                "- Presets = the three built-in curves; Formula = back to the built-in (drawing off).\n"
                "- WARNING: many drawings will NOT oscillate - a silent note means the exciter jammed "

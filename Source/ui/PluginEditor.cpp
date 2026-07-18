@@ -1953,11 +1953,11 @@ void WaveguideDisplay::paint(juce::Graphics& g)
             if (drawn)
             {
                 const float p = x01 * 63.0f; const int i0 = (int) p; const float fr = p - (float) i0;
-                const float a2 = (float) s->wgCurve[mode][i0] * (1.0f / 127.5f) - 1.0f;
-                const float b2 = (float) s->wgCurve[mode][juce::jmin(63, i0 + 1)] * (1.0f / 127.5f) - 1.0f;
+                const float a2 = (float) s->wgCurve[mode][i0] * (1.0f / 32767.5f) - 1.0f;
+                const float b2 = (float) s->wgCurve[mode][juce::jmin(63, i0 + 1)] * (1.0f / 32767.5f) - 1.0f;
                 yv = a2 + (b2 - a2) * fr;
             }
-            else yv = WgCurveEditor::presetY(mode, xin);
+            else yv = WgCurveEditor::presetY(mode, xin * WgCurveEditor::XR);
             const float fx = curveR.getX() + 2.0f + x01 * (curveR.getWidth() - 4.0f);
             const float fy = curveR.getCentreY() - juce::jlimit(-1.0f, 1.0f, yv) * (curveR.getHeight() * 0.42f);
             if (i == 0) cp.startNewSubPath(fx, fy); else cp.lineTo(fx, fy);
@@ -2054,12 +2054,22 @@ void WgCurveEditor::paint(juce::Graphics& g)
                                                      st.getX() + 14.0f, st.getCentreY()));
       g.drawText("what it DOES BACK", (int) st.getX() - 60, (int) st.getCentreY() - 16, 160, 16,
                  juce::Justification::centred, false); }
+    // +-1 guides inside the +-2.5 window (the r3 window was ONLY this middle part = the bug)
+    for (float gx : { -1.0f, 1.0f })
+    {
+        const float px = st.getCentreX() + gx / XR * (st.getWidth() * 0.5f - 3.0f);
+        g.setColour(juce::Colour(0xff20203a)); g.drawVerticalLine((int) px, st.getY(), st.getBottom());
+    }
+    g.setFont(juce::Font(11.0f, juce::Font::bold));
+    g.setColour(juce::Colour(0xff6a6a94));
+    g.drawText("-2.5", (int) st.getX() + 4, (int) st.getY() + 2, 40, 13, juce::Justification::centredLeft, false);
+    g.drawText("+2.5", (int) st.getRight() - 44, (int) st.getY() + 2, 40, 13, juce::Justification::centredRight, false);
     // the curve (drawn = accent; formula shown dim when off, so you see what you would replace)
     juce::Path cp;
     for (int k = 0; k < N; ++k)
     {
         const float x = st.getX() + 3.0f + (float) k / (float)(N - 1) * (st.getWidth() - 6.0f);
-        const float yv = on ? curve[k] : presetY(mode, (float) k / (float)(N - 1) * 2.0f - 1.0f);
+        const float yv = on ? curve[k] : presetY(mode, xAt(k));
         const float y = st.getCentreY() - juce::jlimit(-1.0f, 1.0f, yv) * (st.getHeight() * 0.46f);
         if (k == 0) cp.startNewSubPath(x, y); else cp.lineTo(x, y);
     }
@@ -2091,7 +2101,7 @@ void WgCurveEditor::mouseDrag(const juce::MouseEvent& e)
                                                              / juce::jmax(1.0f, st.getWidth() - 6.0f) * (float)(N - 1)));
     const float v = juce::jlimit(-1.0f, 1.0f, (st.getCentreY() - e.position.y) / (st.getHeight() * 0.46f));
     if (! on)   // first stroke on the formula view = seed from it, then edit (nothing jumps)
-    { for (int k = 0; k < N; ++k) curve[k] = presetY(mode, (float) k / (float)(N - 1) * 2.0f - 1.0f); on = true; }
+    { for (int k = 0; k < N; ++k) curve[k] = presetY(mode, xAt(k)); on = true; }
     if (lastI >= 0 && std::abs(i - lastI) > 1)   // span-connect fast strokes
     {
         const int a = juce::jmin(lastI, i), b2 = juce::jmax(lastI, i);
@@ -5815,13 +5825,30 @@ static bool pickerMatch(const juce::String& name, const juce::String& query)
     return name.removeCharacters(" ").containsIgnoreCase(query.removeCharacters(" "));
 }
 
+// [2026-07-18 r4] SEARCH BY ENGINE (user: typing an engine's name lists that engine's sounds).
+// The tags come from Factory::mixSourceTag, which BUILDS the sound to inspect its slots - far
+// too heavy per keystroke x 268, so they're computed ONCE and cached (session-static; the
+// factory bank is code, it cannot change at runtime).
+static const juce::StringArray& factoryEngineTags()
+{
+    static juce::StringArray tags = [] {
+        juce::StringArray t;
+        const int n = Factory::mixNames().size();
+        for (int i = 0; i < n; ++i) t.add(Factory::mixSourceTag(i));
+        return t;
+    }();
+    return tags;
+}
+
 static juce::Array<int> factoryIndicesFor(const char* cat, const juce::StringArray& names,
                                           const juce::StringArray& cats, const juce::String& query)
 {
     juce::Array<int> idx;
+    const auto& tags = factoryEngineTags();
     for (int i = 0; i < names.size(); ++i)
         if (cats[i] == cat && (query.isEmpty() || pickerMatch(names[i], query)
-                               || pickerMatch(cat, query)))
+                               || pickerMatch(cat, query)
+                               || (i < tags.size() && pickerMatch(tags[i], query))))   // engine names hit too
             idx.add(i);
     std::sort(idx.begin(), idx.end(),
               [&](int a, int b) { return names[a].compareIgnoreCase(names[b]) < 0; });
@@ -9171,6 +9198,8 @@ void DrumSequencerEditor::setupComponents()
                                 "(no sound, sequences another plugin).");
         strip.comboSound.setTooltip("Sound Bank: pick this channel's sound (opens the searchable picker; the "
                                     "current sound is highlighted amber).\n\n"
+                                    "- Search matches names, categories AND ENGINES: type \"waveguide\", "
+                                    "\"granular\", \"modal\", \"karplus\"... to list every sound built on that engine.\n"
                                     "- RIGHT-CLICK = MIDI-learn sound browsing on the SELECTED channel: "
                                     "NEXT/PREV buttons - tap = one sound, HOLD = keeps scrolling until released.\n"
                                     "- Set the pads to MOMENTARY (not Toggle) in your controller's editor.\n"
@@ -9838,7 +9867,7 @@ void DrumSequencerEditor::setupComponents()
         const int ex = juce::jlimit(0, 2, wgCurveEd.mode);   // the exciter this drawing BELONGS to [r3]
         sl.wgCurveOn[ex] = on;
         for (int k = 0; k < WgCurveEditor::N; ++k)
-            sl.wgCurve[ex][k] = (uint8_t) juce::jlimit(0, 255, (int) std::lround((cv[k] * 0.5f + 0.5f) * 255.0f));
+            sl.wgCurve[ex][k] = (uint16_t) juce::jlimit(0, 65535, (int) std::lround((cv[k] * 0.5f + 0.5f) * 65535.0f));
         proc.sequencer.channel(selectedChannel).markDspDirty();
         slotEd[juce::jlimit(0, 1, wgCurveEdSlot)].wgView.repaint();
     };
@@ -12269,8 +12298,8 @@ void DrumSequencerEditor::openWgCurveEditor(int slotIdx)
     wgCurveEd.mode = juce::jlimit(0, 2, sl.wgExcite);   // edits THIS exciter's own curve [r3]
     wgCurveEd.on = sl.wgCurveOn[wgCurveEd.mode];
     for (int k = 0; k < WgCurveEditor::N; ++k)
-        wgCurveEd.curve[k] = wgCurveEd.on ? (float) sl.wgCurve[wgCurveEd.mode][k] * (1.0f / 127.5f) - 1.0f
-                                          : WgCurveEditor::presetY(wgCurveEd.mode, (float) k / (float)(WgCurveEditor::N - 1) * 2.0f - 1.0f);
+        wgCurveEd.curve[k] = wgCurveEd.on ? (float) sl.wgCurve[wgCurveEd.mode][k] * (1.0f / 32767.5f) - 1.0f
+                                          : WgCurveEditor::presetY(wgCurveEd.mode, WgCurveEditor::xAt(k));
     wgCurveEd.accent = slotEd[wgCurveEdSlot].accent;
     wgCurveEd.clickIgnore = &slotEd[wgCurveEdSlot].wgView;
     wgCurveEd.setVisible(true); wgCurveEd.toFront(false);
