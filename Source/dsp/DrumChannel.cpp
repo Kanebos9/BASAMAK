@@ -1078,6 +1078,12 @@ void DrumChannel::prepareToPlay(double sampleRate, int maxBlockSize)
     sr = sampleRate;
     waveBank();   // force-build the wavetable bank now (message thread), not on the audio thread
 
+    // [2026-07-18] NAM/CAB scratch (audio thread must never allocate) + rate-correct reloads.
+    namMono.assign((size_t) juce::jmax(64, maxBlockSize), 0.0f);
+    namHost.assign((size_t) juce::jmax(32, maxBlockSize / 2 + 8), 0.0f);
+    for (int fx = 0; fx < 3; ++fx)
+        if (chFxType[fx] == ChFxNamAmp || chFxType[fx] == ChFxCabIr) refreshChFxAssets(fx);
+
     for (auto& b : formantBP) b.reset();
 
     for (auto& v : voices)
@@ -1280,6 +1286,81 @@ bool DrumChannel::loadMultisample(int slot, const juce::File& folder)
     msSetOld[slot] = msSet[slot];     // graveyard: old pointers stay valid through the fade
     msSet[slot] = set;
     return true;
+}
+
+// [2026-07-18] 23-tap HALF-BAND FIR (Hamming-windowed sinc) shared by the NAM stage's 2:1
+// decimator + 1:2 interpolator. Half-band = every even tap except the centre is zero, so the
+// pass/stop bands are symmetric around quarter rate - exactly the 2x-oversample split.
+static const std::array<float, 23>& namHalfBand()
+{
+    static const std::array<float, 23> h = []{
+        std::array<float, 23> t {};
+        for (int n = -11; n <= 11; ++n)
+        {
+            if (n == 0) { t[11] = 0.5f; continue; }
+            if ((n & 1) == 0) continue;
+            const double w = 0.54 + 0.46 * std::cos(juce::MathConstants<double>::pi * n / 12.0);
+            t[(size_t)(n + 11)] = (float)(std::sin(juce::MathConstants<double>::pi * n / 2.0)
+                                          / (juce::MathConstants<double>::pi * n) * w);
+        }
+        return t;
+    }();
+    return h;
+}
+
+// [2026-07-18] NAM/CAB asset loader (MESSAGE THREAD). (Re)loads whatever chFxType[fx] +
+// chFxFile[fx] name: NAM Amp -> the wrapper (prewarm runs here, tens of ms); Cab IR -> a
+// prepared juce::dsp::Convolution (its loadImpulseResponse resamples + swaps safely). A type
+// change AWAY unloads the stale asset. Publish = atomic pointer; Old = the graveyard.
+void DrumChannel::refreshChFxAssets(int fx)
+{
+    if (fx < 0 || fx >= 3) return;
+    const int type = chFxType[fx];
+    const double hostR  = engineOS > 0 ? sr / (double) engineOS : sr;
+    const int    engBlk = juce::jmax(64, (int) namMono.size());   // sized in prepareToPlay
+
+    if (type != ChFxNamAmp && chFxNamHold[fx] != nullptr)   // retired: keep alive one generation
+    { chFxNamLive[fx].store(nullptr, std::memory_order_release);
+      chFxNamOld[fx] = chFxNamHold[fx]; chFxNamHold[fx] = nullptr; }
+    if (type != ChFxCabIr && chFxConvHold[fx] != nullptr)
+    { chFxConvLive[fx].store(nullptr, std::memory_order_release);
+      chFxConvOld[fx] = chFxConvHold[fx]; chFxConvHold[fx] = nullptr; }
+
+    const juce::File f(chFxFile[fx]);
+    if (type == ChFxNamAmp)
+    {
+        chFxNamLive[fx].store(nullptr, std::memory_order_release);
+        chFxNamOld[fx] = chFxNamHold[fx]; chFxNamHold[fx] = nullptr;
+        if (chFxFile[fx].isNotEmpty() && f.existsAsFile())
+        {
+            std::string err;
+            if (auto* raw = basamak_nam::load(f.getFullPathName().toStdString(), hostR, engBlk, err))
+            {
+                chFxNamHold[fx] = std::shared_ptr<BasamakNam>(raw, &basamak_nam::destroy);
+                double ldb = 0.0;   // LEVEL MATCH: models carry a loudness figure; aim it at ~-18 dB
+                chFxNamGain[fx] = basamak_nam::loudnessDb(raw, ldb)
+                                  ? juce::Decibels::decibelsToGain(juce::jlimit(-30.0, 30.0, -18.0 - ldb))
+                                  : 1.0f;
+                for (int k = 0; k < 24; ++k) { namDnHist[fx][k] = 0.0f; namUpHist[fx][k] = 0.0f; }
+                chFxNamLive[fx].store(raw, std::memory_order_release);
+            }
+        }
+    }
+    else if (type == ChFxCabIr)
+    {
+        chFxConvLive[fx].store(nullptr, std::memory_order_release);
+        chFxConvOld[fx] = chFxConvHold[fx]; chFxConvHold[fx] = nullptr;
+        if (chFxFile[fx].isNotEmpty() && f.existsAsFile())
+        {
+            auto conv = std::make_shared<juce::dsp::Convolution>();
+            juce::dsp::ProcessSpec spec { sr, (juce::uint32) engBlk, 2 };
+            conv->prepare(spec);
+            conv->loadImpulseResponse(f, juce::dsp::Convolution::Stereo::yes,
+                                      juce::dsp::Convolution::Trim::yes, 1 << 15);
+            chFxConvHold[fx] = conv;
+            chFxConvLive[fx].store(conv.get(), std::memory_order_release);
+        }
+    }
 }
 
 // Rebuild slotSample[slot].buf from its .original at slots[slot].smpStretch (pitch-preserving time-stretch).
@@ -4167,7 +4248,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             const int type = chFxType[fx];
             float& sm = chFxSm[fx];
             if (sm < 0.0f) sm = aTgt[fx];                       // first use = snap (bit-identical when constant)
-            const bool runNow = type != ChFxOff && (sm > 1.0e-4f || aTgt[fx] > 1.0e-4f);
+            const bool assetType = type == ChFxNamAmp || type == ChFxCabIr;   // [2026-07-18] no Amount fader - run whenever loaded
+            const bool runNow = type != ChFxOff && (assetType || sm > 1.0e-4f || aTgt[fx] > 1.0e-4f);
             if (runNow && ! chFxRun[fx])
             {   // engaging from OFF -> start from clean state (no stale-buffer burst)
                 std::fill(chFxDL[fx].begin(), chFxDL[fx].end(), 0.0f);
@@ -4251,6 +4333,72 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     chFxW[fx] = w; chFxPhs[fx] = dCur;
                     chFxFbL[fx] = juce::jlimit(-4.0f, 4.0f, lpL); chFxFbR[fx] = juce::jlimit(-4.0f, 4.0f, lpR);
                     sm = amt;
+                } break;
+                case ChFxNamAmp:
+                {   // [2026-07-18] NEURAL AMP (NAM, incl. A2): the summed channel MONO (amps are
+                    // mono - width returns via later FX/the cab) through the model at HOST rate:
+                    // a 23-tap halfband FIR decimates 2:1 (the engine runs 2x oversampled; models
+                    // are trained at normal rates - right tone AND half the cost), the model runs,
+                    // the same kernel interpolates back. Output gain = the auto level-match from
+                    // the model's loudness metadata (target ~-18 dB; unity when unknown).
+                    BasamakNam* mdl = chFxNamLive[fx].load(std::memory_order_acquire);
+                    if (mdl == nullptr || (int) namMono.size() < numSamples) break;   // nothing picked yet = untouched
+                    float* mono = namMono.data();
+                    for (int i = 0; i < numSamples; ++i) mono[i] = 0.5f * (outL[i] + outR[i]);
+                    const float g = chFxNamGain[fx];
+                    const auto& hb = namHalfBand();
+                    if (engineOS >= 2 && (numSamples & 1) == 0 && (int) namHost.size() * 2 >= numSamples)
+                    {
+                        const int n2 = numSamples / 2;
+                        float* dnH = namDnHist[fx];              // last 22 engine-rate inputs
+                        auto xIn = [&](int idx) { return idx < 0 ? dnH[idx + 22] : mono[idx]; };
+                        for (int m = 0; m < n2; ++m)
+                        {
+                            float acc = 0.0f;
+                            for (int k = 0; k < 23; ++k) acc += hb[(size_t) k] * xIn(2 * m + k - 22);
+                            namHost[(size_t) m] = acc;
+                        }
+                        for (int k = 0; k < 22; ++k)             // carry history across blocks
+                            dnH[k] = mono[juce::jmax(0, numSamples - 22 + k)];
+                        basamak_nam::process(mdl, namHost.data(), n2);
+                        // upsample: zero-stuffed stream z (z[2m] = host sample, odd = 0) through the
+                        // same kernel x2; its own 22-sample history in the zero-stuffed domain.
+                        float* upH = namUpHist[fx];
+                        auto zAt = [&](int idx) -> float {
+                            if (idx < 0) return upH[idx + 22];
+                            return (idx & 1) == 0 ? namHost[(size_t)(idx >> 1)] : 0.0f; };
+                        for (int i = 0; i < numSamples; ++i)
+                        {
+                            float acc = 0.0f;
+                            for (int k = 0; k < 23; ++k) acc += hb[(size_t) k] * zAt(i + k - 22);
+                            const float v = juce::jlimit(-8.0f, 8.0f, 2.0f * g * acc);
+                            outL[i] = v; outR[i] = v;
+                        }
+                        for (int k = 0; k < 22; ++k)
+                        { const int idx = numSamples - 22 + k;
+                          upH[k] = idx < 0 ? 0.0f : ((idx & 1) == 0 ? namHost[(size_t)(idx >> 1)] : 0.0f); }
+                    }
+                    else                                          // engine at host rate (tests) = direct
+                    {
+                        basamak_nam::process(mdl, mono, numSamples);
+                        for (int i = 0; i < numSamples; ++i)
+                        { const float v = juce::jlimit(-8.0f, 8.0f, g * mono[i]); outL[i] = v; outR[i] = v; }
+                    }
+                    sm = aTgt[fx];
+                } break;
+                case ChFxCabIr:
+                {   // [2026-07-18] CABINET IR: short speaker-impulse convolution (juce::dsp -
+                    // zero-latency partitioning, IR resampled to our rate on load). Many NAM
+                    // captures are head-only and NEED one: stack FX A = NAM Amp, FX B = Cab IR.
+                    auto* cv = chFxConvLive[fx].load(std::memory_order_acquire);
+                    if (cv == nullptr) break;
+                    float* chans[2] = { outL, outR };
+                    juce::dsp::AudioBlock<float> blk(chans, 2, (size_t) numSamples);
+                    juce::dsp::ProcessContextReplacing<float> ctx(blk);
+                    cv->process(ctx);
+                    for (int i = 0; i < numSamples; ++i)
+                    { outL[i] = juce::jlimit(-8.0f, 8.0f, outL[i]); outR[i] = juce::jlimit(-8.0f, 8.0f, outR[i]); }
+                    sm = aTgt[fx];
                 } break;
                 case ChFxFlanger:
                 {   // swept short delay + feedback (jet sweep); CHARACTER = speed + bite (0.5 = old 0.20 Hz / 0.7 fb)

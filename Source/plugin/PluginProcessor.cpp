@@ -2123,7 +2123,8 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
     { const juce::String k(f);
       chState.setProperty("cfxT" + k, ch.chFxType[f], nullptr);
       chState.setProperty("cfxA" + k, ch.chFxAmt[f],  nullptr);
-      chState.setProperty("cfxC" + k, ch.chFxChar[f], nullptr); }
+      chState.setProperty("cfxC" + k, ch.chFxChar[f], nullptr);
+      chState.setProperty("cfxF" + k, ch.chFxFile[f], nullptr); }   // [2026-07-18] NAM model / Cab IR path
     for (int f = 0; f < 2; ++f)   // [2026-07-16] CHANNEL FILTER/EQ pair (the FILTER/EQ box's CHANNEL chip)
     { const juce::String k(f);
       chState.setProperty("cfT" + k, ch.chFiltType[f],   nullptr);
@@ -2300,9 +2301,12 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
     ch.strumAmt    = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("strum",    0.0f));   // STRUM
     for (int f = 0; f < 3; ++f)   // CHANNEL FX slots (readSlots migrates a pre-slot-system file after this)
     { const juce::String k(f);
-      ch.chFxType[f] = juce::jlimit(0, 17, (int) child.getProperty("cfxT" + k, 0));   // 16 = "(sync)" variants; 17 = Resonator [2026-07-18]
+      ch.chFxType[f] = juce::jlimit(0, 19, (int) child.getProperty("cfxT" + k, 0));   // 17 Resonator; 18 NAM Amp / 19 Cab IR [2026-07-18]
       ch.chFxAmt[f]  = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("cfxA" + k, 0.0f));
-      ch.chFxChar[f] = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("cfxC" + k, 0.5f)); }
+      ch.chFxChar[f] = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("cfxC" + k, 0.5f));
+      ch.chFxFile[f] = child.getProperty("cfxF" + k, "").toString();
+      if (ch.chFxType[f] == DrumChannel::ChFxNamAmp || ch.chFxType[f] == DrumChannel::ChFxCabIr)
+          ch.refreshChFxAssets(f); }   // message thread (setStateInformation)
     {   // MIGRATION: last week's 4-fixed-effect files ("chFxCho"...) -> the strongest two FX slots
         struct OldFx { int type; float amt; };
         OldFx v[4] = { { DrumChannel::ChFxChorus,  juce::jlimit(0.0f, 1.0f, (float) child.getProperty("chFxCho", 0.0f)) },

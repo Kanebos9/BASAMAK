@@ -45,6 +45,24 @@ else()
     set(DAVULSEQ_COPY_AFTER_BUILD TRUE)
 endif()
 
+# ---- NeuralAmpModelerCore [2026-07-18]: vendored official core (MIT; external/nam-core =
+# NAM sources + Eigen/nlohmann headers + 3 example models the tests use). It needs C++20, the
+# plugin stays C++17 - so the core AND Source/dsp/NamWrapper.cpp (the ONLY TU that includes NAM
+# headers) live in this separate static lib; plugin code sees only the opaque NamWrapper.h API.
+file(GLOB NAM_CORE_SRC
+    external/nam-core/NAM/*.cpp
+    external/nam-core/NAM/wavenet/*.cpp)
+add_library(nam_core STATIC ${NAM_CORE_SRC} Source/dsp/NamWrapper.cpp)
+target_include_directories(nam_core
+    PRIVATE external/nam-core external/nam-core/Dependencies/eigen external/nam-core/Dependencies/nlohmann
+    PUBLIC  Source/dsp)
+target_compile_features(nam_core PRIVATE cxx_std_20)
+target_compile_definitions(nam_core PRIVATE NAM_ENABLE_A2_FAST=1)   # the optimized A2 path (the architecture the user asked for)
+set_target_properties(nam_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(MSVC)
+    target_compile_options(nam_core PRIVATE /bigobj)   # Eigen-heavy TUs overflow the default section cap
+endif()
+
 juce_add_plugin(BASAMAK
     # [2026-07-15 19:45] app icon (the wordmark's "B" glyph, white on the plugin's canvas navy):
     # embedded into the Windows .exe, the macOS .app/.component/.vst3 icns, and the Linux window icon.
@@ -79,7 +97,7 @@ juce_generate_juce_header(BASAMAK)
 # builds are untouched. Run tests/run.sh BEFORE EVERY RELEASE - each test exits non-zero on FAIL.
 option(BASAMAK_TESTS "Build the offline DSP regression tests" OFF)
 if(BASAMAK_TESTS)
-    foreach(T PolyTest PRollTest MergeTest PresetTest DuckTest NudgeTest SlotNoteTest GlideTest ArpTest TunerTest GateWrapTest LiveRollTest RollAbsoluteTest WavetableTest AliveTest GrainTest ModMatrixTest BankAudit UIAudit MixDump)
+    foreach(T PolyTest PRollTest MergeTest PresetTest DuckTest NudgeTest SlotNoteTest GlideTest ArpTest TunerTest GateWrapTest LiveRollTest RollAbsoluteTest WavetableTest AliveTest GrainTest ModMatrixTest NamTest BankAudit UIAudit MixDump)
         juce_add_console_app(${T})
         juce_generate_juce_header(${T})
         target_sources(${T} PRIVATE
@@ -89,7 +107,7 @@ if(BASAMAK_TESTS)
             tests/${T}.cpp)
         target_include_directories(${T} PRIVATE Source/dsp Source/midi Source/ui Source/plugin)
         target_compile_definitions(${T} PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 BASAMAK_VERSION="test")
-        target_link_libraries(${T} PRIVATE juce::juce_audio_utils juce::juce_dsp juce::juce_gui_extra
+        target_link_libraries(${T} PRIVATE nam_core juce::juce_audio_utils juce::juce_dsp juce::juce_gui_extra
             PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_lto_flags)
     endforeach()
 endif()
@@ -125,6 +143,7 @@ target_compile_definitions(BASAMAK PUBLIC
 )
 
 target_link_libraries(BASAMAK PRIVATE
+    nam_core
     juce::juce_audio_utils
     juce::juce_audio_plugin_client
     juce::juce_dsp

@@ -3463,7 +3463,7 @@ void VoiceModDisplay::setValues(int unison, int scaleUnison, float detune, float
 }
 void VoiceModDisplay::setDriftLive(const float* cents, int n)
 {
-    n = juce::jlimit(0, 17, n);
+    n = juce::jlimit(0, 17, n);   // driftLive[17] - NOT an FX-type clamp (a blind 0,17 sweep once hit this)
     bool ch = (n != driftLiveN);
     for (int i = 0; i < n && ! ch; ++i) ch = std::abs(cents[i] - driftLive[i]) > 0.05f;
     if (! ch) return;
@@ -5946,6 +5946,7 @@ DrumSequencerEditor::~DrumSequencerEditor()
     comboSampleSel.setLookAndFeel(nullptr);
     for (auto& c : slotCombo) c.setLookAndFeel(nullptr);
     for (auto& c : comboChFx) c.setLookAndFeel(nullptr);   // TinyComboLNF
+    for (auto& b : btnChFxFile) b.setLookAndFeel(nullptr);  // dropBtnLNF [2026-07-18]
     swDelaySync.setLookAndFeel(nullptr); swDelayPingPong.setLookAndFeel(nullptr);   // [2026-07-15] lit buttons (tinyBtnLNF)
     swReverbSync.setLookAndFeel(nullptr);
     for (auto* k : allKnobs) k->setLookAndFeel(nullptr);
@@ -6134,6 +6135,54 @@ void DrumSequencerEditor::handleSampleSelChange()
     {
         getSamplesFolder().revealToUser();
     }
+}
+
+// [2026-07-18] NAM model / Cab IR picker: a flat menu of the library folder's files (subfolders
+// = submenus), + Refresh / Show Folder. The pick writes chFxFile + reloads the asset.
+void DrumSequencerEditor::openChFxFilePicker(int fx)
+{
+    if (fx < 0 || fx >= 3) return;
+    auto& ch = proc.sequencer.channel(selectedChannel);
+    const bool isNam = ch.chFxType[fx] == DrumChannel::ChFxNamAmp;
+    if (! isNam && ch.chFxType[fx] != DrumChannel::ChFxCabIr) return;
+    const juce::File folder = isNam ? UserPaths::namModels() : UserPaths::cabIrs();
+    folder.createDirectory();
+    const juce::String wild = isNam ? "*.nam" : "*.wav;*.aif;*.aiff;*.flac";
+
+    chFxPickFiles.clear();
+    juce::PopupMenu m;
+    std::function<void(juce::PopupMenu&, const juce::File&)> addDir =
+        [&](juce::PopupMenu& menu, const juce::File& dir)
+    {
+        auto dirs = dir.findChildFiles(juce::File::findDirectories, false); dirs.sort();
+        for (auto& d : dirs)
+        { juce::PopupMenu sub; addDir(sub, d); if (sub.getNumItems() > 0) menu.addSubMenu(d.getFileName(), sub); }
+        auto files = dir.findChildFiles(juce::File::findFiles, false, wild); files.sort();
+        for (auto& f : files)
+        { menu.addItem(1000 + chFxPickFiles.size(), f.getFileNameWithoutExtension(),
+                       true, f.getFullPathName() == ch.chFxFile[fx]);
+          chFxPickFiles.add(f); }
+    };
+    addDir(m, folder);
+    if (chFxPickFiles.isEmpty())
+        m.addItem(-1, isNam ? "(no .nam files - drop captures into NAM Models)"
+                            : "(no impulse WAVs - drop IRs into Cab IRs)", false);
+    m.addSeparator();
+    m.addItem(2, "Show Folder");
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(btnChFxFile[fx]),
+        [this, fx, folder](int id)
+        {
+            if (id == 0) return;
+            auto& c2 = proc.sequencer.channel(selectedChannel);
+            if (id == 2) { folder.revealToUser(); return; }
+            const int idx = id - 1000;
+            if (idx < 0 || idx >= chFxPickFiles.size()) return;
+            c2.chFxFile[fx] = chFxPickFiles[idx].getFullPathName();
+            c2.refreshChFxAssets(fx);   // message thread: load + prewarm (a big model = a short pause)
+            c2.markDspDirty();
+            refreshDetailPanel();
+            if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel);
+        });
 }
 
 void DrumSequencerEditor::cacheWaveform(int ch)
@@ -6354,7 +6403,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
     h = mix(h, f(c.strumAmt));     // STRUM is per-sound too (user order: guitar sounds ship strummed)
     // CHANNEL FX (both slots combined) are part of the SOUND: chorus / flanger / phaser / comp.
     for (int fx = 0; fx < 3; ++fx)
-    { h = mix(h, c.chFxType[fx]); h = mix(h, f(c.chFxAmt[fx])); h = mix(h, f(c.chFxChar[fx])); }
+    { h = mix(h, c.chFxType[fx]); h = mix(h, f(c.chFxAmt[fx])); h = mix(h, f(c.chFxChar[fx])); h = mix(h, (juce::int64) c.chFxFile[fx].hashCode64()); }
     for (int cf = 0; cf < 2; ++cf)   // [2026-07-16] CHANNEL FILTER/EQ pair
     { h = mix(h, c.chFiltType[cf]); h = mix(h, f(c.chFiltCutoff[cf])); h = mix(h, f(c.chFiltReso[cf])); h = mix(h, f(c.chFiltGain[cf])); }
     h = mix(h, f(c.chFiltDrive));
@@ -6465,7 +6514,7 @@ juce::int64 DrumSequencerEditor::stateHash() const
             h = mix(h, channelSoundHash(ch));
             h = mix(h, ch.numSteps);
             h = mix(h, f(ch.humanizeAmt)); h = mix(h, f(ch.strumAmt)); h = mix(h, f(ch.keysMinVel)); h = mix(h, f(ch.keysMaxVel)); h = mix(h, f(ch.keysGlide));   // HUMANIZE / STRUM / min+max-vel / GLIDE (undoable)
-            for (int fx = 0; fx < 3; ++fx) { h = mix(h, ch.chFxType[fx]); h = mix(h, f(ch.chFxAmt[fx])); h = mix(h, f(ch.chFxChar[fx])); }   // CHANNEL FX (undoable)
+            for (int fx = 0; fx < 3; ++fx) { h = mix(h, ch.chFxType[fx]); h = mix(h, f(ch.chFxAmt[fx])); h = mix(h, f(ch.chFxChar[fx])); h = mix(h, (juce::int64) ch.chFxFile[fx].hashCode64()); }   // CHANNEL FX (undoable)
             for (int cf = 0; cf < 2; ++cf) { h = mix(h, ch.chFiltType[cf]); h = mix(h, f(ch.chFiltCutoff[cf])); h = mix(h, f(ch.chFiltReso[cf])); h = mix(h, f(ch.chFiltGain[cf])); }
             h = mix(h, f(ch.chFiltDrive));   // CHANNEL FILTER/EQ (undoable) [2026-07-16]
             h = mix(h, f(ch.reverbSend)); h = mix(h, f(ch.delaySend)); h = mix(h, ch.revBus); h = mix(h, ch.delBus);
@@ -6536,7 +6585,7 @@ void DrumSequencerEditor::resetChannelToDefault(DrumChannel& c, int ch)
     c.drawMode = false; c.drawVel = 1.0f; c.drawPan = 0.0f; c.drawTuneCents = 0.0f;   // fresh channel = step mode
     c.keysSlot2Down = 0;                                      // KEYS slot-2 transpose (channel-wide) resets too
     c.humanizeAmt = 0.0f; c.strumAmt = 0.0f; c.keysMinVel = 0.0f; c.keysMaxVel = 1.0f; c.keysGlide = 0.0f;   // HUMANIZE / STRUM / vel range / GLIDE default
-    for (int fx = 0; fx < 3; ++fx) { c.chFxType[fx] = 0; c.chFxAmt[fx] = 0.0f; c.chFxChar[fx] = 0.5f; }   // CHANNEL FX off
+    for (int fx = 0; fx < 3; ++fx) { c.chFxType[fx] = 0; c.chFxAmt[fx] = 0.0f; c.chFxChar[fx] = 0.5f; c.chFxFile[fx].clear(); c.refreshChFxAssets(fx); }   // CHANNEL FX off (+ unload NAM/IR)
     { DrumChannel dch2; for (int cf = 0; cf < 2; ++cf) { c.chFiltType[cf] = 0; c.chFiltCutoff[cf] = dch2.chFiltCutoff[cf]; c.chFiltReso[cf] = 0.707f; c.chFiltGain[cf] = 0.0f; } c.chFiltDrive = 0.0f; }   // CHANNEL FILTER/EQ reset [2026-07-16]
     c.reverbSend = 0.0f; c.delaySend = 0.0f;   // channel sends off (the sound sets its own)
     c.mergeWith = -1; c.keysSplitW1 = 60; c.keysSplitW2 = 12;   // MERGE&SPLIT off / identity windows
@@ -6612,7 +6661,8 @@ void DrumSequencerEditor::writeChannelMix(juce::ValueTree& t, const DrumChannel&
     { const juce::String k(fx);
       t.setProperty("cfxT" + k, ch.chFxType[fx], nullptr);
       t.setProperty("cfxA" + k, ch.chFxAmt[fx],  nullptr);
-      t.setProperty("cfxC" + k, ch.chFxChar[fx], nullptr); }
+      t.setProperty("cfxC" + k, ch.chFxChar[fx], nullptr);
+      t.setProperty("cfxF" + k, ch.chFxFile[fx], nullptr); }   // [2026-07-18] NAM model / Cab IR path
     for (int f = 0; f < 2; ++f)   // [2026-07-16] CHANNEL FILTER/EQ pair rides with the sound
     { const juce::String k(f);
       t.setProperty("cfT" + k, ch.chFiltType[f],   nullptr);
@@ -6710,9 +6760,12 @@ void DrumSequencerEditor::readChannelMix(const juce::ValueTree& t, DrumChannel& 
     ch.strumAmt = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("strum", 0.0f));   // per-sound strum (0 for old files)
     for (int fx = 0; fx < 3; ++fx)   // CHANNEL FX slots (readSlots migrates pre-slot-system files after this)
     { const juce::String k(fx);
-      ch.chFxType[fx] = juce::jlimit(0, 17, (int) t.getProperty("cfxT" + k, 0));
+      ch.chFxType[fx] = juce::jlimit(0, 19, (int) t.getProperty("cfxT" + k, 0));
       ch.chFxAmt[fx]  = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("cfxA" + k, 0.0f));
-      ch.chFxChar[fx] = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("cfxC" + k, 0.5f)); }
+      ch.chFxChar[fx] = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("cfxC" + k, 0.5f));
+      ch.chFxFile[fx] = t.getProperty("cfxF" + k, "").toString();
+      if (ch.chFxType[fx] == DrumChannel::ChFxNamAmp || ch.chFxType[fx] == DrumChannel::ChFxCabIr)
+          ch.refreshChFxAssets(fx); }   // message thread (mix load)
     for (int f = 0; f < 2; ++f)   // [2026-07-16] CHANNEL FILTER/EQ pair (0/defaults for old files)
     { const juce::String k(f); const float cDef = (f == 0) ? 1000.0f : 2500.0f;   // struct defaults (a full DrumChannel per read = heavy)
       ch.chFiltType[f]   = juce::jlimit(0, (int) DrumChannel::Bell, (int) t.getProperty("cfT" + k, 0));
@@ -9488,7 +9541,9 @@ void DrumSequencerEditor::setupComponents()
                 { 10, "FreqShift", "Single-sideband frequency shifter - moves every harmonic by the SAME Hz, so the sound turns inharmonic.\n\nCharacter = the shift in Hz: centre = 0 Hz, right = up, left = down. A few Hz = barber-pole detune, hundreds = alien metal." },
                 { 11, "Rotary",    "Leslie speaker: horn doppler + tremolo + rotor pan.\n\nCharacter = rotor speed in Hz (0.7 = slow chorale, 7 = fast tremolo)." },
                 { 17, "Rotary (sync)",  "Leslie locked to the tempo: Character = rotations per bar." },
-                { 18, "Resonator", "A tuned string-like body that RINGS at the note you play - it tracks the newest note automatically (steps, roll, keys, arp).\n\nAmount = how much ring. Character = tune offset in semitones around the tracked note (centre = unison; +12/-12 = an octave). Turn any drum or noise into pitched metal, or double a bass with a singing body." } };
+                { 18, "Resonator", "A tuned string-like body that RINGS at the note you play - it tracks the newest note automatically (steps, roll, keys, arp).\n\nAmount = how much ring. Character = tune offset in semitones around the tracked note (centre = unison; +12/-12 = an octave). Turn any drum or noise into pitched metal, or double a bass with a singing body." },
+                { 19, "NAM Amp",   "A real captured amplifier: loads a .nam file (Neural Amp Modeler, incl. the A2 architecture) from your NAM Models folder.\n\n- The row becomes a full-width MODEL picker (no Amount/Character - amps are not blended; drive it with the per-slot Drive = your pedal).\n- Runs MONO at normal rate (models are trained there); output is auto level-matched from the file's loudness metadata.\n- Many captures are amp-head only: put CAB IR in the NEXT slot." },
+                { 20, "Cab IR",    "A speaker cabinet: loads an impulse-response WAV from your Cab IRs folder (zero latency; the IR is resampled to your rate).\n\n- The row becomes a full-width IR picker.\n- The classic pairing: FX A = NAM Amp, FX B = Cab IR, then the channel FILTER/EQ chip as the tone stack." } };
         };
         for (int i = 0; i < 3; ++i)
         {
@@ -9505,6 +9560,7 @@ void DrumSequencerEditor::setupComponents()
             cb.addItem("Widener", 8); cb.addItem("OTT", 9); cb.addItem("FreqShift", 10);
             cb.addItem("Rotary", 11); cb.addItem("Rotary (sync)", 17);
             cb.addItem("Resonator", 18);   // [2026-07-18]
+            cb.addItem("NAM Amp", 19); cb.addItem("Cab IR", 20);   // [2026-07-18 night] the amp rig
             cb.setSelectedId(1, juce::dontSendNotification);
             cb.setTooltip(juce::String("CHANNEL FX slot ") + (i == 0 ? "A" : i == 1 ? "B" : "C") + ": pick an effect for the WHOLE instrument "
                           "(both sound slots combined; runs A -> B -> C in series).\n\n"
@@ -9515,10 +9571,12 @@ void DrumSequencerEditor::setupComponents()
             cb.onChange = [this, i] {
                 if (ignoreKnobCallbacks) return;
                 auto& ch = proc.sequencer.channel(selectedChannel);
-                ch.chFxType[i] = juce::jlimit(0, 17, comboChFx[i].getSelectedId() - 1);
-                if (ch.chFxType[i] != DrumChannel::ChFxOff && ch.chFxAmt[i] <= 0.001f)
+                ch.chFxType[i] = juce::jlimit(0, 19, comboChFx[i].getSelectedId() - 1);
+                const bool asset = ch.chFxType[i] == DrumChannel::ChFxNamAmp || ch.chFxType[i] == DrumChannel::ChFxCabIr;
+                if (! asset && ch.chFxType[i] != DrumChannel::ChFxOff && ch.chFxAmt[i] <= 0.001f)
                     ch.chFxAmt[i] = 0.5f;   // picking an effect with amount 0 would be silent - start audible (disclosed)
-                ch.markDspDirty(); refreshDetailPanel();
+                ch.refreshChFxAssets(i);    // [2026-07-18] load/unload the NAM model / Cab IR for the new type
+                ch.markDspDirty(); layoutContent(); refreshDetailPanel();
                 if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel);
             };
             cb.onOpenList = [this, i, chFxTipItems] {
@@ -9587,6 +9645,16 @@ void DrumSequencerEditor::setupComponents()
                 }
             };
             chFxChrF[i].setLabel({});   // value-only: "Chr 2 /bar" didn't fit (user); the tooltip names it
+            // [2026-07-18] NAM/Cab full-row FILE picker (shown instead of Amt/Chr on those types)
+            content.addChildComponent(btnChFxFile[i]);
+            btnChFxFile[i].setLookAndFeel(&dropBtnLNF);
+            btnChFxFile[i].setColour(juce::TextButton::buttonColourId, juce::Colour(0xff223046));
+            btnChFxFile[i].setColour(juce::TextButton::textColourOffId, juce::Colour(0xff9fd1ff));
+            btnChFxFile[i].setTooltip("Pick the model / impulse file for this FX slot.\n\n"
+                "- NAM Amp: .nam captures from Documents/BASAMAK/NAM Models\n"
+                "- Cab IR: impulse WAVs from Documents/BASAMAK/Cab IRs\n"
+                "- Drop files into the folder, then Refresh. The pick is saved with the sound.");
+            btnChFxFile[i].onClick = [this, i] { openChFxFilePicker(i); };
             chFxChrF[i].onChange = [this, i](float v) {
                 if (ignoreKnobCallbacks) return;
                 auto& ch = proc.sequencer.channel(selectedChannel);
@@ -12143,7 +12211,11 @@ void DrumSequencerEditor::updateFxFaders(const DrumChannel::Slot& sl)
     // CHANNEL FX + sends read the CHANNEL (both slots combined) - they never follow the slot selector.
     { const auto& ch = proc.sequencer.channel(selectedChannel);
       for (int i = 0; i < 3; ++i)
-      { comboChFx[i].setSelectedId(juce::jlimit(0, 17, ch.chFxType[i]) + 1, juce::dontSendNotification);
+      { const bool asset = ch.chFxType[i] == DrumChannel::ChFxNamAmp || ch.chFxType[i] == DrumChannel::ChFxCabIr;
+        btnChFxFile[i].setButtonText(! asset ? juce::String()
+            : ch.chFxFile[i].isNotEmpty() ? juce::File(ch.chFxFile[i]).getFileNameWithoutExtension()
+            : ch.chFxType[i] == DrumChannel::ChFxNamAmp ? "pick a model..." : "pick an IR...");
+        comboChFx[i].setSelectedId(juce::jlimit(0, 19, ch.chFxType[i]) + 1, juce::dontSendNotification);
         chFxChrF[i].repaint();   // the Character read-out depends on the TYPE - repaint even when the value didn't move [2026-07-15 15:00]
         chFxAmtF[i].setValue01(ch.chFxAmt[i]);
         chFxChrF[i].setValue01(ch.chFxChar[i]);
@@ -13862,8 +13934,12 @@ void DrumSequencerEditor::layoutContent()
             {
                 const int y = y0 + i * (rh + gap2);
                 comboChFx[i].setVisible(true); comboChFx[i].setBounds(fxX, y, cbW, rh);
-                chFxAmtF[i].setVisible(true);  chFxAmtF[i].setBounds(fxX + cbW + gap2, y, fW2, rh);
-                chFxChrF[i].setVisible(true);  chFxChrF[i].setBounds(fxX + cbW + gap2 * 2 + fW2, y, fW2, rh);
+                const int ty = proc.sequencer.channel(selectedChannel).chFxType[i];
+                const bool asset = ty == DrumChannel::ChFxNamAmp || ty == DrumChannel::ChFxCabIr;   // [2026-07-18]
+                chFxAmtF[i].setVisible(! asset);  chFxAmtF[i].setBounds(fxX + cbW + gap2, y, fW2, rh);
+                chFxChrF[i].setVisible(! asset);  chFxChrF[i].setBounds(fxX + cbW + gap2 * 2 + fW2, y, fW2, rh);
+                btnChFxFile[i].setVisible(asset); // the model/IR name gets the WHOLE remaining row
+                btnChFxFile[i].setBounds(fxX + cbW + gap2, y, gap2 + fW2 * 2, rh);
             }
             const int ys = y0 + 3 * (rh + gap2) + 3, sW = (fxW - gap2) / 2;   // sends sit LOWER (room for the value + bus name)
             sendRevF.setVisible(true); sendRevF.setBounds(fxX, ys, sW, rh);

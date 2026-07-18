@@ -1,6 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include "SpectrumTap.h"
+#include "NamWrapper.h"   // [2026-07-18] opaque NAM amp-model API (the C++20 core stays behind it)
 #include <complex>
 
 //==============================================================================
@@ -798,6 +799,19 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     float  chFiltIc1[2][2] = {}, chFiltIc2[2][2] = {}; // stereo SVF state per filter
     float  chFiltGm[2] = { -1.0f, -1.0f }, chFiltKm[2] = { -1.0f, -1.0f };   // smoothed coeffs (-1 = snap)
     bool   chFxRun[3] = {};                          // engage tracking: off->on clears that slot's state (no stale burst)
+    // [2026-07-18] NAM AMP + CAB IR assets, per FX slot. Message thread loads + owns via the
+    // Hold/Old shared_ptr pair (Old = graveyard: the audio thread may still be inside the retired
+    // instance this block - the MsSet precedent); the audio thread reads ONLY the atomic pointer.
+    juce::String chFxFile[3];                        // .nam model / IR wav path ("" = none picked)
+    std::shared_ptr<BasamakNam> chFxNamHold[3], chFxNamOld[3];
+    std::atomic<BasamakNam*> chFxNamLive[3] = {};
+    float chFxNamGain[3] = { 1.0f, 1.0f, 1.0f };     // auto level-match from the model's loudness metadata
+    std::shared_ptr<juce::dsp::Convolution> chFxConvHold[3], chFxConvOld[3];
+    std::atomic<juce::dsp::Convolution*> chFxConvLive[3] = {};
+    std::vector<float> namMono, namHost;             // NAM scratch: engine-rate mono + host-rate half
+    float namDnHist[3][24] = {}, namUpHist[3][24] = {};   // 23-tap halfband FIR history (down / up)
+    void refreshChFxAssets(int fx);                  // MESSAGE THREAD: (re)load by chFxType+chFxFile
+
     float  chSendHpZ[2] = {};                        // reverb-send high-pass state (~150 Hz; subs stay out of the verb)
     float  chSendSmR = -1.0f, chSendSmD = -1.0f;     // per-sample smoothed send gains (de-zipper; -1 = snap)
     float  chFxLive[8] = { -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000 };   // live modulated channel values (UI rings)
@@ -976,7 +990,14 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
                     // [2026-07-18] RESONATOR (user pick): a tuned feedback comb that RINGS at the
                     // channel's newest note (resoTrackHz, set per trigger). Amount = wet + ring
                     // depth; Character = tune offset -12..+12 st around the tracked note.
-                    ChFxResonator };
+                    ChFxResonator,
+                    // [2026-07-18 night] NAM AMP (18) = a NeuralAmpModelerCore .nam capture (incl.
+                    // the A2 architecture) run MONO at HOST rate (2:1 halfband down/up around it -
+                    // models are trained at normal rates; also half the cost) with auto level-match
+                    // from the file's loudness metadata. CAB IR (19) = a speaker-cabinet impulse
+                    // via juce::dsp::Convolution (zero-latency, IR resampled to our rate). Both use
+                    // chFxFile[slot] (full-row dropdown in the UI - Amt/Chr unused, rows hidden).
+                    ChFxNamAmp, ChFxCabIr };
     // [2026-07-15 14:20] THE cycles-per-bar ladder: sub-1 fractions for slow sweeps, then EVERY
     // whole number to 21 (user: "it should include every number" - no more 12->16 jumps). ONE
     // source shared by the synced channel-FX Character, the LFO Bar-sync detents and any future

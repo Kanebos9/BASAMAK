@@ -3097,6 +3097,9 @@ private:
     // CHANNEL FX = TWO selectable effect slots (type combo + Amount + Character faders) + the channel
     // Reverb/Delay SEND faders (right-click a send fader = pick its bus A/B + MIDI-learn).
     TipCombo comboChFx[3];
+    juce::TextButton btnChFxFile[3];        // [2026-07-18] NAM model / Cab IR full-row picker (replaces Amt+Chr on those types)
+    juce::Array<juce::File> chFxPickFiles;  // flat file list behind the open picker menu
+    void openChFxFilePicker(int fx);
     TipList  fxTypeList;           // shared per-item-tooltip dropdown (channel FX types + drive types)
     TinyComboLNF   tinyComboLNF;   // compact skin for the three type combos (cleared in teardown!)
     SlotDragFader  chFxAmtF[3], chFxChrF[3];
