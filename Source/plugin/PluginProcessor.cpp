@@ -2490,6 +2490,7 @@ juce::ValueTree DrumSequencerProcessor::captureStateTree()
 {
     juce::ValueTree state("DrumSeqState");
 
+    state.setProperty("perBarModes", true, nullptr);   // [1.5.0] merged groups = per-bar play modes (migration stamp)
     state.setProperty("dawSync",  sequencer.dawSync,         nullptr);
     state.setProperty("bpm",      sequencer.standaloneBpm,   nullptr);
     state.setProperty("tsNum",    sequencer.timeSigNum,      nullptr);
@@ -2804,6 +2805,30 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
         {
             if (! ch.restoredSlots) ch.buildSlotsFromLegacy();  // old project: derive from legacy fields
             ch.restoredSlots = false;                           // consume the transient flag
+        }
+
+    // [1.5.0] MERGED-GROUP MIGRATION: playback is PER-BAR now. Old projects (no "perBarModes"
+    // stamp) stored the group's behaviour on its END bar only, internal bars' modes were ignored
+    // junk. Convert: internal bars -> chain to next x1; an END bar on Loop (which meant "loop the
+    // GROUP") -> chain back to the head x1; any other end mode keeps its meaning per-bar.
+    if (! (bool) state.getProperty("perBarModes", false))
+        for (int h = 0; h < Sequencer::NUM_PATTERNS; )
+        {
+            const int e = sequencer.groupEnd(h);
+            if (e > h)
+            {
+                for (int m = h; m < e; ++m)
+                {
+                    auto& bp = sequencer.patterns[m];
+                    bp.playMode = Sequencer::Chain; bp.chainLen = 1; bp.chainStep = 0;
+                    bp.chainLoops[0] = 1; bp.chainSeq[0] = m + 1;
+                }
+                auto& ep = sequencer.patterns[e];
+                if (ep.playMode == Sequencer::LoopForever)
+                { ep.playMode = Sequencer::Chain; ep.chainLen = 1; ep.chainStep = 0;
+                  ep.chainLoops[0] = 1; ep.chainSeq[0] = h; }
+            }
+            h = e + 1;
         }
 }
 

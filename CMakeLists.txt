@@ -1,7 +1,7 @@
 # BASAMAK - a free, open-source drum & sample step-sequencer plugin (VST3 / AU / Standalone).
 # Copyright (C) 2026 Oguzhan Yazici. Licensed under the GNU AGPL v3 (see LICENSE).
 cmake_minimum_required(VERSION 3.22)
-project(BASAMAK VERSION 1.4.9)   # [2026-07-17] 1.4.9 = channel FILTER/EQ chip, F1-pre/F2-post split, slot-2 weight fix, free-LFO live fix, tape/rotary click fix, old EQ deleted, LFO Grid+Snap, 255 sounds
+project(BASAMAK VERSION 1.5.0)   # [2026-07-18] 1.5.0 = PER-BAR play modes in merged groups (the group playback override is gone)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

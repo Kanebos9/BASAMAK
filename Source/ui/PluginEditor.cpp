@@ -7035,8 +7035,12 @@ void DrumSequencerEditor::initPreset()
 
 void DrumSequencerEditor::refreshPatternOptions()
 {
-    // MERGED GROUP: the play-mode/chain settings live on (and are edited on) the LAST bar - the
-    // bar the playback LEAVES from (user rule). Single pattern: groupEnd == itself.
+    // [1.5.0] PER-BAR play modes: a merged group's button face is a summary (each bar's rows live
+    // in the dropdown); a single pattern shows its own mode exactly as before.
+    { auto& sq = proc.sequencer;
+      const int gh = sq.groupHead(currentPattern()), ge = sq.groupEnd(currentPattern());
+      if (ge > gh)
+      { patModeBtn.setButtonText("Bar modes P" + juce::String(gh + 1) + "-" + juce::String(ge + 1)); return; } }
     auto& p = proc.sequencer.patterns[proc.sequencer.groupEnd(currentPattern())];
     juce::String inf   = juce::String(juce::CharPointer_UTF8("\xE2\x88\x9E"));
     juce::String arrow = juce::String(juce::CharPointer_UTF8("\xE2\x86\x92"));
@@ -7751,7 +7755,28 @@ void DrumSequencerEditor::setupComponents()
                         }
                     }
                 }
-                sq.patterns[p].mergeWithPrev = false; selectPattern(p); refreshDetailPanel(); repaint(); return;
+                {   // [1.5.0] un-merge splits oh..oe into TWO units. Bars still on the DEFAULT
+                    // merge chain (next x1 / head x1 under the OLD grouping) get the split's new
+                    // defaults (remaining groups keep flowing; singletons go back to plain Loop);
+                    // bars the user re-pointed are KEPT untouched.
+                    const int oh = sq.groupHead(juce::jmax(0, p - 1)), oe = sq.groupEnd(p);
+                    sq.patterns[p].mergeWithPrev = false;
+                    auto isOldDefault = [&](const Sequencer::Pattern& bp, int m) {
+                        const int defTgt = (m < oe) ? m + 1 : oh;
+                        return bp.playMode == Sequencer::Chain && bp.chainLen == 1
+                            && bp.chainLoops[0] == 1 && bp.chainSeq[0] == defTgt; };
+                    auto applySeg = [&](int a2, int b2) {
+                        for (int m = a2; m <= b2; ++m) {
+                            auto& bp = sq.patterns[m];
+                            if (! isOldDefault(bp, m)) continue;
+                            if (a2 == b2) { bp.playMode = Sequencer::LoopForever; bp.chainLen = 0; bp.chainStep = 0; }
+                            else { bp.playMode = Sequencer::Chain; bp.chainLen = 1; bp.chainStep = 0;
+                                   bp.chainLoops[0] = 1; bp.chainSeq[0] = (m < b2) ? m + 1 : a2; }
+                        }
+                    };
+                    applySeg(oh, p - 1); applySeg(p, oe);
+                }
+                selectPattern(p); refreshDetailPanel(); repaint(); return;
             }
             // MERGE: the group adopts the HEAD's sounds, step counts, roll/step MODE and Tune. Warn
             // first (user) - naming the channels whose mode will FLIP (roll<->step) in the later bars,
@@ -7771,6 +7796,18 @@ void DrumSequencerEditor::setupComponents()
                 auto& sq2 = proc.sequencer;
                 commitUndoNow();
                 sq2.patterns[p].mergeWithPrev = true;
+                // [1.5.0] PER-BAR playback defaults reproducing the old group feel: every internal
+                // bar chains to the NEXT once; the END chains back to the HEAD (= the group loops).
+                // An end bar the user had already pointed somewhere (Stop/Chain/Next) KEEPS its mode.
+                for (int m = mHead; m <= mEnd; ++m)
+                {
+                    auto& bp = sq2.patterns[m];
+                    if (m < mEnd || bp.playMode == Sequencer::LoopForever)
+                    {
+                        bp.playMode = Sequencer::Chain; bp.chainLen = 1; bp.chainStep = 0;
+                        bp.chainLoops[0] = 1; bp.chainSeq[0] = (m < mEnd) ? m + 1 : mHead;
+                    }
+                }
                 for (int m = mHead + 1; m <= mEnd; ++m)
                     for (int c = 0; c < Sequencer::NUM_CHANNELS; ++c) {
                         copyChannelSound(mHead, m, c);
@@ -7795,9 +7832,10 @@ void DrumSequencerEditor::setupComponents()
         };
         pb.setTooltip("Pattern " + juce::String(p + 1) + " - click to view + edit it.\n\n"
                       "- DRAG onto another pattern = copy its steps, swing, play-mode + FX there.\n"
-                      "- SHIFT+CLICK = MERGE with the pattern before it: merged patterns play back to back "
-                      "as one longer piece (sounds + step counts mirror the FIRST bar; play mode/chain "
-                      "come from the LAST). Shift+click again = un-merge.\n"
+                      "- SHIFT+CLICK = MERGE with the pattern before it: merged patterns edit + view as one "
+                      "longer piece (sounds + step counts mirror the FIRST bar). EVERY bar keeps its OWN "
+                      "play mode - merging defaults them to chain-through and loop the group; the play-mode "
+                      "dropdown lists each bar's Loop / Stop / Chain rows. Shift+click again = un-merge.\n"
                       "- Right-click = MIDI-learn.");
         content.addAndMakeVisible(pb);
     }
@@ -8279,45 +8317,57 @@ void DrumSequencerEditor::setupComponents()
     patModeBtn.setLookAndFeel(&dropBtnLNF);   // draws a clean down-triangle on the right
     patModeBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
     patModeBtn.onClick = [this] {
-        // Merged group: edit the LAST bar's settings (the bar playback leaves from).
-        auto& p = proc.sequencer.patterns[proc.sequencer.groupEnd(currentPattern())];
+        // [1.5.0, user design] PER-BAR play modes: a merged group lists EVERY bar's own
+        // Loop / Stop after / Chain rows (up to 8 x 3), each prefixed with its pattern number -
+        // any bar can loop itself, stop, or chain anywhere (in or out of the group). A single
+        // pattern shows one unlabelled set, exactly as before.
+        auto& sq = proc.sequencer;
+        const int gh = sq.groupHead(currentPattern()), ge = sq.groupEnd(currentPattern());
         juce::String inf = juce::String(juce::CharPointer_UTF8("\xE2\x88\x9E"));
         juce::PopupMenu m;
-        m.addItem(1, "Loop " + inf, true, p.playMode == Sequencer::LoopForever);
-        m.addItem(2, "Stop after... (" + juce::String(p.repeatTarget) + ")", true, p.playMode == Sequencer::StopAfterN);
-
-        // CHAIN: each entry is (pattern, loops). Pick a pattern -> a dialog asks how many loops (type any number) ->
-        // appended. At play time the pattern plays that many loops, then jumps to that pattern, advancing the chain.
-        juce::PopupMenu chainAdd;
-        for (int i = 0; i < visiblePatterns; ++i) chainAdd.addItem(220000 + i, "Pattern " + juce::String(i + 1));
-        m.addSubMenu("Chain: add pattern", chainAdd, p.chainLen < Sequencer::CHAIN_MAX);
-        if (p.chainLen > 0) {
-            juce::String cs;
-            for (int k = 0; k < p.chainLen; ++k)
-                cs += "P" + juce::String(p.chainSeq[k] + 1) + "(" + juce::String(p.chainLoops[k])
-                      + ")" + (k < p.chainLen - 1 ? " > " : "");
-            m.addSectionHeader("Chain: " + cs);
-            m.addItem(3, "Delete last chain");
+        for (int b = gh; b <= ge; ++b)
+        {
+            auto& p = sq.patterns[b];
+            const juce::String tag = (ge > gh) ? "P" + juce::String(b + 1) + ": " : juce::String();
+            if (ge > gh) m.addSectionHeader("Pattern " + juce::String(b + 1));
+            m.addItem(300000 + b, tag + "Loop " + inf, true, p.playMode == Sequencer::LoopForever);
+            m.addItem(310000 + b, tag + "Stop after... (" + juce::String(p.repeatTarget) + ")", true, p.playMode == Sequencer::StopAfterN);
+            juce::PopupMenu chainAdd;   // CHAIN entries = (pattern, loops); play N loops then jump
+            for (int i = 0; i < visiblePatterns; ++i) chainAdd.addItem(400000 + b * 100 + i, "Pattern " + juce::String(i + 1));
+            m.addSubMenu(tag + "Chain: add pattern", chainAdd, p.chainLen < Sequencer::CHAIN_MAX);
+            if (p.chainLen > 0) {
+                juce::String cs;
+                for (int k = 0; k < p.chainLen; ++k)
+                    cs += "P" + juce::String(p.chainSeq[k] + 1) + "(" + juce::String(p.chainLoops[k])
+                          + ")" + (k < p.chainLen - 1 ? " > " : "");
+                m.addSectionHeader((ge > gh ? tag : juce::String("Chain: ")) + (ge > gh ? "Chain: " + cs : cs));
+                m.addItem(320000 + b, tag + "Delete last chain");
+            }
         }
-
         m.showMenuAsync(juce::PopupMenu::Options{}.withTargetComponent(&patModeBtn),
             [this](int r) {
                 if (r <= 0) return;
-                auto& pp = proc.sequencer.patterns[proc.sequencer.groupEnd(currentPattern())];
-                if      (r == 1)        { pp.playMode = Sequencer::LoopForever; refreshPatternOptions(); }
-                else if (r == 2)        askLoopCount("Stop after", pp.repeatTarget, [this](int n) {
-                                            auto& q = proc.sequencer.patterns[proc.sequencer.groupEnd(currentPattern())];
-                                            q.playMode = Sequencer::StopAfterN; q.repeatTarget = n; refreshPatternOptions(); });
-                else if (r == 3)        { if (pp.chainLen > 0) --pp.chainLen;          // delete the LAST chain entry
-                                          if (pp.chainLen == 0) pp.playMode = Sequencer::LoopForever; refreshPatternOptions(); }
-                else if (r >= 220000)   { const int pat = r - 220000;
-                                          askLoopCount("Play Pattern " + juce::String(pat + 1) + " after how many loops", 2,
-                                            [this, pat](int n) {
-                                                auto& q = proc.sequencer.patterns[proc.sequencer.groupEnd(currentPattern())];
-                                                if (q.chainLen < Sequencer::CHAIN_MAX) {
-                                                    q.chainSeq[q.chainLen] = pat; q.chainLoops[q.chainLen] = n;
-                                                    ++q.chainLen; q.playMode = Sequencer::Chain; }
-                                                refreshPatternOptions(); }); }
+                auto& sq2 = proc.sequencer;
+                if (r >= 400000)
+                {   const int b = (r - 400000) / 100, pat = (r - 400000) % 100;
+                    askLoopCount("Play Pattern " + juce::String(pat + 1) + " after how many loops", 2,
+                        [this, b, pat](int n) {
+                            auto& q = proc.sequencer.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, b)];
+                            if (q.chainLen < Sequencer::CHAIN_MAX) {
+                                q.chainSeq[q.chainLen] = pat; q.chainLoops[q.chainLen] = n;
+                                ++q.chainLen; q.playMode = Sequencer::Chain; }
+                            refreshPatternOptions(); });
+                    return;
+                }
+                const int b = r % 10000;
+                auto& pp = sq2.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, b)];
+                if      (r >= 320000) { if (pp.chainLen > 0) --pp.chainLen;
+                                        if (pp.chainLen == 0) pp.playMode = Sequencer::LoopForever;
+                                        refreshPatternOptions(); }
+                else if (r >= 310000) askLoopCount("Stop after", pp.repeatTarget, [this, b](int n) {
+                                        auto& q = proc.sequencer.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, b)];
+                                        q.playMode = Sequencer::StopAfterN; q.repeatTarget = n; refreshPatternOptions(); });
+                else if (r >= 300000) { pp.playMode = Sequencer::LoopForever; refreshPatternOptions(); }
             });
     };
 
@@ -10438,7 +10488,14 @@ void DrumSequencerEditor::setupComponents()
                         "- Notes carry their VELOCITY and length; rolls, swing and merged chains are kept.\n"
                         "- Piano-roll channels export exactly as drawn (C4-based); step channels use each "
                         "pitched slot's Base Freq as the 0-point; Scale slots export their full voicing.");
-    patModeBtn.setTooltip("What happens after this pattern finishes: loop forever, stop after N loops, or jump to another pattern.");
+    patModeBtn.setTooltip("What happens after a pattern finishes: loop forever, stop after N loops, "
+        "or CHAIN to another pattern (each chain entry = a target + how many loops first).\n\n"
+        "- In a MERGED group, EVERY bar has its own rows here (P4: Loop / P4: Stop / P4: Chain...): "
+        "a bar can repeat itself, stop mid-group, or chain anywhere - in or out of the group.\n"
+        "- Merging defaults each bar to chain-to-next and the last back to the first (= the group "
+        "loops like before) - change any bar to reshape the flow.\n"
+        "- Loop conditions count per BAR: 'every 2nd loop' = every 2nd play of that bar.\n"
+        "- While RECORDING, the group always plays first-to-last (bar modes pause).");
 
     // (freqDisplay's tooltip lives in FrequencyDisplay::getTooltip() - the override means a static
     //  setTooltip here is NEVER shown. A dead decoy text sat here until [2026-07-15 17:00].)

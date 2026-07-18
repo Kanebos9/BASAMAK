@@ -89,9 +89,9 @@ public:
         int   chainStep = 0;
         float swing        = 0.0f; // 0 = straight .. 1 = max (MPC 50%..75%: off-step at 0.5+swing*0.25 of the pair)
         // MERGE: this pattern is glued onto the PREVIOUS one (shift+click its button). A run of merged
-        // patterns = ONE multi-bar unit: bars play head..end in sequence, the HEAD's play mode governs
-        // what happens after the last bar, and every member mirrors the head's channel SOUNDS (the
-        // editor keeps them in sync - one sound editor, no clashing). Steps stay per bar.
+        // patterns = ONE multi-bar EDITING/VIEW unit (concat grid, sounds mirror the head). PLAYBACK
+        // [1.5.0]: every bar follows its OWN play mode - merging writes per-bar chain DEFAULTS
+        // (each bar -> next x1, the end -> head x1 = the old loop-the-group feel), all editable.
         bool  mergeWithPrev = false;
         MasterFX master;          // per-pattern master FX + output
     };
@@ -210,6 +210,7 @@ public:
     void reset();
     void resetChains()           { for (auto& p : patterns) p.chainStep = 0; }   // chain positions back to the start
     void startStandalone()       { playing = true; finished = false; patternRepeatCount = 0; loopCount = 0;
+                                   for (auto& b2 : barPlays) b2 = 0;
                                    resetChains();
                                    // Play from the viewed pattern - unless playPattern was parked on a BAR of the
                                    // viewed merged group (the user clicked a middle bar: start THERE, run on).
@@ -217,6 +218,7 @@ public:
                                    resetTickDedupe(); }
     void stopStandalone()        { playing = false; barPosition = 0.0; finished = false;
                                    patternRepeatCount = 0; loopCount = 0; resetChains(); isCurrentlyPlaying = false;
+                                   for (auto& b2 : barPlays) b2 = 0;
                                    playPattern = groupHead(playPattern);   // stopping mid-group parks at the HEAD, so the
                                                                            // next Play starts the group from its beginning
                                                                            // (an explicit middle-bar click AFTER stopping
@@ -249,7 +251,10 @@ private:
 
     int    patternRepeatCount = 0; // bars completed in current pattern
 public:
-    int    loopCount = 0;          // pattern playthroughs since playback started (per-step loop conditions)
+    int    loopCount = 0;          // BAR COMPLETIONS since playback started (tick-dedupe epochs)
+    int    barPlays[NUM_PATTERNS] = {};   // [1.5.0] per-BAR play count - drives the step/note LOOP
+                                          // CONDITIONS now that a bar can repeat itself inside a
+                                          // merged group ("one loop" = one play of THAT bar)
 private:
     bool   finished = false;       // StopAfterN reached → suppress triggers
     bool   wasPlaying = false;     // DAW transport edge detection

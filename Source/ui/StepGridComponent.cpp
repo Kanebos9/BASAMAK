@@ -131,7 +131,7 @@ void StepGridComponent::update(const Sequencer& seq, bool hasSolo)
         { if (drawMagCh == ch) drawMagCh = -1; if (drawDragCh == ch) drawDragCh = -1; drawReadSemi = -128; condEdCh = -1; condEdIdx = -1; rollMenuNoteCh = -1; rollMenuNoteIdx = -1; }
     }
     anySolo = hasSolo;
-    curLoop = seq.loopCount;   // for the Prob-mode current-loop indicator
+    curLoop = seq.barPlays[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, seq.playPattern)];   // [1.5.0] per-BAR play count = what the loop conditions actually count
     playBarFrac = playingGroup ? ((float) (seq.playPattern - gHead) + (float) seq.barPos()) / (float) grpBars
                 : (seq.currentPattern == seq.playPattern && seq.isCurrentlyPlaying) ? (float) seq.barPos() : 0.0f;
     repaint();

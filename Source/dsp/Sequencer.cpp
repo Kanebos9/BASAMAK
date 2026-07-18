@@ -9,6 +9,7 @@ void Sequencer::reset()
     finished = false;
     patternRepeatCount = 0;
     loopCount = 0;
+    for (auto& b2 : barPlays) b2 = 0;
     wasPlaying = false;
     resetTickDedupe();
 }
@@ -284,6 +285,7 @@ void Sequencer::advanceDaw(juce::AudioPlayHead* dawHead, double sampleRate, int 
 
     // Transport just (re)started → re-arm the play-mode counters + start from the viewed pattern
     if (!wasPlaying) { finished = false; patternRepeatCount = 0; loopCount = 0; resetChains(); wasPlaying = true;
+                       for (auto& b2 : barPlays) b2 = 0;
                        playPattern = currentPattern; resetTickDedupe(); }
 
     if (finished) { isCurrentlyPlaying = false; return; } // StopAfterN reached
@@ -338,42 +340,30 @@ void Sequencer::advanceDaw(juce::AudioPlayHead* dawHead, double sampleRate, int 
 // Apply the current pattern's play mode after a bar finishes.
 void Sequencer::onBarComplete()
 {
-    ++loopCount;                  // one more bar (for per-step loop conditions)
-    // MERGED GROUP: bars run head..end in sequence as ONE unit. Mid-group -> just move to the next
-    // bar (a group PASS counts as one playthrough, at the end). At the last bar, the HEAD's play
-    // mode decides (loop -> back to the head; StopAfterN/NextAfterN/Chain count group passes).
-    const int gHead = groupHead(playPattern), gEnd = groupEnd(playPattern);
-    if (gEnd > gHead && playPattern < gEnd)
-    {
-        fadeOutPattern = playPattern;
-        playPattern = playPattern + 1;
-        finished = false;
-        patternChanged.store(true);
-        return;
-    }
+    ++loopCount;                  // one more BAR COMPLETION (tick-dedupe epochs)
+    // [1.5.0] per-BAR play count: "one loop" = one play of THIS bar (drives the step/note LOOP
+    // CONDITIONS now that a merged bar can repeat itself - a group pass is no longer well-defined).
+    barPlays[playPattern] = juce::jmin(1 << 24, barPlays[playPattern] + 1);
     ++patternRepeatCount;
     if (recordLoopLock.load(std::memory_order_relaxed))
     {
-        // "This pattern only" recording: LOOP the armed unit (pattern or whole merged group) -
-        // never follow chains / stop / next while the take is rolling.
+        // Recording: LOOP the armed unit LINEARLY head -> end -> head. Per-bar play modes are
+        // IGNORED while the take rolls - the looper-style group recording (clear once, spanning
+        // notes, per-pass reopen) needs strictly ordered bars.
+        const int gHead = groupHead(playPattern), gEnd = groupEnd(playPattern);
         fadeOutPattern = playPattern;
-        playPattern = gHead;
+        playPattern = (playPattern < gEnd) ? playPattern + 1 : gHead;
         finished = false;
         patternChanged.store(true);
         return;
     }
-    auto& p = patterns[gEnd];     // group: the LAST bar's mode/chain governs - the bar playback
-                                  // LEAVES from (user rule; single pattern: gEnd == playPattern)
+    // [1.5.0, user design] EVERY bar follows its OWN play mode - merged groups included. The old
+    // "group = forced head..end sequence, only the last bar's mode counts" override is GONE: the
+    // MERGE now writes per-bar chain DEFAULTS that reproduce it (each bar chains to the next x1,
+    // the end chains back to the head), and every bar can be re-pointed anywhere - loop itself,
+    // stop mid-group, or chain in/out of the group.
+    auto& p = patterns[playPattern];
     const int target = juce::jmax(1, p.repeatTarget);
-    if (gEnd > gHead && p.playMode == LoopForever)
-    {   // loop the whole group: last bar -> back to the head
-        fadeOutPattern = playPattern;
-        playPattern = gHead;
-        finished = false;
-        patternChanged.store(true);
-        return;
-    }
-
     if (p.playMode == StopAfterN && patternRepeatCount >= target)
     {
         finished = true;
@@ -381,9 +371,7 @@ void Sequencer::onBarComplete()
     else if (p.playMode == NextAfterN && patternRepeatCount >= target)
     {
         fadeOutPattern = playPattern;   // let the outgoing pattern's voices ring out (no hard-cut click)
-        // Jump to the EXACT target bar - even a middle bar of a merged group: playback starts there
-        // and runs on through the rest of the group (user rule; do NOT snap to the group head).
-        playPattern = juce::jlimit(0, NUM_PATTERNS - 1, p.gotoPattern);
+        playPattern = juce::jlimit(0, NUM_PATTERNS - 1, p.gotoPattern);   // exact bar, groups included
         patternRepeatCount = 0;
         finished = false;
         patternChanged.store(true);   // editor follows playPattern if "Follow" is on
@@ -391,8 +379,8 @@ void Sequencer::onBarComplete()
     else if (p.playMode == Chain && p.chainLen > 0
              && patternRepeatCount >= juce::jmax(1, p.chainLoops[p.chainStep % p.chainLen]))
     {
-        // Advance through this pattern's chain (cycling). Each entry has its OWN loop count (chainLoops): play this
-        // pattern that many loops, then jump to chainSeq[step]. chainStep persists so each visit can differ.
+        // Advance through this bar's chain (cycling). Each entry has its OWN loop count (chainLoops):
+        // play this bar that many loops, then jump to chainSeq[step]. chainStep persists per visit.
         const int tgt = juce::jlimit(0, NUM_PATTERNS - 1, p.chainSeq[p.chainStep % p.chainLen]);
         p.chainStep = (p.chainStep + 1) % p.chainLen;
         fadeOutPattern = playPattern;
@@ -401,14 +389,8 @@ void Sequencer::onBarComplete()
         finished = false;
         patternChanged.store(true);
     }
-    else if (gEnd > gHead)
-    {
-        // Group in StopAfterN / NextAfterN / Chain with N not reached yet: run the group again.
-        fadeOutPattern = playPattern;
-        playPattern = gHead;
-        finished = false;
-        patternChanged.store(true);
-    }
+    // LoopForever (or a count not reached yet): the bar simply plays again - the position already
+    // wrapped, no pattern change. A merged bar set to Loop repeats ITSELF (that's the flexibility).
 }
 
 //==============================================================================
@@ -462,7 +444,7 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
                 // fire only on the chosen loops of an N-loop cycle. Len 1 / mask 0 = every loop.
                 if (nt.condLen > 1 && nt.condMask != 0)
                 {
-                    const int bar = ((loopCount % (int) nt.condLen) + (int) nt.condLen) % (int) nt.condLen;
+                    const int bar = ((barPlays[playPattern] % (int) nt.condLen) + (int) nt.condLen) % (int) nt.condLen;   // [1.5.0] per-BAR count
                     if (((nt.condMask >> bar) & 1) == 0) continue;
                 }
                 if (auto* tap = c.analysisTap) tap->arm();
@@ -562,7 +544,7 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
                 bool condOk = true;
                 const int condN = juce::jlimit(1, 10, c.stepCondLen[s]);
                 if (condN > 1 && c.stepCondMask[s] != 0) {
-                    const int bar = ((loopCount % condN) + condN) % condN;
+                    const int bar = ((barPlays[playPattern] % condN) + condN) % condN;   // [1.5.0] per-BAR count
                     condOk = ((c.stepCondMask[s] >> bar) & 1) != 0;
                 }
                 if (! c.steps[s] || ! condOk) continue;
