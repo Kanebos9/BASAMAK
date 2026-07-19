@@ -5515,7 +5515,7 @@ void WaveformDisplay::mouseDown(const juce::MouseEvent& e)
     // a new drag REPLACES the old loop. Plain drag draws the loop whenever Trim isn't armed
     // (Multisample Instruments have no trim, so plain drag simply IS the loop there); with Trim
     // armed, trim owns plain drag and SHIFT+drag draws the loop instead.
-    if ((! selEnabled) || e.mods.isShiftDown())
+    if (loopDrawEnabled && ((! selEnabled) || e.mods.isShiftDown()))
     {
         loopDragging = true;
         dragAnchor = juce::jlimit(0.0f, 1.0f, (float) e.position.x / (float) juce::jmax(1, getWidth()));
@@ -5526,7 +5526,8 @@ void WaveformDisplay::mouseDown(const juce::MouseEvent& e)
     if (!selEnabled) return;
     auto in = getLocalBounds().toFloat().reduced(2.0f);
     const float x = juce::jlimit(0.0f, 1.0f, (e.position.x - in.getX()) / in.getWidth());
-    if (regN >= MAXREG) { dragIdx = -1; return; }   // already 4; double-click to clear them
+    if (regN >= 2) { dragIdx = -1; return; }   // [2026-07-19] cap new trim regions at 2 (4 was overkill,
+                                               // user); storage MAXREG stays 4 so old projects still load
     dragIdx = regN; dragAnchor = x; regLo[regN] = regHi[regN] = x; ++regN;   // start a new region
     repaint();
 }
@@ -5960,6 +5961,7 @@ DrumSequencerEditor::~DrumSequencerEditor()
     for (auto& b : btnChFxFile) b.setLookAndFeel(nullptr);  // dropBtnLNF [2026-07-18]
     for (auto& row : btnSmpTog) for (auto& b : row) b.setLookAndFeel(nullptr);   // tinyBtnLNF [2026-07-19]
     for (auto& b : btnMsAutoLoop) b.setLookAndFeel(nullptr);   // tinyBtnLNF
+    for (auto& b : btnMsLoop) b.setLookAndFeel(nullptr);   // tinyBtnLNF
     for (auto& b : btnMsRigModel) b.setLookAndFeel(nullptr);   // dropBtnLNF
     for (auto& b : btnMsRigIr)    b.setLookAndFeel(nullptr);   // dropBtnLNF
     swDelaySync.setLookAndFeel(nullptr); swDelayPingPong.setLookAndFeel(nullptr);   // [2026-07-15] lit buttons (tinyBtnLNF)
@@ -10861,6 +10863,26 @@ void DrumSequencerEditor::setupComponents()
                   "- Saved with the instrument (sidecar)."));
             rb.onClick = [this, b, ir] { openMsRigPicker(b, ir == 1); };
         }
+        // [2026-07-19] MULTISAMPLE AUTO-LOOP toggle (per-zone): held notes sustain instead of dying.
+        content.addChildComponent(btnMsLoop[b]);
+        btnMsLoop[b].setButtonText("Loop");
+        btnMsLoop[b].setLookAndFeel(&tinyBtnLNF);
+        btnMsLoop[b].setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff2f9e57));
+        btnMsLoop[b].setClickingTogglesState(true);
+        btnMsLoop[b].setTooltip("AUTO-LOOP the instrument so HELD notes sustain.\n\n"
+            "- Each zone loops its OWN best sustain region (found automatically - past the attack, "
+            "phase-aligned to the note's pitch, click-free crossfade).\n"
+            "- Use it for sustained sources (organ, pad, bowed). Basses/plucks that decay naturally "
+            "don't need it.\n"
+            "- Saved with the instrument (sidecar).");
+        btnMsLoop[b].onClick = [this, b] {
+            if (ignoreKnobCallbacks) return;
+            auto& dch2 = proc.sequencer.channel(selectedChannel);
+            dch2.slots[b].msLoopOn = btnMsLoop[b].getToggleState();
+            if (dch2.slots[b].msLoopOn) dch2.msRebuildLoops(b);   // derive per-zone regions now
+            dch2.markDspDirty(); dch2.writeMsSidecar(b);
+            if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel);
+        };
     }
     // PITCH (semitones) = transpose the WHOLE channel - works for every engine (synth freq + sample
     // varispeed), applied via vPitchMul in the render. Same unit as the pitch envelope. Per-channel.
@@ -14096,16 +14118,17 @@ void DrumSequencerEditor::layoutContent()
                 }
                 else
                 {   // [2026-07-19 r2] MULTISAMPLE INSTRUMENTS panel (user: use the space): Reverse +
-                    // a WIDE dB Gain fader | full-width note range | the amp RIG row. Loop and its
-                    // crossfade left this panel - zones never loop (the plain Sample group keeps loop).
+                    // Loop toggle + a WIDE dB Gain fader | full-width note range | the amp RIG row.
                     waveform[b].setBounds(sbx[b] + 6, sby[b] + 20, slotW - 12, 40);
+                    waveform[b].setLoopDrawEnabled(false);   // no drawable loop here (per-zone AUTO instead) - kills the dead gesture
                     knobTop = sby[b] + 64;
                     const int tcx = sbx[b] + 6;
-                    btnSmpTog[b][1].setVisible(true); btnSmpTog[b][1].setBounds(tcx, knobTop, 62, 22);   // Reverse
+                    btnSmpTog[b][1].setVisible(true); btnSmpTog[b][1].setBounds(tcx, knobTop, 56, 22);   // Reverse
                     btnSmpTog[b][0].setVisible(false); btnSmpTog[b][2].setVisible(false);
-                    btnSmpTog[b][3].setVisible(false);   // Loop = plain-sample tool, not an instrument's
+                    btnSmpTog[b][3].setVisible(false);   // (plain-sample Loop toggle stays off here - AUTO-loop below)
+                    btnMsLoop[b].setVisible(true); btnMsLoop[b].setBounds(tcx + 60, knobTop, 46, 22);   // AUTO-loop
                     msGainF[b].setVisible(true);
-                    msGainF[b].setBounds(tcx + 68, knobTop, slotW - 12 - 68, 22);   // the wide fader (user)
+                    msGainF[b].setBounds(tcx + 110, knobTop, slotW - 12 - 110, 22);   // the wide fader (user)
                     lblMsRange[b].setVisible(true);
                     lblMsRange[b].setBounds(tcx, knobTop + 26, slotW - 12, 16);     // full width - no truncation
                     const int ry = sby[b] + 112, rw = (slotW - 16) / 2;
@@ -14118,6 +14141,8 @@ void DrumSequencerEditor::layoutContent()
                 if (! msOn)
                 {   // [2026-07-19] plain sample + Loop on: the small AUTO(-loop) button rides the
                     // waveform's top-right corner (loop lives HERE now).
+                    waveform[b].setLoopDrawEnabled(true);   // drawable loop on the plain Sample engine
+                    btnMsLoop[b].setVisible(false);
                     const bool lp = proc.sequencer.channel(selectedChannel).slots[b].smpLoopOn;
                     btnMsAutoLoop[b].setVisible(lp);
                     if (lp) btnMsAutoLoop[b].setBounds(sbx[b] + slotW - 56, sby[b] + 22, 46, 16);

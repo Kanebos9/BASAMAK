@@ -1260,6 +1260,54 @@ int DrumChannel::noteNameToMidi(const juce::String& raw)
 // requested volume plays (on a ladder shifted so the LOUDEST take = velocity max), normalized
 // so the engine's velGain lands the output at EXACTLY the requested volume. Hard switch
 // between takes (classic sampler velocity zones); one take = serves every velocity.
+// [2026-07-19] AUTO-LOOP for Multisample Instruments (per zone, self-contained - no pitch-tap
+// dependency). Finds a sustain loop so a HELD note keeps sounding instead of dying with the file:
+//  - loop START ~40% in (past the attack), snapped to an upward zero-crossing;
+//  - a crude autocorrelation finds the fundamental PERIOD, so the loop is an integer number of
+//    cycles (in phase = clean + pitch-stable) - the biggest quality win for pitched instruments;
+//  - the loop END is the best-matching period-multiple (least sample-difference over a window).
+// The 25 ms wrap crossfade in the render hides the residual. Deterministic -> re-derived on load,
+// so nothing per-zone needs persisting (only the on/off toggle).
+static bool msFindLoop(const juce::AudioBuffer<float>& buf, double sr, float& loFrac, float& hiFrac)
+{
+    const int n = buf.getNumSamples();
+    if (n < 4096 || buf.getNumChannels() < 1) return false;
+    const float* d = buf.getReadPointer(0);
+    int lo = juce::jlimit(0, n - 2, (int) (n * 0.40));
+    for (int i = 0; i < n / 4 && lo < n - 2; ++i, ++lo)   // next upward zero-crossing
+        if (d[lo] <= 0.0f && d[lo + 1] > 0.0f) break;
+    const int win  = 1024;
+    const int hiLo = juce::jmin(lo + (int) (sr * 0.05), n - win - 1);   // >= ~50 ms of loop
+    const int hiHi = n - win - 1;
+    if (hiHi <= hiLo + 64) return false;
+    // crude fundamental period via normalised autocorrelation (24 Hz .. 1.5 kHz)
+    int period = 0; double bestAc = 0.55;   // require a fairly confident peak
+    const int acWin = juce::jmin(3072, n - lo - (int) (sr / 24.0) - 1);
+    double e0 = 0.0; for (int i = 0; i < acWin; i += 2) e0 += (double) d[lo + i] * d[lo + i];
+    if (acWin > 512 && e0 > 1.0e-9)
+        for (int lag = (int) (sr / 1500.0); lag < (int) (sr / 24.0); ++lag)
+        {
+            double ac = 0.0;
+            for (int i = 0; i < acWin; i += 2) ac += (double) d[lo + i] * d[lo + i + lag];
+            const double norm = ac / e0;
+            if (norm > bestAc) { bestAc = norm; period = lag; }
+        }
+    int bestHi = -1; double bestScore = 1.0e18;
+    auto score = [&](int hi){ double sc = 0.0; for (int i = 0; i < win; i += 4)
+                              { const double df = (double) d[lo + i] - d[hi + i]; sc += df * df; } return sc; };
+    if (period >= 16)
+        for (int k = 1; ; ++k)
+        { const int hi = lo + period * k; if (hi > hiHi) break; if (hi < hiLo) continue;
+          const double sc = score(hi); if (sc < bestScore) { bestScore = sc; bestHi = hi; } }
+    else
+        for (int hi = hiLo; hi < hiHi; hi += 64)
+        { const double sc = score(hi); if (sc < bestScore) { bestScore = sc; bestHi = hi; } }
+    if (bestHi <= lo + 64) return false;
+    loFrac = (float) lo / (float) n;
+    hiFrac = (float) bestHi / (float) n;
+    return true;
+}
+
 static void msPickLayer(const DrumChannel::MsZone& z, float vel,
                         const juce::AudioBuffer<float>*& a, float& gA)
 {
@@ -1336,11 +1384,13 @@ bool DrumChannel::loadMultisample(int slot, const juce::File& folder)
         Slot& sl2 = slots[slot];
         sl2.msGainDb    = juce::jlimit(-24.0f, 24.0f, (float) t.getProperty("gainDb", 0.0f));
         sl2.smpReverse  = (bool) t.getProperty("reverse", false);
-        sl2.smpLoopOn   = false;   // zones never loop (old sidecars' loop entries ignored)
+        sl2.smpLoopOn   = false;   // plain-sample loop never applies to zones
+        sl2.msLoopOn    = (bool) t.getProperty("loop", false);   // [2026-07-19] per-zone AUTO-loop
         msRigModel = t.getProperty("rigModel", "").toString();
         msRigIr    = t.getProperty("rigIr", "").toString();
         refreshMsRig();
     }
+    if (slots[slot].msLoopOn) msRebuildLoops(slot);   // [2026-07-19] AUTO-loop: derive per-zone regions
     slotSample[slot].loadedAtRate = hostRate;
     updateStretch(slot);
     msSetOld[slot] = msSet[slot];     // graveyard: old pointers stay valid through the fade
@@ -1464,6 +1514,20 @@ void DrumChannel::refreshMsRig()
     }
 }
 
+// [2026-07-19] Re-derive every zone's AUTO-loop region (message thread). Deterministic, so it runs
+// on load and on the Loop toggle - no per-zone data is persisted, only slots[].msLoopOn.
+void DrumChannel::msRebuildLoops(int slot)
+{
+    if (slot < 0 || slot >= NUM_SLOTS || msSet[slot] == nullptr) return;
+    const double sr2 = sr > 0 ? sr : 48000.0;
+    for (auto& z : msSet[slot]->zones)
+    {
+        z.hasLoop = false; z.loopLo = z.loopHi = 0.0f;
+        if (! z.layers.empty())
+            z.hasLoop = msFindLoop(z.layers.back().buf, sr2, z.loopLo, z.loopHi);   // loudest layer
+    }
+}
+
 // [2026-07-19] SIDECAR: the instrument folder's optional, human-readable settings file - gain,
 // reverse, loop, crossfade and the amp rig TRAVEL WITH the instrument (load it anywhere and it
 // sounds set up). A bare folder of WAVs still works (defaults); hand-editable XML.
@@ -1476,7 +1540,8 @@ void DrumChannel::writeMsSidecar(int slot) const
     const Slot& sl = slots[slot];
     t.setProperty("gainDb",  sl.msGainDb,     nullptr);
     t.setProperty("reverse", sl.smpReverse,   nullptr);
-    t.setProperty("rigModel", msRigModel,     nullptr);   // (loop entries retired - zones never loop)
+    t.setProperty("loop",    sl.msLoopOn,     nullptr);   // [2026-07-19] per-zone AUTO-loop on/off
+    t.setProperty("rigModel", msRigModel,     nullptr);
     t.setProperty("rigIr",    msRigIr,        nullptr);
     if (auto xml = t.createXml())
         xml->writeTo(dir.getChildFile("instrument.basamakinst"));
@@ -1792,7 +1857,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         sv.grNoteIdx = 0;                          // chord/scale note cycling restarts (identical-hits rule)
         for (auto& gr : sv.grains) { gr.age = 0; gr.len = 0; }   // stale grains from the last note die
         sv.keySemis = 0.0f;
-        sv.msBuf = nullptr; sv.msG1 = 1.0f; sv.msSemiAdj = 0.0f;   // multisample zone re-picked per hit
+        sv.msBuf = nullptr; sv.msG1 = 1.0f; sv.msSemiAdj = 0.0f; sv.msLoopLo = sv.msLoopHi = 0.0f;   // multisample zone re-picked per hit
         if (sl.engine == SrcSample && msSet[s] != nullptr && ! msSet[s]->zones.empty())
         {   // nearest zone to the played note (steps/roll: C4 + step pitch; keyDown re-picks below)
             const auto& zs = msSet[s]->zones;
@@ -1802,6 +1867,9 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
                 if (std::abs(zs[zi].root - want) < std::abs(zs[best].root - want)) best = zi;
             msPickLayer(zs[(size_t) best], velocityGain, sv.msBuf, sv.msG1);
             sv.msSemiAdj = (float)(60 - zs[(size_t) best].root);
+            if (sl.msLoopOn && zs[(size_t) best].hasLoop && sv.msBuf != nullptr)
+            { const int L = sv.msBuf->getNumSamples();
+              sv.msLoopLo = zs[(size_t) best].loopLo * (float) L; sv.msLoopHi = zs[(size_t) best].loopHi * (float) L; }
         }
         // TEST on a PIANO-ROLL channel: the block config is C4-absolute (slotBaseHz), so play
         // each pitched slot at its own Base Freq knob via keySemis (user: "TEST should use the
@@ -2169,6 +2237,10 @@ int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly,
                     msPickLayer(zs[(size_t) best], velocity, sv.msBuf, sv.msG1);
                     sv.msSemiAdj = sl.smpPreservePitch ? 0.0f
                                  : (float)(60 - zs[(size_t) best].root);
+                    sv.msLoopLo = sv.msLoopHi = 0.0f;
+                    if (sl.msLoopOn && zs[(size_t) best].hasLoop && sv.msBuf != nullptr)
+                    { const int L = sv.msBuf->getNumSamples();
+                      sv.msLoopLo = zs[(size_t) best].loopLo * (float) L; sv.msLoopHi = zs[(size_t) best].loopHi * (float) L; }
                 }
                 continue;
             case SrcNoise:    sv.keySemis = 0.0f; continue;   // noise is unpitched - just play it
@@ -2505,6 +2577,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         bool   smpPreserve = true;   // Sample: ignore step/draw/key/env pitch (play at the sample's own pitch)
         const juce::AudioBuffer<float>* buf = nullptr; int srcLen = 0, regLo = 0, regHi = 0, slices = 1;  // per-slot sample
         bool   loopOn = false; double loopLoF = 0.0, loopHiF = 0.0, loopXfF = 0.0;   // [2026-07-18] sample LOOP (source frames)
+        bool   msLoopOn = false;   // [2026-07-19] Multisample AUTO-loop (per-zone region on sv.msLoopLo/Hi)
         float  smpGain = 1.0f;   // sample output boost
         // -- section levels + fold (legacy unified-engine extras) --
         float  oscFold = 0, oscLevel = 1, noiseLevel = 0;
@@ -2820,6 +2893,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     c.loopXfF = juce::jmin(0.025 * sr / (double) engineOS,
                                        (c.loopHiF - c.loopLoF) * 0.5);   // fixed 25 ms crossfade (disclosed in the Loop tooltip)
                 }
+                c.msLoopOn = sl.msLoopOn;   // [2026-07-19] Multisample AUTO-loop (per-zone region baked per voice)
                 c.slices = 1;   // manual regions replace auto-slicing
                 c.smpGain = juce::jlimit(0.0f, 4.0f, sl.smpGain);
                 c.smpEnv  = sl.smpEnvOn;   // opt-in amp envelope (off = legacy full-length playback)
@@ -3830,16 +3904,43 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         const bool ms   = (sbuf == sv.msBuf && sbuf != c.buf);
                         const int  regLoV = ms ? 0 : c.regLo;
                         const int  regHiV = ms ? sLen : c.regHi;
-                        const double lLo = c.loopLoF, lHi = c.loopHiF, lXf = c.loopXfF;
-                        // LOOP engages on HELD/GATED notes only; it upgrades the sample to the FULL
-                        // synth envelope contract (sustain holds, release fades) - the whole point
-                        // of looping. One-shot steps keep the legacy path bit-identical.
-                        // [2026-07-19] ZONES NEVER LOOP (user: makes no sense for an instrument -
-                        // and the region, drawn on ONE zone, could only ever be approximate on the
-                        // others). Loop = the plain Sample group's tool; instruments release-gate.
-                        const bool loopEngaged = c.loopOn && ! ms && (v.isKey || v.gateLen > 0);
+                        // LOOP engages on HELD/GATED notes only, so the note SUSTAINS. Plain samples
+                        // loop the drawn cyan region (c.loopLoF/HiF); Multisample Instruments loop each
+                        // zone's OWN auto-found region (per-voice sv.msLoopLo/Hi) - [2026-07-19] zones
+                        // used to never loop (the shared drawn region was only approximate across
+                        // different-length zones); the AUTO-loop finds a clean per-zone region instead.
+                        double lLo = c.loopLoF, lHi = c.loopHiF, lXf = c.loopXfF;
+                        bool loopEngaged = false;
+                        if (ms)
+                        {
+                            if (c.msLoopOn && sv.msLoopHi > sv.msLoopLo + 64.0f && (v.isKey || v.gateLen > 0))
+                            {
+                                loopEngaged = true;
+                                lLo = (double) sv.msLoopLo; lHi = (double) sv.msLoopHi;
+                                lXf = juce::jmin(0.025 * sr / (double) engineOS, (lHi - lLo) * 0.5);
+                            }
+                        }
+                        else
+                            loopEngaged = c.loopOn && (v.isKey || v.gateLen > 0);
                         if (loopEngaged)
-                            env = keyAdsr(t, v.isKey ? v.keyOff : v.gateLen, c.atk, c.hold, c.dec, c.sustain, c.release);
+                        {
+                            // [2026-07-19] LOOP SILENCE FIX: a plain sample has NO amp env by default
+                            // (smpEnv off, sustain 0), so the old keyAdsr decayed the note to silence -
+                            // often BEFORE the head even reached the loop, making Loop mute the sound.
+                            // Now: only run the ADSR when the user OPTED INTO the amp env; otherwise the
+                            // loop HOLDS at full while the key/gate is active and release-fades on key-up
+                            // (min 30 ms) - the whole point of a loop is to sustain.
+                            if (c.smpEnv)
+                                env = keyAdsr(t, v.isKey ? v.keyOff : v.gateLen, c.atk, c.hold, c.dec, c.sustain, c.release);
+                            else
+                            {
+                                env = 1.0f;
+                                const long tOff = v.isKey ? (long) v.keyOff
+                                                 : (v.gateLen > 0 ? (long) v.gateLen : -1L);
+                                if (tOff >= 0 && (long) t >= tOff)
+                                    env *= decayCurve((long) t - tOff, juce::jmax(0.03f, c.release));
+                            }
+                        }
                         else
                         {
                             env = (c.smpEnv || sv.gateDec > 0.0f) ? ahdsEnv(t, c.atk, c.hold, sv.gateDec > 0.0f ? sv.gateDec : c.dec, c.sustain, c.release) : 1.0f;

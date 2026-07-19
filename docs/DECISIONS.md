@@ -278,6 +278,10 @@
 
 | 196 | The wizard has an always-reachable FINISH button (top-right by the X, visible any time a live session has >=1 take) - not just at DoneAll; finish loads what's recorded so far + closes | user: "no button to finish recording whenever i want... users will get scared of losing their recordings"; the last-note single-take skip was a dead-end | user order |
 
+| 197 | A loop (plain sample AND multisample) HOLDS at full while a held/gated note is active and release-fades on key-up (min 30 ms) when the amp env is NOT opted into - it no longer runs keyAdsr-to-zero (which decayed a default-sustain-0 sample to silence before the head even reached the loop = "Loop mutes the sound") | a loop's whole purpose is to sustain; the amp-env decay is an OPT-IN (double-click the graph) | user: "sample loop... becomes silent even before it reaches the beginning of loop" |
+
+| 198 | Multisample AUTO-loop picks the region ITSELF per zone (skip the attack ~40% in, zero-cross start, autocorrelation period, SSD best-match end over period-multiples, on the zone's LOUDEST layer) - the user does NOT hand-set loop points on a multisample | the user asked "how will it decide which part to loop"; a per-instrument drawable loop was rejected (only approximate across different-length zones); zones never loop the shared drawn region | user-designed (auto only), algorithm mine |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

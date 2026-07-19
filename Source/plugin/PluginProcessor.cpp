@@ -204,7 +204,7 @@ void DrumSequencerProcessor::previewFile(const juce::File& f)
     juce::AudioFormatManager fm; fm.registerBasicFormats();
     std::unique_ptr<juce::AudioFormatReader> r(fm.createReaderFor(f));
     if (r == nullptr || r->lengthInSamples <= 0) return;
-    auto buf = std::make_shared<juce::AudioBuffer<float>>(1, (int) juce::jmin<juce::int64>(r->lengthInSamples, (juce::int64)(currentSampleRate * 12)));
+    auto buf = std::make_shared<juce::AudioBuffer<float>>(1, (int) juce::jmin(r->lengthInSamples, (juce::int64)(currentSampleRate * 12)));
     r->read(buf.get(), 0, buf->getNumSamples(), 0, true, false);
     if (msPrevHold != nullptr) msPrevGrave.push_back(msPrevHold);   // graveyard: audio may still be mid-block in it
     if (msPrevGrave.size() > 6) msPrevGrave.erase(msPrevGrave.begin());   // fast clicking keeps a few generations alive
@@ -1322,7 +1322,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                 const float* src = db->getReadPointer(0);
                 float* o0 = audio.getWritePointer(0); float* o1 = audio.getWritePointer(1);
                 const int tot = juce::jmax(1, msPrevDyeTotal.load(std::memory_order_relaxed));
-                const int n = (int) juce::jmin<juce::int64>((juce::int64) numSamples,
+                const int n = (int) juce::jmin((juce::int64) numSamples,
                                                             juce::jmin((juce::int64) rem, dlen - dpos));
                 for (int i = 0; i < n; ++i)
                 {
@@ -1347,7 +1347,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                 const juce::int64 len = pb->getNumSamples();
                 const float* src = pb->getReadPointer(0);
                 float* o0 = audio.getWritePointer(0); float* o1 = audio.getWritePointer(1);
-                const int n = (int) juce::jmin<juce::int64>(numSamples, len - pos);
+                const int n = (int) juce::jmin((juce::int64) numSamples, len - pos);
                 for (int i = 0; i < n; ++i) { const float v = src[pos + i]; o0[i] += v; o1[i] += v; }
                 msPrevPos.store(pos + n >= len ? -1 : pos + n, std::memory_order_relaxed);
             }

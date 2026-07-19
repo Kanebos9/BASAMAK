@@ -581,6 +581,8 @@ public:
         float msGainDb = 0.0f;                  // [2026-07-19] Multisample Instruments GAIN in dB (+-24;
                                                 //   folded into the per-sample-smoothed weight = zipper-free)
         bool  smpLoopOn = false;
+        bool  msLoopOn  = false;   // [2026-07-19] Multisample AUTO-loop: each zone loops its OWN best region
+                                   //   (held notes sustain); off = the recording plays through + release-gates
         float smpLoopLo = 0.5f, smpLoopHi = 0.95f;   // loop region (fractions of the file)
         bool  smpPreservePitch = false;         // Sample: IGNORE step/draw/key/env pitch (play at the sample's own pitch).
                                                 // [2026-07-19] default OFF (user order - notes should pitch samples; flip ON for drums)
@@ -827,6 +829,7 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     float msRigDnHist[24] = {}, msRigUpHist[24] = {};
     void refreshMsRig();                             // MESSAGE THREAD loader (empty paths = unload)
     void writeMsSidecar(int slot) const;             // instrument settings -> folder/instrument.basamakinst
+    void msRebuildLoops(int slot);                   // [2026-07-19] per-zone AUTO-loop (deterministic; on load + toggle)
 
     float  chSendHpZ[2] = {};                        // reverb-send high-pass state (~150 Hz; subs stay out of the verb)
     float  chSendSmR = -1.0f, chSendSmD = -1.0f;     // per-sample smoothed send gains (de-zipper; -1 = snap)
@@ -1163,7 +1166,8 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     // so playback maps velocity across them by CROSSFADE regardless of file naming).
     static constexpr int MS_LAYERS = 5;
     struct MsLayer { juce::AudioBuffer<float> buf; float peak = 0.0f; };   // peak = measured at load (the ladder the closest-take pick walks)
-    struct MsZone  { std::vector<MsLayer> layers; int root = 60; };
+    struct MsZone  { std::vector<MsLayer> layers; int root = 60;
+                     float loopLo = 0.0f, loopHi = 0.0f; bool hasLoop = false; };  // [2026-07-19] per-zone AUTO-loop
     struct MsSet   { std::vector<MsZone> zones; juce::String folder; };
     std::shared_ptr<MsSet> msSet[NUM_SLOTS], msSetOld[NUM_SLOTS];
     bool loadMultisample(int slot, const juce::File& folder);   // message thread; false = no usable WAVs
@@ -1311,6 +1315,7 @@ private:
         float    ksApSt[KS_UNI][12] = {};   // dispersion allpass state per string (up to 12 stages for Stiffness)
         double   smpHead = 0.0;          // this slot's sample playhead
         const juce::AudioBuffer<float>* msBuf = nullptr;   // [2026-07-18] multisample: THIS voice's zone (primary layer)
+        float    msLoopLo = 0.0f, msLoopHi = 0.0f;   // [2026-07-19] this voice's zone loop (frames; hi<=lo = none)
         float    msG1 = 1.0f;            // [2026-07-19 FINAL] the chosen take's normalize gain (1/peak,
                                          //   +18 dB cap): net output = velGain x take/peak = EXACTLY the
                                          //   requested volume (the user's closest-take model)

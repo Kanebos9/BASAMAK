@@ -1065,7 +1065,7 @@ private:
             Take t; t.note = note; t.file = f;
             for (const auto& t2 : takes) if (t2.note == note) ++t.layer;
             t.lenSec = (float)(r2->lengthInSamples / juce::jmax(1.0, r2->sampleRate));
-            juce::AudioBuffer<float> pb(1, (int) juce::jmin<juce::int64>(r2->lengthInSamples, 1 << 20));
+            juce::AudioBuffer<float> pb(1, (int) juce::jmin(r2->lengthInSamples, (juce::int64) (1 << 20)));   // [2026-07-19] cast, NOT jmin<int64> (Linux SIMD gotcha)
             r2->read(&pb, 0, pb.getNumSamples(), 0, true, false);
             float pk = 0.0f;
             for (int i = 0; i < pb.getNumSamples(); ++i) pk = juce::jmax(pk, std::abs(pb.getSample(0, i)));
@@ -1094,9 +1094,9 @@ private:
         layerBtn.setVisible(phase == Review && curLayers < DrumChannel::MS_LAYERS - 1);
         skipBtn.setVisible(phase == Listen || phase == Capture || phase == Review);
         finishBtn.setVisible(phase == DoneAll);
-        // [2026-07-19] a FINISH is reachable ANY time a session is live - no more "trapped until
-        // the last note" (user: users get scared of losing recordings). DoneAll uses finishBtn.
-        doneBtn.setVisible((phase == Listen || phase == Capture || phase == Review) && ! takes.empty());
+        // [2026-07-19] FINISH is ALWAYS reachable past Setup (user: the "only after 1 take" gate made
+        // it look missing). With takes it loads + closes; with none it just closes like the X - never trapped.
+        doneBtn.setVisible(phase == Listen || phase == Capture || phase == Review);
     }
     void beginSession()
     {
@@ -1120,7 +1120,7 @@ private:
         if (proc == nullptr || (phase != Listen && phase != Capture)) return;
         const juce::int64 wr = tapNow();
         if (wr <= readCur) return;
-        const int n = (int) juce::jmin<juce::int64>(wr - readCur, 32768);
+        const int n = (int) juce::jmin(wr - readCur, (juce::int64) 32768);
         std::vector<float> blk((size_t) n);
         proc->readMsTap(readCur, blk.data(), n);
         if (phase == Listen)
@@ -1134,7 +1134,7 @@ private:
                     const int preN = (int) (rate() * preMs * 0.001);   // the user's Pre-roll (8 s ring covers it)
                     capStartFrame = readCur + i - preN;
                     capBuf.clear();
-                    const int pre = (int) juce::jmin<juce::int64>(preN, juce::jmax((juce::int64) 0, readCur + i));
+                    const int pre = (int) juce::jmin((juce::int64) preN, juce::jmax((juce::int64) 0, readCur + i));
                     capBuf.resize((size_t) pre);
                     proc->readMsTap(readCur + i - pre, capBuf.data(), pre);
                     capBuf.insert(capBuf.end(), blk.begin() + i, blk.begin() + n);
@@ -2788,6 +2788,9 @@ public:
     // [2026-07-18] SAMPLE LOOP: cyan region, edited by SHIFT+drag while Loop is on.
     void setLoop(bool on, float lo, float hi)
     { if (on != loopOn || lo != loopLo || hi != loopHi) { loopOn = on; loopLo = lo; loopHi = hi; repaint(); } }
+    // [2026-07-19] Multisample Instruments don't loop by drawing (per-zone AUTO-loop instead), so the
+    // plain-drag loop gesture is DISABLED on that panel - it used to paint a dead cyan region (user bug).
+    void setLoopDrawEnabled(bool en) { loopDrawEnabled = en; }
     std::function<void(float lo, float hi)> onLoopChange;
     // Drop an audio file on the waveform -> the editor loads it into this slot.
     std::function<void(const juce::File&)> onFileDropped;
@@ -2810,6 +2813,7 @@ private:
     float dragAnchor = 0.0f; int dragIdx = -1;   // the region being dragged out
     bool  selEnabled = false;
     bool  loopOn = false; float loopLo = 0.5f, loopHi = 0.95f;   // [2026-07-18] loop region (cyan)
+    bool  loopDrawEnabled = true;   // [2026-07-19] off on the Multisample panel (no drawable loop there)
     bool  loopDragging = false;
     float lengthSec = 0.0f;    // sample length (watermark)
     bool  reversed = false;    // draw a REV badge when the sample plays backwards
@@ -3612,6 +3616,7 @@ private:
     // holds a zone set): dB Gain + Loop Xfade knobs, Auto-Loop, note range, the amp RIG row.
     SlotDragFader    msGainF[DrumChannel::NUM_SLOTS];        // wide horizontal dB fader (user: the knob was too small)
     juce::Label      lblMsRange[DrumChannel::NUM_SLOTS];
+    juce::TextButton btnMsLoop[DrumChannel::NUM_SLOTS];      // [2026-07-19] Multisample AUTO-loop toggle (per-zone)
     juce::TextButton btnMsAutoLoop[DrumChannel::NUM_SLOTS],  // "AUTO" on the waveform corner (plain samples, Loop on)
                      btnMsRigModel[DrumChannel::NUM_SLOTS], btnMsRigIr[DrumChannel::NUM_SLOTS];
     void openMsRigPicker(int slot, bool ir);   // model/IR menu -> msRigModel/msRigIr + refreshMsRig + sidecar
