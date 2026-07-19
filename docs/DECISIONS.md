@@ -274,6 +274,8 @@
 
 | 194 | Level-match is a TOGGLE now ("Vel match" in the MS panel, default ON - user round-2: "if users find it artificial they can disable"): the 0 dB norm gain is STORED per layer and applied at render (never baked into buffers); OFF = takes at natural recorded loudness; per-instrument via sidecar ("levelMatch"), per-sound via "msLM" | a destructive bake couldn't be toggled; the toggle honours both camps | user design |
 
+| 195 | VELOCITY MODEL FINAL (user's spec after 6 rounds of my misreadings - flatten, crossfade, anchored-interp and the Vel-match toggle ALL DELETED same-day): velocity = the volume dial; the ONE take whose recorded peak (ladder shifted so the loudest = velocity max) is CLOSEST to the requested volume plays, normalized (1/peak, +18 dB cap) so the engine's velGain lands the output at EXACTLY the requested volume; HARD switch between takes (classic velocity zones); one take serves every velocity; the retracted -18 output floor stays out (Min vel covers it) | "the output volume chosen by the midi velocity should use the ONE layer that's closest to it" - he was right and simpler all along | user design; probe-locked (closest pick incl. the non-obvious 0.6-vel case, volume tracking 0.601~=0.6) |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

@@ -491,11 +491,11 @@ public:
             addChildComponent(*b);
         layerBtn.setTooltip("Save this take as ANOTHER VELOCITY LAYER of the same note, then record "
             "it again at a different strength (up to 5 layers per note - you decide per note).\n\n"
-            "- Record soft first, then LAYER + and play harder (any order works - layers are "
-            "sorted by measured loudness).\n"
-            "- Layers are LEVEL-MATCHED on load (peak to 0 dB, boost capped +18 dB): they carry "
-            "TONE only, velocity carries the volume - your recording levels don't matter.\n"
-            "- Playback CROSSFADES between layers by how hard you hit the key.\n"
+            "- How it plays: your key's velocity asks for a volume; the ONE take whose recorded "
+            "loudness is closest to that plays, nudged to exactly the volume you asked for.\n"
+            "- More takes = more tone detail across the velocity range; one take already plays "
+            "fully dynamic.\n"
+            "- Record in any order - the measured loudness sorts them.\n"
             "- KEEP = done with this note, move on.");
         layerBtn.onClick = [this] { saveCurrent(true); };
         startBtn.setTooltip("Start the session: walks the note range top of the list to bottom.\n\n"
@@ -594,9 +594,9 @@ public:
             return "THE NOTE MAP: every note of the range = a row.\n\n"
                    "- Click a note = open its layers (LOUDEST first; another note's click closes it).\n"
                    "- Empty rows show REC - a skipped note is just an unfilled row.\n"
-                   "- +LAYER = record another dynamic of that note (up to 5). Layers are "
-                   "level-matched on load: they carry TONE, velocity carries volume - so "
-                   "recording levels don't matter, and one layer already plays fully dynamic.\n"
+                   "- +LAYER = record another dynamic of that note (up to 5). Velocity picks the "
+                   "take with the closest recorded loudness and plays it at exactly the volume "
+                   "your key asked for - one take already plays fully dynamic.\n"
                    "- On a layer: the triangle plays it, RE records over it, x deletes it.\n"
                    "- Click the TITLE to switch instruments or start a NEW one.";
         if (p.y > getHeight() - 70 && p.x < leftW())
@@ -3601,7 +3601,6 @@ private:
     // holds a zone set): dB Gain + Loop Xfade knobs, Auto-Loop, note range, the amp RIG row.
     SlotDragFader    msGainF[DrumChannel::NUM_SLOTS];        // wide horizontal dB fader (user: the knob was too small)
     juce::Label      lblMsRange[DrumChannel::NUM_SLOTS];
-    juce::TextButton btnMsVelMatch[DrumChannel::NUM_SLOTS];  // [2026-07-19] "Vel match" level-match toggle (default ON)
     juce::TextButton btnMsAutoLoop[DrumChannel::NUM_SLOTS],  // "AUTO" on the waveform corner (plain samples, Loop on)
                      btnMsRigModel[DrumChannel::NUM_SLOTS], btnMsRigIr[DrumChannel::NUM_SLOTS];
     void openMsRigPicker(int slot, bool ir);   // model/IR menu -> msRigModel/msRigIr + refreshMsRig + sidecar

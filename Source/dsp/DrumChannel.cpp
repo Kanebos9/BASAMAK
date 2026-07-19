@@ -736,7 +736,6 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("sLp", s.smpLoopOn ? 1 : 0, nullptr);   // [2026-07-18] sample LOOP
         st.setProperty("sLl", s.smpLoopLo, nullptr); st.setProperty("sLh", s.smpLoopHi, nullptr);
         st.setProperty("msGn", s.msGainDb, nullptr);     // [2026-07-19] multisample gain dB ("sLx" retired - fixed 25 ms xfade again)
-        st.setProperty("msLM", s.msLevelMatch ? 1 : 0, nullptr);   // [2026-07-19] "Vel match" toggle (default ON)
         st.setProperty("sFile", slotSample[b].file.getFullPathName(), nullptr);   // per-slot sample (reloaded)
         st.setProperty("msDir", msSet[b] != nullptr ? msSet[b]->folder : juce::String(), nullptr);   // [2026-07-18] multisample folder
         st.setProperty("yFo", s.oscFold, nullptr); st.setProperty("yOL", s.oscLevel, nullptr);
@@ -889,7 +888,6 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
         s.smpLoopOn = (int)st.getProperty("sLp", 0) != 0;   // [2026-07-18] sample LOOP
         s.smpLoopLo = (float)st.getProperty("sLl", d.smpLoopLo); s.smpLoopHi = (float)st.getProperty("sLh", d.smpLoopHi);
         s.msGainDb    = juce::jlimit(-24.0f, 24.0f, (float)st.getProperty("msGn", 0.0f));   // ("sLx" ignored - xfade is the fixed 25 ms again)
-        s.msLevelMatch = (int)st.getProperty("msLM", 1) != 0;   // [2026-07-19] default ON
         s.oscFold = (float)st.getProperty("yFo", d.oscFold); s.oscLevel = (float)st.getProperty("yOL", d.oscLevel);
         s.noiseLevel = (float)st.getProperty("yNL", d.noiseLevel);
         s.waveTable = (int)st.getProperty("wTb", d.waveTable); s.wavePos = (float)st.getProperty("wPs", d.wavePos);
@@ -1257,20 +1255,32 @@ int DrumChannel::noteNameToMidi(const juce::String& raw)
 // [2026-07-19] velocity -> layer pair: layers are peak-sorted soft..loud; velocity 0..1 lands
 // between two adjacent layers, blended equal-power in the render (hard switching = two glued
 // instruments; the crossfade is what makes recorded dynamics feel continuous).
-static void msPickLayers(const DrumChannel::MsZone& z, float vel, bool levelMatch,
-                         const juce::AudioBuffer<float>*& a, const juce::AudioBuffer<float>*& b,
-                         float& mix, float& gA, float& gB)
+// [2026-07-19 FINAL - the user's CLOSEST-TAKE model, replacing the rejected crossfade/flatten
+// rounds]: velocity = the volume dial; the ONE layer whose recorded peak sits closest to the
+// requested volume plays (on a ladder shifted so the LOUDEST take = velocity max), normalized
+// so the engine's velGain lands the output at EXACTLY the requested volume. Hard switch
+// between takes (classic sampler velocity zones); one take = serves every velocity.
+static void msPickLayer(const DrumChannel::MsZone& z, float vel,
+                        const juce::AudioBuffer<float>*& a, float& gA)
 {
+    a = nullptr; gA = 1.0f;
     const int n = (int) z.layers.size();
-    a = nullptr; b = nullptr; mix = 0.0f; gA = 1.0f; gB = 1.0f;
     if (n == 0) return;
-    if (n == 1) { a = &z.layers[0].buf; gA = levelMatch ? z.layers[0].norm : 1.0f; return; }
-    const float pos = juce::jlimit(0.0f, (float)(n - 1) - 1.0e-4f, juce::jlimit(0.0f, 1.0f, vel) * (float)(n - 1));
-    const int i0 = (int) pos;
-    a = &z.layers[(size_t) i0].buf;
-    b = &z.layers[(size_t) i0 + 1].buf;
-    mix = pos - (float) i0;
-    if (levelMatch) { gA = z.layers[(size_t) i0].norm; gB = z.layers[(size_t) i0 + 1].norm; }
+    int best = 0;
+    if (n > 1)
+    {
+        const float maxPkDb = juce::Decibels::gainToDecibels(juce::jmax(1.0e-4f, z.layers[(size_t)(n - 1)].peak));
+        const float tgtDb   = juce::Decibels::gainToDecibels(juce::jmax(1.0e-4f, juce::jlimit(0.0f, 1.0f, vel)));
+        float bestD = 1.0e9f;
+        for (int i = 0; i < n; ++i)
+        {
+            const float shifted = juce::Decibels::gainToDecibels(juce::jmax(1.0e-4f, z.layers[(size_t) i].peak)) - maxPkDb;
+            const float d = std::abs(shifted - tgtDb);
+            if (d < bestD) { bestD = d; best = i; }
+        }
+    }
+    a  = &z.layers[(size_t) best].buf;
+    gA = juce::jmin(1.0f / juce::jmax(1.0e-4f, z.layers[(size_t) best].peak), 7.94f);   // normalize (+18 dB cap)
 }
 
 // Load a multisample FOLDER (WAVs named by note) into one slot. Also loads the zone nearest
@@ -1298,12 +1308,6 @@ bool DrumChannel::loadMultisample(int slot, const juce::File& folder)
         MsLayer ly; ly.buf = std::move(buf);
         for (int i = 0; i < ly.buf.getNumSamples(); ++i)
             ly.peak = juce::jmax(ly.peak, std::abs(ly.buf.getSample(0, i)));
-        // [2026-07-19] LEVEL-MATCH gain (user design): peak -> 0 dB, boost capped +18 dB (a
-        // seatbelt only a broken near-silent take could hit). STORED, not baked into the
-        // buffer - the "Vel match" TOGGLE (user round-2, default ON) picks it up at render;
-        // OFF = the takes play at their natural recorded loudness. Sorting still uses the
-        // ORIGINAL measured peak (which take was softer).
-        if (ly.peak > 1.0e-4f) ly.norm = juce::jmin(1.0f / ly.peak, 7.94f);
         z->layers.push_back(std::move(ly));
     }
     if (set->zones.empty()) return false;
@@ -1332,7 +1336,6 @@ bool DrumChannel::loadMultisample(int slot, const juce::File& folder)
         Slot& sl2 = slots[slot];
         sl2.msGainDb    = juce::jlimit(-24.0f, 24.0f, (float) t.getProperty("gainDb", 0.0f));
         sl2.smpReverse  = (bool) t.getProperty("reverse", false);
-        sl2.msLevelMatch = (bool) t.getProperty("levelMatch", true);
         sl2.smpLoopOn   = false;   // zones never loop (old sidecars' loop entries ignored)
         msRigModel = t.getProperty("rigModel", "").toString();
         msRigIr    = t.getProperty("rigIr", "").toString();
@@ -1473,7 +1476,6 @@ void DrumChannel::writeMsSidecar(int slot) const
     const Slot& sl = slots[slot];
     t.setProperty("gainDb",  sl.msGainDb,     nullptr);
     t.setProperty("reverse", sl.smpReverse,   nullptr);
-    t.setProperty("levelMatch", sl.msLevelMatch, nullptr);   // [2026-07-19] "Vel match" toggle
     t.setProperty("rigModel", msRigModel,     nullptr);   // (loop entries retired - zones never loop)
     t.setProperty("rigIr",    msRigIr,        nullptr);
     if (auto xml = t.createXml())
@@ -1790,7 +1792,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         sv.grNoteIdx = 0;                          // chord/scale note cycling restarts (identical-hits rule)
         for (auto& gr : sv.grains) { gr.age = 0; gr.len = 0; }   // stale grains from the last note die
         sv.keySemis = 0.0f;
-        sv.msBuf = nullptr; sv.msBuf2 = nullptr; sv.msMix = 0.0f; sv.msG1 = sv.msG2 = 1.0f; sv.msSemiAdj = 0.0f;   // multisample zone re-picked per hit
+        sv.msBuf = nullptr; sv.msG1 = 1.0f; sv.msSemiAdj = 0.0f;   // multisample zone re-picked per hit
         if (sl.engine == SrcSample && msSet[s] != nullptr && ! msSet[s]->zones.empty())
         {   // nearest zone to the played note (steps/roll: C4 + step pitch; keyDown re-picks below)
             const auto& zs = msSet[s]->zones;
@@ -1798,7 +1800,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
             int best = 0;
             for (int zi = 1; zi < (int) zs.size(); ++zi)
                 if (std::abs(zs[zi].root - want) < std::abs(zs[best].root - want)) best = zi;
-            msPickLayers(zs[(size_t) best], velocityGain, sl.msLevelMatch, sv.msBuf, sv.msBuf2, sv.msMix, sv.msG1, sv.msG2);
+            msPickLayer(zs[(size_t) best], velocityGain, sv.msBuf, sv.msG1);
             sv.msSemiAdj = (float)(60 - zs[(size_t) best].root);
         }
         // TEST on a PIANO-ROLL channel: the block config is C4-absolute (slotBaseHz), so play
@@ -2164,7 +2166,7 @@ int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly,
                     int best = 0;
                     for (int zi = 1; zi < (int) zs.size(); ++zi)
                         if (std::abs(zs[zi].root - want) < std::abs(zs[best].root - want)) best = zi;
-                    msPickLayers(zs[(size_t) best], velocity, sl.msLevelMatch, sv.msBuf, sv.msBuf2, sv.msMix, sv.msG1, sv.msG2);
+                    msPickLayer(zs[(size_t) best], velocity, sv.msBuf, sv.msG1);
                     sv.msSemiAdj = sl.smpPreservePitch ? 0.0f
                                  : (float)(60 - zs[(size_t) best].root);
                 }
@@ -3909,28 +3911,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             const float gNew = std::sin(xfW * juce::MathConstants<float>::halfPi);
                             sL = sL * gCur + xL * gNew; sR = sR * gCur + xR * gNew;
                         }
-                        if (ms) { sL *= sv.msG1; sR *= sv.msG1; }   // level-match gain (1.0 when "Vel match" is off)
-                        // [2026-07-19] VELOCITY-LAYER CROSSFADE: blend toward the next-louder layer
-                        // (equal-power). Layers are takes of the SAME note, so sharing the primary's
-                        // head/loop position is a benign approximation (lengths differ slightly -
-                        // the bounds guard covers the tail).
-                        if (ms && sv.msBuf2 != nullptr && sv.msMix > 0.001f)
-                        {
-                            const auto* b2 = sv.msBuf2; const int len2 = b2->getNumSamples();
-                            float tL = 0.0f, tR = 0.0f;
-                            readAt(b2, len2, 0, len2, head, tL, tR);
-                            if (headXf >= 0.0 && xfW > 0.0f)
-                            {
-                                float xL2 = 0.0f, xR2 = 0.0f;
-                                readAt(b2, len2, 0, len2, headXf, xL2, xR2);
-                                const float gC = std::cos(xfW * juce::MathConstants<float>::halfPi);
-                                const float gN = std::sin(xfW * juce::MathConstants<float>::halfPi);
-                                tL = tL * gC + xL2 * gN; tR = tR * gC + xR2 * gN;
-                            }
-                            const float g1 = std::cos(sv.msMix * juce::MathConstants<float>::halfPi);
-                            const float g2 = std::sin(sv.msMix * juce::MathConstants<float>::halfPi) * sv.msG2;
-                            sL = sL * g1 + tL * g2; sR = sR * g1 + tR * g2;
-                        }
+                        if (ms) { sL *= sv.msG1; sR *= sv.msG1; }   // normalize the chosen take: velGain (already in
+                                                                    // wEff) then lands the output at the requested volume
                         if (c.crushStep > 0.0f) { sL = std::round(sL / c.crushStep) * c.crushStep; sR = std::round(sR / c.crushStep) * c.crushStep; }
                         sL *= env * c.smpGain; sR *= env * c.smpGain;   // sample output boost
                         // Static pitch (channel + slot) is baked into the buffer (SoundTouch). The pitch
