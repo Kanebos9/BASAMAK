@@ -286,6 +286,10 @@
 
 | 200 | The sample playhead marker reads the ACTUAL folded read frame (per-voice smpReadPos/smpReadLen) not the raw monotonic smpHead - so it cycles inside the loop region instead of pinning to the file end | user: "that transporter in wave visual just doesnt work correctly"; raw head advances forever while looping | user caught it; fix mine |
 
+| 201 | The wizard note list keeps the top note ANCHORED across row-count changes (a landed take auto-expands its note = rows shift); scroll no longer slides up under the user + honours natural-scroll direction | user: "hard to scroll to the last note... goes one row up automatically"; chosen over auto-follow (which would fight a user reaching a different note) | user problem, anchor fix mine |
+
+| 202 | Factory multisamples = ONE clean "BASS-SR500N" (21 notes, 1 layer each, ~28 MB) replacing the two noisy SR500N INDEX/THUMB takes (~141 MB); the install copy is content-agnostic (whole dir, cp -Rn = no duplicates) | user: "remove them and add... BASS-SR500N because the other ones had a noise problem, this one is more clean"; a looped bass repeats any rumble in the loop so a clean source matters | user order |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

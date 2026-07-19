@@ -547,7 +547,7 @@ public:
         if (! resume)
         {
             phase = Setup; takes.clear(); pending.clear(); skipped.clear();
-            listOff = 0; layerNote = -1; editExisting = false;
+            listOff = 0; topNote = -1; layerNote = -1; editExisting = false;
             expandedNote = -1; targetNote = -1; replaceFile = juce::File();
         }
         if (proc != nullptr) proc->msTapOn = true;
@@ -749,7 +749,14 @@ public:
               tri.addTriangle(tx, tyy, tx + 8.0f, tyy, tx + 4.0f, tyy + 5.0f);
               g.setColour(juce::Colour(0xff9fd1ff)); g.fillPath(tri); }
             const int n = (int) listRows.size(), vis = listVisRows();
+            // [2026-07-19] RE-ANCHOR: keep the same note pinned at the top across row-count changes
+            // (a recorded take auto-expands its note = rows shift; without this the view slid up a
+            // row while the user scrolled, "really hard to choose the last one").
+            if (topNote >= 0)
+                for (int i = 0; i < n; ++i)
+                    if (! listRows[(size_t) i].isLayer && listRows[(size_t) i].note == topNote) { listOff = i; break; }
             listOff = juce::jlimit(0, juce::jmax(0, n - vis), listOff);
+            topNote = (listOff < n) ? listRows[(size_t) listOff].note : -1;   // remember the new top note
             for (int r = 0; r < vis && r + listOff < n; ++r)
             {
                 const auto& row = listRows[(size_t)(r + listOff)];
@@ -884,8 +891,10 @@ public:
     void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
     {
         if (! listRect().contains(e.getPosition())) return;
+        const bool down = (w.isReversed ? -w.deltaY : w.deltaY) < 0.0f;   // honour natural-scroll direction
         listOff = juce::jlimit(0, juce::jmax(0, (int) listRows.size() - listVisRows()),
-                               listOff + (w.deltaY < 0 ? 1 : -1));
+                               listOff + (down ? 1 : -1));
+        topNote = (listOff < (int) listRows.size()) ? listRows[(size_t) listOff].note : -1;   // anchor to the user's scroll
         repaint();
     }
 
@@ -911,6 +920,9 @@ private:
     int  targetNote = -1;                                     // note-EXACT record target (beats the grid queue)
     juce::File replaceFile;                                   // RERECORD: overwrite THIS layer's file on keep
     int listOff = 0;
+    int topNote = -1;                                        // [2026-07-19] scroll ANCHOR = the note kept at the
+                                                             // top of the list, so a take landing (row count
+                                                             // change) never slides the view "one row up" (user)
     juce::int64 readCur = 0, capStartFrame = 0;
     std::vector<float> capBuf;
     double heardHz = 0.0; int heardNote = 0, heardCents = 0;
@@ -1034,7 +1046,7 @@ private:
                     phase = Setup; sessionDir = juce::File(); editExisting = false;
                     takes.clear(); pending.clear(); skipped.clear(); capBuf.clear();
                     expandedNote = -1; targetNote = -1; replaceFile = juce::File();
-                    layerNote = -1; listOff = 0;
+                    layerNote = -1; listOff = 0; topNote = -1;
                     nameEd.setText("My Instrument", juce::dontSendNotification);
                     syncButtons(); repaint();
                     return;
@@ -1049,7 +1061,7 @@ private:
         if (proc != nullptr) proc->previewStop();
         sessionDir = dir; editExisting = true;
         nameEd.setText(dir.getFileName(), juce::dontSendNotification);
-        takes.clear(); skipped.clear(); capBuf.clear(); layerNote = -1; listOff = 0;
+        takes.clear(); skipped.clear(); capBuf.clear(); layerNote = -1; listOff = 0; topNote = -1;
         expandedNote = -1; targetNote = -1; replaceFile = juce::File();
         juce::AudioFormatManager fm; fm.registerBasicFormats();
         auto files = dir.findChildFiles(juce::File::findFiles, false, "*.wav;*.aif;*.aiff;*.flac");
