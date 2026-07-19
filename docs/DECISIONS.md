@@ -276,6 +276,8 @@
 
 | 195 | VELOCITY MODEL FINAL (user's spec after 6 rounds of my misreadings - flatten, crossfade, anchored-interp and the Vel-match toggle ALL DELETED same-day): velocity = the volume dial; the ONE take whose recorded peak (ladder shifted so the loudest = velocity max) is CLOSEST to the requested volume plays, normalized (1/peak, +18 dB cap) so the engine's velGain lands the output at EXACTLY the requested volume; HARD switch between takes (classic velocity zones); one take serves every velocity; the retracted -18 output floor stays out (Min vel covers it) | "the output volume chosen by the midi velocity should use the ONE layer that's closest to it" - he was right and simpler all along | user design; probe-locked (closest pick incl. the non-obvious 0.6-vel case, volume tracking 0.601~=0.6) |
 
+| 196 | The wizard has an always-reachable FINISH button (top-right by the X, visible any time a live session has >=1 take) - not just at DoneAll; finish loads what's recorded so far + closes | user: "no button to finish recording whenever i want... users will get scared of losing their recordings"; the last-note single-take skip was a dead-end | user order |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

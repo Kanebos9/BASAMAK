@@ -487,8 +487,14 @@ public:
 
     MsRecordWizard()
     {
-        for (auto* b : { &startBtn, &retryBtn, &keepBtn, &skipBtn, &closeBtn, &finishBtn, &layerBtn })
+        for (auto* b : { &startBtn, &retryBtn, &keepBtn, &skipBtn, &closeBtn, &finishBtn, &layerBtn, &doneBtn })
             addChildComponent(*b);
+        doneBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2f7a4a));   // green = safe exit
+        doneBtn.setTooltip("Finish NOW - load everything you've recorded so far onto the slot and close.\n\n"
+            "- Available any time; you never have to reach the last note.\n"
+            "- Every kept take is already saved on disk regardless.\n"
+            "- Come back later with Record / edit multisample to add more.");
+        doneBtn.onClick = [this] { finishSession(); };
         layerBtn.setTooltip("Save this take as ANOTHER VELOCITY LAYER of the same note, then record "
             "it again at a different strength (up to 5 layers per note - you decide per note).\n\n"
             "- How it plays: your key's velocity asks for a volume; the ONE take whose recorded "
@@ -611,6 +617,7 @@ public:
     {
         const auto b = getLocalBounds();
         closeBtn.setBounds(b.getRight() - 26, b.getY() + 4, 22, 20);
+        doneBtn.setBounds(b.getRight() - 128, b.getY() + 4, 96, 22);   // top-right, left of the X (always reachable)
         nameEd.setBounds(b.getX() + 96, b.getY() + 28, 240, 22);
         const int lw = leftW();
         startBtn.setBounds(lw / 2 - 60, b.getBottom() - 38, 120, 26);
@@ -909,6 +916,7 @@ private:
     double heardHz = 0.0; int heardNote = 0, heardCents = 0;
     int dragBox = 0, dragBase = 0;
     juce::File sessionDir;
+    juce::TextButton doneBtn { "FINISH" };
     juce::TextButton startBtn { "START" }, retryBtn { "RETRY" }, keepBtn { "KEEP" },
                      skipBtn { "SKIP" }, closeBtn { "X" }, finishBtn { "FINISH" },
                      layerBtn { "LAYER +" };
@@ -1086,6 +1094,9 @@ private:
         layerBtn.setVisible(phase == Review && curLayers < DrumChannel::MS_LAYERS - 1);
         skipBtn.setVisible(phase == Listen || phase == Capture || phase == Review);
         finishBtn.setVisible(phase == DoneAll);
+        // [2026-07-19] a FINISH is reachable ANY time a session is live - no more "trapped until
+        // the last note" (user: users get scared of losing recordings). DoneAll uses finishBtn.
+        doneBtn.setVisible((phase == Listen || phase == Capture || phase == Review) && ! takes.empty());
     }
     void beginSession()
     {
