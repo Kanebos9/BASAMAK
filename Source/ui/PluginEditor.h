@@ -799,7 +799,7 @@ public:
         if (dragBox == 1) loNote = juce::jlimit(12, hiNote, dragBase + d);
         else if (dragBox == 2) hiNote = juce::jlimit(loNote, 108, dragBase + d);
         else if (dragBox == 3) spacing = juce::jlimit(1, 6, dragBase + d);
-        else if (dragBox == 4) maxSec = juce::jlimit(2, 20, dragBase + d) * 0.5f;         // 1..10 s in halves
+        else if (dragBox == 4) maxSec = juce::jlimit(2, 40, dragBase + d) * 0.5f;         // 1..20 s in halves (user: cap 20)
         else if (dragBox == 5) armDb  = juce::jlimit(-60, -10, dragBase + d);
         else if (dragBox == 6) endDb  = juce::jlimit(-80, -20, dragBase + d);
         else if (dragBox == 7) preMs  = juce::jlimit(0, 100, dragBase + d * 2);
@@ -818,7 +818,7 @@ private:
     enum Phase { Setup, Listen, Capture, Review, DoneAll };
     Phase phase = Setup;
     int slotIdx = 0, loNote = 28, hiNote = 64, spacing = 2;   // default E1..E4 every 2 st (bass/guitar friendly)
-    float maxSec = 6.0f;                                      // take cap, 1..10 s
+    float maxSec = 15.0f;                                     // take cap, 1..20 s (user: default 15)
     int   armDb  = -10, endDb = -30;                          // start / end gates (user defaults 2026-07-19)
     int   preMs  = 10;                                        // pre-roll kept before the Start gate fires
     float noiseFloorPk = 0.0f; juce::int64 floorFrames = 0;   // measured while listening (warning only)
@@ -950,6 +950,8 @@ private:
     void openInstrumentMenu()
     {
         juce::PopupMenu m;
+        m.addItem(2, "Start a NEW instrument");   // [2026-07-19] the way back out of edit mode (user)
+        m.addSeparator();
         juce::Array<juce::File> dirs = baseDir.findChildFiles(juce::File::findDirectories, false);
         dirs.sort();
         int id = 1000;
@@ -959,11 +961,21 @@ private:
             m.addItem(id, d.getFileName(), true, d == sessionDir);
             ++id;
         }
-        if (m.getNumItems() == 0) m.addItem(-1, "(no instruments yet)", false);
         m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(
                             listRect().translated(getScreenX(), getScreenY()).withHeight(20)),
             [this, dirs](int r)
             {
+                if (r == 2)
+                {   // back to a fresh Setup: name your NEW instrument, START records into a new folder
+                    if (proc != nullptr) proc->previewStop();
+                    phase = Setup; sessionDir = juce::File(); editExisting = false;
+                    takes.clear(); pending.clear(); skipped.clear(); capBuf.clear();
+                    expandedNote = -1; targetNote = -1; replaceFile = juce::File();
+                    layerNote = -1; listOff = 0;
+                    nameEd.setText("My Instrument", juce::dontSendNotification);
+                    syncButtons(); repaint();
+                    return;
+                }
                 if (r < 1000) return;
                 const int idx = r - 1000;
                 if (idx >= 0 && idx < dirs.size()) loadExisting(dirs[(int) idx]);

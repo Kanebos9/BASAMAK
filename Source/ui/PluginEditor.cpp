@@ -6045,7 +6045,7 @@ void DrumSequencerEditor::buildMsMenu(juce::PopupMenu& menu)
     }
     if (msFolders.isEmpty()) menu.addItem(-1, "(no multisample folders yet)", false);
     menu.addSeparator();
-    menu.addItem(ID_RECORD_MS,  "Record / edit a multisample...");   // [2026-07-18] the wizard (records AND edits; shorter = no menu truncation)
+    menu.addItem(ID_RECORD_MS,  "Record / edit multisample");   // [2026-07-19] no ellipsis (user hates the dots - and the old "..." WAS the authored text, not truncation)
     menu.addItem(ID_REFRESH_MS, "Refresh multisamples folder");
     menu.addItem(ID_SHOW_MS,    "Show Folder");   // drop a folder of note-named WAVs in
 }

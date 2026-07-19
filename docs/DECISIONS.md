@@ -258,6 +258,8 @@
 | 184 | Record targeting is BY THE CLICKED ROW's note (beginNoteTarget), never grid arithmetic - which also kills the delete-didn't-requeue bug at the root (off-grid notes were unreachable by the grid walk); RERECORD overwrites that exact layer file in place; +LAYER capped at 5; all of it works AFTER a session "finished" (DoneAll = just idle) | user: "i should be able to record layers even after recording is finished" | user design; root-cause fix mine |
 | 185 | Velocity -> 5 layers verified headlessly: vel 0/.25/.5/.75/1.0 each lands dominant on its layer (equal-power crossfade between neighbours in between) | the user's explicit "make sure midi vel is adjusted for 5 different loudness" | probe-locked |
 
+| 186 | Max time cap 20 s / default 15 s (user); the instrument dropdown gained "Start a NEW instrument" (the way back out of edit mode); the menu item is "Record / edit multisample" - NO ellipsis (his "..." complaint was my own authored dots, not truncation - admitted) | user orders | user orders |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.
