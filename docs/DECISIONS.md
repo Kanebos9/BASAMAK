@@ -262,6 +262,8 @@
 
 | 187 | Wizard reopen RESUMES the in-progress session (open() only wipes when no session exists; "Start a NEW instrument" is the explicit reset); the take-preview keeps a small graveyard of retired buffers (fast row clicks could free one the audio block was still reading) | the edge-click close + reopen-wipe made kept takes LOOK deleted ("my recorded notes were gone" - disk listing proved all files intact) | user incident; root fixes mine |
 
+| 188 | POST-MORTEM CORRECTION: kept layer files WERE destroyed in the notes-gone incident - the state wipe restarted the layer counter, and "count -> filename + deleteFile-first" silently overwrote same-named earlier layers (my earlier "nothing was deleted" read was wrong; the listing showed survivors). FIX: new-take filenames are probed against the DISK for the first free name (never the in-memory count); only an explicit RERECORD may overwrite; overwritten WAVs are unlink-gone, disclosed | a recorder must be collision-proof BY CONSTRUCTION, not by trusting state | user caught my wrong diagnosis; fix mine |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

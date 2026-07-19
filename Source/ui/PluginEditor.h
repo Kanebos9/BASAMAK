@@ -1154,13 +1154,26 @@ private:
         const int target = curTarget();
         if (target < 0) { rebuildPending(); syncButtons(); repaint(); return; }
         int layerNo = 1;
-        for (const auto& t : takes) if (t.note == target) ++layerNo;   // next layer index
+        for (const auto& t : takes) if (t.note == target) ++layerNo;   // layer index (display only)
         const juce::String base = juce::MidiMessage::getMidiNoteName(target, true, true, 4);
-        juce::File f = replaceFile.getFullPathName().isNotEmpty()
-                     ? replaceFile   // RERECORD: overwrite THAT layer's file in place
-                     : sessionDir.getChildFile(layerNo == 1 ? base + ".wav"
-                                                            : base + " v" + juce::String(layerNo) + ".wav");
-        f.deleteFile();
+        juce::File f = replaceFile;
+        if (f.getFullPathName().isEmpty())
+        {   // [2026-07-19] NEW-take names are probed against the DISK, never the in-memory count:
+            // the state-wipe incident restarted the counter and the old "count -> name + delete
+            // first" recipe silently DESTROYED earlier kept layers with the same name. A new
+            // take now always lands on the first FREE filename; only an explicit RERECORD
+            // (replaceFile) may ever overwrite, and layers beyond the cap are refused here too.
+            int k = 1; juce::File cand = sessionDir.getChildFile(base + ".wav");
+            while (cand.existsAsFile() && k < 99)
+            { ++k; cand = sessionDir.getChildFile(base + " v" + juce::String(k) + ".wav"); }
+            if (k > DrumChannel::MS_LAYERS || cand.existsAsFile())
+            { capBuf.clear(); targetNote = -1; replaceFile = juce::File();
+              rebuildPending(); phase = pending.isEmpty() ? DoneAll : Listen;
+              syncButtons(); repaint(); return; }
+            f = cand; layerNo = k;
+        }
+        else
+            f.deleteFile();   // RERECORD replaces THAT exact layer file - the one sanctioned overwrite
         bool wrote = false;
         if (auto os = f.createOutputStream())
         {
