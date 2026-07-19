@@ -260,6 +260,8 @@
 
 | 186 | Max time cap 20 s / default 15 s (user); the instrument dropdown gained "Start a NEW instrument" (the way back out of edit mode); the menu item is "Record / edit multisample" - NO ellipsis (his "..." complaint was my own authored dots, not truncation - admitted) | user orders | user orders |
 
+| 187 | Wizard reopen RESUMES the in-progress session (open() only wipes when no session exists; "Start a NEW instrument" is the explicit reset); the take-preview keeps a small graveyard of retired buffers (fast row clicks could free one the audio block was still reading) | the edge-click close + reopen-wipe made kept takes LOOK deleted ("my recorded notes were gone" - disk listing proved all files intact) | user incident; root fixes mine |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

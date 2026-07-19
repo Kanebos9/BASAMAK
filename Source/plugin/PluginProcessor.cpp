@@ -206,7 +206,9 @@ void DrumSequencerProcessor::previewFile(const juce::File& f)
     if (r == nullptr || r->lengthInSamples <= 0) return;
     auto buf = std::make_shared<juce::AudioBuffer<float>>(1, (int) juce::jmin<juce::int64>(r->lengthInSamples, (juce::int64)(currentSampleRate * 12)));
     r->read(buf.get(), 0, buf->getNumSamples(), 0, true, false);
-    msPrevOld = msPrevHold; msPrevHold = buf;         // graveyard: audio may still read the old one
+    if (msPrevHold != nullptr) msPrevGrave.push_back(msPrevHold);   // graveyard: audio may still be mid-block in it
+    if (msPrevGrave.size() > 6) msPrevGrave.erase(msPrevGrave.begin());   // fast clicking keeps a few generations alive
+    msPrevHold = buf;
     msPrevLive.store(buf.get(), std::memory_order_release);
     msPrevPos.store(0, std::memory_order_release);
 }

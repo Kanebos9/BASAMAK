@@ -219,7 +219,8 @@ public:
     // [2026-07-19] WIZARD TAKE PREVIEW: the recorded-notes list auditions a saved WAV straight
     // into the Main output (mixed in before the master soft-clip). Message thread loads + owns
     // (Hold/Old graveyard); the audio thread reads only the atomic pointer + cursor (-1 = idle).
-    std::shared_ptr<juce::AudioBuffer<float>> msPrevHold, msPrevOld;
+    std::shared_ptr<juce::AudioBuffer<float>> msPrevHold;
+    std::vector<std::shared_ptr<juce::AudioBuffer<float>>> msPrevGrave;   // retired previews (audio may still be mid-block in one)
     std::atomic<juce::AudioBuffer<float>*> msPrevLive { nullptr };
     std::atomic<juce::int64> msPrevPos { -1 };
     void previewFile(const juce::File& f);            // MESSAGE THREAD

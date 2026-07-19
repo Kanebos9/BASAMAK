@@ -520,9 +520,18 @@ public:
 
     void open(int slot)
     {
-        slotIdx = slot; phase = Setup; takes.clear(); pending.clear(); skipped.clear();
-        listOff = 0; layerNote = -1; editExisting = false;
-        expandedNote = -1; targetNote = -1; replaceFile = juce::File();
+        slotIdx = slot;
+        // [2026-07-19] RESUME, don't wipe: an accidental outside-click close (the list sits at
+        // the wizard's edge) used to cost the whole session on reopen - "my recorded notes were
+        // gone" (they never left the disk, but the wizard forgot them). A session in progress
+        // now survives close/reopen; "Start a NEW instrument" in the dropdown is the reset.
+        const bool resume = sessionDir.isDirectory() && (! takes.empty() || phase != Setup);
+        if (! resume)
+        {
+            phase = Setup; takes.clear(); pending.clear(); skipped.clear();
+            listOff = 0; layerNote = -1; editExisting = false;
+            expandedNote = -1; targetNote = -1; replaceFile = juce::File();
+        }
         if (proc != nullptr) proc->msTapOn = true;
         setVisible(true); toFront(true);
         startTimerHz(30); syncButtons(); repaint();
