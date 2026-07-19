@@ -272,6 +272,8 @@
 
 | 193 | Velocity layers are PEAK-NORMALIZED to 0 dB on load (boost capped +18 dB, disclosed): layers carry TONE only, velocity carries volume (already engine-wide) - recording levels stop mattering; sorting still uses the ORIGINAL measured peak | the old blend counted loudness twice (velGain x naturally-louder takes) = recording 5 calibrated dynamics was a chore; the user's simplification (takes peak -2..-15 dB anyway = just pull to 0) beat my cautious version | user design |
 
+| 194 | Level-match is a TOGGLE now ("Vel match" in the MS panel, default ON - user round-2: "if users find it artificial they can disable"): the 0 dB norm gain is STORED per layer and applied at render (never baked into buffers); OFF = takes at natural recorded loudness; per-instrument via sidecar ("levelMatch"), per-sound via "msLM" | a destructive bake couldn't be toggled; the toggle honours both camps | user design |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

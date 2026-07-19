@@ -5960,6 +5960,7 @@ DrumSequencerEditor::~DrumSequencerEditor()
     for (auto& b : btnChFxFile) b.setLookAndFeel(nullptr);  // dropBtnLNF [2026-07-18]
     for (auto& row : btnSmpTog) for (auto& b : row) b.setLookAndFeel(nullptr);   // tinyBtnLNF [2026-07-19]
     for (auto& b : btnMsAutoLoop) b.setLookAndFeel(nullptr);   // tinyBtnLNF
+    for (auto& b : btnMsVelMatch) b.setLookAndFeel(nullptr);   // tinyBtnLNF
     for (auto& b : btnMsRigModel) b.setLookAndFeel(nullptr);   // dropBtnLNF
     for (auto& b : btnMsRigIr)    b.setLookAndFeel(nullptr);   // dropBtnLNF
     swDelaySync.setLookAndFeel(nullptr); swDelayPingPong.setLookAndFeel(nullptr);   // [2026-07-15] lit buttons (tinyBtnLNF)
@@ -6530,7 +6531,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         h = mix(h, f(sl.smpStart)); h = mix(h, f(sl.smpEnd)); h = mix(h, sl.smpSlices); h = mix(h, f(sl.smpStretch)); h = mix(h, f(sl.smpGain));
         h = mix(h, sl.smpEnvOn ? 1 : 0); h = mix(h, sl.smpPreservePitch ? 1 : 0);
         h = mix(h, sl.smpLoopOn ? 1 : 0); h = mix(h, f(sl.smpLoopLo)); h = mix(h, f(sl.smpLoopHi));   // [2026-07-18] LOOP
-        h = mix(h, f(sl.msGainDb));   // [2026-07-19] MS gain (Xfade retired) h = mix(h, sl.fmEnvFollow ? 1 : 0); h = mix(h, f(sl.modalMorph));
+        h = mix(h, f(sl.msGainDb)); h = mix(h, sl.msLevelMatch ? 1 : 0);   // [2026-07-19] MS gain + Vel match h = mix(h, sl.fmEnvFollow ? 1 : 0); h = mix(h, f(sl.modalMorph));
         h = mix(h, sl.smpRegN); for (int r = 0; r < DrumChannel::Slot::MAXREG; ++r) { h = mix(h, f(sl.smpRegLo[r])); h = mix(h, f(sl.smpRegHi[r])); }
         h = mix(h, (juce::int64) c.slotSample[b].file.getFullPathName().hashCode64());   // this slot's sample
         h = mix(h, f(sl.oscFold)); h = mix(h, f(sl.oscLevel)); h = mix(h, f(sl.noiseLevel));
@@ -10861,6 +10862,27 @@ void DrumSequencerEditor::setupComponents()
                   "- Saved with the instrument (sidecar)."));
             rb.onClick = [this, b, ir] { openMsRigPicker(b, ir == 1); };
         }
+        // [2026-07-19] "Vel match" TOGGLE (user round-2, default ON): level-matched layers =
+        // tone from layers + volume from velocity; OFF = natural recorded loudness per take.
+        content.addChildComponent(btnMsVelMatch[b]);
+        btnMsVelMatch[b].setButtonText("Vel match");
+        btnMsVelMatch[b].setLookAndFeel(&tinyBtnLNF);
+        btnMsVelMatch[b].setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff2f9e57));
+        btnMsVelMatch[b].setClickingTogglesState(true);
+        btnMsVelMatch[b].setTooltip("VELOCITY LEVEL-MATCH (on by default).\n\n"
+            "- ON: every layer is peak-matched to 0 dB (boost capped +18 dB), so layers carry "
+            "TONE only and velocity gives one smooth volume curve - your recording levels "
+            "don't matter, and even a single layer plays fully dynamic.\n"
+            "- OFF: takes play at their natural recorded loudness (use it if the matching "
+            "feels artificial for your instrument).\n"
+            "- Saved with the instrument (sidecar).");
+        btnMsVelMatch[b].onClick = [this, b] {
+            if (ignoreKnobCallbacks) return;
+            auto& dch2 = proc.sequencer.channel(selectedChannel);
+            dch2.slots[b].msLevelMatch = btnMsVelMatch[b].getToggleState();
+            dch2.markDspDirty(); dch2.writeMsSidecar(b);
+            if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel);
+        };
     }
     // PITCH (semitones) = transpose the WHOLE channel - works for every engine (synth freq + sample
     // varispeed), applied via vPitchMul in the render. Same unit as the pitch envelope. Per-channel.
@@ -12601,6 +12623,7 @@ void DrumSequencerEditor::refreshDetailPanel()
         {   // [2026-07-19] MULTISAMPLE INSTRUMENTS panel values
             auto& dch2 = proc.sequencer.channel(selectedChannel);
             msGainF[b].setValue01((sl.msGainDb + 24.0f) / 48.0f);
+            btnMsVelMatch[b].setToggleState(sl.msLevelMatch, juce::dontSendNotification);
             if (auto ms = dch2.msSet[b]; ms != nullptr && ! ms->zones.empty())
             {
                 int layers = 0; for (const auto& z : ms->zones) layers += (int) z.layers.size();
@@ -14036,6 +14059,7 @@ void DrumSequencerEditor::layoutContent()
             lblSmpLoop[b].setVisible(false); swSmpLoop[b].setVisible(false);
             for (int t = 0; t < 4; ++t) btnSmpTog[b][t].setVisible(false);   // [2026-07-19] the 2x2 grid
             msGainF[b].setVisible(false); lblMsRange[b].setVisible(false);
+            btnMsVelMatch[b].setVisible(false);
             btnMsAutoLoop[b].setVisible(false); btnMsRigModel[b].setVisible(false); btnMsRigIr[b].setVisible(false);
             slotEd[b].msFace = false;
         }
@@ -14092,6 +14116,7 @@ void DrumSequencerEditor::layoutContent()
                     }
                     knobX = sbx[b] + tcW + 8; knobW = slotW - tcW - 8;   // knobs right of the grid
                     msGainF[b].setVisible(false); lblMsRange[b].setVisible(false);
+                    btnMsVelMatch[b].setVisible(false);
                     btnMsRigModel[b].setVisible(false); btnMsRigIr[b].setVisible(false);
                 }
                 else
@@ -14104,8 +14129,10 @@ void DrumSequencerEditor::layoutContent()
                     btnSmpTog[b][1].setVisible(true); btnSmpTog[b][1].setBounds(tcx, knobTop, 62, 22);   // Reverse
                     btnSmpTog[b][0].setVisible(false); btnSmpTog[b][2].setVisible(false);
                     btnSmpTog[b][3].setVisible(false);   // Loop = plain-sample tool, not an instrument's
+                    btnMsVelMatch[b].setVisible(true);
+                    btnMsVelMatch[b].setBounds(tcx + 66, knobTop, 78, 22);   // [2026-07-19] the level-match toggle
                     msGainF[b].setVisible(true);
-                    msGainF[b].setBounds(tcx + 68, knobTop, slotW - 12 - 68, 22);   // the wide fader (user)
+                    msGainF[b].setBounds(tcx + 148, knobTop, slotW - 12 - 148, 22);   // the wide fader (user)
                     lblMsRange[b].setVisible(true);
                     lblMsRange[b].setBounds(tcx, knobTop + 26, slotW - 12, 16);     // full width - no truncation
                     const int ry = sby[b] + 112, rw = (slotW - 16) / 2;

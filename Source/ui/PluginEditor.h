@@ -3601,6 +3601,7 @@ private:
     // holds a zone set): dB Gain + Loop Xfade knobs, Auto-Loop, note range, the amp RIG row.
     SlotDragFader    msGainF[DrumChannel::NUM_SLOTS];        // wide horizontal dB fader (user: the knob was too small)
     juce::Label      lblMsRange[DrumChannel::NUM_SLOTS];
+    juce::TextButton btnMsVelMatch[DrumChannel::NUM_SLOTS];  // [2026-07-19] "Vel match" level-match toggle (default ON)
     juce::TextButton btnMsAutoLoop[DrumChannel::NUM_SLOTS],  // "AUTO" on the waveform corner (plain samples, Loop on)
                      btnMsRigModel[DrumChannel::NUM_SLOTS], btnMsRigIr[DrumChannel::NUM_SLOTS];
     void openMsRigPicker(int slot, bool ir);   // model/IR menu -> msRigModel/msRigIr + refreshMsRig + sidecar

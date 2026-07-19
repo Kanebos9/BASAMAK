@@ -578,6 +578,9 @@ public:
         // cycles the loop region with a fixed 25 ms equal-power crossfade - the attack before
         // the loop plays ONCE, then the sound sustains for as long as the gate is open and the
         // envelope allows (raise Sustain!). One-shot steps play through unchanged.
+        bool  msLevelMatch = true;              // [2026-07-19] LEVEL-MATCH toggle (user design, default ON):
+                                                //   layers peak-normalized at render = tone only, velocity =
+                                                //   volume. OFF = takes play at their recorded loudness.
         float msGainDb = 0.0f;                  // [2026-07-19] Multisample Instruments GAIN in dB (+-24;
                                                 //   folded into the per-sample-smoothed weight = zipper-free)
         bool  smpLoopOn = false;
@@ -1162,7 +1165,7 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     // dynamics per note as they like; layers are SORTED BY MEASURED PEAK at load - soft..loud -
     // so playback maps velocity across them by CROSSFADE regardless of file naming).
     static constexpr int MS_LAYERS = 5;
-    struct MsLayer { juce::AudioBuffer<float> buf; float peak = 0.0f; };
+    struct MsLayer { juce::AudioBuffer<float> buf; float peak = 0.0f; float norm = 1.0f; };   // norm = the 0 dB level-match gain (applied at render when msLevelMatch)
     struct MsZone  { std::vector<MsLayer> layers; int root = 60; };
     struct MsSet   { std::vector<MsZone> zones; juce::String folder; };
     std::shared_ptr<MsSet> msSet[NUM_SLOTS], msSetOld[NUM_SLOTS];
@@ -1313,6 +1316,7 @@ private:
         const juce::AudioBuffer<float>* msBuf = nullptr;   // [2026-07-18] multisample: THIS voice's zone (primary layer)
         const juce::AudioBuffer<float>* msBuf2 = nullptr;  // [2026-07-19] the NEXT velocity layer (crossfade partner; null = single)
         float    msMix = 0.0f;           // 0..1 blend toward msBuf2 (equal-power in the render)
+        float    msG1 = 1.0f, msG2 = 1.0f;   // per-layer LEVEL-MATCH gains (1.0 when the toggle is off)
         float    msSemiAdj = 0.0f;       // 60 - zoneRoot (folds into the varispeed exponent)
         // === PER-SLOT EQ (begin) - filter state for HP(2)+bells(3)+LP(2); coeffs live in SC ===
         // === PER-SLOT EQ (end) ===
