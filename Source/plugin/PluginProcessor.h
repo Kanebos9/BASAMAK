@@ -62,7 +62,7 @@ public:
 
     // Auto-audition: when ON, releasing a slot knob/fader fires a TEST hit so you hear the edit. ON by
     // default (user request); toggled from the top bar. A fresh instance starts ON; saved state restores.
-    std::atomic<bool> auditionOnEdit { true };
+    std::atomic<bool> auditionOnEdit { false };   // [2026-07-19] Auto Test OFF by default (user order, reversing the old ON default)
 
     // The whole synth engine renders at this internal oversampling factor (anti-aliasing),
     // then the processor downsamples to the host rate. renderInto/channels are unaware (they

@@ -477,8 +477,8 @@ public:
 // that stays LIVE MID-SESSION (user order: "record 5 notes ending at -30, then raise it to
 // -24"); a RECORDED list on the right shows each kept take's length + peak dB (consistency),
 // with audition + delete (a deleted note re-queues). Closes on X or an outside click; the
-// Closer unhooks in BOTH visibilityChanged AND the dtor (the Reaper-crash lesson).
-class MsRecordWizard : public juce::Component, private juce::Timer
+// close = the X button ONLY (user order - no outside-click watcher at all).
+class MsRecordWizard : public juce::Component, public juce::SettableTooltipClient, private juce::Timer
 {
 public:
     DrumSequencerProcessor* proc = nullptr;
@@ -496,6 +496,20 @@ public:
             "- Playback CROSSFADES between layers by how hard you hit the key.\n"
             "- KEEP = done with this note, move on.");
         layerBtn.onClick = [this] { saveCurrent(true); };
+        startBtn.setTooltip("Start the session: walks the note range top of the list to bottom.\n\n"
+            "- Recording ARMS itself when the input crosses \"Start at\" - just play each note when asked.\n"
+            "- Every setting stays adjustable WHILE recording.");
+        retryBtn.setTooltip("Throw this take away and record the SAME note again.");
+        keepBtn.setTooltip("Save this take and move on.\n\n"
+            "- The file lands in the instrument folder immediately (24-bit WAV named by note).\n"
+            "- The start is cleaned automatically: resting-level re-zero + a short fade-in (see the Pre-roll tip).");
+        skipBtn.setTooltip("Skip this note without saving - it stays as an EMPTY row in the list, "
+            "so you can record it later with its REC button.");
+        finishBtn.setTooltip("Load the instrument onto the slot and close.\n\n"
+            "- You can come back any time: Record / edit multisample, then pick it from the list-title dropdown.");
+        closeBtn.setTooltip("Close the wizard (the ONLY way - outside clicks never close it).\n\n"
+            "- A session in progress is REMEMBERED: reopening resumes exactly where you left off.\n"
+            "- Every kept take is already saved on disk.");
         addChildComponent(nameEd);
         nameEd.setText("My Instrument", juce::dontSendNotification);
         nameEd.setJustification(juce::Justification::centredLeft);
@@ -510,13 +524,9 @@ public:
             rebuildPending(); repaint(); syncButtons(); };
         finishBtn.onClick = [this] { finishSession(); };
     }
-    ~MsRecordWizard() override
-    {   // [2026-07-19] THE REAPER CRASH: every overlay Closer must unhook in its DESTRUCTOR too -
-        // the editor can be destroyed (FX window closed) while the wizard is OPEN, and
-        // visibilityChanged never fires during teardown. The stale global listener then made the
-        // next click anywhere dispatch into freed memory (EXC_BAD_ACCESS in setButtons).
-        if (closerHooked) { juce::Desktop::getInstance().removeGlobalMouseListener(&closer); closerHooked = false; }
-    }
+    // [2026-07-19] X-ONLY CLOSE (user order, reversing his earlier outside-click rule after the
+    // edge-click incident): the wizard has NO outside-click watcher any more - "mistakes are
+    // waiting to happen". Only the X button (and editor teardown) closes it.
 
     void open(int slot)
     {
@@ -542,10 +552,56 @@ public:
         if (proc != nullptr) { proc->msTapOn = false; proc->previewStop(); }
         setVisible(false);
     }
-    void visibilityChanged() override             // click-outside closes (user order; a mid-take
-    {                                             // outside click abandons the take - deliberate)
-        if (isVisible() && ! closerHooked)      { juce::Desktop::getInstance().addGlobalMouseListener(&closer); closerHooked = true; }
-        else if (! isVisible() && closerHooked) { juce::Desktop::getInstance().removeGlobalMouseListener(&closer); closerHooked = false; }
+
+    // [2026-07-19] REGION TOOLTIPS (user: "i wanna see the tips u just gave me when i hover on
+    // preroll") - the boxes/meter/list are drawn, not components, so the tooltip comes from a
+    // hit-test of the mouse position (the ArpEditor idiom).
+    juce::String getTooltip() override
+    {
+        const auto p = getMouseXYRelative();
+        if (prRect().contains(p))
+            return "PRE-ROLL: how much air is kept from BEFORE the moment recording armed.\n\n"
+                   "- The gate only trips partway up your attack - the pre-roll rescues the soft "
+                   "beginning of the note.\n"
+                   "- The first fifth of it (max 5 ms) is a FADE-IN, so the file can never start "
+                   "with a click; that slice is pure air, the attack is untouched.\n"
+                   "- Pre-roll 0 = a tiny 2 ms fade over the note's own foot instead (inaudible "
+                   "next to a pick's 5-20 ms rise) - clicks are impossible at any setting.";
+        if (adRect().contains(p))
+            return "START AT: recording ARMS the instant the input crosses this level.\n\n"
+                   "- The white tick on the meter marks it; the fill turns GREEN above it.\n"
+                   "- Set it above your idle noise (a warning appears if noise sits near it).\n"
+                   "- Adjustable mid-session - the very next note uses the new value.";
+        if (edRect().contains(p))
+            return "END BELOW: a take ENDS once the ring stays under this level for half a second.\n\n"
+                   "- A note is loudest at the attack then decays - this says where in the decay to stop.\n"
+                   "- Grey tick on the meter; amber fill = a running take would keep going.\n"
+                   "- Adjustable mid-session (even affects the take currently running).";
+        if (mxRect().contains(p))
+            return "MAX TIME: the hard cap per take (1-20 s) - the take ends here even if the ring "
+                   "never falls under \"End below\".";
+        if (loRect().contains(p) || hiRect().contains(p))
+            return "The note RANGE this instrument covers. Every note in the range gets a row in the "
+                   "list on the right (empty rows are recordable any time). Changing the range "
+                   "mid-session re-queues accordingly - nothing recorded is lost.";
+        if (spRect().contains(p))
+            return "RECORD EVERY N SEMITONES: how densely the range is sampled.\n\n"
+                   "- Notes between recordings are pitched from the nearest one - every 2-3 st is "
+                   "usually inaudible; every 1 st = maximum realism, more work.";
+        if (listRect().contains(p))
+            return "THE NOTE MAP: every note of the range = a row.\n\n"
+                   "- Click a note = open its layers (LOUDEST first; another note's click closes it).\n"
+                   "- Empty rows show REC - a skipped note is just an unfilled row.\n"
+                   "- +LAYER = record another dynamic of that note (up to 5; velocity crossfades "
+                   "between them by how hard you play).\n"
+                   "- On a layer: the triangle plays it, RE records over it, x deletes it.\n"
+                   "- Click the TITLE to switch instruments or start a NEW one.";
+        if (p.y > getHeight() - 70 && p.x < leftW())
+            return "INPUT LEVEL. White tick = \"Start at\" (green fill above = recording would arm), "
+                   "grey tick = \"End below\" (amber fill above = a take would keep running).";
+        return "RECORD / EDIT A MULTISAMPLE: play each note when asked - the wizard hears it, checks "
+               "the pitch, trims and saves it into the instrument's folder. Everything here stays "
+               "adjustable WHILE recording; closing (X only) never loses a session.";
     }
 
     void resized() override
@@ -694,30 +750,30 @@ public:
                     const bool open = row.note == expandedNote;
                     g.setColour(open ? juce::Colour(0xff2a2a4c) : juce::Colour(0xff20203a));
                     g.fillRoundedRectangle(rr.toFloat().reduced(1.0f), 3.0f);
-                    g.setColour(cnt > 0 ? juce::Colours::white : juce::Colour(0xff70708c));
-                    g.setFont(juce::Font(11.0f, juce::Font::bold));
+                    g.setColour(cnt > 0 ? juce::Colours::white : juce::Colour(0xff8a8aa6));
+                    g.setFont(juce::Font(13.5f, juce::Font::bold));   // readable note names (user)
                     g.drawText(juce::MidiMessage::getMidiNoteName(row.note, true, true, 4),
-                               rr.getX() + 5, rr.getY(), 34, rr.getHeight(), juce::Justification::centredLeft);
-                    g.setColour(juce::Colour(0xffaebada)); g.setFont(10.0f);
+                               rr.getX() + 6, rr.getY(), 44, rr.getHeight(), juce::Justification::centredLeft);
+                    g.setColour(juce::Colour(0xffaebada)); g.setFont(11.0f);
                     if (cnt > 0)
                     {
                         float pk = -90.0f;
                         for (const auto& t : takes) if (t.note == row.note) pk = juce::jmax(pk, t.peakDb);
                         g.drawText(juce::String(cnt) + (cnt == 1 ? " layer" : " layers"),
-                                   rr.getX() + 38, rr.getY(), 52, rr.getHeight(), juce::Justification::centredLeft);
-                        g.drawText(juce::String(juce::roundToInt(pk)) + "dB",
-                                   rr.getX() + 92, rr.getY(), 34, rr.getHeight(), juce::Justification::centredLeft);
+                                   rr.getX() + 52, rr.getY(), 62, rr.getHeight(), juce::Justification::centredLeft);
+                        g.drawText(juce::String(juce::roundToInt(pk)) + " dB",
+                                   rr.getX() + 118, rr.getY(), 44, rr.getHeight(), juce::Justification::centredLeft);
                         if (cnt < DrumChannel::MS_LAYERS)
                         {   // +LAYER (record ANOTHER dynamic - any time, incl. long after finishing)
-                            g.setColour(juce::Colour(0xff35b56a)); g.setFont(juce::Font(9.5f, juce::Font::bold));
-                            g.drawText("+LAYER", rr.getRight() - 46, rr.getY(), 44, rr.getHeight(), juce::Justification::centred);
+                            g.setColour(juce::Colour(0xff35b56a)); g.setFont(juce::Font(10.5f, juce::Font::bold));
+                            g.drawText("+LAYER", rr.getRight() - 56, rr.getY(), 52, rr.getHeight(), juce::Justification::centred);
                         }
                     }
                     else
                     {
-                        g.drawText("-", rr.getX() + 38, rr.getY(), 20, rr.getHeight(), juce::Justification::centredLeft);
-                        g.setColour(juce::Colour(0xffffc24a)); g.setFont(juce::Font(9.5f, juce::Font::bold));
-                        g.drawText("REC", rr.getRight() - 36, rr.getY(), 32, rr.getHeight(), juce::Justification::centred);
+                        g.drawText("-", rr.getX() + 52, rr.getY(), 20, rr.getHeight(), juce::Justification::centredLeft);
+                        g.setColour(juce::Colour(0xffffc24a)); g.setFont(juce::Font(10.5f, juce::Font::bold));
+                        g.drawText("REC", rr.getRight() - 44, rr.getY(), 40, rr.getHeight(), juce::Justification::centred);
                     }
                 }
                 else if (row.takeIdx >= 0 && row.takeIdx < (int) takes.size())
@@ -727,13 +783,13 @@ public:
                     g.setColour(juce::Colour(0xff35b56a));                       // audition glyph (drawn)
                     { juce::Path pl; const float px = (float) rr.getX() + 14.0f, py = (float) rr.getCentreY();
                       pl.addTriangle(px, py - 4.0f, px, py + 4.0f, px + 7.0f, py); g.fillPath(pl); }
-                    g.setColour(juce::Colour(0xffaebada)); g.setFont(10.0f);
-                    g.drawText(juce::String(t.lenSec, 1) + "s", rr.getX() + 30, rr.getY(), 32, rr.getHeight(), juce::Justification::centredLeft);
-                    g.drawText(juce::String(juce::roundToInt(t.peakDb)) + "dB", rr.getX() + 64, rr.getY(), 36, rr.getHeight(), juce::Justification::centredLeft);
-                    g.setColour(juce::Colour(0xff9fd1ff)); g.setFont(juce::Font(9.5f, juce::Font::bold));
-                    g.drawText("RE", rr.getRight() - 40, rr.getY(), 22, rr.getHeight(), juce::Justification::centred);
-                    g.setColour(juce::Colour(0xffd26a6a)); g.setFont(juce::Font(11.0f, juce::Font::bold));
-                    g.drawText("x", rr.getRight() - 16, rr.getY(), 12, rr.getHeight(), juce::Justification::centred);
+                    g.setColour(juce::Colour(0xffaebada)); g.setFont(11.0f);
+                    g.drawText(juce::String(t.lenSec, 1) + " s", rr.getX() + 32, rr.getY(), 42, rr.getHeight(), juce::Justification::centredLeft);
+                    g.drawText(juce::String(juce::roundToInt(t.peakDb)) + " dB", rr.getX() + 78, rr.getY(), 46, rr.getHeight(), juce::Justification::centredLeft);
+                    g.setColour(juce::Colour(0xff9fd1ff)); g.setFont(juce::Font(10.5f, juce::Font::bold));
+                    g.drawText("RE", rr.getRight() - 48, rr.getY(), 26, rr.getHeight(), juce::Justification::centred);
+                    g.setColour(juce::Colour(0xffd26a6a)); g.setFont(juce::Font(12.0f, juce::Font::bold));
+                    g.drawText("x", rr.getRight() - 18, rr.getY(), 14, rr.getHeight(), juce::Justification::centred);
                 }
             }
         }
@@ -760,9 +816,9 @@ public:
                     if (! row.isLayer)
                     {
                         const int cnt = takesFor(row.note);
-                        if (cnt == 0 && x >= rr.getRight() - 40)            // REC an empty note
+                        if (cnt == 0 && x >= rr.getRight() - 48)            // REC an empty note
                             beginNoteTarget(row.note, {});
-                        else if (cnt > 0 && cnt < DrumChannel::MS_LAYERS && x >= rr.getRight() - 50)
+                        else if (cnt > 0 && cnt < DrumChannel::MS_LAYERS && x >= rr.getRight() - 58)
                             beginNoteTarget(row.note, {});                  // +LAYER (cap 5 enforced by the hidden button)
                         else
                         {   // expand/collapse (one open at a time - user spec)
@@ -772,7 +828,7 @@ public:
                     }
                     else if (row.takeIdx >= 0 && row.takeIdx < (int) takes.size())
                     {
-                        if (x >= rr.getRight() - 18)
+                        if (x >= rr.getRight() - 22)
                         {   // delete this LAYER; an empty note just shows as a recordable row again
                             const int dn = takes[(size_t) row.takeIdx].note;
                             takes[(size_t) row.takeIdx].file.deleteFile();
@@ -781,7 +837,7 @@ public:
                             rebuildPending();
                             syncButtons(); repaint();
                         }
-                        else if (x >= rr.getRight() - 44)                   // RE = record OVER this layer
+                        else if (x >= rr.getRight() - 52)                   // RE = record OVER this layer
                             beginNoteTarget(row.note, takes[(size_t) row.takeIdx].file);
                         else if (proc != nullptr)                           // play
                             proc->previewFile(takes[(size_t) row.takeIdx].file);
@@ -854,25 +910,12 @@ private:
                      skipBtn { "SKIP" }, closeBtn { "X" }, finishBtn { "FINISH" },
                      layerBtn { "LAYER +" };
     juce::TextEditor nameEd;
-    struct Closer : juce::MouseListener
-    {
-        MsRecordWizard& ed; explicit Closer(MsRecordWizard& e) : ed(e) {}
-        void mouseDown(const juce::MouseEvent& e) override
-        {
-            if (! ed.isVisible()) return;
-            if (juce::Component::getCurrentlyModalComponent() != nullptr) return;   // a menu is up
-            if (ed.getScreenBounds().contains(e.getScreenPosition())) return;
-            ed.close();
-        }
-    };
-    Closer closer { *this };
-    bool closerHooked = false;
 
-    int  leftW() const { return getWidth() - 232; }           // list column = right 232 px (r2: row buttons need it)
-    juce::Rectangle<int> listRect() const { return { getWidth() - 226, 28, 218, getHeight() - 36 }; }
-    int  listVisRows() const { return (listRect().getHeight() - 22) / 18; }
+    int  leftW() const { return getWidth() - 272; }           // list column = right 272 px (readable note names - user)
+    juce::Rectangle<int> listRect() const { return { getWidth() - 266, 28, 258, getHeight() - 36 }; }
+    int  listVisRows() const { return (listRect().getHeight() - 24) / 21; }
     juce::Rectangle<int> listRowRect(int r) const
-    { const auto lc = listRect(); return { lc.getX() + 3, lc.getY() + 20 + r * 18, lc.getWidth() - 6, 17 }; }
+    { const auto lc = listRect(); return { lc.getX() + 3, lc.getY() + 22 + r * 21, lc.getWidth() - 6, 20 }; }
     juce::Rectangle<int> loRect() const { return { leftW() / 2 - 170, 66,  100, 24 }; }
     juce::Rectangle<int> hiRect() const { return { leftW() / 2 - 50,  66,  100, 24 }; }
     juce::Rectangle<int> spRect() const { return { leftW() / 2 + 70,  66,  100, 24 }; }
@@ -1174,6 +1217,23 @@ private:
         }
         else
             f.deleteFile();   // RERECORD replaces THAT exact layer file - the one sanctioned overwrite
+        // [2026-07-19] CLEAN THE HEAD before writing (user: "clipping sound in the beginning"):
+        // (1) re-zero the resting level - interfaces sit slightly off true zero, so playback's
+        //     first sample was a jump = a click/thump, worst on quiet takes;
+        // (2) FADE-IN over the earliest slice of the pre-roll (a fifth of it, capped 5 ms -
+        //     guaranteed air, the attack is untouched); Pre-roll 0 = a 2 ms fade over the note's
+        //     own foot (inaudible vs a pick's 5-20 ms rise - the graceful worst case).
+        if (! capBuf.empty())
+        {
+            double dc = 0.0;
+            for (float v : capBuf) dc += v;
+            dc /= (double) capBuf.size();
+            if (std::abs(dc) > 1.0e-6) for (auto& v : capBuf) v -= (float) dc;
+            const int fadeN = juce::jmax((int)(sr * 0.002),
+                                         juce::jmin((int)(sr * 0.005), (int)(sr * preMs * 0.001 / 5.0)));
+            for (int i = 0; i < fadeN && i < (int) capBuf.size(); ++i)
+                capBuf[(size_t) i] *= (float) i / (float) juce::jmax(1, fadeN);
+        }
         bool wrote = false;
         if (auto os = f.createOutputStream())
         {
@@ -1189,7 +1249,7 @@ private:
         if (wrote)
         {
             float pk = 0.0f;
-            for (float v : capBuf) pk = juce::jmax(pk, std::abs(v));
+            for (float v : capBuf) pk = juce::jmax(pk, std::abs(v));   // (capBuf already head-cleaned below)
             const float lenS = (float)(capBuf.size() / juce::jmax(1.0, sr));
             const float pkDb = juce::Decibels::gainToDecibels(juce::jmax(1.0e-5f, pk));
             bool replaced = false;

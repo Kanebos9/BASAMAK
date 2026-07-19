@@ -2726,7 +2726,7 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
     kbGuideKey   = juce::jlimit(0, 11, (int) state.getProperty("kbGuideKey", 0));
     kbGuideScale = juce::jlimit(0, 9,  (int) state.getProperty("kbGuideScale", 0));
     visiblePatterns = Sequencer::NUM_PATTERNS;   // always 32 (old files' 16 is ignored)
-    auditionOnEdit.store((bool) state.getProperty("audEdit", true));   // default ON (matches a fresh instance)
+    auditionOnEdit.store((bool) state.getProperty("audEdit", false));   // [2026-07-19] default OFF (user order; saved sessions keep their setting)
     keysSlot2Down.store(juce::jlimit(-24, 24, (int) state.getProperty("keys2Down", 0)));
     keysTakes.clear();
     if (auto kt = state.getChildWithName("KeysTakes"); kt.isValid())

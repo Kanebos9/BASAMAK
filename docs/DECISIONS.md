@@ -264,6 +264,10 @@
 
 | 188 | POST-MORTEM CORRECTION: kept layer files WERE destroyed in the notes-gone incident - the state wipe restarted the layer counter, and "count -> filename + deleteFile-first" silently overwrote same-named earlier layers (my earlier "nothing was deleted" read was wrong; the listing showed survivors). FIX: new-take filenames are probed against the DISK for the first free name (never the in-memory count); only an explicit RERECORD may overwrite; overwritten WAVs are unlink-gone, disclosed | a recorder must be collision-proof BY CONSTRUCTION, not by trusting state | user caught my wrong diagnosis; fix mine |
 
+| 189 | Take heads are CLEANED on save: resting-level re-zero + a fade-in over the first fifth of the pre-roll (cap 5 ms = guaranteed air; pre-roll 0 = 2 ms over the note's foot, the graceful worst case); one-time repair pass declicked the 26 existing takes (originals in Multisamples/_backup before declick 19jul) | the "clipping at the beginning" = a first-sample step (+ interface offset thump), worst on quiet takes; merged-into-pre-roll rule chosen over a 2nd parameter after the full-fade trap was explained (a hot gate puts real attack inside the pre-roll) | user-approved design after 3 Q&A rounds |
+| 190 | The wizard closes on X ONLY (outside-click close REMOVED - the user reversed his own earlier order after the edge-click incident); wizard 880x334 with a 258px list column + 13.5px note names; REGION TOOLTIPS via getTooltip hit-tests (incl. the full pre-roll/fade explanation) + all buttons tipped | "mistakes are waiting to happen"; "i cant read the note names"; "i wanna see the tips u just gave me when i hover on preroll" | user orders |
+| 191 | Auto Test default OFF (reverses the old ON default; saved sessions keep their setting via the state read default flip too) | user order | user order |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.
