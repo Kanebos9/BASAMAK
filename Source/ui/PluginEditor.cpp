@@ -14088,7 +14088,8 @@ void DrumSequencerEditor::layoutContent()
             lblSmpLoop[b].setVisible(false); swSmpLoop[b].setVisible(false);
             for (int t = 0; t < 4; ++t) btnSmpTog[b][t].setVisible(false);   // [2026-07-19] the 2x2 grid
             msGainF[b].setVisible(false); lblMsRange[b].setVisible(false);
-            btnMsAutoLoop[b].setVisible(false); btnMsRigModel[b].setVisible(false); btnMsRigIr[b].setVisible(false);
+            btnMsAutoLoop[b].setVisible(false); btnMsLoop[b].setVisible(false);   // [2026-07-19] was leaking onto non-Sample slots
+            btnMsRigModel[b].setVisible(false); btnMsRigIr[b].setVisible(false);
             slotEd[b].msFace = false;
         }
 
