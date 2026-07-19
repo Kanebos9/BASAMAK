@@ -223,8 +223,25 @@ public:
     std::vector<std::shared_ptr<juce::AudioBuffer<float>>> msPrevGrave;   // retired previews (audio may still be mid-block in one)
     std::atomic<juce::AudioBuffer<float>*> msPrevLive { nullptr };
     std::atomic<juce::int64> msPrevPos { -1 };
+    // [2026-07-19] the DYING slot: an interrupted preview (fast re-click / stop / wizard close)
+    // is never chopped mid-wave - it ramps out over ~4 ms here while the new one starts (the
+    // same manners every engine voice already has; a hard cut = a step = the click the user heard).
+    std::atomic<juce::AudioBuffer<float>*> msPrevDying { nullptr };
+    std::atomic<juce::int64> msPrevDyePos { -1 };
+    std::atomic<int> msPrevDyeRemain { 0 }, msPrevDyeTotal { 256 };
     void previewFile(const juce::File& f);            // MESSAGE THREAD
-    void previewStop() { msPrevPos.store(-1, std::memory_order_relaxed); }
+    void previewStop()
+    {
+        auto* pb = msPrevLive.load(std::memory_order_acquire);
+        const juce::int64 pos = msPrevPos.exchange(-1, std::memory_order_relaxed);
+        if (pb != nullptr && pos >= 0 && pos < (juce::int64) pb->getNumSamples())
+        {
+            msPrevDyeTotal.store(juce::jmax(64, (int)(currentSampleRate * 0.004)), std::memory_order_relaxed);
+            msPrevDyePos.store(pos, std::memory_order_relaxed);
+            msPrevDying.store(pb, std::memory_order_release);
+            msPrevDyeRemain.store(msPrevDyeTotal.load(std::memory_order_relaxed), std::memory_order_release);
+        }
+    }
 
     // MIDI-in monitor (drives the on-screen "MIDI" indicator). midiInCount bumps
     // for EVERY incoming message so the UI can tell whether MIDI reaches us at all.

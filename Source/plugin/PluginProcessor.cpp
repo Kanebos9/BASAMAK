@@ -200,7 +200,7 @@ void DrumSequencerProcessor::releaseResources() {}
 // [2026-07-19] Load a saved take (mono WAV at OUR rate - the wizard wrote it) and start playback.
 void DrumSequencerProcessor::previewFile(const juce::File& f)
 {
-    msPrevPos.store(-1, std::memory_order_relaxed);
+    previewStop();   // [2026-07-19] a playing preview ramps out in the DYING slot (no mid-wave chop)
     juce::AudioFormatManager fm; fm.registerBasicFormats();
     std::unique_ptr<juce::AudioFormatReader> r(fm.createReaderFor(f));
     if (r == nullptr || r->lengthInSamples <= 0) return;
@@ -1309,7 +1309,36 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         //   0 dBFS. Any stray spike (10, 50, whatever) is bounded to at most ONE full-scale sample (a faint
         //   tick, never a loud burst); legit signal below 0.85 is untouched; hot mixes saturate musically.
         //   This is the standard "you cannot exceed full-scale" master ceiling every plugin has.
-        // [2026-07-19] WIZARD TAKE PREVIEW mix-in (before the soft-clip so it's bounded too)
+        // [2026-07-19] WIZARD TAKE PREVIEW mix-in (before the soft-clip so it's bounded too).
+        // First the DYING slot: an interrupted preview ramps to zero over ~4 ms instead of
+        // being chopped mid-wave (fast re-clicks were a click per click - user report).
+        if (auto* db = msPrevDying.load(std::memory_order_acquire))
+        {
+            int rem = msPrevDyeRemain.load(std::memory_order_relaxed);
+            juce::int64 dpos = msPrevDyePos.load(std::memory_order_relaxed);
+            const juce::int64 dlen = db->getNumSamples();
+            if (rem > 0 && dpos >= 0 && dpos < dlen && audio.getNumChannels() >= 2)
+            {
+                const float* src = db->getReadPointer(0);
+                float* o0 = audio.getWritePointer(0); float* o1 = audio.getWritePointer(1);
+                const int tot = juce::jmax(1, msPrevDyeTotal.load(std::memory_order_relaxed));
+                const int n = (int) juce::jmin<juce::int64>((juce::int64) numSamples,
+                                                            juce::jmin((juce::int64) rem, dlen - dpos));
+                for (int i = 0; i < n; ++i)
+                {
+                    const float g = (float)(rem - i) / (float) tot;
+                    const float v = src[dpos + i] * g;
+                    o0[i] += v; o1[i] += v;
+                }
+                rem -= n; dpos += n;
+                if (rem <= 0 || dpos >= dlen)
+                { msPrevDying.store(nullptr, std::memory_order_release); msPrevDyeRemain.store(0, std::memory_order_relaxed); }
+                else
+                { msPrevDyeRemain.store(rem, std::memory_order_relaxed); msPrevDyePos.store(dpos, std::memory_order_relaxed); }
+            }
+            else
+            { msPrevDying.store(nullptr, std::memory_order_release); msPrevDyeRemain.store(0, std::memory_order_relaxed); }
+        }
         if (auto* pb = msPrevLive.load(std::memory_order_acquire))
         {
             juce::int64 pos = msPrevPos.load(std::memory_order_relaxed);

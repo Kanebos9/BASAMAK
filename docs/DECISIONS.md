@@ -268,6 +268,8 @@
 | 190 | The wizard closes on X ONLY (outside-click close REMOVED - the user reversed his own earlier order after the edge-click incident); wizard 880x334 with a 258px list column + 13.5px note names; REGION TOOLTIPS via getTooltip hit-tests (incl. the full pre-roll/fade explanation) + all buttons tipped | "mistakes are waiting to happen"; "i cant read the note names"; "i wanna see the tips u just gave me when i hover on preroll" | user orders |
 | 191 | Auto Test default OFF (reverses the old ON default; saved sessions keep their setting via the state read default flip too) | user order | user order |
 
+| 192 | The take-preview got a DYING slot: an interrupted preview (fast re-click / stop / wizard close) ramps out over ~4 ms instead of being chopped mid-wave (a hard cut = a step = the "click per click" the user's fast-clicking exposed - the head fade was correct but couldn't cover playback-side chops) | the same fade-on-interrupt manners every engine voice already has; the preview was the one playback path built without them | user caught it; fix mine |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.
