@@ -493,6 +493,8 @@ public:
             "it again at a different strength (up to 5 layers per note - you decide per note).\n\n"
             "- Record soft first, then LAYER + and play harder (any order works - layers are "
             "sorted by measured loudness).\n"
+            "- Layers are LEVEL-MATCHED on load (peak to 0 dB, boost capped +18 dB): they carry "
+            "TONE only, velocity carries the volume - your recording levels don't matter.\n"
             "- Playback CROSSFADES between layers by how hard you hit the key.\n"
             "- KEEP = done with this note, move on.");
         layerBtn.onClick = [this] { saveCurrent(true); };
@@ -592,8 +594,9 @@ public:
             return "THE NOTE MAP: every note of the range = a row.\n\n"
                    "- Click a note = open its layers (LOUDEST first; another note's click closes it).\n"
                    "- Empty rows show REC - a skipped note is just an unfilled row.\n"
-                   "- +LAYER = record another dynamic of that note (up to 5; velocity crossfades "
-                   "between them by how hard you play).\n"
+                   "- +LAYER = record another dynamic of that note (up to 5). Layers are "
+                   "level-matched on load: they carry TONE, velocity carries volume - so "
+                   "recording levels don't matter, and one layer already plays fully dynamic.\n"
                    "- On a layer: the triangle plays it, RE records over it, x deletes it.\n"
                    "- Click the TITLE to switch instruments or start a NEW one.";
         if (p.y > getHeight() - 70 && p.x < leftW())

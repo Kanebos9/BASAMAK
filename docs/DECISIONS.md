@@ -270,6 +270,8 @@
 
 | 192 | The take-preview got a DYING slot: an interrupted preview (fast re-click / stop / wizard close) ramps out over ~4 ms instead of being chopped mid-wave (a hard cut = a step = the "click per click" the user's fast-clicking exposed - the head fade was correct but couldn't cover playback-side chops) | the same fade-on-interrupt manners every engine voice already has; the preview was the one playback path built without them | user caught it; fix mine |
 
+| 193 | Velocity layers are PEAK-NORMALIZED to 0 dB on load (boost capped +18 dB, disclosed): layers carry TONE only, velocity carries volume (already engine-wide) - recording levels stop mattering; sorting still uses the ORIGINAL measured peak | the old blend counted loudness twice (velGain x naturally-louder takes) = recording 5 calibrated dynamics was a chore; the user's simplification (takes peak -2..-15 dB anyway = just pull to 0) beat my cautious version | user design |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

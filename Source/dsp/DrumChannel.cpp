@@ -1294,6 +1294,16 @@ bool DrumChannel::loadMultisample(int slot, const juce::File& folder)
         MsLayer ly; ly.buf = std::move(buf);
         for (int i = 0; i < ly.buf.getNumSamples(); ++i)
             ly.peak = juce::jmax(ly.peak, std::abs(ly.buf.getSample(0, i)));
+        // [2026-07-19] LEVEL-MATCH (user design): every layer is peak-normalized to 0 dB, so
+        // layers carry TONE only and velocity carries the volume - recording levels stop
+        // mattering (record the soft take too quiet, the hard one too hot: absorbed here).
+        // Sorting still uses the ORIGINAL measured peak (which take was softer). Boost ceiling
+        // +18 dB = a seatbelt only a broken near-silent take could hit.
+        if (ly.peak > 1.0e-4f)
+        {
+            const float gNorm = juce::jmin(1.0f / ly.peak, 7.94f);
+            if (std::abs(gNorm - 1.0f) > 1.0e-3f) ly.buf.applyGain(gNorm);
+        }
         z->layers.push_back(std::move(ly));
     }
     if (set->zones.empty()) return false;
