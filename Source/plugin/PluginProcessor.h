@@ -308,6 +308,13 @@ public:
     // MOST RECENT still-held note = the mono projection recording follows.
     int   keysHeldStack[DrumChannel::POLY * 2] = {}; float keysHeldStackVel[DrumChannel::POLY * 2] = {};
     int   keysHeldCount = 0;
+    // [2026-07-19] LET RING: a coarse (per-block) sample clock times the strum window; a group
+    // starts at letRingGroupStart and holds (ringing, keyUp suppressed) until a note lands past the
+    // window = a new gesture that fades the old group. The ringing group's notes live in the held
+    // stack (keyUp doesn't pop them) until the swap.
+    uint64_t keysSampleClock = 0;
+    uint64_t letRingGroupStart = 0;
+    bool     letRingActive = false;
     std::atomic<uint64_t> keysHeldMaskLo { 0 }, keysHeldMaskHi { 0 };   // bit n = MIDI note n held
     std::atomic<int> keysHeldNote { -1 };          // audio-thread writes; the held key (for auto-merge)
     std::atomic<float> keysHeldVel { 1.0f };       // velocity of the held key (for DRAW recording of per-column velocity)

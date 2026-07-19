@@ -1118,6 +1118,12 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
                                   // legato (overlapping presses retune the sounding voice, envelope
                                   // rides on); with POLY = poly glide (every note slides in from the
                                   // last played note's pitch). Glide knob = the shared slide time.
+    // [2026-07-19] LET RING (5th Mode): notes ring into each other with no gap on a re-strum.
+    // Notes struck within keysLetRingMs of the group's first note = ONE gesture that holds until the
+    // NEXT gesture lands, when the old group fades (over the window) as the new one comes in. Live-
+    // keys feel; recording extends note lengths to the group swap so live == recording. Per-sound.
+    bool  keysLetRing   = false;
+    int   keysLetRingMs = 90;     // the strum window: bigger than a strum spread, smaller than the gap between strums
     int   lastKeyNote  = -1;      // runtime: the previous key (poly-glide source pitch); not persisted
     //-- TRANSPOSE LOCK (PER-SOUND, rides with Sound Bank mixes like the engines do): when true the
     //   Freq knobs/faders of BOTH slots are UI-disabled, so nothing can sneakily transpose the sound's

@@ -388,6 +388,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
     //   step boundary AUTO-MERGES the new step (one long note - see DrumChannel::stepMerge).
     {
         const int  chIdx = juce::jlimit(0, Sequencer::NUM_CHANNELS - 1, lastSelectedChannel);
+        keysSampleClock += (uint64_t) audio.getNumSamples();   // [2026-07-19] Let Ring strum-window clock (per-block granular ~ block ms; the window is ~90 ms >> a block)
         const bool rec   = keysRecording.load(std::memory_order_relaxed);
         // Which pattern the keyboard plays (and records into):
         //  - chain record: the PLAYING pattern (follow the chain -> its loaded sound + slot-2 setting);
@@ -679,6 +680,39 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             keysHeldNote.store(-1, std::memory_order_relaxed);
             keysHeldMaskLo.store(0, std::memory_order_relaxed); keysHeldMaskHi.store(0, std::memory_order_relaxed);
         };
+        // [2026-07-19] LET RING: a new gesture arrived - release the ringing group (fade over the
+        // window so the old chord bleeds UNDER the incoming strum = no gap), close its recorded notes
+        // at the length they actually rang (live == recording), and clear the held stack.
+        auto letRingSwap = [&]()
+        {
+            const float winSec = juce::jmax(0.03f,
+                (float) sequencer.patterns[keyPat].channels[chIdx].keysLetRingMs * 0.001f);
+            for (auto& patF : sequencer.patterns)
+            {
+                patF.channels[chIdx].fadeOutVoices(winSec);
+                if (paired) patF.channels[mergedP].fadeOutVoices(winSec);
+            }
+            if (rec && drawRec && sequencer.isCurrentlyPlaying)
+                for (int i = 0; i < keysHeldCount; ++i)
+                {
+                    const int oi = keysHeldOpenIdx[i], op = keysHeldOpenPat[i], oc = keysHeldOpenChan[i];
+                    if (oi < 0 || op < 0) continue;
+                    auto& pch = sequencer.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, op)]
+                                    .channels[juce::jlimit(0, Sequencer::NUM_CHANNELS - 1, oc)];
+                    const int barDelta = sequencer.playPattern - op;
+                    if (oi < pch.drawNoteCount && barDelta >= 0
+                        && sequencer.groupHead(op) == sequencer.groupHead(sequencer.playPattern))
+                    {
+                        auto& nt = pch.drawNotes[oi];
+                        const int cur = barDelta * DrumChannel::DRAW_RES
+                                      + juce::jlimit(0, DrumChannel::DRAW_RES - 1, (int) (sequencer.barPos() * DrumChannel::DRAW_RES));
+                        if (cur >= nt.start) nt.len = (int16_t) juce::jlimit(1, DrumChannel::DRAW_RES * 8, cur - nt.start + 1);
+                    }
+                }
+            keysHeldCount = 0;
+            keysHeldNote.store(-1, std::memory_order_relaxed);
+            updateHeldMask();
+        };
 
         int keyChanNow = 0;   // [2026-07-13 21:20] MPE: the channel of the key event being handled
         auto handleKeyDown = [&](int note, float vel)
@@ -696,6 +730,19 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                 startArp(note, juce::jlimit(0.05f, 1.0f, mv + vel * (xv - mv)));
                 arpKicked = false;
                 return;
+            }
+            // [2026-07-19] LET RING: is this note part of the CURRENT gesture, or a NEW one? A note past
+            // the window starts a new gesture and RELEASES the old group (fade bridges the strum). Notes
+            // within the window join the ringing group. keyUp is suppressed (see handleKeyUp).
+            const bool letRing = sequencer.patterns[keyPat].channels[chIdx].keysLetRing;
+            if (letRing)
+            {
+                const uint64_t win = (uint64_t) juce::jmax(1.0,
+                    (double) sequencer.patterns[keyPat].channels[chIdx].keysLetRingMs * 0.001 * currentSampleRate);
+                if (letRingActive && keysSampleClock - letRingGroupStart > win)
+                { letRingSwap(); letRingGroupStart = keysSampleClock; }
+                else if (! letRingActive)
+                { letRingGroupStart = keysSampleClock; letRingActive = true; }
             }
             bool kicked = false;   // "key starts recording": isCurrentlyPlaying only turns true on the
                                    // NEXT block, so the FIRST key must record via this flag (regression fix)
@@ -743,7 +790,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             int tgtCh = chIdx;
             const int playNote = splitMap(note, tgtCh);
             auto& tc = sequencer.patterns[keyPat].channels[tgtCh];   // the pressed HALF's channel (full sound)
-            tc.keyDown(playNote, kvel, tc.keysSlot2Down, tc.keysPolyMode, 0, keyChanNow);   // MPE: tag the voice with its channel
+            tc.keyDown(playNote, kvel, tc.keysSlot2Down, letRing ? true : tc.keysPolyMode, 0, keyChanNow);   // Let Ring = poly (group-mates don't cut); MPE: tag the voice with its channel
             // Held stack: a re-press moves the note to the top (most recent). openIdx/Pat ride along.
             for (int i = 0; i < keysHeldCount; ++i)
                 if (keysHeldStack[i] == note)
@@ -786,6 +833,10 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                 return;
             }
             auto& kc = sequencer.patterns[keyPat].channels[chIdx];
+            // [2026-07-19] LET RING: the note keeps ringing after you lift - its release is DEFERRED to
+            // the next gesture (letRingSwap). So a physical key-up is a no-op here: the voice stays, the
+            // recorded note stays open + growing, the key stays lit. The group swap does the release/close.
+            if (kc.keysLetRing) return;
             // Remove from the held stack wherever it sits (poly releases arrive in any order),
             // capturing this key's OPEN piano-roll note (if recording) to close it below.
             bool wasHeld = false; int openIdx = -1, openPat = -1, openChan = chIdx;
@@ -961,6 +1012,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         for (auto& pat : sequencer.patterns)
             for (auto& ch : pat.channels)
                 ch.stopVoicesFaded(0.020f);
+        letRingActive = false;   // [2026-07-19] Stop clears the Let Ring gesture (next play starts fresh)
         // [2026-07-15 16:30] Stop kills the REVERB/DELAY tails too (user: one press = silence):
         // the whole Main output ramps to zero over ~100 ms (clickless - by then only wet tails
         // remain, the voices fade in 20 ms), then the bus states are wiped while silent and the
@@ -2215,6 +2267,8 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
       chState.setProperty("arpOff", ao, nullptr); }                 // ARP: 12 row offsets (ARP_REST = rest)
     chState.setProperty("keysPoly",   ch.keysPolyMode, nullptr);   // KEYS: poly (held keys stack) vs mono (new key cuts)
     chState.setProperty("keysLegato", ch.keysLegato, nullptr);     // [2026-07-16] the mode dropdown's legato/glide axis
+    chState.setProperty("keysLetRing", ch.keysLetRing, nullptr);   // [2026-07-19] Let Ring mode + its window
+    chState.setProperty("keysLetRingMs", ch.keysLetRingMs, nullptr);
     chState.setProperty("chokeGrp", ch.chokeGroup,     nullptr);   // choke group (channel-wide)
     chState.setProperty("duckBy",   ch.duckBy,         nullptr);   // sidechain duck (channel-wide)
     chState.setProperty("duckAmt",  ch.duckAmt,        nullptr);
@@ -2418,6 +2472,8 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
           ch.arpOffset[i] = (int8_t) juce::jlimit(-128, 127, f[i].getIntValue()); } }
     ch.keysPolyMode = (bool) child.getProperty("keysPoly", true);    // KEYS poly/mono (poly default)
     ch.keysLegato   = (bool) child.getProperty("keysLegato", false);
+    ch.keysLetRing  = (bool) child.getProperty("keysLetRing", false);
+    ch.keysLetRingMs = juce::jlimit(10, 1000, (int) child.getProperty("keysLetRingMs", 90));
     ch.chokeGroup  = (int)  child.getProperty("chokeGrp", 0);
     ch.duckBy      = juce::jlimit(-1, Sequencer::NUM_CHANNELS - 1, (int) child.getProperty("duckBy", -1));
     ch.duckAmt     = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("duckAmt", 0.5f));

@@ -6522,6 +6522,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
     h = mix(h, f(c.reverbSend)); h = mix(h, f(c.delaySend));   // channel sends are part of the SOUND
     h = mix(h, c.keysPolyMode ? 1 : 0);   // keys Poly/Mono is per-sound too
     h = mix(h, c.keysLegato ? 1 : 0);     // [2026-07-16] mode dropdown's legato/glide axis (per-sound)
+    h = mix(h, c.keysLetRing ? 1 : 0); h = mix(h, c.keysLetRingMs);   // [2026-07-19] Let Ring mode + window
     h = mix(h, f(c.keysGlide));           // [2026-07-16 round-3] GLIDE per-sound (user: match the Mode's scope)
     // ARP is per-sound now (user 2026-07-11): editing it marks the sound modified like any param.
     h = mix(h, c.arpOn ? 1 : 0); h = mix(h, c.arpLen); h = mix(h, c.arpRate); h = mix(h, c.arpSync);
@@ -6637,6 +6638,7 @@ juce::int64 DrumSequencerEditor::stateHash() const
             for (int ai = 0; ai < DrumChannel::ARP_ROWS; ++ai) h = mix(h, (int) ch.arpOffset[ai] + 128);   // ARP (undoable)
             h = mix(h, ch.keysPolyMode ? 1 : 0);   // KEYS poly/mono toggle (undoable)
             h = mix(h, ch.keysLegato ? 1 : 0);
+            h = mix(h, ch.keysLetRing ? 1 : 0); h = mix(h, ch.keysLetRingMs);   // [2026-07-19] Let Ring
             h = mix(h, ch.duckBy + 2); h = mix(h, f(ch.duckAmt));   // sidechain duck (undoable)
             juce::int64 st = 0; for (int i = 0; i < DrumChannel::MAX_STEPS; ++i) st = (st << 1) | (ch.steps[i] ? 1 : 0);
             h = mix(h, st); h = mix(h, ch.mute ? 1 : 0); h = mix(h, ch.solo ? 2 : 0);
@@ -6707,6 +6709,7 @@ void DrumSequencerEditor::resetChannelToDefault(DrumChannel& c, int ch)
       c.arpAlign = d.arpAlign; c.arpHold = d.arpHold; c.arpGate = d.arpGate;   // ARP defaults
       for (int ai = 0; ai < DrumChannel::ARP_ROWS; ++ai) c.arpOffset[ai] = d.arpOffset[ai]; }
     c.keysPolyMode = true;                                    // keys POLY by default on Init
+    c.keysLetRing = false; c.keysLetRingMs = 90;              // [2026-07-19] Let Ring off on Init
     c.clearDrawNotes();
     c.padX = c.padY = 0.5f; c.padLayoutB = false;
     c.layerOscShape = 0; c.layerSineFreq = 60.0f; c.layerSinePEnvAmt = 0.0f; c.layerSinePEnvTime = 0.04f; c.layerSinePOffset = 0.0f;
@@ -6754,6 +6757,8 @@ void DrumSequencerEditor::writeChannelMix(juce::ValueTree& t, const DrumChannel&
     t.setProperty("sound",    (int) ch.soundType,    nullptr);
     t.setProperty("keysPoly", ch.keysPolyMode, nullptr);
     t.setProperty("keysLegato", ch.keysLegato, nullptr);   // [2026-07-16]
+    t.setProperty("keysLetRing", ch.keysLetRing, nullptr);   // [2026-07-19] Let Ring + window
+    t.setProperty("keysLetRingMs", ch.keysLetRingMs, nullptr);
     t.setProperty("keysGlide",  ch.keysGlide,  nullptr);   // [2026-07-16 round-3] glide time rides with the sound
     if (ch.arpOn)   // DEDICATED-ARP sounds: the pattern is part of the sound and travels with it.
     {               // arp OFF = the sound carries NO arp - loading it leaves the channel's arp alone
@@ -6855,6 +6860,8 @@ void DrumSequencerEditor::readChannelMix(const juce::ValueTree& t, DrumChannel& 
 {
     ch.keysPolyMode = (bool) t.getProperty("keysPoly", true);
     ch.keysLegato   = (bool) t.getProperty("keysLegato", false);
+    ch.keysLetRing  = (bool) t.getProperty("keysLetRing", false);
+    ch.keysLetRingMs = juce::jlimit(10, 1000, (int) t.getProperty("keysLetRingMs", 90));
     ch.keysGlide    = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("keysGlide", 0.0f));   // [2026-07-16 round-3]
     if (t.hasProperty("arpOn") && (bool) t.getProperty("arpOn", false))
     {   // the sound brings its OWN arp -> apply it; sounds without one keep the channel's arp
@@ -8543,21 +8550,46 @@ void DrumSequencerEditor::setupComponents()
         "silence still attack normally.\n"
         "- Mono: a new key cuts the previous one; the envelope restarts each note.\n"
         "- Mono Legato: overlapping presses retune the sounding note - the envelope rides on.\n\n"
-        "Mono modes do NOT block Scale - one key still plays its full voicing. Applies to the "
-        "keyboard AND piano-roll playback (overlapping/butted roll notes = an overlapping press); "
-        "the sequencer's per-channel OV button is separate.");
+        "Mono modes do NOT block Scale - one key still plays its full voicing.\n"
+        "- Let Ring: notes ring INTO each other - re-strumming leaves NO gap. Notes struck within the "
+        "window you set (~90 ms) count as one strum that holds until the NEXT strum lands, then the old "
+        "one fades under it. For strummed/chordal bass + guitar (not fast melodic lines). Pick it to set "
+        "the ms.\n\n"
+        "Applies to the keyboard AND piano-roll playback; the sequencer's per-channel OV button is separate.");
     keysPanel.btnPlayMode.onClick = [this] {
         auto& c0 = proc.sequencer.channel(selectedChannel);
-        const int cur = (c0.keysPolyMode ? 0 : 2) + (c0.keysLegato ? 1 : 0);
+        const int cur = c0.keysLetRing ? 5 : (c0.keysPolyMode ? 0 : 2) + (c0.keysLegato ? 1 : 0);
         juce::PopupMenu m;
         m.addItem(1, "Poly",        true, cur == 0);
         m.addItem(2, "Poly Legato", true, cur == 1);
         m.addItem(3, "Mono",        true, cur == 2);
         m.addItem(4, "Mono Legato", true, cur == 3);
+        m.addSeparator();
+        m.addItem(5, "Let Ring" + juce::String(c0.keysLetRing ? " (" + juce::String(c0.keysLetRingMs) + " ms)..." : "..."),
+                  true, cur == 5);   // [2026-07-19] strummed-chord hold - opens a ms window prompt
         m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&keysPanel.btnPlayMode),
             [this](int r) {
                 if (r == 0) return;
                 auto& c = proc.sequencer.channel(selectedChannel);
+                if (r == 5)
+                {   // LET RING: ask the strum window (pre-filled with the current value)
+                    auto* aw = new juce::AlertWindow("Let Ring",
+                        "Strum window in ms - notes struck this close count as ONE gesture that\n"
+                        "rings until the next gesture (bigger than a strum, smaller than the gap\n"
+                        "between strums). Typical: 60-140 ms.", juce::MessageBoxIconType::NoIcon);
+                    aw->addTextEditor("ms", juce::String(c.keysLetRingMs));
+                    aw->addButton("OK",     1, juce::KeyPress(juce::KeyPress::returnKey));
+                    aw->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+                    aw->enterModalState(true, juce::ModalCallbackFunction::create([this, aw](int rr) {
+                        if (rr != 1) return;
+                        auto& cc = proc.sequencer.channel(selectedChannel);
+                        cc.keysLetRingMs = juce::jlimit(10, 1000, aw->getTextEditorContents("ms").getIntValue());
+                        cc.keysLetRing = true;
+                        refreshKeysPanel();
+                    }), true);
+                    return;
+                }
+                c.keysLetRing  = false;
                 c.keysPolyMode = (r <= 2);
                 c.keysLegato   = (r == 2 || r == 4);
                 keysPanel.polyMode = c.keysPolyMode;   // routes the panel's note-offs (per-sound)
@@ -11771,8 +11803,9 @@ void DrumSequencerEditor::refreshKeysPanel()
         keysPanel.btnArp.setColour(juce::TextButton::textColourOffId, c.arpOn ? juce::Colours::black : juce::Colours::lightgrey);
         keysPanel.btnArp.repaint();
     };
-    keysPanel.btnPlayMode.setButtonText(kch.keysPolyMode ? (kch.keysLegato ? "Poly Legato" : "Poly")
-                                                          : (kch.keysLegato ? "Mono Legato" : "Mono"));
+    keysPanel.btnPlayMode.setButtonText(kch.keysLetRing ? ("Let Ring " + juce::String(kch.keysLetRingMs) + " ms")
+                                        : kch.keysPolyMode ? (kch.keysLegato ? "Poly Legato" : "Poly")
+                                                           : (kch.keysLegato ? "Mono Legato" : "Mono"));
     keysPanel.polyMode = kch.keysPolyMode;
     ignoreKnobCallbacks = prevIgnore;
     // SLOT OFFSET needs BOTH slots (it delays slot 2 behind slot 1); STRUM only when a slot is in Scale.

@@ -82,6 +82,7 @@ static void clearSound(DC& c)
 {
     c.keysPolyMode = true;   // POLY by default (per-sound); a builder may set it off
     c.keysLegato = false;    // [2026-07-16] plain Poly by default; builders may ship Legato/Glide
+    c.keysLetRing = false; c.keysLetRingMs = 90;   // [2026-07-19] Let Ring off by default (per-sound)
     c.keysGlide = 0.0f;      // [2026-07-16 round-3] GLIDE is per-sound too (the mode's other axis rides with it)
     for (int i = 0; i < DC::NUM_SOURCES; ++i) { c.srcOn[i] = false; c.srcWeight[i] = 0.0f; }
     for (auto& s : c.slots) s = DC::Slot();   // empty all slots (engine = -1)

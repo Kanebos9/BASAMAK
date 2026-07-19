@@ -292,6 +292,8 @@
 
 | 203 | Scale/Chord + Strum now work on MULTISAMPLE instruments (option B: in-voice, each diatonic tone reads its OWN nearest zone at natural pitch); plain samples stay excluded (no zones); synth engines keep in-voice unison unchanged | user: "i cant use scale mode in multisample... unacceptable"; multi-voice would be ~3x CPU + lose per-slot independence; B costs ~nothing over A (same N reads, zone chosen once at note-on) | user order (approach B), container mine |
 
+| 204 | LET RING = a 5th Play Mode (group model): notes struck within a per-sound window (default 90 ms) = one gesture that rings (key-up deferred) until the next gesture, which fades the old group over the window (bleeds under the new strum = no gap). Engine-agnostic (release-timing only, at the input layer); recording extends note lengths to the swap so live == recording | user: re-strummed bass "sounded awful... in real bass there is no gap"; the pros model strings (per-string ring) which needs a string model we don't have; the time-window is a cheap input-layer proxy for chordal playing (disclosed: not for fast melodic lines, no per-string ring) | user order (name "Let Ring", user-set ms window); mechanism mine |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.
