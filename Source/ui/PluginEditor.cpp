@@ -8795,7 +8795,8 @@ void DrumSequencerEditor::setupComponents()
         const auto& sl = c.slots[juce::jlimit(0, DrumChannel::NUM_SLOTS - 1, slot)];
         const bool pitched = sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal
                           || sl.engine == DrumChannel::SrcPhys || sl.engine == DrumChannel::SrcGrain;   // grain voices chords too [2026-07-16]
-        if (! pitched || sl.weight <= 0.001f) return 0;
+        const bool msScale = sl.engine == DrumChannel::SrcSample && c.msSet[slot] != nullptr;   // [2026-07-19] multisamples voice scale too
+        if ((! pitched && ! msScale) || sl.weight <= 0.001f) return 0;
         const int down = (slot == 1) ? c.keysSlot2Down : 0;   // positive = semitones DOWN (baked into slot 2's Freq)
         const int base = semi - down;
         int n = 0;
@@ -11873,11 +11874,12 @@ void DrumSequencerEditor::updateKeyboardHighlight()
             if (sl.engine < 0 || sl.weight <= 0.001f) return;   // empty/muted slot
             const bool pitched = (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal
                                   || sl.engine == DrumChannel::SrcPhys || sl.engine == DrumChannel::SrcGrain);   // [2026-07-16]
+            const bool msScale = sl.engine == DrumChannel::SrcSample && c.msSet[s] != nullptr;   // [2026-07-19] multisample voices scale
             const bool transposes = pitched || (sl.engine == DrumChannel::SrcSample && ! sl.smpPreservePitch);
             const int base = held - (s == 1 && transposes ? c.keysSlot2Down : 0);
             auto add = [&](int off) { if (off < -90) return;   // guitar voicing: missing string
                                       const int m = base + off; if (m >= 0 && m < 128) used[s][m] = true; };
-            if (pitched && sl.scaleOn) { const int nv = juce::jlimit(1, DrumChannel::UNI_MAX, sl.scaleType >= 10 ? 6 : sl.scaleUnison);
+            if ((pitched || msScale) && sl.scaleOn) { const int nv = juce::jlimit(1, DrumChannel::UNI_MAX, sl.scaleType >= 10 ? 6 : sl.scaleUnison);
                 for (int u = 0; u < nv; ++u) add(DrumChannel::scaleNoteOffset(sl.scaleType, sl.scaleKey, base, u)); }
 
             else add(0);                                        // plain note (Osc/Modal/Phys single, or Sample/Noise)
