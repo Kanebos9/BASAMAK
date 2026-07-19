@@ -290,6 +290,8 @@
 
 | 202 | Factory multisamples = ONE clean "BASS-SR500N" (21 notes, 1 layer each, ~28 MB) replacing the two noisy SR500N INDEX/THUMB takes (~141 MB); the install copy is content-agnostic (whole dir, cp -Rn = no duplicates) | user: "remove them and add... BASS-SR500N because the other ones had a noise problem, this one is more clean"; a looped bass repeats any rumble in the loop so a clean source matters | user order |
 
+| 203 | Scale/Chord + Strum now work on MULTISAMPLE instruments (option B: in-voice, each diatonic tone reads its OWN nearest zone at natural pitch); plain samples stay excluded (no zones); synth engines keep in-voice unison unchanged | user: "i cant use scale mode in multisample... unacceptable"; multi-voice would be ~3x CPU + lose per-slot independence; B costs ~nothing over A (same N reads, zone chosen once at note-on) | user order (approach B), container mine |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

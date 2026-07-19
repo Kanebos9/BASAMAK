@@ -1331,6 +1331,36 @@ static void msPickLayer(const DrumChannel::MsZone& z, float vel,
     gA = juce::jmin(1.0f / juce::jmax(1.0e-4f, z.layers[(size_t) best].peak), 7.94f);   // normalize (+18 dB cap)
 }
 
+// [2026-07-19] MULTISAMPLE SCALE/CHORD (option B): one key -> a diatonic chord, EACH tone reading
+// its OWN nearest zone at natural pitch (no varispeed artefacts). Fills the voice's per-tone arrays
+// from sv.uniSemis[] (the diatonic offsets computed by the caller). nv==1 leaves them unused (the
+// single-note path). Multisample only (a plain sample has no zones - scale stays a synth feature).
+void DrumChannel::fillMsScaleVoices(SlotVoice& sv, int s, int playedMidi, float velocity)
+{
+    for (int k = 0; k < SMP_UNI; ++k)
+    { sv.msBufN[k] = nullptr; sv.smpHeadN[k] = 0.0; sv.msLoopLoN[k] = sv.msLoopHiN[k] = 0.0f;
+      sv.msG1N[k] = 1.0f; sv.msPitchN[k] = 1.0f; }
+    const Slot& sl = slots[s];
+    if (! sl.scaleOn || sl.engine != SrcSample || msSet[s] == nullptr || msSet[s]->zones.empty()) return;
+    const auto& zs = msSet[s]->zones;
+    const int nv = juce::jlimit(1, SMP_UNI, sl.scaleUnison);
+    for (int k = 0; k < nv; ++k)
+    {
+        const int tgt = juce::jlimit(0, 127, playedMidi + (int) std::lround((double) sv.uniSemis[k]));
+        int best = 0;                                            // this tone picks its OWN nearest zone
+        for (int zi = 1; zi < (int) zs.size(); ++zi)
+            if (std::abs(zs[(size_t) zi].root - tgt) < std::abs(zs[(size_t) best].root - tgt)) best = zi;
+        const juce::AudioBuffer<float>* buf = nullptr; float g1 = 1.0f;
+        msPickLayer(zs[(size_t) best], velocity, buf, g1);       // velocity layer (same as the single-note path)
+        sv.msBufN[k] = buf; sv.msG1N[k] = g1;
+        sv.msPitchN[k] = sl.smpPreservePitch ? 1.0f              // varispeed the zone from its root to this tone
+                       : (float) std::pow(2.0, (double)(tgt - zs[(size_t) best].root) / 12.0);
+        if (sl.msLoopOn && zs[(size_t) best].hasLoop && buf != nullptr)
+        { const int L = buf->getNumSamples();
+          sv.msLoopLoN[k] = zs[(size_t) best].loopLo * (float) L; sv.msLoopHiN[k] = zs[(size_t) best].loopHi * (float) L; }
+    }
+}
+
 // Load a multisample FOLDER (WAVs named by note) into one slot. Also loads the zone nearest
 // middle C into the slot's MAIN buffer (waveform display + a sane fallback), and RETIRES the
 // previous zone set instead of freeing it (fading voices may still hold pointers into it).
@@ -1948,12 +1978,15 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         // SCALE mode (diatonic harmonizer): the chord depends on the played NOTE, so compute this voice's
         // per-note diatonic offsets now (keySemis is 0 for step/draw hits; keyDown recomputes for held keys).
         for (int u = 0; u < UNI_MAX; ++u) sv.uniSemis[u] = 0.0f;
-        if (sl.scaleOn && (sl.engine == SrcOsc || sl.engine == SrcModal || sl.engine == SrcPhys || sl.engine == SrcGrain))
+        if (sl.scaleOn && (sl.engine == SrcOsc || sl.engine == SrcModal || sl.engine == SrcPhys
+                           || sl.engine == SrcGrain || sl.engine == SrcSample))
         {
             const double baseF = slotBaseHz(s, sl);
             const int playedMidi = (int) std::lround(69.0 + 12.0 * std::log2(juce::jmax(1.0, baseF) / 440.0) + (double) pitchSemis);
             const int nv = juce::jlimit(1, UNI_MAX, sl.scaleUnison);
             for (int u = 0; u < nv; ++u) sv.uniSemis[u] = (float) scaleSemis(sl.scaleType, sl.scaleKey, playedMidi, u);
+            // MULTISAMPLE: each chord tone picks its OWN zone (option B) - fill per-tone read state.
+            if (sl.engine == SrcSample) fillMsScaleVoices(sv, s, playedMidi, velocityGain);
         }
 
         // SLOT OFFSET: slot 2 fires slotOffsetSamples (0..100 ms) after slot 1, the same every hit
@@ -1966,7 +1999,8 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         // identical and a "strum" would just comb-filter. uniDelay[0] stays 0 (the root leads).
         const float sAmt = strumOverride >= 0.0f ? strumOverride : strumAmt;   // per-note override (piano roll)
         if (sAmt > 0.001f && sl.scaleOn
-            && (sl.engine == SrcOsc || sl.engine == SrcModal || sl.engine == SrcPhys || sl.engine == SrcGrain))   // grain strums its cloud [2026-07-16]
+            && (sl.engine == SrcOsc || sl.engine == SrcModal || sl.engine == SrcPhys
+                || sl.engine == SrcGrain || sl.engine == SrcSample))   // grain strums its cloud [2026-07-16]; sample strums its chord tones
         {
             const int nStr = juce::jlimit(1, UNI_MAX, sl.scaleType >= 10 ? 6 : sl.scaleUnison);
             if (nStr > 1)
@@ -2244,6 +2278,17 @@ int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly,
                     if (sl.msLoopOn && zs[(size_t) best].hasLoop && sv.msBuf != nullptr)
                     { const int L = sv.msBuf->getNumSamples();
                       sv.msLoopLo = zs[(size_t) best].loopLo * (float) L; sv.msLoopHi = zs[(size_t) best].loopHi * (float) L; }
+                    // [2026-07-19] SCALE/CHORD: voice the diatonic chord of the pressed note, each
+                    // tone from its OWN nearest zone (option B). trigger() computed uniSemis off the
+                    // step pitch (0 for keys) so recompute from the real pressed note here.
+                    if (sl.scaleOn)
+                    {
+                        const int effNote = midiNote - (s == 1 ? slot2Down : 0);
+                        for (int u = 0; u < UNI_MAX; ++u) sv.uniSemis[u] = 0.0f;
+                        const int nvv = juce::jlimit(1, UNI_MAX, sl.scaleUnison);
+                        for (int u = 0; u < nvv; ++u) sv.uniSemis[u] = (float) scaleSemis(sl.scaleType, sl.scaleKey, effNote, u);
+                        fillMsScaleVoices(sv, s, effNote, velocity);
+                    }
                 }
                 continue;
             case SrcNoise:    sv.keySemis = 0.0f; continue;   // noise is unpitched - just play it
@@ -2902,6 +2947,9 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 c.smpEnv  = sl.smpEnvOn;   // opt-in amp envelope (off = legacy full-length playback)
                 c.smpPreserve = sl.smpPreservePitch;   // ignore step/draw/key/env pitch when on
                 c.oscVibFac = 1.0f + juce::jlimit(0.0f, 1.0f, sl.vibrato) * 0.09f * vibLfo;  // vibrato = varispeed wobble
+                // [2026-07-19] MULTISAMPLE SCALE/CHORD: nv>1 tells the render to sum per-tone zone reads.
+                c.scaleOn   = sl.scaleOn && msSet[s] != nullptr;
+                c.uniVoices = c.scaleOn ? juce::jlimit(1, SMP_UNI, sl.scaleUnison) : 1;
                 break; }
             // SrcSynth / SrcWave: legacy slot engines REMOVED (v1.2.x). No factory sound uses them; the
             // enum values stay reserved so saved projects don't renumber, but they no longer bake/render
@@ -4007,6 +4055,57 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             { const float wj = hp[j]; accL += wj * at(srcA, j - (SincTable::HALF - 1)); accR += wj * at(srcB, j - (SincTable::HALF - 1)); }
                             oL = accL; oR = accR;
                         };
+                        // [2026-07-19] MULTISAMPLE SCALE/CHORD (option B): one key -> a diatonic
+                        // chord, EACH tone reading its OWN nearest zone (filled at note-on). Sum the
+                        // per-tone reads with RMS make-up; strum staggers their onsets. nvS==1 falls
+                        // through to the single-note path below (bit-identical - no scale sound today).
+                        const int nvS = (c.scaleOn && c.uniVoices > 1) ? juce::jlimit(1, SMP_UNI, c.uniVoices) : 1;
+                        if (nvS > 1)
+                        {
+                            double smpSemis2 = 0.0;   // env/vib/pitch-env only (NOTE pitch is msPitchN[k])
+                            if (c.smpPEnvAmt != 0.0f) smpSemis2 += (double) c.smpPEnvAmt * pitchEnvShape(t, c.smpPEnvTime, c.smpPOffset);
+                            const double keyMul2  = (sv.keySemis != 0.0f) ? std::pow(2.0, (double) sv.keySemis / 12.0) : 1.0;
+                            const double envPart2 = std::pow(2.0, smpSemis2 / 12.0) * (double) c.oscVibFac * (pe3Mul / keyMul2);
+                            const float uniGain = 1.0f / std::sqrt((float) nvS);
+                            float accL = 0.0f, accR = 0.0f; double rootHead = -1.0; int rootLen = sLen;
+                            for (int k = 0; k < nvS; ++k)
+                            {
+                                if (k < UNI_MAX && t < sv.uniDelay[k]) continue;   // STRUM: hold this tone silent till its onset
+                                const juce::AudioBuffer<float>* sb = sv.msBufN[k];
+                                if (sb == nullptr) continue;
+                                const int sLenK = sb->getNumSamples();
+                                if (sLenK < 2) continue;
+                                double hk = sv.smpHeadN[k];
+                                double xf = -1.0; float xw = 0.0f;
+                                const bool lp = c.msLoopOn && sv.msLoopHiN[k] > sv.msLoopLoN[k] + 64.0f && (v.isKey || v.gateLen > 0);
+                                if (lp)
+                                {
+                                    const double lo = sv.msLoopLoN[k], hi = sv.msLoopHiN[k], ln = juce::jmax(64.0, hi - lo);
+                                    const double xfl = juce::jmin(0.025 * sr / (double) engineOS, ln * 0.5);
+                                    if (hk > hi) hk = lo + std::fmod(hk - lo, ln);
+                                    const double p = hk - lo;
+                                    if (p >= 0.0 && xfl > 1.0 && p > ln - xfl && lo - xfl >= 0.0)
+                                    { xf = hk - ln; xw = juce::jlimit(0.0f, 1.0f, (float)((p - (ln - xfl)) / xfl)); }
+                                }
+                                float oL = 0.0f, oR = 0.0f;
+                                readAt(sb, sLenK, 0, sLenK, hk, oL, oR);
+                                if (xf >= 0.0 && xw > 0.0f)
+                                { float xl = 0.0f, xr = 0.0f; readAt(sb, sLenK, 0, sLenK, xf, xl, xr);
+                                  const float gc = std::cos(xw * juce::MathConstants<float>::halfPi);
+                                  const float gn = std::sin(xw * juce::MathConstants<float>::halfPi);
+                                  oL = oL * gc + xl * gn; oR = oR * gc + xr * gn; }
+                                oL *= sv.msG1N[k]; oR *= sv.msG1N[k];   // per-zone normalize
+                                accL += oL; accR += oR;
+                                if (rootHead < 0.0) { rootHead = hk; rootLen = sLenK; }
+                                sv.smpHeadN[k] += (double) c.speed * envPart2 * (double) sv.msPitchN[k] / (double) engineOS;
+                            }
+                            sL = accL * uniGain; sR = accR * uniGain;
+                            if (c.crushStep > 0.0f) { sL = std::round(sL / c.crushStep) * c.crushStep; sR = std::round(sR / c.crushStep) * c.crushStep; }
+                            sL *= env * c.smpGain; sR *= env * c.smpGain;
+                            sv.smpReadPos = rootHead >= 0.0 ? rootHead : sv.smpReadPos; sv.smpReadLen = rootLen;
+                            stereo = true;
+                            break;
+                        }
                         readAt(sbuf, sLen, regLoV, regHiV, head, sL, sR);
                         if (headXf >= 0.0 && xfW > 0.0f)
                         {   // equal-power crossfade into the pre-loop material (click-free wrap)

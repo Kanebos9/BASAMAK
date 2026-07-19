@@ -491,6 +491,7 @@ public:
     // SrcGrain slots (cleared otherwise); the audio thread reads only when fully sized.
     std::vector<float> grainTbl[NUM_SLOTS];
     static constexpr int UNI_MAX   = 16;     // max unison/chord/scale voices (Osc; KS 6 / Modal 3 caps stay - public: key-highlight uses it)
+    static constexpr int SMP_UNI   = 6;      // [2026-07-19] multisample SCALE/CHORD max voiced tones (per-tone zone reads)
     static constexpr int POLY      = 16;     // simultaneous note events (chords live INSIDE a voice); public: the processor's held stack sizes off it
 
     // SCALE diatonic harmonizer: the semitone offset (from the played note) of chord voice `voiceIdx`
@@ -830,6 +831,10 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     void refreshMsRig();                             // MESSAGE THREAD loader (empty paths = unload)
     void writeMsSidecar(int slot) const;             // instrument settings -> folder/instrument.basamakinst
     void msRebuildLoops(int slot);                   // [2026-07-19] per-zone AUTO-loop (deterministic; on load + toggle)
+    // [2026-07-19] MULTISAMPLE SCALE/CHORD (option B): at note-on, pick each diatonic chord tone's
+    // OWN nearest zone (buffer/loop/normalize/varispeed) into the voice's per-tone arrays. Called
+    // from trigger() (steps/draw) + keyDown() (keys) when a multisample slot has scaleOn.
+    void fillMsScaleVoices(SlotVoice& sv, int s, int playedMidi, float velocity);
 
     float  chSendHpZ[2] = {};                        // reverb-send high-pass state (~150 Hz; subs stay out of the verb)
     float  chSendSmR = -1.0f, chSendSmD = -1.0f;     // per-sample smoothed send gains (de-zipper; -1 = snap)
@@ -1323,6 +1328,15 @@ private:
                                          //   +18 dB cap): net output = velGain x take/peak = EXACTLY the
                                          //   requested volume (the user's closest-take model)
         float    msSemiAdj = 0.0f;       // 60 - zoneRoot (folds into the varispeed exponent)
+        // [2026-07-19] MULTISAMPLE SCALE/CHORD (option B): one key -> a diatonic chord, EACH tone
+        // reading its OWN nearest zone (no varispeed artefacts). Per-tone state, filled at note-on
+        // by fillMsScaleVoices(); the render sums SMP_UNI pitched zone reads. nv==1 = the old
+        // single-note path (these unused). Kept small (SMP_UNI=6 = triads/7ths, bass-friendly).
+        const juce::AudioBuffer<float>* msBufN[6] = {};   // each chord tone's zone buffer
+        double   smpHeadN[6] = {};        // each tone's own read head
+        float    msLoopLoN[6] = {}, msLoopHiN[6] = {};    // each tone's zone loop (frames)
+        float    msG1N[6] = { 1,1,1,1,1,1 };              // each tone's normalize gain
+        float    msPitchN[6] = { 1,1,1,1,1,1 };           // each tone's varispeed ratio (2^((note-root)/12))
         // === PER-SLOT EQ (begin) - filter state for HP(2)+bells(3)+LP(2); coeffs live in SC ===
         // === PER-SLOT EQ (end) ===
         // === PER-SLOT FILTER (begin) - resonant LP state (stereo); coeffs live in SC ===
