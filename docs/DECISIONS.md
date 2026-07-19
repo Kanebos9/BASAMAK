@@ -282,6 +282,10 @@
 
 | 198 | Multisample AUTO-loop picks the region ITSELF per zone (skip the attack ~40% in, zero-cross start, autocorrelation period, SSD best-match end over period-multiples, on the zone's LOUDEST layer) - the user does NOT hand-set loop points on a multisample | the user asked "how will it decide which part to loop"; a per-instrument drawable loop was rejected (only approximate across different-length zones); zones never loop the shared drawn region | user-designed (auto only), algorithm mine |
 
+| 199 | Loop + Trim edit TOGETHER via draggable cyan EDGE lines (grab within 9 px = move that edge; drag elsewhere = trim if armed, else a fresh loop) - the SHIFT+drag loop gesture is removed | user: "trim and loop doesnt work well together... i cant control loop beginning and end when trim is enabled"; SHIFT was undiscoverable / host-eaten | user problem, edge-grab UX mine |
+
+| 200 | The sample playhead marker reads the ACTUAL folded read frame (per-voice smpReadPos/smpReadLen) not the raw monotonic smpHead - so it cycles inside the loop region instead of pinning to the file end | user: "that transporter in wave visual just doesnt work correctly"; raw head advances forever while looping | user caught it; fix mine |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

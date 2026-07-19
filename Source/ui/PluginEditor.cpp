@@ -5477,7 +5477,7 @@ void WaveformDisplay::paint(juce::Graphics& g)
         g.drawVerticalLine((int) px, in.getY(), in.getBottom());
     }
 
-    // [2026-07-18] LOOP region (cyan): the sustained cycle while a note is held. SHIFT+drag edits it.
+    // [2026-07-18] LOOP region (cyan): the sustained cycle while a note is held. Drag an edge to shape it.
     if (loopOn)
     {
         const float x0 = in.getX() + loopLo * W, x1 = in.getX() + loopHi * W;
@@ -5511,25 +5511,39 @@ void WaveformDisplay::filesDropped(const juce::StringArray& files, int, int)
 
 void WaveformDisplay::mouseDown(const juce::MouseEvent& e)
 {
-    // [2026-07-19] LOOP drawing = TRIM-style (user order): press = one end, release = the other,
-    // a new drag REPLACES the old loop. Plain drag draws the loop whenever Trim isn't armed
-    // (Multisample Instruments have no trim, so plain drag simply IS the loop there); with Trim
-    // armed, trim owns plain drag and SHIFT+drag draws the loop instead.
-    if (loopDrawEnabled && ((! selEnabled) || e.mods.isShiftDown()))
+    auto in = getLocalBounds().toFloat().reduced(2.0f);
+    const float x = juce::jlimit(0.0f, 1.0f, (e.position.x - in.getX()) / juce::jmax(1.0f, in.getWidth()));
+
+    // [2026-07-19] LOOP + TRIM both editable together (user: "i cant control loop when trim is
+    // enabled"). When Loop is on, grabbing NEAR an edge line drags THAT edge (works whether or not
+    // Trim is armed = full control of both); a drag elsewhere goes to Trim if armed, else draws a
+    // fresh loop. No SHIFT needed. (Multisample = loopDrawEnabled false = this whole block skipped.)
+    if (loopDrawEnabled && loopOn)
     {
-        loopDragging = true;
-        dragAnchor = juce::jlimit(0.0f, 1.0f, (float) e.position.x / (float) juce::jmax(1, getWidth()));
-        loopLo = loopHi = dragAnchor;
+        const float grab = 9.0f / juce::jmax(1.0f, in.getWidth());   // ~9 px hit zone per edge
+        const float dLo = std::abs(x - loopLo), dHi = std::abs(x - loopHi);
+        if (dLo < grab || dHi < grab)
+        {
+            loopDragging = true;
+            dragAnchor = (dLo <= dHi) ? loopHi : loopLo;   // hold the OTHER edge fixed, drag this one
+            return;
+        }
+    }
+    // TRIM region (plain drag when Trim is armed) - owns the middle of the waveform.
+    if (selEnabled)
+    {
+        if (regN >= 2) { dragIdx = -1; return; }   // [2026-07-19] cap new trim regions at 2 (4 was
+                                                   // overkill, user); storage MAXREG stays 4 for old files
+        dragIdx = regN; dragAnchor = x; regLo[regN] = regHi[regN] = x; ++regN;   // start a new region
         repaint();
         return;
     }
-    if (!selEnabled) return;
-    auto in = getLocalBounds().toFloat().reduced(2.0f);
-    const float x = juce::jlimit(0.0f, 1.0f, (e.position.x - in.getX()) / in.getWidth());
-    if (regN >= 2) { dragIdx = -1; return; }   // [2026-07-19] cap new trim regions at 2 (4 was overkill,
-                                               // user); storage MAXREG stays 4 so old projects still load
-    dragIdx = regN; dragAnchor = x; regLo[regN] = regHi[regN] = x; ++regN;   // start a new region
-    repaint();
+    // No Trim armed: a plain drag DRAWS a fresh loop (turns Loop on via onLoopChange).
+    if (loopDrawEnabled)
+    {
+        loopDragging = true; dragAnchor = x; loopLo = loopHi = x;
+        repaint();
+    }
 }
 
 void WaveformDisplay::mouseDrag(const juce::MouseEvent& e)
@@ -10711,13 +10725,13 @@ void DrumSequencerEditor::setupComponents()
             proc.sequencer.channel(selectedChannel).markDspDirty();
         };
         swSmpLoop[b].setTooltip("LOOP: while a note is HELD (keys / gated piano-roll notes), playback CYCLES the "
-                                "cyan region with a crossfade (the Loop Xfade knob on instruments) - a short "
-                                "sample sustains like an instrument.\n\n"
-                                "- DRAG on the waveform draws the loop (press = one end, release = the other; "
-                                "a new drag replaces it; with Trim armed use SHIFT+DRAG).\n"
-                                "- AUTO-LOOP (instruments) finds a good region for you.\n"
+                                "cyan region (25 ms crossfade at the wrap) - a short sample sustains like an "
+                                "instrument.\n\n"
+                                "- With Loop ON, DRAG an EDGE of the cyan region to move it (works with Trim on too).\n"
+                                "- With Trim OFF, a plain drag draws a fresh loop (press = one end, release = the other).\n"
                                 "- The attack before the region plays ONCE, then the loop holds.\n"
-                                "- Raise SUSTAIN in the amp envelope or the held note still decays.\n"
+                                "- The note holds at full until you release, then release-fades (open the amp env "
+                                "with a double-click for a custom decay).\n"
                                 "- One-shot steps ignore the loop and play through as always.");
         waveform[b].onLoopChange = [this, b](float lo, float hi) {
             auto& dch2 = proc.sequencer.channel(selectedChannel);
@@ -10737,9 +10751,10 @@ void DrumSequencerEditor::setupComponents()
             proc.sequencer.channel(selectedChannel).markDspDirty();
             updateSampleLengthLabel();
         };
-        waveform[b].setTooltip("This slot's sample. With 'Trim' ON, DRAG to draw up to 4 play regions (green, yellow, "
-                               "pink, cyan) - they can overlap, and each hit plays the NEXT one in turn. Double-click to "
-                               "clear them. Turning Trim off clears them too (plays the whole sample).");
+        waveform[b].setTooltip("This slot's sample. With 'Trim' ON, DRAG to draw up to 2 play regions (green, yellow) - "
+                               "they can overlap, and each hit plays the NEXT one in turn. Double-click to clear them. "
+                               "Turning Trim off clears them too (plays the whole sample).\n\n"
+                               "With Loop ON you can drag the cyan loop edges even while Trim is armed.");
         content.addAndMakeVisible(lblUseRegion[b]);
         lblUseRegion[b].setText("Trim", juce::dontSendNotification);
         lblUseRegion[b].setFont(juce::Font(11.5f)); lblUseRegion[b].setColour(juce::Label::textColourId, juce::Colours::lightgrey);
@@ -10865,7 +10880,7 @@ void DrumSequencerEditor::setupComponents()
         }
         // [2026-07-19] MULTISAMPLE AUTO-LOOP toggle (per-zone): held notes sustain instead of dying.
         content.addChildComponent(btnMsLoop[b]);
-        btnMsLoop[b].setButtonText("Loop");
+        btnMsLoop[b].setButtonText("Auto Loop");
         btnMsLoop[b].setLookAndFeel(&tinyBtnLNF);
         btnMsLoop[b].setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff2f9e57));
         btnMsLoop[b].setClickingTogglesState(true);
@@ -12636,10 +12651,23 @@ void DrumSequencerEditor::refreshDetailPanel()
             btnMsRigIr[b].setButtonText(dch2.msRigIr.isNotEmpty()
                 ? "Cab: " + juce::File(dch2.msRigIr).getFileNameWithoutExtension() : juce::String("Cab: none"));
         }
-        waveform[b].setLoop(sl.smpLoopOn, sl.smpLoopLo, sl.smpLoopHi);
-        swUseRegion[b].setToggleState(sl.smpUseRegion, juce::dontSendNotification);
-        waveform[b].setSelectionEnabled(sl.smpUseRegion);
-        waveform[b].setRegions(sl.smpRegN, sl.smpRegLo, sl.smpRegHi);
+        // [2026-07-19] MULTISAMPLE has NO trim + NO drawable loop (zones are full-range, AUTO-loop
+        // instead) - force them OFF so a plain-sample slot's Trim/loop state never LEAKS onto the
+        // shared waveform when this slot is a multisample (user: "i can see trim in multisample too").
+        if (proc.sequencer.channel(selectedChannel).msSet[b] != nullptr)
+        {
+            waveform[b].setLoop(false, 0.0f, 0.0f);
+            waveform[b].setSelectionEnabled(false);
+            waveform[b].setRegions(0, sl.smpRegLo, sl.smpRegHi);
+            btnMsLoop[b].setToggleState(sl.msLoopOn, juce::dontSendNotification);   // Auto Loop face
+        }
+        else
+        {
+            waveform[b].setLoop(sl.smpLoopOn, sl.smpLoopLo, sl.smpLoopHi);
+            swUseRegion[b].setToggleState(sl.smpUseRegion, juce::dontSendNotification);
+            waveform[b].setSelectionEnabled(sl.smpUseRegion);
+            waveform[b].setRegions(sl.smpRegN, sl.smpRegLo, sl.smpRegHi);
+        }
         waveform[b].setReversed(sl.smpReverse);
     }
     cacheWaveform(selectedChannel);
@@ -14123,12 +14151,12 @@ void DrumSequencerEditor::layoutContent()
                     waveform[b].setLoopDrawEnabled(false);   // no drawable loop here (per-zone AUTO instead) - kills the dead gesture
                     knobTop = sby[b] + 64;
                     const int tcx = sbx[b] + 6;
-                    btnSmpTog[b][1].setVisible(true); btnSmpTog[b][1].setBounds(tcx, knobTop, 56, 22);   // Reverse
+                    btnSmpTog[b][1].setVisible(true); btnSmpTog[b][1].setBounds(tcx, knobTop, 54, 22);   // Reverse
                     btnSmpTog[b][0].setVisible(false); btnSmpTog[b][2].setVisible(false);
                     btnSmpTog[b][3].setVisible(false);   // (plain-sample Loop toggle stays off here - AUTO-loop below)
-                    btnMsLoop[b].setVisible(true); btnMsLoop[b].setBounds(tcx + 60, knobTop, 46, 22);   // AUTO-loop
+                    btnMsLoop[b].setVisible(true); btnMsLoop[b].setBounds(tcx + 58, knobTop, 72, 22);   // AUTO-loop
                     msGainF[b].setVisible(true);
-                    msGainF[b].setBounds(tcx + 110, knobTop, slotW - 12 - 110, 22);   // the wide fader (user)
+                    msGainF[b].setBounds(tcx + 134, knobTop, slotW - 12 - 134, 22);   // the wide fader (user)
                     lblMsRange[b].setVisible(true);
                     lblMsRange[b].setBounds(tcx, knobTop + 26, slotW - 12, 16);     // full width - no truncation
                     const int ry = sby[b] + 112, rw = (slotW - 16) / 2;

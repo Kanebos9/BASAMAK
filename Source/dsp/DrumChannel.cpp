@@ -1632,14 +1632,16 @@ float DrumChannel::getSamplePlayheadFrac(int slot) const
 {
     if (slot < 0 || slot >= NUM_SLOTS) return -1.0f;
     if (slots[slot].engine != SrcSample) return -1.0f;
-    const int len = slotSample[slot].buf.getNumSamples();
-    if (len <= 0) return -1.0f;
-    // Newest active voice = the hit the user is hearing most prominently.
-    long newest = -1; double head = -1.0;
+    if (slotSample[slot].buf.getNumSamples() <= 0) return -1.0f;
+    // Newest active voice = the hit the user is hearing most prominently. Use the ACTUAL read frame
+    // (sv.smpReadPos, folded into the loop region when looping) - the raw smpHead advances forever and
+    // the marker pinned to the end while a note looped ("transporter doesn't work correctly", user).
+    long newest = -1; double rpos = -1.0; int rlen = 0;
     for (const auto& v : voices)
-        if (v.active() && (newest < 0 || v.voiceSamples < newest)) { newest = v.voiceSamples; head = v.sv[slot].smpHead; }
-    if (head < 0.0) return -1.0f;
-    float frac = juce::jlimit(0.0f, 1.0f, (float)(head / (double) len));
+        if (v.active() && (newest < 0 || v.voiceSamples < newest))
+            { newest = v.voiceSamples; rpos = v.sv[slot].smpReadPos; rlen = v.sv[slot].smpReadLen; }
+    if (rpos < 0.0 || rlen <= 0) return -1.0f;
+    float frac = juce::jlimit(0.0f, 1.0f, (float)(rpos / (double) rlen));
     // [2026-07-18] HONEST PLAYHEAD: the read head keeps advancing (silently) past the trim
     // region's end - the marker used to sweep on to the END OF FILE while nothing sounded
     // (user: "goes until the end of file"). Past the region = the marker dies with the sound.
@@ -2021,6 +2023,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
             }
         }
         sv.smpHead = head;
+        sv.smpReadPos = -1.0; sv.smpReadLen = 0;   // [2026-07-19] honest-playhead state (set per block in the render)
 
         // Karplus-Strong: pluck = fill the tuned delay with a noise burst, tone-shaped
         // by the Material model, then comb it by the strike Position. The KS line is
@@ -3972,6 +3975,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                                 xfW = juce::jlimit(0.0f, 1.0f, (float)((p - (lLen - lXf)) / lXf));
                             }
                         }
+                        sv.smpReadPos = head; sv.smpReadLen = sLen;   // [2026-07-19] the HONEST read frame (folded when looping)
                         const long fin = (long) (0.003 * sr);
                         if (fin > 0 && t < fin) env *= (float) t / (float) fin;
                         // Fade the last ~10 ms by POSITION (source frames left before the end), so a pitched-DOWN /

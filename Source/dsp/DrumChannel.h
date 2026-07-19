@@ -1314,6 +1314,9 @@ private:
         float    ksLp[KS_UNI]    = {};
         float    ksApSt[KS_UNI][12] = {};   // dispersion allpass state per string (up to 12 stages for Stiffness)
         double   smpHead = 0.0;          // this slot's sample playhead
+        double   smpReadPos = -1.0;      // [2026-07-19] the ACTUAL read frame this block (folded into the loop
+        int      smpReadLen = 0;         //   region when looping) + the buffer length it's relative to =
+                                         //   the HONEST playhead (the raw smpHead pins to the end while looping)
         const juce::AudioBuffer<float>* msBuf = nullptr;   // [2026-07-18] multisample: THIS voice's zone (primary layer)
         float    msLoopLo = 0.0f, msLoopHi = 0.0f;   // [2026-07-19] this voice's zone loop (frames; hi<=lo = none)
         float    msG1 = 1.0f;            // [2026-07-19 FINAL] the chosen take's normalize gain (1/peak,

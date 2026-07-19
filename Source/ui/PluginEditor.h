@@ -2785,7 +2785,7 @@ public:
     { if (std::abs(frac - playhead) > 0.002f || (frac < 0.0f) != (playhead < 0.0f)) { playhead = frac; repaint(); } }
     // Called whenever the regions change (drag/clear). The editor writes them to the slot.
     std::function<void(int n, const float* lo, const float* hi)> onRegionsChange;
-    // [2026-07-18] SAMPLE LOOP: cyan region, edited by SHIFT+drag while Loop is on.
+    // [2026-07-18] SAMPLE LOOP: cyan region. Drag its edge lines to shape it (works with Trim on).
     void setLoop(bool on, float lo, float hi)
     { if (on != loopOn || lo != loopLo || hi != loopHi) { loopOn = on; loopLo = lo; loopHi = hi; repaint(); } }
     // [2026-07-19] Multisample Instruments don't loop by drawing (per-zone AUTO-loop instead), so the
