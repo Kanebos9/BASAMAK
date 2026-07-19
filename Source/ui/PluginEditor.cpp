@@ -5959,6 +5959,9 @@ DrumSequencerEditor::~DrumSequencerEditor()
     for (auto& c : comboChFx) c.setLookAndFeel(nullptr);   // TinyComboLNF
     for (auto& b : btnChFxFile) b.setLookAndFeel(nullptr);  // dropBtnLNF [2026-07-18]
     for (auto& row : btnSmpTog) for (auto& b : row) b.setLookAndFeel(nullptr);   // tinyBtnLNF [2026-07-19]
+    for (auto& b : btnMsAutoLoop) b.setLookAndFeel(nullptr);   // tinyBtnLNF
+    for (auto& b : btnMsRigModel) b.setLookAndFeel(nullptr);   // dropBtnLNF
+    for (auto& b : btnMsRigIr)    b.setLookAndFeel(nullptr);   // dropBtnLNF
     swDelaySync.setLookAndFeel(nullptr); swDelayPingPong.setLookAndFeel(nullptr);   // [2026-07-15] lit buttons (tinyBtnLNF)
     swReverbSync.setLookAndFeel(nullptr);
     for (auto* k : allKnobs) k->setLookAndFeel(nullptr);
@@ -6527,7 +6530,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         h = mix(h, f(sl.smpStart)); h = mix(h, f(sl.smpEnd)); h = mix(h, sl.smpSlices); h = mix(h, f(sl.smpStretch)); h = mix(h, f(sl.smpGain));
         h = mix(h, sl.smpEnvOn ? 1 : 0); h = mix(h, sl.smpPreservePitch ? 1 : 0);
         h = mix(h, sl.smpLoopOn ? 1 : 0); h = mix(h, f(sl.smpLoopLo)); h = mix(h, f(sl.smpLoopHi));   // [2026-07-18] LOOP
-        h = mix(h, f(sl.smpLoopXfMs)); h = mix(h, f(sl.msGainDb));   // [2026-07-19] Xfade + MS gain h = mix(h, sl.fmEnvFollow ? 1 : 0); h = mix(h, f(sl.modalMorph));
+        h = mix(h, f(sl.msGainDb));   // [2026-07-19] MS gain (Xfade retired) h = mix(h, sl.fmEnvFollow ? 1 : 0); h = mix(h, f(sl.modalMorph));
         h = mix(h, sl.smpRegN); for (int r = 0; r < DrumChannel::Slot::MAXREG; ++r) { h = mix(h, f(sl.smpRegLo[r])); h = mix(h, f(sl.smpRegHi[r])); }
         h = mix(h, (juce::int64) c.slotSample[b].file.getFullPathName().hashCode64());   // this slot's sample
         h = mix(h, f(sl.oscFold)); h = mix(h, f(sl.oscLevel)); h = mix(h, f(sl.noiseLevel));
@@ -10805,41 +10808,40 @@ void DrumSequencerEditor::setupComponents()
         }
         // [2026-07-19] MULTISAMPLE INSTRUMENTS panel controls (visible only when the slot holds
         // a zone set - layoutContent swaps them in for the sample grid).
-        setupKnob(knobMsGain[b], lblMsGain[b], "Gain", -24.0, 24.0, 0.0, 1.0,
-                  [](double v){ return juce::String(v, 1) + " dB"; });
-        knobMsGain[b].setTooltip("INSTRUMENT GAIN in dB (+-24).\n\n"
+        content.addChildComponent(msGainF[b]);
+        msGainF[b].setLabel("Gain");
+        msGainF[b].setAccent(b == 0 ? juce::Colour(0xffe8bf4d) : juce::Colour(0xffe86aa8));
+        msGainF[b].setDefault(0.5f);   // fader centre = 0 dB
+        msGainF[b].format = [](float v){ const float db = v * 48.0f - 24.0f;
+                                         return juce::String(db, 1) + " dB"; };
+        msGainF[b].setTooltip("INSTRUMENT GAIN (+-24 dB).\n\n"
             "- A plain, lossless gain - smoothed per sample, so sweeps never zipper.\n"
-            "- Use it to match this instrument's level to the kit; saved with the instrument (sidecar).");
-        knobMsGain[b].onValueChange = [this, b] {
+            "- Match this instrument's level to the kit; double-click = 0 dB.\n"
+            "- Saved with the instrument (sidecar) - it travels with the folder.");
+        msGainF[b].onChange = [this, b](float v) {
             if (ignoreKnobCallbacks) return;
             auto& dch2 = proc.sequencer.channel(selectedChannel);
-            dch2.slots[b].msGainDb = (float) knobMsGain[b].getValue();
-            dch2.markDspDirty(); dch2.writeMsSidecar(b);
+            dch2.slots[b].msGainDb = v * 48.0f - 24.0f;
+            dch2.markDspDirty();
         };
-        setupKnob(knobMsXf[b], lblMsXf[b], "Loop Xfade", 5.0, 200.0, 25.0, 0.5,
-                  [](double v){ return juce::String(juce::roundToInt(v)) + " ms"; });
-        knobMsXf[b].setTooltip("LOOP CROSSFADE length in ms.\n\n"
-            "- How long the loop's end blends back into its start each cycle.\n"
-            "- Short = tight (basses), long = glassy smooth (pads, bowed sounds).\n"
-            "- Only matters while Loop is on; saved with the instrument.");
-        knobMsXf[b].onValueChange = [this, b] {
-            if (ignoreKnobCallbacks) return;
+        msGainF[b].onDragEnd = [this, b] {
             auto& dch2 = proc.sequencer.channel(selectedChannel);
-            dch2.slots[b].smpLoopXfMs = (float) knobMsXf[b].getValue();
-            dch2.markDspDirty(); dch2.writeMsSidecar(b);
+            if (dch2.msSet[b] != nullptr) dch2.writeMsSidecar(b);
+            if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel);
         };
         content.addChildComponent(btnMsAutoLoop[b]);
-        btnMsAutoLoop[b].setButtonText("AUTO-LOOP");
+        btnMsAutoLoop[b].setButtonText("AUTO");
         btnMsAutoLoop[b].setLookAndFeel(&tinyBtnLNF);
-        btnMsAutoLoop[b].setTooltip("Find a good loop automatically.\n\n"
-            "- Searches the sustain for the pair of points that match best (least click).\n"
-            "- Sets the loop region + turns Loop on; drag on the waveform to adjust by hand.\n"
-            "- Works on the displayed zone; the loop applies proportionally to every zone.");
+        btnMsAutoLoop[b].setTooltip("AUTO-LOOP: find a good loop region automatically.\n\n"
+            "- Searches the sustain for the pair of points that match best (least click at the wrap).\n"
+            "- Sets the loop region; drag on the waveform to adjust by hand.\n"
+            "- Loop cycles with a fixed 25 ms crossfade.");
         btnMsAutoLoop[b].onClick = [this, b] { autoLoopFind(b); };
         content.addChildComponent(lblMsRange[b]);
         lblMsRange[b].setFont(juce::Font(11.5f, juce::Font::bold));
         lblMsRange[b].setColour(juce::Label::textColourId, juce::Colour(0xffaebada));
         lblMsRange[b].setJustificationType(juce::Justification::centred);
+        lblMsRange[b].setMinimumHorizontalScale(0.7f);   // squeeze, never "..." (plugin rule)
         for (int ir = 0; ir < 2; ++ir)
         {
             auto& rb = ir == 0 ? btnMsRigModel[b] : btnMsRigIr[b];
@@ -12598,8 +12600,7 @@ void DrumSequencerEditor::refreshDetailPanel()
         }
         {   // [2026-07-19] MULTISAMPLE INSTRUMENTS panel values
             auto& dch2 = proc.sequencer.channel(selectedChannel);
-            knobMsGain[b].setValue(sl.msGainDb, juce::dontSendNotification);
-            knobMsXf[b].setValue(sl.smpLoopXfMs, juce::dontSendNotification);
+            msGainF[b].setValue01((sl.msGainDb + 24.0f) / 48.0f);
             if (auto ms = dch2.msSet[b]; ms != nullptr && ! ms->zones.empty())
             {
                 int layers = 0; for (const auto& z : ms->zones) layers += (int) z.layers.size();
@@ -14034,8 +14035,7 @@ void DrumSequencerEditor::layoutContent()
             lblSmpPreserve[b].setVisible(false); swSmpPreserve[b].setVisible(false);
             lblSmpLoop[b].setVisible(false); swSmpLoop[b].setVisible(false);
             for (int t = 0; t < 4; ++t) btnSmpTog[b][t].setVisible(false);   // [2026-07-19] the 2x2 grid
-            knobMsGain[b].setVisible(false); knobMsXf[b].setVisible(false);
-            lblMsGain[b].setVisible(false); lblMsXf[b].setVisible(false); lblMsRange[b].setVisible(false);
+            msGainF[b].setVisible(false); lblMsRange[b].setVisible(false);
             btnMsAutoLoop[b].setVisible(false); btnMsRigModel[b].setVisible(false); btnMsRigIr[b].setVisible(false);
             slotEd[b].msFace = false;
         }
@@ -14091,32 +14091,37 @@ void DrumSequencerEditor::layoutContent()
                         btnSmpTog[b][t].setBounds(tcx + (t % 2) * (bw + 4), ty + (t / 2) * (bh + 6), bw, bh);
                     }
                     knobX = sbx[b] + tcW + 8; knobW = slotW - tcW - 8;   // knobs right of the grid
-                    for (auto* c2 : { &knobMsGain[b], &knobMsXf[b] }) c2->setVisible(false);
-                    lblMsGain[b].setVisible(false); lblMsXf[b].setVisible(false); lblMsRange[b].setVisible(false);
-                    btnMsAutoLoop[b].setVisible(false); btnMsRigModel[b].setVisible(false); btnMsRigIr[b].setVisible(false);
+                    msGainF[b].setVisible(false); lblMsRange[b].setVisible(false);
+                    btnMsRigModel[b].setVisible(false); btnMsRigIr[b].setVisible(false);
                 }
                 else
-                {   // [2026-07-19] MULTISAMPLE INSTRUMENTS panel: Reverse+Loop buttons | dB Gain +
-                    // Loop Xfade knobs | AUTO-LOOP + note range | the amp RIG row at the bottom.
-                    waveform[b].setBounds(sbx[b] + 6, sby[b] + 20, slotW - 12, 36);   // slightly shorter -> room for the rig row
-                    knobTop = sby[b] + 58;
+                {   // [2026-07-19 r2] MULTISAMPLE INSTRUMENTS panel (user: use the space): Reverse +
+                    // a WIDE dB Gain fader | full-width note range | the amp RIG row. Loop and its
+                    // crossfade left this panel - zones never loop (the plain Sample group keeps loop).
+                    waveform[b].setBounds(sbx[b] + 6, sby[b] + 20, slotW - 12, 40);
+                    knobTop = sby[b] + 64;
                     const int tcx = sbx[b] + 6;
-                    btnSmpTog[b][1].setVisible(true); btnSmpTog[b][1].setBounds(tcx, knobTop + 2, 58, 22);   // Reverse
-                    btnSmpTog[b][3].setVisible(true); btnSmpTog[b][3].setBounds(tcx, knobTop + 29, 58, 22);  // Loop
-                    btnSmpTog[b][0].setVisible(false); btnSmpTog[b][2].setVisible(false);   // Trim/Keep pitch = meaningless for zones
-                    auto placeK = [&](LearnableKnob& k, juce::Label& l, int x)
-                    { k.setVisible(true); l.setVisible(true);
-                      k.setBounds(x, knobTop, 44, 40); l.setBounds(x - 8, knobTop + 40, 60, 12); };
-                    placeK(knobMsGain[b], lblMsGain[b], tcx + 70);
-                    placeK(knobMsXf[b],   lblMsXf[b],   tcx + 134);
-                    btnMsAutoLoop[b].setVisible(true); btnMsAutoLoop[b].setBounds(tcx + 196, knobTop + 2, 82, 22);
-                    lblMsRange[b].setVisible(true);    lblMsRange[b].setBounds(tcx + 196, knobTop + 28, 110, 14);
-                    const int ry = sby[b] + 114, rw = (slotW - 16) / 2;
+                    btnSmpTog[b][1].setVisible(true); btnSmpTog[b][1].setBounds(tcx, knobTop, 62, 22);   // Reverse
+                    btnSmpTog[b][0].setVisible(false); btnSmpTog[b][2].setVisible(false);
+                    btnSmpTog[b][3].setVisible(false);   // Loop = plain-sample tool, not an instrument's
+                    msGainF[b].setVisible(true);
+                    msGainF[b].setBounds(tcx + 68, knobTop, slotW - 12 - 68, 22);   // the wide fader (user)
+                    lblMsRange[b].setVisible(true);
+                    lblMsRange[b].setBounds(tcx, knobTop + 26, slotW - 12, 16);     // full width - no truncation
+                    const int ry = sby[b] + 112, rw = (slotW - 16) / 2;
                     btnMsRigModel[b].setVisible(true); btnMsRigModel[b].setBounds(tcx, ry, rw, 22);
                     btnMsRigIr[b].setVisible(true);    btnMsRigIr[b].setBounds(tcx + rw + 4, ry, rw, 22);
+                    btnMsAutoLoop[b].setVisible(false);
                     knobX = sbx[b]; knobW = slotW;   // SlotEditor spans the box (msFace hides its grid; box-drag copy stays alive)
                 }
                 slotEd[b].msFace = msOn;
+                if (! msOn)
+                {   // [2026-07-19] plain sample + Loop on: the small AUTO(-loop) button rides the
+                    // waveform's top-right corner (loop lives HERE now).
+                    const bool lp = proc.sequencer.channel(selectedChannel).slots[b].smpLoopOn;
+                    btnMsAutoLoop[b].setVisible(lp);
+                    if (lp) btnMsAutoLoop[b].setBounds(sbx[b] + slotW - 56, sby[b] + 22, 46, 16);
+                }
             }
             slotEd[b].place(knobX, knobTop, knobW, slotH - (knobTop - sby[b]) - 4);
         }

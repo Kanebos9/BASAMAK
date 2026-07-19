@@ -3375,10 +3375,10 @@ private:
                                                              // BUTTON grid (user design) - each proxies its ToggleSwitch
     // [2026-07-19] MULTISAMPLE INSTRUMENTS panel (shown instead of the sample grid when the slot
     // holds a zone set): dB Gain + Loop Xfade knobs, Auto-Loop, note range, the amp RIG row.
-    LearnableKnob    knobMsGain[DrumChannel::NUM_SLOTS] { { "", proc.midiLearn }, { "", proc.midiLearn } },
-                     knobMsXf  [DrumChannel::NUM_SLOTS] { { "", proc.midiLearn }, { "", proc.midiLearn } };
-    juce::Label      lblMsGain[DrumChannel::NUM_SLOTS], lblMsXf[DrumChannel::NUM_SLOTS], lblMsRange[DrumChannel::NUM_SLOTS];
-    juce::TextButton btnMsAutoLoop[DrumChannel::NUM_SLOTS], btnMsRigModel[DrumChannel::NUM_SLOTS], btnMsRigIr[DrumChannel::NUM_SLOTS];
+    SlotDragFader    msGainF[DrumChannel::NUM_SLOTS];        // wide horizontal dB fader (user: the knob was too small)
+    juce::Label      lblMsRange[DrumChannel::NUM_SLOTS];
+    juce::TextButton btnMsAutoLoop[DrumChannel::NUM_SLOTS],  // "AUTO" on the waveform corner (plain samples, Loop on)
+                     btnMsRigModel[DrumChannel::NUM_SLOTS], btnMsRigIr[DrumChannel::NUM_SLOTS];
     void openMsRigPicker(int slot, bool ir);   // model/IR menu -> msRigModel/msRigIr + refreshMsRig + sidecar
     void autoLoopFind(int slot);               // best-match loop search on the displayed zone
     juce::TextButton btnChFxFile[3];        // [2026-07-18] NAM model / Cab IR full-row picker (replaces Amt+Chr on those types)

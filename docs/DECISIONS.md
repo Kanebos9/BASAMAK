@@ -250,6 +250,9 @@
 | 178 | Loop drawing = TRIM-style plain drag (press/release = the two ends, redraw replaces, drawing turns Loop ON); Trim-armed slots keep SHIFT+drag | user: "just like trim. simple" - the shift-only gesture was undiscoverable (my failure) | user design |
 | 179 | Wizard RECORDED title = an INSTRUMENT dropdown: pick any folder to EDIT IN PLACE (stats scanned instantly; deletes/re-records overwrite for real; range boxes snap to the instrument) - the never-overwrite rule now applies only to NEW names | user design, overwrite rule explicitly approved | user design |
 
+| 180 | ZONES NEVER LOOP (render gate `!ms`); Loop + its drawing stay a plain-Sample tool; the Xfade knob/field retired same-day (back to the fixed, disclosed 25 ms); sidecars stop carrying loop | user: loop "makes no sense in an instrument like this" - and the region, drawn on one zone, was only ever approximate on the others (admitted) | user order; the approximation admission mine |
+| 181 | MS panel r2 = Reverse + a WIDE horizontal dB Gain fader (+-24, centre-default) + full-width note range (squeeze-never-ellipsis) + the rig row; AUTO(-loop) became a small button riding the plain-sample waveform corner while Loop is on | user: knob too small, range text truncated, "use the space efficiently" | user design |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

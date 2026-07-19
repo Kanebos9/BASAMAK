@@ -580,7 +580,6 @@ public:
         // envelope allows (raise Sustain!). One-shot steps play through unchanged.
         float msGainDb = 0.0f;                  // [2026-07-19] Multisample Instruments GAIN in dB (+-24;
                                                 //   folded into the per-sample-smoothed weight = zipper-free)
-        float smpLoopXfMs = 25.0f;              // [2026-07-19] loop crossfade ms (5..200; was a fixed 25 ms constant)
         bool  smpLoopOn = false;
         float smpLoopLo = 0.5f, smpLoopHi = 0.95f;   // loop region (fractions of the file)
         bool  smpPreservePitch = false;         // Sample: IGNORE step/draw/key/env pitch (play at the sample's own pitch).

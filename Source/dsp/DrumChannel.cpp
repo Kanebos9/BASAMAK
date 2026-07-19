@@ -735,8 +735,7 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("sPP", s.smpPreservePitch, nullptr);   // preserve pitch (ignore step/draw/key pitch)
         st.setProperty("sLp", s.smpLoopOn ? 1 : 0, nullptr);   // [2026-07-18] sample LOOP
         st.setProperty("sLl", s.smpLoopLo, nullptr); st.setProperty("sLh", s.smpLoopHi, nullptr);
-        st.setProperty("sLx", s.smpLoopXfMs, nullptr);   // [2026-07-19] loop crossfade ms
-        st.setProperty("msGn", s.msGainDb, nullptr);     // [2026-07-19] multisample gain dB
+        st.setProperty("msGn", s.msGainDb, nullptr);     // [2026-07-19] multisample gain dB ("sLx" retired - fixed 25 ms xfade again)
         st.setProperty("sFile", slotSample[b].file.getFullPathName(), nullptr);   // per-slot sample (reloaded)
         st.setProperty("msDir", msSet[b] != nullptr ? msSet[b]->folder : juce::String(), nullptr);   // [2026-07-18] multisample folder
         st.setProperty("yFo", s.oscFold, nullptr); st.setProperty("yOL", s.oscLevel, nullptr);
@@ -888,8 +887,7 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
                                                                   // (the STRUCT default is false now - fresh slots pitch with the note [2026-07-19])
         s.smpLoopOn = (int)st.getProperty("sLp", 0) != 0;   // [2026-07-18] sample LOOP
         s.smpLoopLo = (float)st.getProperty("sLl", d.smpLoopLo); s.smpLoopHi = (float)st.getProperty("sLh", d.smpLoopHi);
-        s.smpLoopXfMs = juce::jlimit(5.0f, 200.0f, (float)st.getProperty("sLx", d.smpLoopXfMs));   // [2026-07-19]
-        s.msGainDb    = juce::jlimit(-24.0f, 24.0f, (float)st.getProperty("msGn", 0.0f));
+        s.msGainDb    = juce::jlimit(-24.0f, 24.0f, (float)st.getProperty("msGn", 0.0f));   // ("sLx" ignored - xfade is the fixed 25 ms again)
         s.oscFold = (float)st.getProperty("yFo", d.oscFold); s.oscLevel = (float)st.getProperty("yOL", d.oscLevel);
         s.noiseLevel = (float)st.getProperty("yNL", d.noiseLevel);
         s.waveTable = (int)st.getProperty("wTb", d.waveTable); s.wavePos = (float)st.getProperty("wPs", d.wavePos);
@@ -1324,10 +1322,7 @@ bool DrumChannel::loadMultisample(int slot, const juce::File& folder)
         Slot& sl2 = slots[slot];
         sl2.msGainDb    = juce::jlimit(-24.0f, 24.0f, (float) t.getProperty("gainDb", 0.0f));
         sl2.smpReverse  = (bool) t.getProperty("reverse", false);
-        sl2.smpLoopOn   = (bool) t.getProperty("loopOn", false);
-        sl2.smpLoopLo   = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("loopLo", 0.5f));
-        sl2.smpLoopHi   = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("loopHi", 0.95f));
-        sl2.smpLoopXfMs = juce::jlimit(5.0f, 200.0f, (float) t.getProperty("xfMs", 25.0f));
+        sl2.smpLoopOn   = false;   // zones never loop (old sidecars' loop entries ignored)
         msRigModel = t.getProperty("rigModel", "").toString();
         msRigIr    = t.getProperty("rigIr", "").toString();
         refreshMsRig();
@@ -1467,11 +1462,7 @@ void DrumChannel::writeMsSidecar(int slot) const
     const Slot& sl = slots[slot];
     t.setProperty("gainDb",  sl.msGainDb,     nullptr);
     t.setProperty("reverse", sl.smpReverse,   nullptr);
-    t.setProperty("loopOn",  sl.smpLoopOn,    nullptr);
-    t.setProperty("loopLo",  sl.smpLoopLo,    nullptr);
-    t.setProperty("loopHi",  sl.smpLoopHi,    nullptr);
-    t.setProperty("xfMs",    sl.smpLoopXfMs,  nullptr);
-    t.setProperty("rigModel", msRigModel,     nullptr);
+    t.setProperty("rigModel", msRigModel,     nullptr);   // (loop entries retired - zones never loop)
     t.setProperty("rigIr",    msRigIr,        nullptr);
     if (auto xml = t.createXml())
         xml->writeTo(dir.getChildFile("instrument.basamakinst"));
@@ -2500,7 +2491,6 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         bool   smpPreserve = true;   // Sample: ignore step/draw/key/env pitch (play at the sample's own pitch)
         const juce::AudioBuffer<float>* buf = nullptr; int srcLen = 0, regLo = 0, regHi = 0, slices = 1;  // per-slot sample
         bool   loopOn = false; double loopLoF = 0.0, loopHiF = 0.0, loopXfF = 0.0;   // [2026-07-18] sample LOOP (source frames)
-        float  loopLoFrac = 0.5f, loopHiFrac = 0.95f;   // fractions (multisample zones size their own frames)
         float  smpGain = 1.0f;   // sample output boost
         // -- section levels + fold (legacy unified-engine extras) --
         float  oscFold = 0, oscLevel = 1, noiseLevel = 0;
@@ -2809,13 +2799,12 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 // [2026-07-18] SAMPLE LOOP: region in source frames, clamped inside the playing
                 // range; crossfade = a fixed 25 ms of source audio (disclosed in the tooltip).
                 c.loopOn = sl.smpLoopOn && c.srcLen > 64;
-                c.loopLoFrac = sl.smpLoopLo; c.loopHiFrac = sl.smpLoopHi;
                 if (c.loopOn)
                 {
                     c.loopLoF = juce::jlimit((double) c.regLo, (double) c.regHi - 64.0, (double) sl.smpLoopLo * c.srcLen);
                     c.loopHiF = juce::jlimit(c.loopLoF + 64.0, (double) c.regHi, (double) sl.smpLoopHi * c.srcLen);
-                    c.loopXfF = juce::jmin(juce::jlimit(5.0f, 200.0f, sl.smpLoopXfMs) * 0.001 * sr / (double) engineOS,
-                                       (c.loopHiF - c.loopLoF) * 0.5);   // [2026-07-19] Loop Xfade knob (was fixed 25 ms)
+                    c.loopXfF = juce::jmin(0.025 * sr / (double) engineOS,
+                                       (c.loopHiF - c.loopLoF) * 0.5);   // fixed 25 ms crossfade (disclosed in the Loop tooltip)
                 }
                 c.slices = 1;   // manual regions replace auto-slicing
                 c.smpGain = juce::jlimit(0.0f, 4.0f, sl.smpGain);
@@ -3827,17 +3816,14 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         const bool ms   = (sbuf == sv.msBuf && sbuf != c.buf);
                         const int  regLoV = ms ? 0 : c.regLo;
                         const int  regHiV = ms ? sLen : c.regHi;
-                        double lLo = c.loopLoF, lHi = c.loopHiF, lXf = c.loopXfF;
-                        if (ms && c.loopOn)
-                        {
-                            lLo = juce::jlimit(0.0, (double) sLen - 64.0, (double) c.loopLoFrac * sLen);
-                            lHi = juce::jlimit(lLo + 64.0, (double) sLen, (double) c.loopHiFrac * sLen);
-                            lXf = juce::jmin(lXf, (lHi - lLo) * 0.5);
-                        }
+                        const double lLo = c.loopLoF, lHi = c.loopHiF, lXf = c.loopXfF;
                         // LOOP engages on HELD/GATED notes only; it upgrades the sample to the FULL
                         // synth envelope contract (sustain holds, release fades) - the whole point
                         // of looping. One-shot steps keep the legacy path bit-identical.
-                        const bool loopEngaged = c.loopOn && (v.isKey || v.gateLen > 0);
+                        // [2026-07-19] ZONES NEVER LOOP (user: makes no sense for an instrument -
+                        // and the region, drawn on ONE zone, could only ever be approximate on the
+                        // others). Loop = the plain Sample group's tool; instruments release-gate.
+                        const bool loopEngaged = c.loopOn && ! ms && (v.isKey || v.gateLen > 0);
                         if (loopEngaged)
                             env = keyAdsr(t, v.isKey ? v.keyOff : v.gateLen, c.atk, c.hold, c.dec, c.sustain, c.release);
                         else
