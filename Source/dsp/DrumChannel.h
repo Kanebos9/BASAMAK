@@ -578,6 +578,9 @@ public:
         // cycles the loop region with a fixed 25 ms equal-power crossfade - the attack before
         // the loop plays ONCE, then the sound sustains for as long as the gate is open and the
         // envelope allows (raise Sustain!). One-shot steps play through unchanged.
+        float msGainDb = 0.0f;                  // [2026-07-19] Multisample Instruments GAIN in dB (+-24;
+                                                //   folded into the per-sample-smoothed weight = zipper-free)
+        float smpLoopXfMs = 25.0f;              // [2026-07-19] loop crossfade ms (5..200; was a fixed 25 ms constant)
         bool  smpLoopOn = false;
         float smpLoopLo = 0.5f, smpLoopHi = 0.95f;   // loop region (fractions of the file)
         bool  smpPreservePitch = false;         // Sample: IGNORE step/draw/key/env pitch (play at the sample's own pitch).
@@ -812,6 +815,19 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     std::vector<float> namMono, namHost;             // NAM scratch: engine-rate mono + host-rate half
     float namDnHist[3][24] = {}, namUpHist[3][24] = {};   // 23-tap halfband FIR history (down / up)
     void refreshChFxAssets(int fx);                  // MESSAGE THREAD: (re)load by chFxType+chFxFile
+    // [2026-07-19] INSTRUMENT RIG (user design): a DEDICATED NAM amp + Cab IR pair owned by the
+    // Multisample Instruments panel - the 3 generic Channel FX slots stay free. Runs on the
+    // summed channel BEFORE FX A/B/C (amp first, then your effects), same halfband machinery.
+    // Saved with the sound AND in the instrument's sidecar (the rig travels with the instrument).
+    juce::String msRigModel, msRigIr;
+    std::shared_ptr<BasamakNam> msRigNamHold, msRigNamOld;
+    std::atomic<BasamakNam*> msRigNamLive { nullptr };
+    float msRigGain = 1.0f;
+    std::shared_ptr<juce::dsp::Convolution> msRigConvHold, msRigConvOld;
+    std::atomic<juce::dsp::Convolution*> msRigConvLive { nullptr };
+    float msRigDnHist[24] = {}, msRigUpHist[24] = {};
+    void refreshMsRig();                             // MESSAGE THREAD loader (empty paths = unload)
+    void writeMsSidecar(int slot) const;             // instrument settings -> folder/instrument.basamakinst
 
     float  chSendHpZ[2] = {};                        // reverb-send high-pass state (~150 Hz; subs stay out of the verb)
     float  chSendSmR = -1.0f, chSendSmD = -1.0f;     // per-sample smoothed send gains (de-zipper; -1 = snap)
@@ -1143,8 +1159,13 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     // few semitones of varispeed). Loaded on the message thread; voices hold raw zone pointers,
     // so the previous set is retired to msSetOld (not freed) until the next load - pointers of
     // fading voices stay valid (the shared_ptr graveyard rule).
-    struct MsZone { juce::AudioBuffer<float> buf; int root = 60; };
-    struct MsSet  { std::vector<MsZone> zones; juce::String folder; };
+    // [2026-07-19] a zone = one NOTE with up to MS_LAYERS velocity LAYERS (user records as many
+    // dynamics per note as they like; layers are SORTED BY MEASURED PEAK at load - soft..loud -
+    // so playback maps velocity across them by CROSSFADE regardless of file naming).
+    static constexpr int MS_LAYERS = 5;
+    struct MsLayer { juce::AudioBuffer<float> buf; float peak = 0.0f; };
+    struct MsZone  { std::vector<MsLayer> layers; int root = 60; };
+    struct MsSet   { std::vector<MsZone> zones; juce::String folder; };
     std::shared_ptr<MsSet> msSet[NUM_SLOTS], msSetOld[NUM_SLOTS];
     bool loadMultisample(int slot, const juce::File& folder);   // message thread; false = no usable WAVs
     void clearMultisample(int slot) { msSetOld[slot] = msSet[slot]; msSet[slot] = nullptr; }
@@ -1290,7 +1311,9 @@ private:
         float    ksLp[KS_UNI]    = {};
         float    ksApSt[KS_UNI][12] = {};   // dispersion allpass state per string (up to 12 stages for Stiffness)
         double   smpHead = 0.0;          // this slot's sample playhead
-        const juce::AudioBuffer<float>* msBuf = nullptr;   // [2026-07-18] multisample: THIS voice's zone
+        const juce::AudioBuffer<float>* msBuf = nullptr;   // [2026-07-18] multisample: THIS voice's zone (primary layer)
+        const juce::AudioBuffer<float>* msBuf2 = nullptr;  // [2026-07-19] the NEXT velocity layer (crossfade partner; null = single)
+        float    msMix = 0.0f;           // 0..1 blend toward msBuf2 (equal-power in the render)
         float    msSemiAdj = 0.0f;       // 60 - zoneRoot (folds into the varispeed exponent)
         // === PER-SLOT EQ (begin) - filter state for HP(2)+bells(3)+LP(2); coeffs live in SC ===
         // === PER-SLOT EQ (end) ===

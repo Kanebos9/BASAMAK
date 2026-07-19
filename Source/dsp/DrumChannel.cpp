@@ -735,6 +735,8 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("sPP", s.smpPreservePitch, nullptr);   // preserve pitch (ignore step/draw/key pitch)
         st.setProperty("sLp", s.smpLoopOn ? 1 : 0, nullptr);   // [2026-07-18] sample LOOP
         st.setProperty("sLl", s.smpLoopLo, nullptr); st.setProperty("sLh", s.smpLoopHi, nullptr);
+        st.setProperty("sLx", s.smpLoopXfMs, nullptr);   // [2026-07-19] loop crossfade ms
+        st.setProperty("msGn", s.msGainDb, nullptr);     // [2026-07-19] multisample gain dB
         st.setProperty("sFile", slotSample[b].file.getFullPathName(), nullptr);   // per-slot sample (reloaded)
         st.setProperty("msDir", msSet[b] != nullptr ? msSet[b]->folder : juce::String(), nullptr);   // [2026-07-18] multisample folder
         st.setProperty("yFo", s.oscFold, nullptr); st.setProperty("yOL", s.oscLevel, nullptr);
@@ -886,6 +888,8 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
                                                                   // (the STRUCT default is false now - fresh slots pitch with the note [2026-07-19])
         s.smpLoopOn = (int)st.getProperty("sLp", 0) != 0;   // [2026-07-18] sample LOOP
         s.smpLoopLo = (float)st.getProperty("sLl", d.smpLoopLo); s.smpLoopHi = (float)st.getProperty("sLh", d.smpLoopHi);
+        s.smpLoopXfMs = juce::jlimit(5.0f, 200.0f, (float)st.getProperty("sLx", d.smpLoopXfMs));   // [2026-07-19]
+        s.msGainDb    = juce::jlimit(-24.0f, 24.0f, (float)st.getProperty("msGn", 0.0f));
         s.oscFold = (float)st.getProperty("yFo", d.oscFold); s.oscLevel = (float)st.getProperty("yOL", d.oscLevel);
         s.noiseLevel = (float)st.getProperty("yNL", d.noiseLevel);
         s.waveTable = (int)st.getProperty("wTb", d.waveTable); s.wavePos = (float)st.getProperty("wPs", d.wavePos);
@@ -1084,6 +1088,7 @@ void DrumChannel::prepareToPlay(double sampleRate, int maxBlockSize)
     namHost.assign((size_t) juce::jmax(32, maxBlockSize / 2 + 8), 0.0f);
     for (int fx = 0; fx < 3; ++fx)
         if (chFxType[fx] == ChFxNamAmp || chFxType[fx] == ChFxCabIr) refreshChFxAssets(fx);
+    if (msRigModel.isNotEmpty() || msRigIr.isNotEmpty()) refreshMsRig();   // [2026-07-19] rate-correct reload
 
     for (auto& b : formantBP) b.reset();
 
@@ -1249,6 +1254,23 @@ int DrumChannel::noteNameToMidi(const juce::String& raw)
     return (n >= 0 && n <= 127) ? n : -1;
 }
 
+// [2026-07-19] velocity -> layer pair: layers are peak-sorted soft..loud; velocity 0..1 lands
+// between two adjacent layers, blended equal-power in the render (hard switching = two glued
+// instruments; the crossfade is what makes recorded dynamics feel continuous).
+static void msPickLayers(const DrumChannel::MsZone& z, float vel,
+                         const juce::AudioBuffer<float>*& a, const juce::AudioBuffer<float>*& b, float& mix)
+{
+    const int n = (int) z.layers.size();
+    a = nullptr; b = nullptr; mix = 0.0f;
+    if (n == 0) return;
+    if (n == 1) { a = &z.layers[0].buf; return; }
+    const float pos = juce::jlimit(0.0f, (float)(n - 1) - 1.0e-4f, juce::jlimit(0.0f, 1.0f, vel) * (float)(n - 1));
+    const int i0 = (int) pos;
+    a = &z.layers[(size_t) i0].buf;
+    b = &z.layers[(size_t) i0 + 1].buf;
+    mix = pos - (float) i0;
+}
+
 // Load a multisample FOLDER (WAVs named by note) into one slot. Also loads the zone nearest
 // middle C into the slot's MAIN buffer (waveform display + a sane fallback), and RETIRES the
 // previous zone set instead of freeing it (fading voices may still hold pointers into it).
@@ -1260,24 +1282,34 @@ bool DrumChannel::loadMultisample(int slot, const juce::File& folder)
     set->folder = folder.getFullPathName();
     for (const auto& f : folder.findChildFiles(juce::File::findFiles, false, "*.wav;*.aif;*.aiff;*.flac"))
     {
-        const int root = noteNameToMidi(f.getFileNameWithoutExtension());
+        // [2026-07-19] LAYERS: "E1.wav" and "E1 v2.wav" (any suffix after the note token) are
+        // the SAME note - extra files = extra velocity layers, ordered by MEASURED peak below.
+        const juce::String base = f.getFileNameWithoutExtension().trim();
+        const int root = noteNameToMidi(base.upToFirstOccurrenceOf(" ", false, false));
         if (root < 0) continue;
         juce::AudioBuffer<float> buf;
         if (! sampleFileCache().get(f, hostRate, buf) || buf.getNumSamples() < 64) continue;
-        set->zones.push_back({});
-        set->zones.back().buf = std::move(buf);
-        set->zones.back().root = root;
+        MsZone* z = nullptr;
+        for (auto& zz : set->zones) if (zz.root == root) { z = &zz; break; }
+        if (z == nullptr) { set->zones.push_back({}); z = &set->zones.back(); z->root = root; }
+        if ((int) z->layers.size() >= MS_LAYERS) continue;   // cap 5 layers per note
+        MsLayer ly; ly.buf = std::move(buf);
+        for (int i = 0; i < ly.buf.getNumSamples(); ++i)
+            ly.peak = juce::jmax(ly.peak, std::abs(ly.buf.getSample(0, i)));
+        z->layers.push_back(std::move(ly));
     }
     if (set->zones.empty()) return false;
     std::sort(set->zones.begin(), set->zones.end(), [](const MsZone& a, const MsZone& b){ return a.root < b.root; });
-    // main buffer = the zone nearest middle C (display + non-zone paths)
+    for (auto& z : set->zones)   // layers soft -> loud (velocity maps across them)
+        std::sort(z.layers.begin(), z.layers.end(), [](const MsLayer& a, const MsLayer& b){ return a.peak < b.peak; });
+    // main buffer = the zone nearest middle C, LOUDEST layer (display + non-zone paths)
     int best = 0;
     for (int i = 1; i < (int) set->zones.size(); ++i)
         if (std::abs(set->zones[i].root - 60) < std::abs(set->zones[best].root - 60)) best = i;
     fadeOutVoices(retrigFadeSec());   // fading voices keep the OLD set (graveyard below)
     {
         const juce::ScopedLock sl2(sampleLock);
-        slotSample[slot].original = set->zones[(size_t) best].buf;   // copy
+        slotSample[slot].original = set->zones[(size_t) best].layers.back().buf;   // copy (loudest layer)
         for (auto& v : voices) v.playHead = -1.0;
     }
     slotSample[slot].usingUser = true;
@@ -1285,6 +1317,21 @@ bool DrumChannel::loadMultisample(int slot, const juce::File& folder)
     slots[slot].smpPreservePitch = false;   // [2026-07-19] a multisample is an INSTRUMENT - always
                                             // pitch to the note (user order; re-enable by hand for
                                             // a drum-kit folder mapped across keys)
+    // [2026-07-19] apply the folder's SIDECAR (missing = defaults; the settings travel with it)
+    if (auto xml = juce::parseXML(folder.getChildFile("instrument.basamakinst")))
+    {
+        const juce::ValueTree t = juce::ValueTree::fromXml(*xml);
+        Slot& sl2 = slots[slot];
+        sl2.msGainDb    = juce::jlimit(-24.0f, 24.0f, (float) t.getProperty("gainDb", 0.0f));
+        sl2.smpReverse  = (bool) t.getProperty("reverse", false);
+        sl2.smpLoopOn   = (bool) t.getProperty("loopOn", false);
+        sl2.smpLoopLo   = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("loopLo", 0.5f));
+        sl2.smpLoopHi   = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("loopHi", 0.95f));
+        sl2.smpLoopXfMs = juce::jlimit(5.0f, 200.0f, (float) t.getProperty("xfMs", 25.0f));
+        msRigModel = t.getProperty("rigModel", "").toString();
+        msRigIr    = t.getProperty("rigIr", "").toString();
+        refreshMsRig();
+    }
     slotSample[slot].loadedAtRate = hostRate;
     updateStretch(slot);
     msSetOld[slot] = msSet[slot];     // graveyard: old pointers stay valid through the fade
@@ -1365,6 +1412,69 @@ void DrumChannel::refreshChFxAssets(int fx)
             chFxConvLive[fx].store(conv.get(), std::memory_order_release);
         }
     }
+}
+
+// [2026-07-19] INSTRUMENT RIG loader (MESSAGE THREAD): same recipe as refreshChFxAssets but for
+// the dedicated Multisample amp+cab pair. Empty paths = unload. Old instances -> graveyard.
+void DrumChannel::refreshMsRig()
+{
+    const double hostR  = engineOS > 0 ? sr / (double) engineOS : sr;
+    const int    engBlk = juce::jmax(64, (int) namMono.size());
+    msRigNamLive.store(nullptr, std::memory_order_release);
+    msRigNamOld = msRigNamHold; msRigNamHold = nullptr;
+    if (msRigModel.isNotEmpty())
+    {
+        const juce::File f(msRigModel);
+        std::string err;
+        if (f.existsAsFile())
+            if (auto* raw = basamak_nam::load(f.getFullPathName().toStdString(), hostR, engBlk, err))
+            {
+                msRigNamHold = std::shared_ptr<BasamakNam>(raw, &basamak_nam::destroy);
+                double ldb = 0.0;
+                msRigGain = basamak_nam::loudnessDb(raw, ldb)
+                            ? juce::Decibels::decibelsToGain(juce::jlimit(-30.0, 30.0, -18.0 - ldb)) : 1.0f;
+                for (int k = 0; k < 24; ++k) { msRigDnHist[k] = 0.0f; msRigUpHist[k] = 0.0f; }
+                msRigNamLive.store(raw, std::memory_order_release);
+            }
+    }
+    msRigConvLive.store(nullptr, std::memory_order_release);
+    msRigConvOld = msRigConvHold; msRigConvHold = nullptr;
+    if (msRigIr.isNotEmpty())
+    {
+        const juce::File f(msRigIr);
+        if (f.existsAsFile())
+        {
+            auto conv = std::make_shared<juce::dsp::Convolution>();
+            juce::dsp::ProcessSpec spec { sr, (juce::uint32) engBlk, 2 };
+            conv->prepare(spec);
+            conv->loadImpulseResponse(f, juce::dsp::Convolution::Stereo::yes,
+                                      juce::dsp::Convolution::Trim::yes, 1 << 15);
+            msRigConvHold = conv;
+            msRigConvLive.store(conv.get(), std::memory_order_release);
+        }
+    }
+}
+
+// [2026-07-19] SIDECAR: the instrument folder's optional, human-readable settings file - gain,
+// reverse, loop, crossfade and the amp rig TRAVEL WITH the instrument (load it anywhere and it
+// sounds set up). A bare folder of WAVs still works (defaults); hand-editable XML.
+void DrumChannel::writeMsSidecar(int slot) const
+{
+    if (slot < 0 || slot >= NUM_SLOTS || msSet[slot] == nullptr) return;
+    const juce::File dir(msSet[slot]->folder);
+    if (! dir.isDirectory()) return;
+    juce::ValueTree t("BasamakInstrument");
+    const Slot& sl = slots[slot];
+    t.setProperty("gainDb",  sl.msGainDb,     nullptr);
+    t.setProperty("reverse", sl.smpReverse,   nullptr);
+    t.setProperty("loopOn",  sl.smpLoopOn,    nullptr);
+    t.setProperty("loopLo",  sl.smpLoopLo,    nullptr);
+    t.setProperty("loopHi",  sl.smpLoopHi,    nullptr);
+    t.setProperty("xfMs",    sl.smpLoopXfMs,  nullptr);
+    t.setProperty("rigModel", msRigModel,     nullptr);
+    t.setProperty("rigIr",    msRigIr,        nullptr);
+    if (auto xml = t.createXml())
+        xml->writeTo(dir.getChildFile("instrument.basamakinst"));
 }
 
 // Rebuild slotSample[slot].buf from its .original at slots[slot].smpStretch (pitch-preserving time-stretch).
@@ -1677,7 +1787,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         sv.grNoteIdx = 0;                          // chord/scale note cycling restarts (identical-hits rule)
         for (auto& gr : sv.grains) { gr.age = 0; gr.len = 0; }   // stale grains from the last note die
         sv.keySemis = 0.0f;
-        sv.msBuf = nullptr; sv.msSemiAdj = 0.0f;   // [2026-07-18] multisample zone re-picked per hit
+        sv.msBuf = nullptr; sv.msBuf2 = nullptr; sv.msMix = 0.0f; sv.msSemiAdj = 0.0f;   // multisample zone re-picked per hit
         if (sl.engine == SrcSample && msSet[s] != nullptr && ! msSet[s]->zones.empty())
         {   // nearest zone to the played note (steps/roll: C4 + step pitch; keyDown re-picks below)
             const auto& zs = msSet[s]->zones;
@@ -1685,7 +1795,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
             int best = 0;
             for (int zi = 1; zi < (int) zs.size(); ++zi)
                 if (std::abs(zs[zi].root - want) < std::abs(zs[best].root - want)) best = zi;
-            sv.msBuf = &zs[(size_t) best].buf;
+            msPickLayers(zs[(size_t) best], velocityGain, sv.msBuf, sv.msBuf2, sv.msMix);
             sv.msSemiAdj = (float)(60 - zs[(size_t) best].root);
         }
         // TEST on a PIANO-ROLL channel: the block config is C4-absolute (slotBaseHz), so play
@@ -2051,7 +2161,7 @@ int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly,
                     int best = 0;
                     for (int zi = 1; zi < (int) zs.size(); ++zi)
                         if (std::abs(zs[zi].root - want) < std::abs(zs[best].root - want)) best = zi;
-                    sv.msBuf = &zs[(size_t) best].buf;
+                    msPickLayers(zs[(size_t) best], velocity, sv.msBuf, sv.msBuf2, sv.msMix);
                     sv.msSemiAdj = sl.smpPreservePitch ? 0.0f
                                  : (float)(60 - zs[(size_t) best].root);
                 }
@@ -2474,6 +2584,10 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         auto bakeSlot = [&](int s, const Slot& sl, SC& c)
         {
         c.engine = sl.engine; c.weight = sl.weight;
+        if (msSet[s] != nullptr && sl.engine == SrcSample && sl.msGainDb != 0.0f)   // [2026-07-19]
+            c.weight *= juce::Decibels::decibelsToGain(juce::jlimit(-24.0f, 24.0f, sl.msGainDb));
+            // Multisample GAIN in dB, folded into the weight = it rides the per-sample wSm
+            // smoother for free (zipper-free sweeps; a plain multiply = bit-exact otherwise).
         c.fxDriveType = sl.fxDriveType; c.fxDrive = sl.fxDrive;   // per-slot FX (sends are CHANNEL-level now)
         c.lfoKeyBase = 0.0;
         for (int d2 = 0; d2 < 4; ++d2) {   // per-slot LFOs (free-Hz / tempo-synced / KEY-tracked)
@@ -2700,7 +2814,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 {
                     c.loopLoF = juce::jlimit((double) c.regLo, (double) c.regHi - 64.0, (double) sl.smpLoopLo * c.srcLen);
                     c.loopHiF = juce::jlimit(c.loopLoF + 64.0, (double) c.regHi, (double) sl.smpLoopHi * c.srcLen);
-                    c.loopXfF = juce::jmin(0.025 * sr / (double) engineOS, (c.loopHiF - c.loopLoF) * 0.5);
+                    c.loopXfF = juce::jmin(juce::jlimit(5.0f, 200.0f, sl.smpLoopXfMs) * 0.001 * sr / (double) engineOS,
+                                       (c.loopHiF - c.loopLoF) * 0.5);   // [2026-07-19] Loop Xfade knob (was fixed 25 ms)
                 }
                 c.slices = 1;   // manual regions replace auto-slicing
                 c.smpGain = juce::jlimit(0.0f, 4.0f, sl.smpGain);
@@ -3763,20 +3878,23 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         const double foutSrc = juce::jmax(1.0, 0.010 * sr * juce::jmax(0.05, c.speed));
                         const double toEnd   = (double) regHiV - head;
                         if (! loopEngaged && toEnd < foutSrc) env *= juce::jmax(0.0f, (float)(toEnd / foutSrc));
-                        // The sinc read at a fractional position (the loop crossfade reads twice).
-                        auto readAt = [&](double hpos, float& oL, float& oR)
+                        // The sinc read at a fractional position, buffer-parameterized [2026-07-19]
+                        // (the loop crossfade reads twice; a velocity-layer pair reads a 2nd buffer).
+                        auto readAt = [&](const juce::AudioBuffer<float>* sb, int len2, int lo2, int hi2,
+                                          double hpos, float& oL, float& oR)
                         {
                             const int idx = (int) hpos;
                             oL = 0.0f; oR = 0.0f;
-                            if (idx < regLoV || idx >= juce::jmin(regHiV, sLen)) return;
+                            if (idx < lo2 || idx >= juce::jmin(hi2, len2)) return;
                             const float fr = (float)(hpos - idx);
                             int rIdx = idx;
                             const int dir = c.reverse ? -1 : 1;          // playback direction
-                            if (c.reverse) rIdx = juce::jlimit(0, sLen - 1, regLoV + (regHiV - 1 - idx));
-                            const auto* srcA = sbuf->getReadPointer(0);
-                            const auto* srcB = sbuf->getReadPointer(juce::jmin(1, sCh - 1));
+                            if (c.reverse) rIdx = juce::jlimit(0, len2 - 1, lo2 + (hi2 - 1 - idx));
+                            const int ch2 = sb->getNumChannels();
+                            const auto* srcA = sb->getReadPointer(0);
+                            const auto* srcB = sb->getReadPointer(juce::jmin(1, ch2 - 1));
                             // [2026-07-13 20:45] 8-tap windowed-SINC interpolation (replaced 4-point Hermite).
-                            auto at = [&](const float* s2, int k){ return s2[juce::jlimit(0, sLen - 1, rIdx + dir * k)]; };
+                            auto at = [&](const float* s2, int k){ return s2[juce::jlimit(0, len2 - 1, rIdx + dir * k)]; };
                             const float* hp = gSincTable.t[juce::jlimit(0, SincTable::PHASES,
                                                                         (int) std::lround((double) fr * SincTable::PHASES))];
                             float accL = 0.0f, accR = 0.0f;
@@ -3784,14 +3902,35 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                             { const float wj = hp[j]; accL += wj * at(srcA, j - (SincTable::HALF - 1)); accR += wj * at(srcB, j - (SincTable::HALF - 1)); }
                             oL = accL; oR = accR;
                         };
-                        readAt(head, sL, sR);
+                        readAt(sbuf, sLen, regLoV, regHiV, head, sL, sR);
                         if (headXf >= 0.0 && xfW > 0.0f)
                         {   // equal-power crossfade into the pre-loop material (click-free wrap)
                             float xL = 0.0f, xR = 0.0f;
-                            readAt(headXf, xL, xR);
+                            readAt(sbuf, sLen, regLoV, regHiV, headXf, xL, xR);
                             const float gCur = std::cos(xfW * juce::MathConstants<float>::halfPi);
                             const float gNew = std::sin(xfW * juce::MathConstants<float>::halfPi);
                             sL = sL * gCur + xL * gNew; sR = sR * gCur + xR * gNew;
+                        }
+                        // [2026-07-19] VELOCITY-LAYER CROSSFADE: blend toward the next-louder layer
+                        // (equal-power). Layers are takes of the SAME note, so sharing the primary's
+                        // head/loop position is a benign approximation (lengths differ slightly -
+                        // the bounds guard covers the tail).
+                        if (ms && sv.msBuf2 != nullptr && sv.msMix > 0.001f)
+                        {
+                            const auto* b2 = sv.msBuf2; const int len2 = b2->getNumSamples();
+                            float tL = 0.0f, tR = 0.0f;
+                            readAt(b2, len2, 0, len2, head, tL, tR);
+                            if (headXf >= 0.0 && xfW > 0.0f)
+                            {
+                                float xL2 = 0.0f, xR2 = 0.0f;
+                                readAt(b2, len2, 0, len2, headXf, xL2, xR2);
+                                const float gC = std::cos(xfW * juce::MathConstants<float>::halfPi);
+                                const float gN = std::sin(xfW * juce::MathConstants<float>::halfPi);
+                                tL = tL * gC + xL2 * gN; tR = tR * gC + xR2 * gN;
+                            }
+                            const float g1 = std::cos(sv.msMix * juce::MathConstants<float>::halfPi);
+                            const float g2 = std::sin(sv.msMix * juce::MathConstants<float>::halfPi);
+                            sL = sL * g1 + tL * g2; sR = sR * g1 + tR * g2;
                         }
                         if (c.crushStep > 0.0f) { sL = std::round(sL / c.crushStep) * c.crushStep; sR = std::round(sR / c.crushStep) * c.crushStep; }
                         sL *= env * c.smpGain; sR *= env * c.smpGain;   // sample output boost
@@ -4244,6 +4383,60 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         }
 
         if (finished) v.playHead = -1.0;
+    }
+
+    // [2026-07-19] INSTRUMENT RIG (Multisample Instruments): the dedicated NAM amp + Cab IR run
+    // FIRST - amp, then the user's FX A/B/C (the musically right order). Same mono/halfband
+    // recipe as the ChFxNamAmp case; nothing loaded = untouched.
+    if (auto* rig = msRigNamLive.load(std::memory_order_acquire); rig != nullptr && (int) namMono.size() >= numSamples)
+    {
+        float* mono = namMono.data();
+        for (int i = 0; i < numSamples; ++i) mono[i] = 0.5f * (outL[i] + outR[i]);
+        const float g = msRigGain;
+        const auto& hb = namHalfBand();
+        if (engineOS >= 2 && (numSamples & 1) == 0 && (int) namHost.size() * 2 >= numSamples)
+        {
+            const int n2 = numSamples / 2;
+            float* dnH = msRigDnHist;
+            auto xIn = [&](int idx) { return idx < 0 ? dnH[idx + 22] : mono[idx]; };
+            for (int m = 0; m < n2; ++m)
+            {
+                float acc = 0.0f;
+                for (int k = 0; k < 23; ++k) acc += hb[(size_t) k] * xIn(2 * m + k - 22);
+                namHost[(size_t) m] = acc;
+            }
+            for (int k = 0; k < 22; ++k) dnH[k] = mono[juce::jmax(0, numSamples - 22 + k)];
+            basamak_nam::process(rig, namHost.data(), n2);
+            float* upH = msRigUpHist;
+            auto zAt = [&](int idx) -> float {
+                if (idx < 0) return upH[idx + 22];
+                return (idx & 1) == 0 ? namHost[(size_t)(idx >> 1)] : 0.0f; };
+            for (int i = 0; i < numSamples; ++i)
+            {
+                float acc = 0.0f;
+                for (int k = 0; k < 23; ++k) acc += hb[(size_t) k] * zAt(i + k - 22);
+                const float v = juce::jlimit(-8.0f, 8.0f, 2.0f * g * acc);
+                outL[i] = v; outR[i] = v;
+            }
+            for (int k = 0; k < 22; ++k)
+            { const int idx = numSamples - 22 + k;
+              upH[k] = idx < 0 ? 0.0f : ((idx & 1) == 0 ? namHost[(size_t)(idx >> 1)] : 0.0f); }
+        }
+        else
+        {
+            basamak_nam::process(rig, mono, numSamples);
+            for (int i = 0; i < numSamples; ++i)
+            { const float v = juce::jlimit(-8.0f, 8.0f, g * mono[i]); outL[i] = v; outR[i] = v; }
+        }
+    }
+    if (auto* rigCv = msRigConvLive.load(std::memory_order_acquire))
+    {
+        float* chans[2] = { outL, outR };
+        juce::dsp::AudioBlock<float> blk2(chans, 2, (size_t) numSamples);
+        juce::dsp::ProcessContextReplacing<float> ctx2(blk2);
+        rigCv->process(ctx2);
+        for (int i = 0; i < numSamples; ++i)
+        { outL[i] = juce::jlimit(-8.0f, 8.0f, outL[i]); outR[i] = juce::jlimit(-8.0f, 8.0f, outR[i]); }
     }
 
     // === CHANNEL FX (v1.3.9 round-2): TWO selectable effect SLOTS run in series A -> B on the summed

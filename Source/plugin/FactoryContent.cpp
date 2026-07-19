@@ -122,6 +122,7 @@ static void clearSound(DC& c)
     c.keysSlot2Down = 0;   // slot-2 pitch is TIED TO THE SOUND now: each sound sets its own (default 0),
                            // so picking a new sound refreshes it instead of leaking the previous value.
     for (int f = 0; f < 3; ++f) { c.chFxType[f] = 0; c.chFxAmt[f] = 0.0f; c.chFxChar[f] = 0.5f; c.chFxFile[f].clear(); c.refreshChFxAssets(f); }   // CHANNEL FX ride with the sound (+ unload NAM/IR)
+    c.msRigModel.clear(); c.msRigIr.clear(); c.refreshMsRig();   // [2026-07-19] instrument rig rides with the sound
     { DC dch2; for (int cf = 0; cf < 2; ++cf) { c.chFiltType[cf] = 0; c.chFiltCutoff[cf] = dch2.chFiltCutoff[cf]; c.chFiltReso[cf] = 0.707f; c.chFiltGain[cf] = 0.0f; } c.chFiltDrive = 0.0f; }   // CHANNEL FILTER/EQ reset [2026-07-16]
     c.reverbSend = 0.0f; c.delaySend = 0.0f;   // channel sends ride with the sound too
     c.markDspDirty();
@@ -3211,6 +3212,7 @@ static void resetAll(Sequencer& s)
             ch.keysSlot2Down = 0;   // KEYS slot-2 transpose (channel-wide) is preset-level too
             ch.humanizeAmt = 0.0f; ch.strumAmt = 0.0f; ch.keysMinVel = 0.0f; ch.keysMaxVel = 1.0f; ch.keysGlide = 0.0f;   // HUMANIZE / STRUM / vel range / GLIDE reset
             for (int f2 = 0; f2 < 3; ++f2) { ch.chFxType[f2] = 0; ch.chFxAmt[f2] = 0.0f; ch.chFxChar[f2] = 0.5f; ch.chFxFile[f2].clear(); ch.refreshChFxAssets(f2); }   // CHANNEL FX reset (+ unload NAM/IR)
+            ch.msRigModel.clear(); ch.msRigIr.clear(); ch.refreshMsRig();   // [2026-07-19] instrument rig
             { DC dch2; for (int cf = 0; cf < 2; ++cf) { ch.chFiltType[cf] = 0; ch.chFiltCutoff[cf] = dch2.chFiltCutoff[cf]; ch.chFiltReso[cf] = 0.707f; ch.chFiltGain[cf] = 0.0f; } ch.chFiltDrive = 0.0f; }   // CHANNEL FILTER/EQ reset [2026-07-16]
             ch.reverbSend = 0.0f; ch.delaySend = 0.0f;
             ch.mergeWith = -1; ch.keysSplitW1 = 60; ch.keysSplitW2 = 12;   // MERGE&SPLIT reset (per-pattern pairing + split windows)

@@ -487,15 +487,22 @@ public:
 
     MsRecordWizard()
     {
-        for (auto* b : { &startBtn, &retryBtn, &keepBtn, &skipBtn, &closeBtn, &finishBtn })
+        for (auto* b : { &startBtn, &retryBtn, &keepBtn, &skipBtn, &closeBtn, &finishBtn, &layerBtn })
             addChildComponent(*b);
+        layerBtn.setTooltip("Save this take as ANOTHER VELOCITY LAYER of the same note, then record "
+            "it again at a different strength (up to 5 layers per note - you decide per note).\n\n"
+            "- Record soft first, then LAYER + and play harder (any order works - layers are "
+            "sorted by measured loudness).\n"
+            "- Playback CROSSFADES between layers by how hard you hit the key.\n"
+            "- KEEP = done with this note, move on.");
+        layerBtn.onClick = [this] { saveCurrent(true); };
         addChildComponent(nameEd);
         nameEd.setText("My Instrument", juce::dontSendNotification);
         nameEd.setJustification(juce::Justification::centredLeft);
         startBtn.onClick = [this] { beginSession(); };
         closeBtn.onClick = [this] { close(); };
         retryBtn.onClick = [this] { phase = Listen; readCur = tapNow(); capBuf.clear(); repaint(); syncButtons(); };
-        keepBtn.onClick  = [this] { saveCurrent(); };
+        keepBtn.onClick  = [this] { saveCurrent(false); };
         skipBtn.onClick  = [this] { skipped.addIfNotAlreadyThere(curTarget()); rebuildPending(); repaint(); syncButtons(); };
         finishBtn.onClick = [this] { finishSession(); };
     }
@@ -510,7 +517,7 @@ public:
     void open(int slot)
     {
         slotIdx = slot; phase = Setup; takes.clear(); pending.clear(); skipped.clear();
-        listOff = 0;
+        listOff = 0; layerNote = -1; editExisting = false;
         if (proc != nullptr) proc->msTapOn = true;
         setVisible(true); toFront(true);
         startTimerHz(30); syncButtons(); repaint();
@@ -535,9 +542,10 @@ public:
         const int lw = leftW();
         startBtn.setBounds(lw / 2 - 60, b.getBottom() - 38, 120, 26);
         const int by = b.getBottom() - 38;
-        retryBtn.setBounds(lw / 2 - 150, by, 88, 26);
-        keepBtn.setBounds (lw / 2 - 44,  by, 88, 26);
-        skipBtn.setBounds (lw / 2 + 62,  by, 88, 26);
+        retryBtn.setBounds(lw / 2 - 196, by, 88, 26);
+        keepBtn.setBounds (lw / 2 - 102, by, 88, 26);
+        layerBtn.setBounds(lw / 2 - 8,   by, 96, 26);
+        skipBtn.setBounds (lw / 2 + 94,  by, 88, 26);
         finishBtn.setBounds(lw / 2 - 60, by, 120, 26);
     }
 
@@ -651,8 +659,13 @@ public:
             const juce::Rectangle<int> lc = listRect();
             g.setColour(juce::Colour(0xff181830)); g.fillRoundedRectangle(lc.toFloat(), 5.0f);
             g.setColour(juce::Colour(0xff33335a)); g.drawRoundedRectangle(lc.toFloat(), 5.0f, 1.0f);
-            g.setColour(juce::Colour(0xffaebada)); g.setFont(juce::Font(11.5f, juce::Font::bold));
-            g.drawText("RECORDED (" + juce::String((int) takes.size()) + ")", lc.getX() + 8, lc.getY() + 4, lc.getWidth() - 16, 14, juce::Justification::left);
+            g.setColour(juce::Colour(0xff9fd1ff)); g.setFont(juce::Font(11.5f, juce::Font::bold));
+            g.drawText((editExisting ? juce::File(sessionDir).getFileName() : nameEd.getText().trim())
+                       + " (" + juce::String((int) takes.size()) + ")",
+                       lc.getX() + 8, lc.getY() + 4, lc.getWidth() - 28, 14, juce::Justification::left);
+            { juce::Path tri; const float tx = (float) lc.getRight() - 16.0f, tyy = (float) lc.getY() + 8.0f;   // dropdown triangle (drawn)
+              tri.addTriangle(tx, tyy, tx + 8.0f, tyy, tx + 4.0f, tyy + 5.0f);
+              g.setColour(juce::Colour(0xff9fd1ff)); g.fillPath(tri); }
             const int n = (int) takes.size(), vis = listVisRows();
             listOff = juce::jlimit(0, juce::jmax(0, n - vis), listOff);
             for (int r = 0; r < vis && r + listOff < n; ++r)
@@ -661,10 +674,12 @@ public:
                 const auto rr = listRowRect(r);
                 g.setColour(juce::Colour(0xff20203a)); g.fillRoundedRectangle(rr.toFloat().reduced(1.0f), 3.0f);
                 g.setColour(juce::Colours::white); g.setFont(juce::Font(11.0f, juce::Font::bold));
-                g.drawText(juce::MidiMessage::getMidiNoteName(t.note, true, true, 4), rr.getX() + 5, rr.getY(), 30, rr.getHeight(), juce::Justification::centredLeft);
+                g.drawText(juce::MidiMessage::getMidiNoteName(t.note, true, true, 4)
+                           + (t.layer > 1 ? " v" + juce::String(t.layer) : juce::String()),
+                           rr.getX() + 5, rr.getY(), 34, rr.getHeight(), juce::Justification::centredLeft);
                 g.setColour(juce::Colour(0xffaebada)); g.setFont(10.5f);
-                g.drawText(juce::String(t.lenSec, 1) + "s", rr.getX() + 36, rr.getY(), 34, rr.getHeight(), juce::Justification::centredLeft);
-                g.drawText(juce::String(juce::roundToInt(t.peakDb)) + "dB", rr.getX() + 72, rr.getY(), 40, rr.getHeight(), juce::Justification::centredLeft);
+                g.drawText(juce::String(t.lenSec, 1) + "s", rr.getX() + 40, rr.getY(), 32, rr.getHeight(), juce::Justification::centredLeft);
+                g.drawText(juce::String(juce::roundToInt(t.peakDb)) + "dB", rr.getX() + 74, rr.getY(), 38, rr.getHeight(), juce::Justification::centredLeft);
                 g.setColour(juce::Colour(0xff35b56a));                       // audition glyph (drawn, no unicode)
                 { juce::Path pl; const float px = (float) rr.getRight() - 34.0f, py = (float) rr.getCentreY();
                   pl.addTriangle(px, py - 4.0f, px, py + 4.0f, px + 7.0f, py); g.fillPath(pl); }
@@ -683,15 +698,19 @@ public:
         // the RECORDED list: row click = audition, its x = delete + re-queue that note
         if (listRect().contains(e.getPosition()))
         {
+            const auto lc = listRect();
+            if (e.getPosition().y < lc.getY() + 20) { openInstrumentMenu(); return; }   // title row = the dropdown
             const int vis = listVisRows();
             for (int r = 0; r < vis && r + listOff < (int) takes.size(); ++r)
                 if (listRowRect(r).contains(e.getPosition()))
                 {
                     const int idx = r + listOff;
                     if (e.getPosition().x >= listRowRect(r).getRight() - 18)
-                    {   // delete: file gone, note re-queued in order
+                    {   // delete: file gone, note re-queued in order (unless other layers remain)
+                        const int dn = takes[(size_t) idx].note;
                         takes[(size_t) idx].file.deleteFile();
                         takes.erase(takes.begin() + idx);
+                        if (layerNote == dn) layerNote = -1;
                         rebuildPending();
                         if (phase == DoneAll && ! pending.isEmpty()) { phase = Listen; readCur = tapNow(); capBuf.clear(); }
                         syncButtons(); repaint();
@@ -742,10 +761,12 @@ private:
     int   armDb  = -10, endDb = -30;                          // start / end gates (user defaults 2026-07-19)
     int   preMs  = 10;                                        // pre-roll kept before the Start gate fires
     float noiseFloorPk = 0.0f; juce::int64 floorFrames = 0;   // measured while listening (warning only)
-    struct Take { int note = 0; juce::File file; float lenSec = 0.0f; float peakDb = -90.0f; };
+    struct Take { int note = 0; int layer = 1; juce::File file; float lenSec = 0.0f; float peakDb = -90.0f; };
     std::vector<Take> takes;                                  // kept notes, sorted by note
     juce::Array<int>  pending;                                // still to record (head = current target)
     juce::Array<int>  skipped;                                // user-skipped (not re-queued)
+    int  layerNote = -1;                                      // LAYER+: stay on this note for another take
+    bool editExisting = false;                                // dropdown-picked instrument = edit IN PLACE
     int listOff = 0;
     juce::int64 readCur = 0, capStartFrame = 0;
     std::vector<float> capBuf;
@@ -753,7 +774,8 @@ private:
     int dragBox = 0, dragBase = 0;
     juce::File sessionDir;
     juce::TextButton startBtn { "START" }, retryBtn { "RETRY" }, keepBtn { "KEEP" },
-                     skipBtn { "SKIP" }, closeBtn { "X" }, finishBtn { "FINISH" };
+                     skipBtn { "SKIP" }, closeBtn { "X" }, finishBtn { "FINISH" },
+                     layerBtn { "LAYER +" };
     juce::TextEditor nameEd;
     struct Closer : juce::MouseListener
     {
@@ -798,6 +820,7 @@ private:
         pending.clear();
         auto want = [this](int k)
         {
+            if (k == layerNote) return true;   // LAYER+ keeps the note queued for another take
             for (const auto& t : takes) if (t.note == k) return false;
             return ! skipped.contains(k);
         };
@@ -808,11 +831,78 @@ private:
         else if (phase == DoneAll && ! pending.isEmpty()) { phase = Listen; readCur = tapNow(); capBuf.clear(); }
     }
 
+    // [2026-07-19] the RECORDED-title DROPDOWN: pick any existing instrument to EDIT IT IN
+    // PLACE - its takes list loads with length + peak scanned from the files, deletes and
+    // re-records overwrite for real (user-approved rule), and the range boxes snap to it.
+    void openInstrumentMenu()
+    {
+        juce::PopupMenu m;
+        juce::Array<juce::File> dirs = baseDir.findChildFiles(juce::File::findDirectories, false);
+        dirs.sort();
+        int id = 1000;
+        for (auto& d : dirs)
+        {
+            if (d.getNumberOfChildFiles(juce::File::findFiles, "*.wav;*.aif;*.aiff;*.flac") == 0) { ++id; continue; }
+            m.addItem(id, d.getFileName(), true, d == sessionDir);
+            ++id;
+        }
+        if (m.getNumItems() == 0) m.addItem(-1, "(no instruments yet)", false);
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(
+                            listRect().translated(getScreenX(), getScreenY()).withHeight(20)),
+            [this, dirs](int r)
+            {
+                if (r < 1000) return;
+                const int idx = r - 1000;
+                if (idx >= 0 && idx < dirs.size()) loadExisting(dirs[(int) idx]);
+            });
+    }
+    void loadExisting(const juce::File& dir)
+    {
+        if (proc != nullptr) proc->previewStop();
+        sessionDir = dir; editExisting = true;
+        nameEd.setText(dir.getFileName(), juce::dontSendNotification);
+        takes.clear(); skipped.clear(); capBuf.clear(); layerNote = -1; listOff = 0;
+        juce::AudioFormatManager fm; fm.registerBasicFormats();
+        auto files = dir.findChildFiles(juce::File::findFiles, false, "*.wav;*.aif;*.aiff;*.flac");
+        files.sort();
+        int lo2 = 128, hi2 = -1;
+        for (auto& f : files)
+        {
+            const int note = DrumChannel::noteNameToMidi(
+                f.getFileNameWithoutExtension().trim().upToFirstOccurrenceOf(" ", false, false));
+            if (note < 0) continue;
+            std::unique_ptr<juce::AudioFormatReader> r2(fm.createReaderFor(f));
+            if (r2 == nullptr || r2->lengthInSamples <= 0) continue;
+            Take t; t.note = note; t.file = f;
+            for (const auto& t2 : takes) if (t2.note == note) ++t.layer;
+            t.lenSec = (float)(r2->lengthInSamples / juce::jmax(1.0, r2->sampleRate));
+            juce::AudioBuffer<float> pb(1, (int) juce::jmin<juce::int64>(r2->lengthInSamples, 1 << 20));
+            r2->read(&pb, 0, pb.getNumSamples(), 0, true, false);
+            float pk = 0.0f;
+            for (int i = 0; i < pb.getNumSamples(); ++i) pk = juce::jmax(pk, std::abs(pb.getSample(0, i)));
+            t.peakDb = juce::Decibels::gainToDecibels(juce::jmax(1.0e-5f, pk));
+            takes.push_back(t);
+            lo2 = juce::jmin(lo2, note); hi2 = juce::jmax(hi2, note);
+        }
+        std::sort(takes.begin(), takes.end(),
+                  [](const Take& a, const Take& b){ return a.note != b.note ? a.note < b.note : a.layer < b.layer; });
+        if (hi2 >= 0) { loNote = lo2; hiNote = juce::jmax(lo2, hi2); }
+        noiseFloorPk = 0.0f; floorFrames = 0;
+        if (proc != nullptr) proc->msTapOn = true;
+        rebuildPending();
+        phase = pending.isEmpty() ? DoneAll : Listen;
+        readCur = tapNow();
+        syncButtons(); repaint();
+    }
+
     void syncButtons()
     {
         closeBtn.setVisible(true);
         startBtn.setVisible(phase == Setup); nameEd.setVisible(phase == Setup);
         retryBtn.setVisible(phase == Review); keepBtn.setVisible(phase == Review);
+        int curLayers = 0;
+        for (const auto& t : takes) if (t.note == curTarget()) ++curLayers;
+        layerBtn.setVisible(phase == Review && curLayers < DrumChannel::MS_LAYERS - 1);
         skipBtn.setVisible(phase == Listen || phase == Capture || phase == Review);
         finishBtn.setVisible(phase == DoneAll);
     }
@@ -826,6 +916,7 @@ private:
             sessionDir = baseDir.getChildFile(nm + " " + juce::String(suffix++));
         sessionDir.createDirectory();
         takes.clear(); skipped.clear(); capBuf.clear();
+        layerNote = -1; editExisting = false;
         noiseFloorPk = 0.0f; floorFrames = 0;
         rebuildPending();
         readCur = tapNow(); phase = pending.isEmpty() ? DoneAll : Listen; syncButtons(); repaint();
@@ -921,13 +1012,16 @@ private:
         }
         phase = Review; syncButtons(); repaint();
     }
-    void saveCurrent()
+    void saveCurrent(bool stayForLayer)
     {
         const double sr = rate();
         const int target = curTarget();
         if (target < 0) { rebuildPending(); syncButtons(); repaint(); return; }
-        juce::File f = sessionDir.getChildFile(
-            juce::MidiMessage::getMidiNoteName(target, true, true, 4) + ".wav");
+        int layerNo = 1;
+        for (const auto& t : takes) if (t.note == target) ++layerNo;   // next layer index
+        const juce::String base = juce::MidiMessage::getMidiNoteName(target, true, true, 4);
+        juce::File f = sessionDir.getChildFile(layerNo == 1 ? base + ".wav"
+                                                            : base + " v" + juce::String(layerNo) + ".wav");
         f.deleteFile();
         bool wrote = false;
         if (auto os = f.createOutputStream())
@@ -945,13 +1039,15 @@ private:
         {
             float pk = 0.0f;
             for (float v : capBuf) pk = juce::jmax(pk, std::abs(v));
-            Take t; t.note = target; t.file = f;
+            Take t; t.note = target; t.layer = layerNo; t.file = f;
             t.lenSec = (float)(capBuf.size() / juce::jmax(1.0, sr));
             t.peakDb = juce::Decibels::gainToDecibels(juce::jmax(1.0e-5f, pk));
             takes.push_back(t);
-            std::sort(takes.begin(), takes.end(), [](const Take& a, const Take& b){ return a.note < b.note; });
+            std::sort(takes.begin(), takes.end(),
+                      [](const Take& a, const Take& b){ return a.note != b.note ? a.note < b.note : a.layer < b.layer; });
         }
         capBuf.clear();
+        layerNote = stayForLayer && wrote ? target : -1;   // LAYER+ = same note again
         rebuildPending();
         if (phase != DoneAll) { phase = Listen; readCur = tapNow(); }
         syncButtons(); repaint();
@@ -961,7 +1057,7 @@ private:
         const bool any = ! takes.empty();
         const juce::File dir = sessionDir;
         close();
-        if (any && onDone) onDone(slotIdx, dir);
+        if (any && onDone) onDone(slotIdx, dir);   // (edit-in-place reloads the same folder = updated zones)
     }
 };
 
@@ -2005,6 +2101,8 @@ public:
     }
     void setEngine(int eng);     // rebuild params + show/hide knobs
     void pushValues();           // slot -> knobs (no notification)
+    bool msFace = false;         // [2026-07-19] Multisample Instruments face: hide the engine grid
+                                 // (the editor lays the dedicated MS controls into this area)
     void place(int boxX, int yTop, int boxW, int boxH); // lay out the visible knobs
     void paint(juce::Graphics& g) override;             // SrcOsc section divider lines + labels
     // How many params are actually shown right now: trailing resonGated params (the
@@ -3275,6 +3373,14 @@ private:
     TipCombo comboChFx[3];
     juce::TextButton btnSmpTog[DrumChannel::NUM_SLOTS][4];   // [2026-07-19] Trim/Reverse/Keep pitch/Loop as a 2x2
                                                              // BUTTON grid (user design) - each proxies its ToggleSwitch
+    // [2026-07-19] MULTISAMPLE INSTRUMENTS panel (shown instead of the sample grid when the slot
+    // holds a zone set): dB Gain + Loop Xfade knobs, Auto-Loop, note range, the amp RIG row.
+    LearnableKnob    knobMsGain[DrumChannel::NUM_SLOTS] { { "", proc.midiLearn }, { "", proc.midiLearn } },
+                     knobMsXf  [DrumChannel::NUM_SLOTS] { { "", proc.midiLearn }, { "", proc.midiLearn } };
+    juce::Label      lblMsGain[DrumChannel::NUM_SLOTS], lblMsXf[DrumChannel::NUM_SLOTS], lblMsRange[DrumChannel::NUM_SLOTS];
+    juce::TextButton btnMsAutoLoop[DrumChannel::NUM_SLOTS], btnMsRigModel[DrumChannel::NUM_SLOTS], btnMsRigIr[DrumChannel::NUM_SLOTS];
+    void openMsRigPicker(int slot, bool ir);   // model/IR menu -> msRigModel/msRigIr + refreshMsRig + sidecar
+    void autoLoopFind(int slot);               // best-match loop search on the displayed zone
     juce::TextButton btnChFxFile[3];        // [2026-07-18] NAM model / Cab IR full-row picker (replaces Amt+Chr on those types)
     juce::Array<juce::File> chFxPickFiles;  // flat file list behind the open picker menu
     void openChFxFilePicker(int fx);

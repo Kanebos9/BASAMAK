@@ -2307,6 +2307,14 @@ void SlotEditor::place(int boxX, int yTop, int boxW, int boxH)
     lastBoxX = boxX; lastYTop = yTop; lastBoxW = boxW; lastBoxH = boxH;
     updateKnobVisibility();                               // resonator reveal may have toggled
     setBounds(boxX, yTop, boxW, boxH);
+    if (msFace)
+    {   // [2026-07-19] Multisample Instruments: no engine grid - the editor places the dedicated
+        // controls (dB Gain / Loop Xfade / Auto-Loop / note range / amp rig) over this area.
+        for (int i = 0; i < MAXK; ++i) { knobs[(size_t) i]->setVisible(false); labels[(size_t) i]->setVisible(false); }
+        oscLayout = false; fmLineY = resLineY = -1;
+        repaint();
+        return;
+    }
     // Reset all generic knobs to rotary + value-below; placeGeneric re-styles some as faders for 5+-param engines.
     for (auto& k : knobs) { k->setSliderStyle(juce::Slider::RotaryVerticalDrag);
                             k->setTextBoxStyle(juce::Slider::TextBoxBelow, true, 46, 13); }
@@ -5503,8 +5511,11 @@ void WaveformDisplay::filesDropped(const juce::StringArray& files, int, int)
 
 void WaveformDisplay::mouseDown(const juce::MouseEvent& e)
 {
-    // [2026-07-18] SHIFT+drag = edit the LOOP region (cyan) while Loop is on.
-    if (loopOn && e.mods.isShiftDown())
+    // [2026-07-19] LOOP drawing = TRIM-style (user order): press = one end, release = the other,
+    // a new drag REPLACES the old loop. Plain drag draws the loop whenever Trim isn't armed
+    // (Multisample Instruments have no trim, so plain drag simply IS the loop there); with Trim
+    // armed, trim owns plain drag and SHIFT+drag draws the loop instead.
+    if ((! selEnabled) || e.mods.isShiftDown())
     {
         loopDragging = true;
         dragAnchor = juce::jlimit(0.0f, 1.0f, (float) e.position.x / (float) juce::jmax(1, getWidth()));
@@ -6186,6 +6197,86 @@ void DrumSequencerEditor::openChFxFilePicker(int fx)
         });
 }
 
+// [2026-07-19] INSTRUMENT RIG picker: same folder-menu recipe as the Channel FX pickers, but it
+// writes the channel's DEDICATED rig fields (msRigModel/msRigIr) + the instrument sidecar.
+void DrumSequencerEditor::openMsRigPicker(int slot, bool ir)
+{
+    auto& ch = proc.sequencer.channel(selectedChannel);
+    const juce::File folder = ir ? UserPaths::cabIrs() : UserPaths::namModels();
+    folder.createDirectory();
+    const juce::String wild = ir ? "*.wav;*.aif;*.aiff;*.flac" : "*.nam";
+    const juce::String cur  = ir ? ch.msRigIr : ch.msRigModel;
+    chFxPickFiles.clear();
+    juce::PopupMenu m;
+    m.addItem(2, ir ? "No cabinet" : "No amp", true, cur.isEmpty());
+    m.addSeparator();
+    std::function<void(juce::PopupMenu&, const juce::File&)> addDir =
+        [&](juce::PopupMenu& menu, const juce::File& dir)
+    {
+        auto dirs = dir.findChildFiles(juce::File::findDirectories, false); dirs.sort();
+        for (auto& d : dirs)
+        { juce::PopupMenu sub; addDir(sub, d); if (sub.getNumItems() > 0) menu.addSubMenu(d.getFileName(), sub); }
+        auto files = dir.findChildFiles(juce::File::findFiles, false, wild); files.sort();
+        for (auto& f : files)
+        { menu.addItem(1000 + chFxPickFiles.size(), f.getFileNameWithoutExtension(), true, f.getFullPathName() == cur);
+          chFxPickFiles.add(f); }
+    };
+    addDir(m, folder);
+    if (chFxPickFiles.isEmpty())
+        m.addItem(-1, ir ? "(no impulse WAVs - drop IRs into Cab IRs)"
+                         : "(no .nam files - drop captures into NAM Models)", false);
+    m.addSeparator();
+    m.addItem(3, "Show Folder");
+    auto& btn = ir ? btnMsRigIr[slot] : btnMsRigModel[slot];
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(btn),
+        [this, slot, ir, folder](int id)
+        {
+            if (id == 0) return;
+            auto& c2 = proc.sequencer.channel(selectedChannel);
+            if (id == 3) { folder.revealToUser(); return; }
+            juce::String& dst = ir ? c2.msRigIr : c2.msRigModel;
+            if (id == 2) dst.clear();
+            else
+            { const int idx = id - 1000;
+              if (idx < 0 || idx >= chFxPickFiles.size()) return;
+              dst = chFxPickFiles[idx].getFullPathName(); }
+            c2.refreshMsRig();                 // load + prewarm (a big model = a short pause)
+            c2.writeMsSidecar(slot);           // the rig travels with the instrument
+            c2.markDspDirty(); refreshDetailPanel();
+            if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel);
+        });
+}
+
+// [2026-07-19] AUTO-LOOP: search the displayed zone's sustain for the loop pair that matches
+// best - lo fixed at ~40% in, hi swept across 55..92%, scored by waveform mismatch over a
+// 1024-sample window (the lower the score, the less click at the wrap). Coarse+cheap, message
+// thread; the user fine-tunes by dragging on the waveform.
+void DrumSequencerEditor::autoLoopFind(int slot)
+{
+    auto& ch = proc.sequencer.channel(selectedChannel);
+    const auto& buf = ch.slotSample[slot].buf;
+    const int n = buf.getNumSamples();
+    if (n < 8192) return;
+    const float* d = buf.getReadPointer(0);
+    const int lo = (int)(n * 0.40), win = 1024;
+    int bestHi = (int)(n * 0.75); double bestScore = 1.0e18;
+    for (int hi = (int)(n * 0.55); hi < (int)(n * 0.92) - win; hi += 256)
+    {
+        double sc = 0.0;
+        for (int k = 0; k < win; k += 4)
+        { const double df = (double) d[lo + k] - d[hi + k]; sc += df * df; }
+        if (sc < bestScore) { bestScore = sc; bestHi = hi; }
+    }
+    auto& sl = ch.slots[slot];
+    sl.smpLoopLo = (float) lo / (float) n;
+    sl.smpLoopHi = (float) bestHi / (float) n;
+    sl.smpLoopOn = true;
+    waveform[slot].setLoop(true, sl.smpLoopLo, sl.smpLoopHi);
+    ch.markDspDirty(); ch.writeMsSidecar(slot);
+    refreshDetailPanel();
+    if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel);
+}
+
 void DrumSequencerEditor::cacheWaveform(int ch)
 {
     auto& dch = proc.sequencer.channel(ch);
@@ -6405,6 +6496,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
     // CHANNEL FX (both slots combined) are part of the SOUND: chorus / flanger / phaser / comp.
     for (int fx = 0; fx < 3; ++fx)
     { h = mix(h, c.chFxType[fx]); h = mix(h, f(c.chFxAmt[fx])); h = mix(h, f(c.chFxChar[fx])); h = mix(h, (juce::int64) c.chFxFile[fx].hashCode64()); }
+    h = mix(h, (juce::int64) c.msRigModel.hashCode64()); h = mix(h, (juce::int64) c.msRigIr.hashCode64());   // [2026-07-19]
     for (int cf = 0; cf < 2; ++cf)   // [2026-07-16] CHANNEL FILTER/EQ pair
     { h = mix(h, c.chFiltType[cf]); h = mix(h, f(c.chFiltCutoff[cf])); h = mix(h, f(c.chFiltReso[cf])); h = mix(h, f(c.chFiltGain[cf])); }
     h = mix(h, f(c.chFiltDrive));
@@ -6434,7 +6526,8 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         h = mix(h, f(sl.smpSpeed)); h = mix(h, f(sl.smpCrush)); h = mix(h, f(sl.smpPitch)); h = mix(h, f(sl.smpPEnvAmt)); h = mix(h, f(sl.smpPEnvTime)); h = mix(h, f(sl.smpPOffset)); h = mix(h, sl.smpReverse ? 1 : 0); h = mix(h, sl.smpUseRegion ? 1 : 0);
         h = mix(h, f(sl.smpStart)); h = mix(h, f(sl.smpEnd)); h = mix(h, sl.smpSlices); h = mix(h, f(sl.smpStretch)); h = mix(h, f(sl.smpGain));
         h = mix(h, sl.smpEnvOn ? 1 : 0); h = mix(h, sl.smpPreservePitch ? 1 : 0);
-        h = mix(h, sl.smpLoopOn ? 1 : 0); h = mix(h, f(sl.smpLoopLo)); h = mix(h, f(sl.smpLoopHi));   // [2026-07-18] LOOP h = mix(h, sl.fmEnvFollow ? 1 : 0); h = mix(h, f(sl.modalMorph));
+        h = mix(h, sl.smpLoopOn ? 1 : 0); h = mix(h, f(sl.smpLoopLo)); h = mix(h, f(sl.smpLoopHi));   // [2026-07-18] LOOP
+        h = mix(h, f(sl.smpLoopXfMs)); h = mix(h, f(sl.msGainDb));   // [2026-07-19] Xfade + MS gain h = mix(h, sl.fmEnvFollow ? 1 : 0); h = mix(h, f(sl.modalMorph));
         h = mix(h, sl.smpRegN); for (int r = 0; r < DrumChannel::Slot::MAXREG; ++r) { h = mix(h, f(sl.smpRegLo[r])); h = mix(h, f(sl.smpRegHi[r])); }
         h = mix(h, (juce::int64) c.slotSample[b].file.getFullPathName().hashCode64());   // this slot's sample
         h = mix(h, f(sl.oscFold)); h = mix(h, f(sl.oscLevel)); h = mix(h, f(sl.noiseLevel));
@@ -6587,6 +6680,7 @@ void DrumSequencerEditor::resetChannelToDefault(DrumChannel& c, int ch)
     c.keysSlot2Down = 0;                                      // KEYS slot-2 transpose (channel-wide) resets too
     c.humanizeAmt = 0.0f; c.strumAmt = 0.0f; c.keysMinVel = 0.0f; c.keysMaxVel = 1.0f; c.keysGlide = 0.0f;   // HUMANIZE / STRUM / vel range / GLIDE default
     for (int fx = 0; fx < 3; ++fx) { c.chFxType[fx] = 0; c.chFxAmt[fx] = 0.0f; c.chFxChar[fx] = 0.5f; c.chFxFile[fx].clear(); c.refreshChFxAssets(fx); }   // CHANNEL FX off (+ unload NAM/IR)
+    c.msRigModel.clear(); c.msRigIr.clear(); c.refreshMsRig();   // [2026-07-19] instrument rig off
     { DrumChannel dch2; for (int cf = 0; cf < 2; ++cf) { c.chFiltType[cf] = 0; c.chFiltCutoff[cf] = dch2.chFiltCutoff[cf]; c.chFiltReso[cf] = 0.707f; c.chFiltGain[cf] = 0.0f; } c.chFiltDrive = 0.0f; }   // CHANNEL FILTER/EQ reset [2026-07-16]
     c.reverbSend = 0.0f; c.delaySend = 0.0f;   // channel sends off (the sound sets its own)
     c.mergeWith = -1; c.keysSplitW1 = 60; c.keysSplitW2 = 12;   // MERGE&SPLIT off / identity windows
@@ -6664,6 +6758,8 @@ void DrumSequencerEditor::writeChannelMix(juce::ValueTree& t, const DrumChannel&
       t.setProperty("cfxA" + k, ch.chFxAmt[fx],  nullptr);
       t.setProperty("cfxC" + k, ch.chFxChar[fx], nullptr);
       t.setProperty("cfxF" + k, ch.chFxFile[fx], nullptr); }   // [2026-07-18] NAM model / Cab IR path
+    t.setProperty("msRigM", ch.msRigModel, nullptr);   // [2026-07-19] instrument rig rides with the sound
+    t.setProperty("msRigI", ch.msRigIr,    nullptr);
     for (int f = 0; f < 2; ++f)   // [2026-07-16] CHANNEL FILTER/EQ pair rides with the sound
     { const juce::String k(f);
       t.setProperty("cfT" + k, ch.chFiltType[f],   nullptr);
@@ -6767,6 +6863,9 @@ void DrumSequencerEditor::readChannelMix(const juce::ValueTree& t, DrumChannel& 
       ch.chFxFile[fx] = t.getProperty("cfxF" + k, "").toString();
       if (ch.chFxType[fx] == DrumChannel::ChFxNamAmp || ch.chFxType[fx] == DrumChannel::ChFxCabIr)
           ch.refreshChFxAssets(fx); }   // message thread (mix load)
+    ch.msRigModel = t.getProperty("msRigM", "").toString();   // [2026-07-19] instrument rig
+    ch.msRigIr    = t.getProperty("msRigI", "").toString();
+    if (ch.msRigModel.isNotEmpty() || ch.msRigIr.isNotEmpty()) ch.refreshMsRig();
     for (int f = 0; f < 2; ++f)   // [2026-07-16] CHANNEL FILTER/EQ pair (0/defaults for old files)
     { const juce::String k(f); const float cDef = (f == 0) ? 1000.0f : 2500.0f;   // struct defaults (a full DrumChannel per read = heavy)
       ch.chFiltType[f]   = juce::jlimit(0, (int) DrumChannel::Bell, (int) t.getProperty("cfT" + k, 0));
@@ -10607,16 +10706,24 @@ void DrumSequencerEditor::setupComponents()
             proc.sequencer.channel(selectedChannel).markDspDirty();
         };
         swSmpLoop[b].setTooltip("LOOP: while a note is HELD (keys / gated piano-roll notes), playback CYCLES the "
-                                "cyan region with a fixed 25 ms crossfade - a short sample sustains like an "
-                                "instrument.\n\n"
-                                "- SHIFT+DRAG on the waveform draws/moves the loop region.\n"
+                                "cyan region with a crossfade (the Loop Xfade knob on instruments) - a short "
+                                "sample sustains like an instrument.\n\n"
+                                "- DRAG on the waveform draws the loop (press = one end, release = the other; "
+                                "a new drag replaces it; with Trim armed use SHIFT+DRAG).\n"
+                                "- AUTO-LOOP (instruments) finds a good region for you.\n"
                                 "- The attack before the region plays ONCE, then the loop holds.\n"
                                 "- Raise SUSTAIN in the amp envelope or the held note still decays.\n"
                                 "- One-shot steps ignore the loop and play through as always.");
         waveform[b].onLoopChange = [this, b](float lo, float hi) {
-            auto& sl = proc.sequencer.channel(selectedChannel).slots[b];
+            auto& dch2 = proc.sequencer.channel(selectedChannel);
+            auto& sl = dch2.slots[b];
             sl.smpLoopLo = lo; sl.smpLoopHi = hi;
-            proc.sequencer.channel(selectedChannel).markDspDirty();
+            if (! sl.smpLoopOn && hi - lo > 0.005f)   // [2026-07-19] drawing a loop TURNS IT ON (trim-style)
+            { sl.smpLoopOn = true; waveform[b].setLoop(true, lo, hi);
+              swSmpLoop[b].setToggleState(true, juce::dontSendNotification);
+              btnSmpTog[b][3].setToggleState(true, juce::dontSendNotification); }
+            dch2.markDspDirty();
+            if (dch2.msSet[b] != nullptr) dch2.writeMsSidecar(b);   // loop travels with the instrument
         };
         waveform[b].onRegionsChange = [this, b](int n, const float* lo, const float* hi) {
             auto& sl = proc.sequencer.channel(selectedChannel).slots[b];
@@ -10691,8 +10798,66 @@ void DrumSequencerEditor::setupComponents()
                     ToggleSwitch* sw2[4] = { &swUseRegion[b], &swSampleReverse[b], &swSmpPreserve[b], &swSmpLoop[b] };
                     sw2[t]->setToggleState(btnSmpTog[b][t].getToggleState(), juce::dontSendNotification);
                     if (sw2[t]->onClick) sw2[t]->onClick();
+                    auto& dch2 = proc.sequencer.channel(selectedChannel);
+                    if (dch2.msSet[b] != nullptr && (t == 1 || t == 3)) dch2.writeMsSidecar(b);   // Reverse/Loop travel with the instrument
                 };
             }
+        }
+        // [2026-07-19] MULTISAMPLE INSTRUMENTS panel controls (visible only when the slot holds
+        // a zone set - layoutContent swaps them in for the sample grid).
+        setupKnob(knobMsGain[b], lblMsGain[b], "Gain", -24.0, 24.0, 0.0, 1.0,
+                  [](double v){ return juce::String(v, 1) + " dB"; });
+        knobMsGain[b].setTooltip("INSTRUMENT GAIN in dB (+-24).\n\n"
+            "- A plain, lossless gain - smoothed per sample, so sweeps never zipper.\n"
+            "- Use it to match this instrument's level to the kit; saved with the instrument (sidecar).");
+        knobMsGain[b].onValueChange = [this, b] {
+            if (ignoreKnobCallbacks) return;
+            auto& dch2 = proc.sequencer.channel(selectedChannel);
+            dch2.slots[b].msGainDb = (float) knobMsGain[b].getValue();
+            dch2.markDspDirty(); dch2.writeMsSidecar(b);
+        };
+        setupKnob(knobMsXf[b], lblMsXf[b], "Loop Xfade", 5.0, 200.0, 25.0, 0.5,
+                  [](double v){ return juce::String(juce::roundToInt(v)) + " ms"; });
+        knobMsXf[b].setTooltip("LOOP CROSSFADE length in ms.\n\n"
+            "- How long the loop's end blends back into its start each cycle.\n"
+            "- Short = tight (basses), long = glassy smooth (pads, bowed sounds).\n"
+            "- Only matters while Loop is on; saved with the instrument.");
+        knobMsXf[b].onValueChange = [this, b] {
+            if (ignoreKnobCallbacks) return;
+            auto& dch2 = proc.sequencer.channel(selectedChannel);
+            dch2.slots[b].smpLoopXfMs = (float) knobMsXf[b].getValue();
+            dch2.markDspDirty(); dch2.writeMsSidecar(b);
+        };
+        content.addChildComponent(btnMsAutoLoop[b]);
+        btnMsAutoLoop[b].setButtonText("AUTO-LOOP");
+        btnMsAutoLoop[b].setLookAndFeel(&tinyBtnLNF);
+        btnMsAutoLoop[b].setTooltip("Find a good loop automatically.\n\n"
+            "- Searches the sustain for the pair of points that match best (least click).\n"
+            "- Sets the loop region + turns Loop on; drag on the waveform to adjust by hand.\n"
+            "- Works on the displayed zone; the loop applies proportionally to every zone.");
+        btnMsAutoLoop[b].onClick = [this, b] { autoLoopFind(b); };
+        content.addChildComponent(lblMsRange[b]);
+        lblMsRange[b].setFont(juce::Font(11.5f, juce::Font::bold));
+        lblMsRange[b].setColour(juce::Label::textColourId, juce::Colour(0xffaebada));
+        lblMsRange[b].setJustificationType(juce::Justification::centred);
+        for (int ir = 0; ir < 2; ++ir)
+        {
+            auto& rb = ir == 0 ? btnMsRigModel[b] : btnMsRigIr[b];
+            content.addChildComponent(rb);
+            rb.setLookAndFeel(&dropBtnLNF);
+            rb.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff223046));
+            rb.setColour(juce::TextButton::textColourOffId, juce::Colour(0xff9fd1ff));
+            rb.setTooltip(ir == 0
+                ? juce::String("AMP (NAM model) for THIS instrument - the dedicated rig stage.\n\n"
+                  "- Runs BEFORE the Channel FX (amp first, then your effects) - the 3 FX slots stay free.\n"
+                  "- Models load from Documents/BASAMAK/NAM Models (.nam, incl. A2 captures).\n"
+                  "- Output is auto level-matched from the model's loudness metadata.\n"
+                  "- Saved with the instrument (sidecar) - it brings its amp everywhere.")
+                : juce::String("CABINET (impulse WAV) for THIS instrument - pairs with the AMP.\n\n"
+                  "- Many NAM captures are amp-head only and NEED a cab to sound right.\n"
+                  "- IRs load from Documents/BASAMAK/Cab IRs; zero latency.\n"
+                  "- Saved with the instrument (sidecar)."));
+            rb.onClick = [this, b, ir] { openMsRigPicker(b, ir == 1); };
         }
     }
     // PITCH (semitones) = transpose the WHOLE channel - works for every engine (synth freq + sample
@@ -11039,6 +11204,13 @@ void DrumSequencerEditor::syncBoxesFromSrcOn()
             slotCombo[b].setTextWhenNothingSelected("Wavetable (legacy)");
             slotCombo[b].repaint();
         }
+        else if (boxEngine[b] == DrumChannel::SrcSample
+                 && proc.sequencer.channel(selectedChannel).msSet[b] != nullptr)
+        {   // [2026-07-19] the Multisample Instruments FACE (sample DSP underneath)
+            slotCombo[b].setSelectedId(0, juce::dontSendNotification);
+            slotCombo[b].setTextWhenNothingSelected("Multisample Instruments");
+            slotCombo[b].repaint();
+        }
         else
             slotCombo[b].setSelectedId(boxEngine[b] < 0 ? 1 : boxEngine[b] + 2, juce::dontSendNotification);
     }
@@ -11057,12 +11229,14 @@ void DrumSequencerEditor::rebuildSlotMenus()
         juce::PopupMenu sampleSub;
         addFolderToMenu(sampleSub, getSamplesFolder());
         sampleSub.addSeparator();
-        { juce::PopupMenu msSub; buildMsMenu(msSub);        // [2026-07-18] multisample instruments
-          sampleSub.addSubMenu("Multisamples", msSub); }
-        sampleSub.addSeparator();
         sampleSub.addItem(ID_REFRESH_SAMPLES, "Refresh samples folder");   // rescan so newly-added files show up
         sampleSub.addItem(ID_SHOW_SAMPLES,    "Show Folder");              // open the Samples folder to drop files in
         root->addSubMenu("Sample", sampleSub);
+        // [2026-07-19] "Multisample Instruments" = its own engine-level entry (user order): a
+        // recorded/assembled instrument of note-named WAVs. Same sample DSP underneath - the
+        // FACE (panel, defaults, semantics) is what differs; picking a folder here loads it.
+        { juce::PopupMenu msSub; buildMsMenu(msSub);
+          root->addSubMenu("Multisample Instruments", msSub); }
         root->addItem(3, "Noise"); root->addItem(4, "Oscillator");   // analog waves + FM + drawable additive Custom
         root->addItem(6, "Karplus-Strong");   // (was "Physical") - the honest algorithm name; "FM"/"Synth"/"Wavetable" retired (kept parseable for old
                                         // projects); the Oscillator now covers wavetable-style shaping (more shapes + Warp).
@@ -12421,6 +12595,23 @@ void DrumSequencerEditor::refreshDetailPanel()
         {   // [2026-07-19] the 2x2 proxy buttons mirror the switches
             ToggleSwitch* sws[4] = { &swUseRegion[b], &swSampleReverse[b], &swSmpPreserve[b], &swSmpLoop[b] };
             for (int t = 0; t < 4; ++t) btnSmpTog[b][t].setToggleState(sws[t]->getToggleState(), juce::dontSendNotification);
+        }
+        {   // [2026-07-19] MULTISAMPLE INSTRUMENTS panel values
+            auto& dch2 = proc.sequencer.channel(selectedChannel);
+            knobMsGain[b].setValue(sl.msGainDb, juce::dontSendNotification);
+            knobMsXf[b].setValue(sl.smpLoopXfMs, juce::dontSendNotification);
+            if (auto ms = dch2.msSet[b]; ms != nullptr && ! ms->zones.empty())
+            {
+                int layers = 0; for (const auto& z : ms->zones) layers += (int) z.layers.size();
+                lblMsRange[b].setText(juce::MidiMessage::getMidiNoteName(ms->zones.front().root, true, true, 4)
+                    + " - " + juce::MidiMessage::getMidiNoteName(ms->zones.back().root, true, true, 4)
+                    + "  (" + juce::String((int) ms->zones.size()) + " notes, " + juce::String(layers) + " takes)",
+                    juce::dontSendNotification);
+            }
+            btnMsRigModel[b].setButtonText(dch2.msRigModel.isNotEmpty()
+                ? "Amp: " + juce::File(dch2.msRigModel).getFileNameWithoutExtension() : juce::String("Amp: none"));
+            btnMsRigIr[b].setButtonText(dch2.msRigIr.isNotEmpty()
+                ? "Cab: " + juce::File(dch2.msRigIr).getFileNameWithoutExtension() : juce::String("Cab: none"));
         }
         waveform[b].setLoop(sl.smpLoopOn, sl.smpLoopLo, sl.smpLoopHi);
         swUseRegion[b].setToggleState(sl.smpUseRegion, juce::dontSendNotification);
@@ -13843,6 +14034,10 @@ void DrumSequencerEditor::layoutContent()
             lblSmpPreserve[b].setVisible(false); swSmpPreserve[b].setVisible(false);
             lblSmpLoop[b].setVisible(false); swSmpLoop[b].setVisible(false);
             for (int t = 0; t < 4; ++t) btnSmpTog[b][t].setVisible(false);   // [2026-07-19] the 2x2 grid
+            knobMsGain[b].setVisible(false); knobMsXf[b].setVisible(false);
+            lblMsGain[b].setVisible(false); lblMsXf[b].setVisible(false); lblMsRange[b].setVisible(false);
+            btnMsAutoLoop[b].setVisible(false); btnMsRigModel[b].setVisible(false); btnMsRigIr[b].setVisible(false);
+            slotEd[b].msFace = false;
         }
 
         // Use NUM_SLOTS engine headers purely as box OUTLINES (empty text; the dropdown is the visible header).
@@ -13880,21 +14075,48 @@ void DrumSequencerEditor::layoutContent()
                 waveform[b].setBounds(sbx[b] + 6, sby[b] + 20, slotW - 12, 46);   // slightly shorter -> room for 3 toggles
                 lblSampleLen[b].setVisible(false);                               // length is a watermark in the waveform now
                 knobTop = sby[b] + 70;                                            // knobs a bit higher (user)
-                // [2026-07-19] Trim/Reverse/Keep pitch/Loop = a 2x2 BUTTON grid (user design - the
-                // 4 stacked switches overlapped the box bottom). Old labels/switches stay hidden
-                // (the buttons proxy them); the knobs just start a little further right.
-                const int tcW = 118, tcx = sbx[b] + 6, ty = knobTop + 4;
-                const int bw = (tcW - 4) / 2, bh = 23;
-                for (int t = 0; t < 4; ++t)
-                {
-                    btnSmpTog[b][t].setVisible(true);
-                    btnSmpTog[b][t].setBounds(tcx + (t % 2) * (bw + 4), ty + (t / 2) * (bh + 6), bw, bh);
-                }
+                const bool msOn = proc.sequencer.channel(selectedChannel).msSet[b] != nullptr;   // [2026-07-19]
                 lblUseRegion[b].setVisible(false);     swUseRegion[b].setVisible(false);
                 lblSampleReverse[b].setVisible(false); swSampleReverse[b].setVisible(false);
                 lblSmpPreserve[b].setVisible(false);   swSmpPreserve[b].setVisible(false);
                 lblSmpLoop[b].setVisible(false);       swSmpLoop[b].setVisible(false);
-                knobX = sbx[b] + tcW + 8; knobW = slotW - tcW - 8;   // knobs right of the grid
+                if (! msOn)
+                {   // [2026-07-19] Trim/Reverse/Keep pitch/Loop = a 2x2 BUTTON grid (user design -
+                    // the 4 stacked switches overlapped). The buttons proxy the hidden switches.
+                    const int tcW = 118, tcx = sbx[b] + 6, ty = knobTop + 4;
+                    const int bw = (tcW - 4) / 2, bh = 23;
+                    for (int t = 0; t < 4; ++t)
+                    {
+                        btnSmpTog[b][t].setVisible(true);
+                        btnSmpTog[b][t].setBounds(tcx + (t % 2) * (bw + 4), ty + (t / 2) * (bh + 6), bw, bh);
+                    }
+                    knobX = sbx[b] + tcW + 8; knobW = slotW - tcW - 8;   // knobs right of the grid
+                    for (auto* c2 : { &knobMsGain[b], &knobMsXf[b] }) c2->setVisible(false);
+                    lblMsGain[b].setVisible(false); lblMsXf[b].setVisible(false); lblMsRange[b].setVisible(false);
+                    btnMsAutoLoop[b].setVisible(false); btnMsRigModel[b].setVisible(false); btnMsRigIr[b].setVisible(false);
+                }
+                else
+                {   // [2026-07-19] MULTISAMPLE INSTRUMENTS panel: Reverse+Loop buttons | dB Gain +
+                    // Loop Xfade knobs | AUTO-LOOP + note range | the amp RIG row at the bottom.
+                    waveform[b].setBounds(sbx[b] + 6, sby[b] + 20, slotW - 12, 36);   // slightly shorter -> room for the rig row
+                    knobTop = sby[b] + 58;
+                    const int tcx = sbx[b] + 6;
+                    btnSmpTog[b][1].setVisible(true); btnSmpTog[b][1].setBounds(tcx, knobTop + 2, 58, 22);   // Reverse
+                    btnSmpTog[b][3].setVisible(true); btnSmpTog[b][3].setBounds(tcx, knobTop + 29, 58, 22);  // Loop
+                    btnSmpTog[b][0].setVisible(false); btnSmpTog[b][2].setVisible(false);   // Trim/Keep pitch = meaningless for zones
+                    auto placeK = [&](LearnableKnob& k, juce::Label& l, int x)
+                    { k.setVisible(true); l.setVisible(true);
+                      k.setBounds(x, knobTop, 44, 40); l.setBounds(x - 8, knobTop + 40, 60, 12); };
+                    placeK(knobMsGain[b], lblMsGain[b], tcx + 70);
+                    placeK(knobMsXf[b],   lblMsXf[b],   tcx + 134);
+                    btnMsAutoLoop[b].setVisible(true); btnMsAutoLoop[b].setBounds(tcx + 196, knobTop + 2, 82, 22);
+                    lblMsRange[b].setVisible(true);    lblMsRange[b].setBounds(tcx + 196, knobTop + 28, 110, 14);
+                    const int ry = sby[b] + 114, rw = (slotW - 16) / 2;
+                    btnMsRigModel[b].setVisible(true); btnMsRigModel[b].setBounds(tcx, ry, rw, 22);
+                    btnMsRigIr[b].setVisible(true);    btnMsRigIr[b].setBounds(tcx + rw + 4, ry, rw, 22);
+                    knobX = sbx[b]; knobW = slotW;   // SlotEditor spans the box (msFace hides its grid; box-drag copy stays alive)
+                }
+                slotEd[b].msFace = msOn;
             }
             slotEd[b].place(knobX, knobTop, knobW, slotH - (knobTop - sby[b]) - 4);
         }

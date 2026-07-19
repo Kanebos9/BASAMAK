@@ -2153,6 +2153,8 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
       chState.setProperty("cfxA" + k, ch.chFxAmt[f],  nullptr);
       chState.setProperty("cfxC" + k, ch.chFxChar[f], nullptr);
       chState.setProperty("cfxF" + k, ch.chFxFile[f], nullptr); }   // [2026-07-18] NAM model / Cab IR path
+    chState.setProperty("msRigM", ch.msRigModel, nullptr);   // [2026-07-19] instrument rig (amp + cab)
+    chState.setProperty("msRigI", ch.msRigIr,    nullptr);
     for (int f = 0; f < 2; ++f)   // [2026-07-16] CHANNEL FILTER/EQ pair (the FILTER/EQ box's CHANNEL chip)
     { const juce::String k(f);
       chState.setProperty("cfT" + k, ch.chFiltType[f],   nullptr);
@@ -2335,6 +2337,9 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
       ch.chFxFile[f] = child.getProperty("cfxF" + k, "").toString();
       if (ch.chFxType[f] == DrumChannel::ChFxNamAmp || ch.chFxType[f] == DrumChannel::ChFxCabIr)
           ch.refreshChFxAssets(f); }   // message thread (setStateInformation)
+    ch.msRigModel = child.getProperty("msRigM", "").toString();   // [2026-07-19] instrument rig
+    ch.msRigIr    = child.getProperty("msRigI", "").toString();
+    if (ch.msRigModel.isNotEmpty() || ch.msRigIr.isNotEmpty()) ch.refreshMsRig();
     {   // MIGRATION: last week's 4-fixed-effect files ("chFxCho"...) -> the strongest two FX slots
         struct OldFx { int type; float amt; };
         OldFx v[4] = { { DrumChannel::ChFxChorus,  juce::jlimit(0.0f, 1.0f, (float) child.getProperty("chFxCho", 0.0f)) },
