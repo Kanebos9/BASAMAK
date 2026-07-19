@@ -67,6 +67,7 @@ jobs:
             echo "STAGING FAILED: BASAMAK.vst3 missing/empty"; exit 1
           fi
           cp -R Resources/Samples "$OUT/Samples"                                        # bundled CC0 sample library
+          cp -R Resources/Multisamples "$OUT/Multisamples"                              # [2026-07-19] bundled factory multisample instruments
           cp -R Resources/TouchOSC "$OUT/TouchOSC"                                       # TouchOSC control-surface template
           cp -R "Resources/launchpad+launchkey custom midi modes" "$OUT/launchpad+launchkey custom midi modes"   # Novation custom modes (.syx) pairing with the factory MIDI map
           echo "$VER" > "$OUT/VERSION"
@@ -102,6 +103,7 @@ jobs:
           $exe = Get-ChildItem -Recurse -File build -Filter BASAMAK.exe | Select-Object -First 1
           if ($exe) { Copy-Item $exe.FullName "$out\BASAMAK.exe" }   # Standalone (Windows)
           Copy-Item Resources/Samples "$out\Samples" -Recurse        # bundled CC0 sample library
+          Copy-Item Resources/Multisamples "$out\Multisamples" -Recurse   # [2026-07-19] bundled factory multisample instruments
           Copy-Item Resources/TouchOSC "$out\TouchOSC" -Recurse      # TouchOSC control-surface template
           Copy-Item "Resources/launchpad+launchkey custom midi modes" "$out\launchpad+launchkey custom midi modes" -Recurse   # Novation custom modes (.syx) pairing with the factory MIDI map
           Copy-Item Distribution/scripts/install-windows.bat "$out\"

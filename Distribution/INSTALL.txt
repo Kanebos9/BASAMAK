@@ -60,6 +60,7 @@ folder (Documents/BASAMAK) that the installer leaves alone.
   Everything you make or add lives in:  Documents/BASAMAK/
 
      Samples/      your audio samples (factory set added on install)
+     Multisamples/ recorded instruments (factory set added on install)
      Sound Bank/   sounds you save from a channel  (.basamaksound)
      Presets/      whole-kit presets you save      (.basamakpreset)
 

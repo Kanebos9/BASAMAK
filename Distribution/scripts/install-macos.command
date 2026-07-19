@@ -14,6 +14,7 @@ VST3_DST="$HOME/Library/Audio/Plug-Ins/VST3"
 AU_DST="$HOME/Library/Audio/Plug-Ins/Components"
 DATA="$HOME/Documents/BASAMAK"
 SAMPLES_DST="$DATA/Samples"
+MULTI_DST="$DATA/Multisamples"   # [2026-07-19] factory multisample instruments
 
 echo "==> Installing BASAMAK ..."
 mkdir -p "$VST3_DST" "$AU_DST" "$SAMPLES_DST" "$DATA/Sound Bank" "$DATA/Presets"
@@ -42,6 +43,10 @@ xattr -dr com.apple.quarantine "$AU_DST/BASAMAK.component"   2>/dev/null || true
 if [ -d "$HERE/Samples" ]; then
   echo "==> Adding factory samples (existing files are kept) ..."
   cp -Rn "$HERE/Samples/." "$SAMPLES_DST/" 2>/dev/null || true
+fi
+if [ -d "$HERE/Multisamples" ]; then
+  echo "==> Adding factory multisample instruments (existing files are kept) ..."
+  mkdir -p "$MULTI_DST"; cp -Rn "$HERE/Multisamples/." "$MULTI_DST/" 2>/dev/null || true
 fi
 
 echo ""

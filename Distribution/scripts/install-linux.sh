@@ -12,6 +12,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 VST3_DST="$HOME/.vst3"
 DATA="$HOME/Documents/BASAMAK"
 SAMPLES_DST="$DATA/Samples"
+MULTI_DST="$DATA/Multisamples"   # [2026-07-19] factory multisample instruments
 
 echo "==> Installing BASAMAK ..."
 mkdir -p "$VST3_DST" "$SAMPLES_DST" "$DATA/Sound Bank" "$DATA/Presets"
@@ -26,6 +27,10 @@ cp -R "$HERE/BASAMAK.vst3" "$VST3_DST/"
 if [ -d "$HERE/Samples" ]; then
   echo "==> Adding factory samples (existing files are kept) ..."
   cp -rn "$HERE/Samples/." "$SAMPLES_DST/" 2>/dev/null || true
+fi
+if [ -d "$HERE/Multisamples" ]; then
+  echo "==> Adding factory multisample instruments (existing files are kept) ..."
+  mkdir -p "$MULTI_DST"; cp -rn "$HERE/Multisamples/." "$MULTI_DST/" 2>/dev/null || true
 fi
 
 echo ""

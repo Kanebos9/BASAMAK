@@ -19,6 +19,7 @@ for /f "usebackq delims=" %%D in (`powershell -NoProfile -Command "[Environment]
 if not defined DOCS set "DOCS=%USERPROFILE%\Documents"
 set "DATA=%DOCS%\BASAMAK"
 set "SAMPLES_DST=%DATA%\Samples"
+set "MULTI_DST=%DATA%\Multisamples"
 
 echo ==^> Installing BASAMAK ...
 
@@ -67,6 +68,10 @@ REM own additions are preserved.
 if exist "%HERE%Samples" (
   echo ==^> Adding factory samples ^(existing files are kept^) ...
   xcopy /e /i /d /y "%HERE%Samples" "%SAMPLES_DST%" >nul
+)
+if exist "%HERE%Multisamples" (
+  echo ==^> Adding factory multisample instruments ^(existing files are kept^) ...
+  xcopy /e /i /d /y "%HERE%Multisamples" "%MULTI_DST%" >nul
 )
 
 echo.
