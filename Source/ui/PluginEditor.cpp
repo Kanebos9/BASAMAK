@@ -6045,7 +6045,7 @@ void DrumSequencerEditor::buildMsMenu(juce::PopupMenu& menu)
     }
     if (msFolders.isEmpty()) menu.addItem(-1, "(no multisample folders yet)", false);
     menu.addSeparator();
-    menu.addItem(ID_RECORD_MS,  "Record a multisample (mic / line in)...");   // [2026-07-18] the wizard
+    menu.addItem(ID_RECORD_MS,  "Record / edit a multisample...");   // [2026-07-18] the wizard (records AND edits; shorter = no menu truncation)
     menu.addItem(ID_REFRESH_MS, "Refresh multisamples folder");
     menu.addItem(ID_SHOW_MS,    "Show Folder");   // drop a folder of note-named WAVs in
 }
@@ -14219,7 +14219,7 @@ void DrumSequencerEditor::layoutContent()
     // DRAW HARMONICS overlay: parked over the amp/pitch columns (opened from the Custom wave preview;
     // hidden again at the top of every layoutContent like the sound picker).
     harmEd.setBounds(cxAmp, colTop, ampEqW + gp + pitchW + gp + fxColW, colH);   // covers amp..FX (user-outlined area)
-    msWizard.setBounds(cxAmp, colTop + 6, 760, 326);   // [2026-07-19] wider = the RECORDED list column; keeps its spot across relayouts (never auto-closed - a take may be running)
+    msWizard.setBounds(cxAmp, colTop + 6, 800, 326);   // [2026-07-19 r2] wider still (note-map row buttons); keeps its spot across relayouts (never auto-closed - a take may be running)
     lfoCurveEd.setBounds(cxAmp, colTop, ampEqW + gp + pitchW + gp + fxColW, colH);   // LFO draw window = the wavetable menu's footprint (user 2026-07-16)
     routePicker.setBounds(cxPitch, colTop + 24, pitchW + gp + fxColW, colH - 48);   // route source|target chooser (parked left of the faders)
 

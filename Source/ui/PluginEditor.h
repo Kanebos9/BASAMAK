@@ -503,7 +503,11 @@ public:
         closeBtn.onClick = [this] { close(); };
         retryBtn.onClick = [this] { phase = Listen; readCur = tapNow(); capBuf.clear(); repaint(); syncButtons(); };
         keepBtn.onClick  = [this] { saveCurrent(false); };
-        skipBtn.onClick  = [this] { skipped.addIfNotAlreadyThere(curTarget()); rebuildPending(); repaint(); syncButtons(); };
+        skipBtn.onClick  = [this] {
+            if (targetNote >= 0) { targetNote = -1; replaceFile = juce::File();
+                                   rebuildPending(); phase = pending.isEmpty() ? DoneAll : Listen; }
+            else skipped.addIfNotAlreadyThere(curTarget());
+            rebuildPending(); repaint(); syncButtons(); };
         finishBtn.onClick = [this] { finishSession(); };
     }
     ~MsRecordWizard() override
@@ -518,6 +522,7 @@ public:
     {
         slotIdx = slot; phase = Setup; takes.clear(); pending.clear(); skipped.clear();
         listOff = 0; layerNote = -1; editExisting = false;
+        expandedNote = -1; targetNote = -1; replaceFile = juce::File();
         if (proc != nullptr) proc->msTapOn = true;
         setVisible(true); toFront(true);
         startTimerHz(30); syncButtons(); repaint();
@@ -555,7 +560,7 @@ public:
         g.setColour(juce::Colour(0xf0141428)); g.fillRoundedRectangle(b.toFloat(), 8.0f);
         g.setColour(juce::Colour(0xff35c0ff)); g.drawRoundedRectangle(b.toFloat().reduced(1.0f), 8.0f, 1.4f);
         g.setColour(juce::Colours::white); g.setFont(juce::Font(15.0f, juce::Font::bold));
-        g.drawText("RECORD A MULTISAMPLE", b.getX() + 12, b.getY() + 6, b.getWidth() - 50, 18, juce::Justification::centredLeft);
+        g.drawText("RECORD / EDIT A MULTISAMPLE", b.getX() + 12, b.getY() + 6, b.getWidth() - 50, 18, juce::Justification::centredLeft);
         const int lw = leftW();
 
         if (phase == Setup)
@@ -653,9 +658,11 @@ public:
                        mr.getX(), mr.getY() - 26, mr.getWidth(), 12, juce::Justification::left);
         }
 
-        // RECORDED list (right column, user design): note | length | peak dB - the peak column is
-        // the consistency meter; click a row = audition, click its x = delete + re-queue.
+        // [2026-07-19 r2] THE NOTE MAP (user design): every grid note = a row (empty rows are
+        // recordable - a skipped note is just an unfilled row); click a note = expand its layers
+        // LOUDEST FIRST (one open at a time); per-row actions REC / +LAYER / play / RE / x.
         {
+            buildListRows();
             const juce::Rectangle<int> lc = listRect();
             g.setColour(juce::Colour(0xff181830)); g.fillRoundedRectangle(lc.toFloat(), 5.0f);
             g.setColour(juce::Colour(0xff33335a)); g.drawRoundedRectangle(lc.toFloat(), 5.0f, 1.0f);
@@ -663,59 +670,113 @@ public:
             g.drawText((editExisting ? juce::File(sessionDir).getFileName() : nameEd.getText().trim())
                        + " (" + juce::String((int) takes.size()) + ")",
                        lc.getX() + 8, lc.getY() + 4, lc.getWidth() - 28, 14, juce::Justification::left);
-            { juce::Path tri; const float tx = (float) lc.getRight() - 16.0f, tyy = (float) lc.getY() + 8.0f;   // dropdown triangle (drawn)
+            { juce::Path tri; const float tx = (float) lc.getRight() - 16.0f, tyy = (float) lc.getY() + 8.0f;   // instrument dropdown (drawn)
               tri.addTriangle(tx, tyy, tx + 8.0f, tyy, tx + 4.0f, tyy + 5.0f);
               g.setColour(juce::Colour(0xff9fd1ff)); g.fillPath(tri); }
-            const int n = (int) takes.size(), vis = listVisRows();
+            const int n = (int) listRows.size(), vis = listVisRows();
             listOff = juce::jlimit(0, juce::jmax(0, n - vis), listOff);
             for (int r = 0; r < vis && r + listOff < n; ++r)
             {
-                const auto& t = takes[(size_t)(r + listOff)];
+                const auto& row = listRows[(size_t)(r + listOff)];
                 const auto rr = listRowRect(r);
-                g.setColour(juce::Colour(0xff20203a)); g.fillRoundedRectangle(rr.toFloat().reduced(1.0f), 3.0f);
-                g.setColour(juce::Colours::white); g.setFont(juce::Font(11.0f, juce::Font::bold));
-                g.drawText(juce::MidiMessage::getMidiNoteName(t.note, true, true, 4)
-                           + (t.layer > 1 ? " v" + juce::String(t.layer) : juce::String()),
-                           rr.getX() + 5, rr.getY(), 34, rr.getHeight(), juce::Justification::centredLeft);
-                g.setColour(juce::Colour(0xffaebada)); g.setFont(10.5f);
-                g.drawText(juce::String(t.lenSec, 1) + "s", rr.getX() + 40, rr.getY(), 32, rr.getHeight(), juce::Justification::centredLeft);
-                g.drawText(juce::String(juce::roundToInt(t.peakDb)) + "dB", rr.getX() + 74, rr.getY(), 38, rr.getHeight(), juce::Justification::centredLeft);
-                g.setColour(juce::Colour(0xff35b56a));                       // audition glyph (drawn, no unicode)
-                { juce::Path pl; const float px = (float) rr.getRight() - 34.0f, py = (float) rr.getCentreY();
-                  pl.addTriangle(px, py - 4.0f, px, py + 4.0f, px + 7.0f, py); g.fillPath(pl); }
-                g.setColour(juce::Colour(0xffd26a6a)); g.setFont(juce::Font(11.0f, juce::Font::bold));
-                g.drawText("x", rr.getRight() - 16, rr.getY(), 12, rr.getHeight(), juce::Justification::centred);
+                if (! row.isLayer)
+                {
+                    const int cnt = takesFor(row.note);
+                    const bool open = row.note == expandedNote;
+                    g.setColour(open ? juce::Colour(0xff2a2a4c) : juce::Colour(0xff20203a));
+                    g.fillRoundedRectangle(rr.toFloat().reduced(1.0f), 3.0f);
+                    g.setColour(cnt > 0 ? juce::Colours::white : juce::Colour(0xff70708c));
+                    g.setFont(juce::Font(11.0f, juce::Font::bold));
+                    g.drawText(juce::MidiMessage::getMidiNoteName(row.note, true, true, 4),
+                               rr.getX() + 5, rr.getY(), 34, rr.getHeight(), juce::Justification::centredLeft);
+                    g.setColour(juce::Colour(0xffaebada)); g.setFont(10.0f);
+                    if (cnt > 0)
+                    {
+                        float pk = -90.0f;
+                        for (const auto& t : takes) if (t.note == row.note) pk = juce::jmax(pk, t.peakDb);
+                        g.drawText(juce::String(cnt) + (cnt == 1 ? " layer" : " layers"),
+                                   rr.getX() + 38, rr.getY(), 52, rr.getHeight(), juce::Justification::centredLeft);
+                        g.drawText(juce::String(juce::roundToInt(pk)) + "dB",
+                                   rr.getX() + 92, rr.getY(), 34, rr.getHeight(), juce::Justification::centredLeft);
+                        if (cnt < DrumChannel::MS_LAYERS)
+                        {   // +LAYER (record ANOTHER dynamic - any time, incl. long after finishing)
+                            g.setColour(juce::Colour(0xff35b56a)); g.setFont(juce::Font(9.5f, juce::Font::bold));
+                            g.drawText("+LAYER", rr.getRight() - 46, rr.getY(), 44, rr.getHeight(), juce::Justification::centred);
+                        }
+                    }
+                    else
+                    {
+                        g.drawText("-", rr.getX() + 38, rr.getY(), 20, rr.getHeight(), juce::Justification::centredLeft);
+                        g.setColour(juce::Colour(0xffffc24a)); g.setFont(juce::Font(9.5f, juce::Font::bold));
+                        g.drawText("REC", rr.getRight() - 36, rr.getY(), 32, rr.getHeight(), juce::Justification::centred);
+                    }
+                }
+                else if (row.takeIdx >= 0 && row.takeIdx < (int) takes.size())
+                {
+                    const auto& t = takes[(size_t) row.takeIdx];
+                    g.setColour(juce::Colour(0xff1b1b32)); g.fillRoundedRectangle(rr.toFloat().reduced(1.0f), 3.0f);
+                    g.setColour(juce::Colour(0xff35b56a));                       // audition glyph (drawn)
+                    { juce::Path pl; const float px = (float) rr.getX() + 14.0f, py = (float) rr.getCentreY();
+                      pl.addTriangle(px, py - 4.0f, px, py + 4.0f, px + 7.0f, py); g.fillPath(pl); }
+                    g.setColour(juce::Colour(0xffaebada)); g.setFont(10.0f);
+                    g.drawText(juce::String(t.lenSec, 1) + "s", rr.getX() + 30, rr.getY(), 32, rr.getHeight(), juce::Justification::centredLeft);
+                    g.drawText(juce::String(juce::roundToInt(t.peakDb)) + "dB", rr.getX() + 64, rr.getY(), 36, rr.getHeight(), juce::Justification::centredLeft);
+                    g.setColour(juce::Colour(0xff9fd1ff)); g.setFont(juce::Font(9.5f, juce::Font::bold));
+                    g.drawText("RE", rr.getRight() - 40, rr.getY(), 22, rr.getHeight(), juce::Justification::centred);
+                    g.setColour(juce::Colour(0xffd26a6a)); g.setFont(juce::Font(11.0f, juce::Font::bold));
+                    g.drawText("x", rr.getRight() - 16, rr.getY(), 12, rr.getHeight(), juce::Justification::centred);
+                }
             }
-            if (n == 0)
-            { g.setColour(juce::Colour(0xff5a5a78)); g.setFont(10.5f);
-              g.drawText("takes land here", lc.getX(), lc.getCentreY() - 7, lc.getWidth(), 14, juce::Justification::centred); }
         }
     }
 
     void mouseDown(const juce::MouseEvent& e) override
     {
         dragBox = 0;
-        // the RECORDED list: row click = audition, its x = delete + re-queue that note
+        // [2026-07-19 r2] the NOTE MAP: note row = expand/collapse (+ REC / +LAYER actions);
+        // layer row = play / RE(record over) / x(delete). Targeting is by the CLICKED ROW's
+        // note - never by grid arithmetic (the old delete-didn't-requeue bug is dead by design).
         if (listRect().contains(e.getPosition()))
         {
             const auto lc = listRect();
             if (e.getPosition().y < lc.getY() + 20) { openInstrumentMenu(); return; }   // title row = the dropdown
+            buildListRows();
             const int vis = listVisRows();
-            for (int r = 0; r < vis && r + listOff < (int) takes.size(); ++r)
+            for (int r = 0; r < vis && r + listOff < (int) listRows.size(); ++r)
                 if (listRowRect(r).contains(e.getPosition()))
                 {
-                    const int idx = r + listOff;
-                    if (e.getPosition().x >= listRowRect(r).getRight() - 18)
-                    {   // delete: file gone, note re-queued in order (unless other layers remain)
-                        const int dn = takes[(size_t) idx].note;
-                        takes[(size_t) idx].file.deleteFile();
-                        takes.erase(takes.begin() + idx);
-                        if (layerNote == dn) layerNote = -1;
-                        rebuildPending();
-                        if (phase == DoneAll && ! pending.isEmpty()) { phase = Listen; readCur = tapNow(); capBuf.clear(); }
-                        syncButtons(); repaint();
+                    const auto row = listRows[(size_t)(r + listOff)];
+                    const auto rr = listRowRect(r);
+                    const int x = e.getPosition().x;
+                    if (! row.isLayer)
+                    {
+                        const int cnt = takesFor(row.note);
+                        if (cnt == 0 && x >= rr.getRight() - 40)            // REC an empty note
+                            beginNoteTarget(row.note, {});
+                        else if (cnt > 0 && cnt < DrumChannel::MS_LAYERS && x >= rr.getRight() - 50)
+                            beginNoteTarget(row.note, {});                  // +LAYER (cap 5 enforced by the hidden button)
+                        else
+                        {   // expand/collapse (one open at a time - user spec)
+                            expandedNote = expandedNote == row.note ? -1 : row.note;
+                            repaint();
+                        }
                     }
-                    else if (proc != nullptr) proc->previewFile(takes[(size_t) idx].file);
+                    else if (row.takeIdx >= 0 && row.takeIdx < (int) takes.size())
+                    {
+                        if (x >= rr.getRight() - 18)
+                        {   // delete this LAYER; an empty note just shows as a recordable row again
+                            const int dn = takes[(size_t) row.takeIdx].note;
+                            takes[(size_t) row.takeIdx].file.deleteFile();
+                            takes.erase(takes.begin() + row.takeIdx);
+                            if (layerNote == dn) layerNote = -1;
+                            rebuildPending();
+                            syncButtons(); repaint();
+                        }
+                        else if (x >= rr.getRight() - 44)                   // RE = record OVER this layer
+                            beginNoteTarget(row.note, takes[(size_t) row.takeIdx].file);
+                        else if (proc != nullptr)                           // play
+                            proc->previewFile(takes[(size_t) row.takeIdx].file);
+                    }
                     return;
                 }
             return;
@@ -748,7 +809,7 @@ public:
     void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
     {
         if (! listRect().contains(e.getPosition())) return;
-        listOff = juce::jlimit(0, juce::jmax(0, (int) takes.size() - listVisRows()),
+        listOff = juce::jlimit(0, juce::jmax(0, (int) listRows.size() - listVisRows()),
                                listOff + (w.deltaY < 0 ? 1 : -1));
         repaint();
     }
@@ -767,6 +828,13 @@ private:
     juce::Array<int>  skipped;                                // user-skipped (not re-queued)
     int  layerNote = -1;                                      // LAYER+: stay on this note for another take
     bool editExisting = false;                                // dropdown-picked instrument = edit IN PLACE
+    // [2026-07-19 r2] the ACCORDION NOTE MAP (user design): every grid note gets a row (empty =
+    // recordable); clicking a note expands its layers (LOUDEST first) with per-layer actions.
+    struct ListRow { bool isLayer = false; int note = 0; int takeIdx = -1; };
+    std::vector<ListRow> listRows;                            // rebuilt by buildListRows()
+    int  expandedNote = -1;                                   // one note open at a time
+    int  targetNote = -1;                                     // note-EXACT record target (beats the grid queue)
+    juce::File replaceFile;                                   // RERECORD: overwrite THIS layer's file on keep
     int listOff = 0;
     juce::int64 readCur = 0, capStartFrame = 0;
     std::vector<float> capBuf;
@@ -791,8 +859,8 @@ private:
     Closer closer { *this };
     bool closerHooked = false;
 
-    int  leftW() const { return getWidth() - 196; }           // list column = right 196 px
-    juce::Rectangle<int> listRect() const { return { getWidth() - 190, 28, 182, getHeight() - 36 }; }
+    int  leftW() const { return getWidth() - 232; }           // list column = right 232 px (r2: row buttons need it)
+    juce::Rectangle<int> listRect() const { return { getWidth() - 226, 28, 218, getHeight() - 36 }; }
     int  listVisRows() const { return (listRect().getHeight() - 22) / 18; }
     juce::Rectangle<int> listRowRect(int r) const
     { const auto lc = listRect(); return { lc.getX() + 3, lc.getY() + 20 + r * 18, lc.getWidth() - 6, 17 }; }
@@ -807,7 +875,52 @@ private:
     float endThresh() const { return juce::Decibels::decibelsToGain((float) endDb); }
     double rate() const { return proc != nullptr ? juce::jmax(8000.0, proc->getSampleRate()) : 48000.0; }
     juce::int64 tapNow() const { return proc != nullptr ? proc->msTapWrite.load(std::memory_order_acquire) : 0; }
-    int  curTarget() const { return pending.isEmpty() ? -1 : pending.getFirst(); }
+    int  curTarget() const { return targetNote >= 0 ? targetNote : (pending.isEmpty() ? -1 : pending.getFirst()); }
+    juce::Array<int> gridNotes() const
+    {
+        juce::Array<int> g;
+        for (int k = loNote; k <= hiNote; k += spacing) g.add(k);
+        if (g.isEmpty() || g.getLast() != hiNote) g.add(hiNote);
+        return g;
+    }
+    int takesFor(int note) const { int n = 0; for (const auto& t : takes) if (t.note == note) ++n; return n; }
+    void buildListRows()
+    {
+        listRows.clear();
+        juce::Array<int> notes = gridNotes();
+        for (const auto& t : takes) notes.addIfNotAlreadyThere(t.note);   // off-grid recordings still show
+        std::sort(notes.begin(), notes.end());
+        for (int nt : notes)
+        {
+            listRows.push_back({ false, nt, -1 });
+            if (nt != expandedNote) continue;
+            // layers of the open note, LOUDEST FIRST (user spec; playback still maps soft->loud)
+            std::vector<int> idx;
+            for (int i = 0; i < (int) takes.size(); ++i) if (takes[(size_t) i].note == nt) idx.push_back(i);
+            std::sort(idx.begin(), idx.end(),
+                      [this](int a, int b){ return takes[(size_t) a].peakDb > takes[(size_t) b].peakDb; });
+            for (int i : idx) listRows.push_back({ true, nt, i });
+        }
+    }
+    // Jump the recorder to ONE note (row buttons; works in ANY phase incl. after "finished" -
+    // the edit-later flow the user asked for). replaceF = overwrite that layer's file on keep.
+    void beginNoteTarget(int note, const juce::File& replaceF)
+    {
+        if (! sessionDir.isDirectory())
+        {   // acting on rows straight from Setup = start the session implicitly
+            juce::String nm = juce::File::createLegalFileName(nameEd.getText().trim());
+            if (nm.isEmpty()) nm = "My Instrument";
+            sessionDir = baseDir.getChildFile(nm);
+            int suffix = 2;
+            while (sessionDir.isDirectory() && sessionDir.getNumberOfChildFiles(juce::File::findFiles) > 0)
+                sessionDir = baseDir.getChildFile(nm + " " + juce::String(suffix++));
+            sessionDir.createDirectory();
+        }
+        if (proc != nullptr) { proc->msTapOn = true; proc->previewStop(); }
+        targetNote = note; replaceFile = replaceF; layerNote = -1;
+        capBuf.clear(); noiseFloorPk = 0.0f; floorFrames = 0;
+        readCur = tapNow(); phase = Listen; syncButtons(); repaint();
+    }
     int  pendingCountForRange() const
     { int n = 0; for (int k = loNote; k <= hiNote; k += spacing) ++n;
       if (((hiNote - loNote) % spacing) != 0) ++n; return n; }
@@ -862,6 +975,7 @@ private:
         sessionDir = dir; editExisting = true;
         nameEd.setText(dir.getFileName(), juce::dontSendNotification);
         takes.clear(); skipped.clear(); capBuf.clear(); layerNote = -1; listOff = 0;
+        expandedNote = -1; targetNote = -1; replaceFile = juce::File();
         juce::AudioFormatManager fm; fm.registerBasicFormats();
         auto files = dir.findChildFiles(juce::File::findFiles, false, "*.wav;*.aif;*.aiff;*.flac");
         files.sort();
@@ -917,6 +1031,7 @@ private:
         sessionDir.createDirectory();
         takes.clear(); skipped.clear(); capBuf.clear();
         layerNote = -1; editExisting = false;
+        expandedNote = -1; targetNote = -1; replaceFile = juce::File();
         noiseFloorPk = 0.0f; floorFrames = 0;
         rebuildPending();
         readCur = tapNow(); phase = pending.isEmpty() ? DoneAll : Listen; syncButtons(); repaint();
@@ -1020,7 +1135,9 @@ private:
         int layerNo = 1;
         for (const auto& t : takes) if (t.note == target) ++layerNo;   // next layer index
         const juce::String base = juce::MidiMessage::getMidiNoteName(target, true, true, 4);
-        juce::File f = sessionDir.getChildFile(layerNo == 1 ? base + ".wav"
+        juce::File f = replaceFile.getFullPathName().isNotEmpty()
+                     ? replaceFile   // RERECORD: overwrite THAT layer's file in place
+                     : sessionDir.getChildFile(layerNo == 1 ? base + ".wav"
                                                             : base + " v" + juce::String(layerNo) + ".wav");
         f.deleteFile();
         bool wrote = false;
@@ -1039,15 +1156,25 @@ private:
         {
             float pk = 0.0f;
             for (float v : capBuf) pk = juce::jmax(pk, std::abs(v));
-            Take t; t.note = target; t.layer = layerNo; t.file = f;
-            t.lenSec = (float)(capBuf.size() / juce::jmax(1.0, sr));
-            t.peakDb = juce::Decibels::gainToDecibels(juce::jmax(1.0e-5f, pk));
-            takes.push_back(t);
-            std::sort(takes.begin(), takes.end(),
-                      [](const Take& a, const Take& b){ return a.note != b.note ? a.note < b.note : a.layer < b.layer; });
+            const float lenS = (float)(capBuf.size() / juce::jmax(1.0, sr));
+            const float pkDb = juce::Decibels::gainToDecibels(juce::jmax(1.0e-5f, pk));
+            bool replaced = false;
+            if (replaceFile.getFullPathName().isNotEmpty())
+                for (auto& t : takes)
+                    if (t.file == replaceFile) { t.lenSec = lenS; t.peakDb = pkDb; replaced = true; break; }
+            if (! replaced)
+            {
+                Take t; t.note = target; t.layer = layerNo; t.file = f;
+                t.lenSec = lenS; t.peakDb = pkDb;
+                takes.push_back(t);
+                std::sort(takes.begin(), takes.end(),
+                          [](const Take& a, const Take& b){ return a.note != b.note ? a.note < b.note : a.layer < b.layer; });
+            }
+            expandedNote = target;   // show what just landed
         }
         capBuf.clear();
         layerNote = stayForLayer && wrote ? target : -1;   // LAYER+ = same note again
+        if (! stayForLayer) { targetNote = -1; replaceFile = juce::File(); }   // targeted record done
         rebuildPending();
         if (phase != DoneAll) { phase = Listen; readCur = tapNow(); }
         syncButtons(); repaint();
