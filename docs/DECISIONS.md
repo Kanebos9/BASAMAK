@@ -294,6 +294,8 @@
 
 | 204 | LET RING = a 5th Play Mode (group model): notes struck within a per-sound window (default 90 ms) = one gesture that rings (key-up deferred) until the next gesture, which fades the old group over the window (bleeds under the new strum = no gap). Engine-agnostic (release-timing only, at the input layer); recording extends note lengths to the swap so live == recording | user: re-strummed bass "sounded awful... in real bass there is no gap"; the pros model strings (per-string ring) which needs a string model we don't have; the time-window is a cheap input-layer proxy for chordal playing (disclosed: not for fast melodic lines, no per-string ring) | user order (name "Let Ring", user-set ms window); mechanism mine |
 
+| 205 | Let Ring highlight follows REAL audibility (per-voice ampNow) so a decayed note un-lights while a sustaining one stays lit; "Stop ring" = a MIDI-learn palm-mute (100 ms fade, no transport stop) in selection-controls; the ms prompt is an in-plugin overlay (not a desktop dialog that floats over other apps); REC-stop damps the ring (else held voices double the loaded take = "gets loud") | user field-test: "keys stay lit after silent"; "pop up can be seen even after i open other apps... should NOT be like that"; "stop ring 100 ms"; "when recording when i STOP it gets loud" | user orders |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

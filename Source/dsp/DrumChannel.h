@@ -1219,6 +1219,14 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
         }
     }
     void keyUp();
+    // [2026-07-19] LET RING: is this key note still AUDIBLE (a voice of it above ~-62 dB)? The ring
+    // highlight uses this so a decayed pluck un-lights while a sustaining note stays lit.
+    bool keyNoteAudible(int note) const
+    {
+        for (auto& v : voices)
+            if (v.active() && v.isKey && v.keyNote == note && v.ampNow > 0.0008f) return true;
+        return false;
+    }
     static float physDecayScale(int material);   // material ring-length multiplier (for the UI's tail read-out)
     void renderInto(juce::AudioBuffer<float>& dest, int startSample, int numSamples, bool anySolo,
                     juce::AudioBuffer<float>* reverbSendBus  = nullptr,
@@ -1437,6 +1445,8 @@ private:
         float    slideTgt = 0, slideCur = 0;   // MPE slide / CC74 0..1
         float    bendTgt  = 0, bendCur  = 0;   // per-note pitch bend (semitones, range per channel)
         const juce::AudioBuffer<float>* smpBuf = nullptr;  // velocity-layer buffer chosen at trigger
+        float    ampNow = 0.0f;     // [2026-07-19] this voice's PEAK amp-env level last block (Let Ring: the
+                                    // highlight follows real audibility, so a decayed key un-lights)
         SlotVoice sv[NUM_SLOTS];
         bool active() const { return playHead >= 0.0; }
     };

@@ -315,6 +315,7 @@ public:
     uint64_t keysSampleClock = 0;
     uint64_t letRingGroupStart = 0;
     bool     letRingActive = false;
+    std::atomic<bool> stopRingRequest { false };   // [2026-07-19] "Stop ring" MIDI target = the live palm-mute
     std::atomic<uint64_t> keysHeldMaskLo { 0 }, keysHeldMaskHi { 0 };   // bit n = MIDI note n held
     std::atomic<int> keysHeldNote { -1 };          // audio-thread writes; the held key (for auto-merge)
     std::atomic<float> keysHeldVel { 1.0f };       // velocity of the held key (for DRAW recording of per-column velocity)

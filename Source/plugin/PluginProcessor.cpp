@@ -927,6 +927,37 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             if (e.down) handleKeyDown((int) e.note, (float) e.vel / 127.0f); else handleKeyUp((int) e.note);
         }
 
+        // [2026-07-19] STOP RING (the "Stop ring" MIDI target = a live palm-mute): fade the ringing
+        // group over 100 ms (user-set) and end the gesture, WITHOUT stopping the transport.
+        if (stopRingRequest.exchange(false))
+        {
+            for (auto& patF : sequencer.patterns)
+            {
+                patF.channels[chIdx].fadeOutVoices(0.10f);
+                if (paired) patF.channels[mergedP].fadeOutVoices(0.10f);
+            }
+            letRingActive = false;
+            keysHeldCount = 0;
+            keysHeldNote.store(-1, std::memory_order_relaxed);
+            updateHeldMask();
+        }
+
+        // [2026-07-19] LET RING highlight = REAL audibility (every block, even with no key events): a
+        // ring note whose voice has decayed to silence un-lights; a sustaining one stays lit. The held
+        // stack keeps every ring note (for the swap release); only the LIT mask follows the sound.
+        if (keysHeldCount > 0 && sequencer.patterns[keyPat].channels[chIdx].keysLetRing)
+        {
+            uint64_t lo = 0, hi = 0;
+            for (int i = 0; i < keysHeldCount; ++i)
+            {
+                int mTgt = chIdx; const int mapped = splitMap(keysHeldStack[i], mTgt);
+                if (sequencer.patterns[keyPat].channels[mTgt].keyNoteAudible(mapped))
+                { const int n = keysHeldStack[i] & 0x7f; (n < 64 ? lo : hi) |= 1ULL << (n & 63); }
+            }
+            keysHeldMaskLo.store(lo, std::memory_order_relaxed);
+            keysHeldMaskHi.store(hi, std::memory_order_relaxed);
+        }
+
         // ARP CLOCK: while a key is held on an arp channel, fire the next note every time the computed
         // step time elapses. The rate is derived from bpm + time-sig + the channel's step count (so it
         // runs whether the transport plays or not); the phase started at the keypress ("from the top").
@@ -1484,6 +1515,7 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
     if (pid == "global_play")       { if (on && !sequencer.dawSync) sequencer.startStandalone(); return; }
     if (pid == "global_stop")       { if (on && !sequencer.dawSync) { sequencer.stopStandalone(); silenceRequest.store(true); } return; }
     if (pid == "global_pause")      { if (on) standalonePause();                                  return; }
+    if (pid == "ui_sel_stopRing")   { if (on) stopRingRequest.store(true);                         return; }   // [2026-07-19] Let Ring: damp the ring (100 ms) - the live palm-mute
     if (pid == "global_dawsync")    { if (on) sequencer.dawSync = !sequencer.dawSync;             return; }
     // MASTER CCs: write ALL patterns (the UI knobs' preset-wide rule - a single-pattern write
     // gets silently overwritten the next time the knob moves) and flag the editor so the master

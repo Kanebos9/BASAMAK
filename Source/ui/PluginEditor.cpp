@@ -7266,6 +7266,7 @@ void DrumSequencerEditor::handleMidiMenuChange()
         m.addItem(4, "Prev pattern..."  + tag("ui_sel_patPrev"));
         m.addItem(5, "Slot 1 <-> 2..."  + tag("ui_sel_slotSel"));
         m.addItem(6, "TEST the selected channel..." + tag("ui_sel_test"));
+        m.addItem(15, "Stop ring - Let Ring palm-mute (pad)..." + tag("ui_sel_stopRing"));   // [2026-07-19]
         m.addSectionHeader("Global (knobs / pads)");
         m.addItem(7, "BPM (knob)..."   + tag("ui_sel_bpm"));
         m.addItem(8, "Swing (knob)..." + tag("ui_sel_swing"));
@@ -7277,16 +7278,17 @@ void DrumSequencerEditor::handleMidiMenuChange()
         m.addSeparator(); m.addItem(11, "Clear these assignments");
         m.showMenuAsync(juce::PopupMenu::Options{}.withTargetComponent(&comboMidi).withMinimumWidth(260),
             [L](int r) {
-                static const char* pids[13] = { "ui_sel_chNext", "ui_sel_chPrev",
+                static const char* pids[14] = { "ui_sel_chNext", "ui_sel_chPrev",
                                                 "ui_sel_patNext", "ui_sel_patPrev",
                                                 "ui_sel_slotSel", "ui_sel_test",
                                                 "ui_sel_bpm", "ui_sel_swing",
                                                 "ui_sel_undo", "ui_sel_redo", "ui_sel_modWheel",
-                                                "ui_sel_slide", "ui_sel_pitchWheel" };
+                                                "ui_sel_slide", "ui_sel_pitchWheel", "ui_sel_stopRing" };
                 if (r >= 1 && r <= 10) L->startLearning(pids[r - 1]);
                 else if (r == 12) L->startLearning(pids[10]);
                 else if (r == 13) L->startLearning(pids[11]);
                 else if (r == 14) L->startLearning(pids[12]);
+                else if (r == 15) L->startLearning(pids[13]);
                 else if (r == 11) for (auto* p : pids) L->clearParam(p);
             });
     }
@@ -8571,22 +8573,10 @@ void DrumSequencerEditor::setupComponents()
             [this](int r) {
                 if (r == 0) return;
                 auto& c = proc.sequencer.channel(selectedChannel);
-                if (r == 5)
-                {   // LET RING: ask the strum window (pre-filled with the current value)
-                    auto* aw = new juce::AlertWindow("Let Ring",
-                        "Strum window in ms - notes struck this close count as ONE gesture that\n"
-                        "rings until the next gesture (bigger than a strum, smaller than the gap\n"
-                        "between strums). Typical: 60-140 ms.", juce::MessageBoxIconType::NoIcon);
-                    aw->addTextEditor("ms", juce::String(c.keysLetRingMs));
-                    aw->addButton("OK",     1, juce::KeyPress(juce::KeyPress::returnKey));
-                    aw->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
-                    aw->enterModalState(true, juce::ModalCallbackFunction::create([this, aw](int rr) {
-                        if (rr != 1) return;
-                        auto& cc = proc.sequencer.channel(selectedChannel);
-                        cc.keysLetRingMs = juce::jlimit(10, 1000, aw->getTextEditorContents("ms").getIntValue());
-                        cc.keysLetRing = true;
-                        refreshKeysPanel();
-                    }), true);
+                if (r == 5)   // LET RING: the CONTAINED in-plugin prompt (never floats over other apps)
+                {
+                    letRingPrompt.setBounds(content.getLocalBounds());
+                    letRingPrompt.show(c.keysLetRingMs);
                     return;
                 }
                 c.keysLetRing  = false;
@@ -9907,6 +9897,13 @@ void DrumSequencerEditor::setupComponents()
         if (sl.lfoShape[d] == 7) openLfoCurveEditor(d);   // picking Custom opens the draw window
     };
     lfoDisplay.onOpenCurveEditor = [this](int dest) { openLfoCurveEditor(dest); };   // click the wave in Custom
+    content.addChildComponent(letRingPrompt);   // [2026-07-19] in-plugin Let Ring ms prompt
+    letRingPrompt.onDone = [this](int ms) {
+        auto& cc = proc.sequencer.channel(selectedChannel);
+        cc.keysLetRingMs = juce::jlimit(10, 1000, ms);
+        cc.keysLetRing = true;
+        refreshKeysPanel();
+    };
     content.addChildComponent(lfoCurveEd);
     lfoCurveEd.clickIgnore = &lfoDisplay;
     lfoCurveEd.onToolsChange = [this](int g2, bool sn) {
@@ -11531,6 +11528,8 @@ void DrumSequencerEditor::keysStopRecord(bool finalize)
     proc.keysDrawLastCol.store(-1);
     const bool wasPlaying = proc.sequencer.isCurrentlyPlaying;
     proc.keysRecording.store(false);
+    proc.stopRingRequest.store(true);   // [2026-07-19] damp any Let Ring voices still held - else they
+                                        // double with the just-recorded take when it starts playing back ("gets loud")
     keysCountdownTicks = 0; keysGoTicks = 0; keysPanel.countdown = 0;
     if (countdownOverlay.label.isNotEmpty()) { countdownOverlay.label.clear(); countdownOverlay.repaint(); }
     parseKeysEvents();
@@ -13480,6 +13479,8 @@ void DrumSequencerEditor::zoomToGroup(juce::Rectangle<int> designRect)
         static_cast<SoundPickerPanel&>(*soundPicker).close();
     harmEd.setVisible(false);
     lfoCurveEd.setVisible(false);
+    letRingPrompt.setBounds(content.getLocalBounds());   // [2026-07-19] full-cover dim; hidden until opened
+    letRingPrompt.setVisible(false);
     routePicker.setVisible(false);
     remapEd.setVisible(false);
     fxTypeList.close();   // anchored under a combo that just moved (close() frees the combo latch)

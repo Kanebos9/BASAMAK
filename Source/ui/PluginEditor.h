@@ -1478,6 +1478,57 @@ private:
     juce::Rectangle<float> strip() const { return getLocalBounds().toFloat().reduced(10.0f).withTrimmedTop(26.0f).withTrimmedBottom(16.0f); }
 };
 
+// [2026-07-19] In-plugin "Let Ring" prompt: an overlay CONTAINED in the editor (unlike a desktop
+// AlertWindow, which floats over other apps - user caught it). Dims the editor, centres a panel with
+// the strum-window field + how to Stop the ring.
+class LetRingPrompt : public juce::Component
+{
+public:
+    juce::TextEditor msEd;
+    juce::TextButton okBtn { "OK" }, cancelBtn { "Cancel" };
+    std::function<void(int)> onDone;   // OK -> the ms value (Cancel does nothing)
+    LetRingPrompt()
+    {
+        addAndMakeVisible(msEd); msEd.setJustification(juce::Justification::centred);
+        msEd.setInputRestrictions(4, "0123456789");
+        addAndMakeVisible(okBtn); addAndMakeVisible(cancelBtn);
+        okBtn.onClick     = [this] { if (onDone) onDone(juce::jlimit(10, 1000, msEd.getText().getIntValue())); setVisible(false); };
+        cancelBtn.onClick = [this] { setVisible(false); };
+        msEd.onReturnKey  = [this] { okBtn.onClick(); };
+        setInterceptsMouseClicks(true, true);
+    }
+    void show(int cur) { msEd.setText(juce::String(cur), false); setVisible(true); toFront(true);
+                         msEd.grabKeyboardFocus(); msEd.selectAll(); repaint(); }
+    void paint(juce::Graphics& g) override
+    {
+        g.fillAll(juce::Colour(0xb2000000));                                   // dim the editor behind
+        const auto p = panel();
+        g.setColour(juce::Colour(0xff1b1b2e)); g.fillRoundedRectangle(p, 8.0f);
+        g.setColour(juce::Colour(0xff4a4a70)); g.drawRoundedRectangle(p, 8.0f, 1.5f);
+        g.setColour(juce::Colour(0xff9fd1ff)); g.setFont(juce::Font(16.0f, juce::Font::bold));
+        g.drawText("Let Ring", p.reduced(16, 10).withHeight(22), juce::Justification::topLeft, false);
+        g.setColour(juce::Colour(0xffcfd6e6)); g.setFont(juce::Font(12.5f));
+        g.drawFittedText(
+            "Strum WINDOW in ms: notes struck this close count as ONE strum that keeps ringing until the "
+            "next strum lands (bigger than a strum, smaller than the gap between strums). Typical 60-140 ms.\n\n"
+            "The last chord rings on. To damp it live without stopping the transport, assign \"Stop ring\" "
+            "under the MIDI menu -> \"MIDI-learn: selection controls\" to a footswitch/pad (a palm-mute).",
+            p.reduced(16).withTrimmedTop(30).withTrimmedBottom(64).toNearestInt(),
+            juce::Justification::topLeft, 10);
+    }
+    void resized() override
+    {
+        const auto p = panel().toNearestInt();
+        msEd.setBounds(p.getX() + 16, p.getBottom() - 60, p.getWidth() - 32, 26);
+        okBtn.setBounds(p.getRight() - 162, p.getBottom() - 30, 70, 22);
+        cancelBtn.setBounds(p.getRight() - 86, p.getBottom() - 30, 70, 22);
+    }
+    void mouseDown(const juce::MouseEvent& e) override { if (! panel().contains(e.position.toFloat())) setVisible(false); }  // outside = cancel
+private:
+    juce::Rectangle<float> panel() const
+    { const float w = 460.0f, h = 250.0f; return { (getWidth() - w) * 0.5f, (getHeight() - h) * 0.5f, w, h }; }
+};
+
 //==============================================================================
 // RemapEditor [2026-07-14 00:03]: the per-route REMAP curve overlay (Vital-style "modulation
 // remap"). X = the source's incoming value, Y = what actually reaches the target; the drawn shape
@@ -3679,6 +3730,7 @@ private:
     HarmonicEditor harmEd;    // ADDITIVE draw-harmonics overlay (content child)
     MsRecordWizard msWizard;  // [2026-07-18] multisample recording wizard (content child; X-close only)
     LfoCurveEditor lfoCurveEd;             // LFO SHAPER overlay (draw the Custom LFO cycle)
+    LetRingPrompt  letRingPrompt;          // [2026-07-19] in-plugin "Let Ring" ms prompt (contained)
     ModFaderMatrix  modFaders;             // 12 route faders (6x2) inline in the MODULATION box
     RoutePicker     routePicker;           // its right-click source|target chooser (overlay)
     RemapEditor     remapEd;               // [2026-07-14] the per-route REMAP curve overlay (opened from the picker)

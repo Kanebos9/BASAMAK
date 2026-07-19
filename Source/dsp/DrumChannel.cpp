@@ -3347,6 +3347,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
     {
         Voice& v = voices[vi];
         if (! v.active()) continue;
+        v.ampNow = 0.0f;   // [2026-07-19] recomputed below = this voice's peak env this block (Let Ring highlight)
 
         // PER-VOICE MODULATION: re-bake each slot's config from THIS voice's OWN sources (its velocity,
         // note, amp/mod envelope, per-note random, retrig-LFO phase) so keytrack / velocity->cutoff /
@@ -4556,6 +4557,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             outL[i] += mixL * v.velGain * vPanL * kg;
             outR[i] += mixR * v.velGain * vPanR * kg;
             maxEnvLevel = juce::jmax(maxEnvLevel, vEnv * v.velGain);
+            v.ampNow = juce::jmax(v.ampNow, vEnv * v.velGain);   // [2026-07-19] per-voice peak (Let Ring audibility)
 
             // (Per-step LENGTH no longer hard-cuts here: it's a HOLD handled in the amp env - the note
             //  sustains until the gate, then the env decays as the release. Only CHOKES set v.killing now.)
