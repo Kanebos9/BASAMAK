@@ -5821,7 +5821,7 @@ void WaveformDisplay::mouseDoubleClick(const juce::MouseEvent&)
 // Electro Perc + the three FX shelves). A category missing here is silently dropped!
 static const char* kSoundCatOrder[] = { "Kicks", "Snares", "Claps", "Hi-Hats", "Cymbals", "Toms",
                                         "Percussion", "Electro Perc", "Bass", "Keys", "Pads & Choirs",
-                                        "Leads", "Plucks & Strings", "Bells & Mallets", "Chords & Arps",
+                                        "Leads", "Winds", "Plucks & Strings", "Bells & Mallets", "Chords & Arps",
                                         "Risers & Falls", "Impacts & Booms", "Noise & Texture" };
 // [2026-07-20 reorg, user] FACTORY multisamples file under their instrument-ROLE category (the
 // bank's oldest rule: roles, never engine names - a "Multisamples" section broke it). Unknown
@@ -5839,15 +5839,15 @@ static juce::String msCategoryOf(const juce::String& n)
         { "Voice Oohs", "Pads & Choirs" }, { "Choir Aahs", "Pads & Choirs" }, { "Solo Voice", "Pads & Choirs" },
         { "Violin Section", "Pads & Choirs" }, { "Cello Section", "Pads & Choirs" },
         { "Viola Section", "Pads & Choirs" }, { "Wine Glasses", "Pads & Choirs" },
-        { "Alto Recorder", "Leads" }, { "Ocarina", "Leads" }, { "Tenor Sax", "Leads" },
-        { "Saxello", "Leads" }, { "Harmonica", "Leads" }, { "French Horn", "Leads" },
-        { "Trumpet Real", "Leads" }, { "Trombone Real", "Leads" }, { "Clarinet Real", "Leads" },
-        { "Bassoon Real", "Leads" },
+        { "Alto Recorder", "Winds" }, { "Ocarina", "Winds" }, { "Tenor Sax", "Winds" },
+        { "Saxello", "Winds" }, { "Harmonica", "Winds" }, { "French Horn", "Winds" },
+        { "Trumpet Real", "Winds" }, { "Trombone Real", "Winds" }, { "Clarinet Real", "Winds" },
+        { "Bassoon Real", "Winds" },
         { "Vibraphone Real", "Bells & Mallets" }, { "Marimba Real", "Bells & Mallets" },
         { "Balafon", "Bells & Mallets" }, { "Kalimba Real", "Bells & Mallets" },
         { "Mbira", "Bells & Mallets" }, { "Tubular Bells Real", "Bells & Mallets" },
         { "Timpani Real", "Toms" },
-        { "Flute Real", "Leads" }, { "Oboe Real", "Leads" }, { "Solo Violin", "Leads" },
+        { "Flute Real", "Winds" }, { "Oboe Real", "Winds" }, { "Solo Violin", "Leads" },
         { "Solo Contrabass", "Bass" }, { "Pizzicato Strings", "Plucks & Strings" },
         { "Electric Piano Real", "Keys" }, { "Celesta Real", "Bells & Mallets" },
         { "Da Loo Ne", "Pads & Choirs" },   // the user's OWN recorded syllable voice - factory now
@@ -5855,19 +5855,20 @@ static juce::String msCategoryOf(const juce::String& n)
         { "Renaissance Organ", "Keys" }, { "Cathedral Organ", "Keys" },
         { "Upright Piano Real", "Keys" }, { "Glockenspiel Real", "Bells & Mallets" },
         { "Xylophone Real", "Bells & Mallets" }, { "Strumstick", "Plucks & Strings" },
-        { "Didgeridoo", "Noise & Texture" },
-        { "Bagpipes", "Leads" }, { "Baritone Sax", "Leads" }, { "Solo Cello", "Leads" },
-        { "Folk Tuba", "Bass" }, { "Double Bass Pizz", "Bass" },
+        { "Didgeridoo", "Winds" },
+        { "Bagpipes", "Winds" }, { "Baritone Sax", "Winds" }, { "Solo Cello", "Leads" },
+        { "Folk Tuba", "Winds" }, { "Double Bass Pizz", "Bass" },
         { "Tagelharpa", "Plucks & Strings" },
         { "Gamelan Saron", "Bells & Mallets" }, { "Gamelan Gender", "Bells & Mallets" },
         { "Gamelan Bonang", "Bells & Mallets" },
-        { "Haegeum", "Leads" }, { "Sanjo Daegeum", "Leads" }, { "Danso", "Leads" },
-        { "Sogeum", "Leads" }, { "Taepyeongso", "Leads" }, { "Saenghwang", "Pads & Choirs" },
+        { "Haegeum", "Leads" }, { "Sanjo Daegeum", "Winds" }, { "Danso", "Winds" },
+        { "Sogeum", "Winds" }, { "Taepyeongso", "Winds" }, { "Saenghwang", "Winds" },
         { "Ajaeng", "Leads" }, { "Sanjo Gayageum", "Plucks & Strings" },
         { "Gayageum 25", "Plucks & Strings" }, { "Yanggeum", "Plucks & Strings" },
         { "Erhu", "Leads" }, { "Hungarian Zither", "Plucks & Strings" },
         { "Banjo", "Plucks & Strings" }, { "Lyre", "Plucks & Strings" },
-        { "Steel Pan Real", "Bells & Mallets" },
+        { "Steel Pan Real", "Bells & Mallets" }, { "Stone Chimes", "Bells & Mallets" },
+        { "Bronze Bells", "Bells & Mallets" }, { "Seul", "Plucks & Strings" },
     };
     for (auto& p : T) if (n == p.first) return p.second;
     return {};

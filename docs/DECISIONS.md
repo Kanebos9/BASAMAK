@@ -350,6 +350,8 @@
 
 | 232 | r11: sfzinstruments org license sweep -> Erhu/Hungarian Zither/Banjo/Lyre/Steel Pan Real (CC0/Unlicense). Zither drone strings mask melody pitch = author names trusted, ear-flagged. GATHERING COMPLETE at 78 instruments / 767 MB | user push | final gathering |
 
+| 233 | r12: Winds category (21 ms remapped); 3 uniques = Stone Chimes / Bronze Bells / Seul (Gugak KOGL-1); hurdy-gurdy dropped (GPL sounds); factory 81 | user orders | winds + uniques |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

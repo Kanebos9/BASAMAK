@@ -20,7 +20,7 @@ license text ships alongside the samples). Credits are given as a courtesy to th
 
 - Gamelan Saron / Gamelan Gender / Gamelan Bonang — from the Casa da Musica Gamelan Sample Library (Digitopia, Porto) &middot; Artistic License 2.0
 
-- Haegeum / Sanjo Gayageum / Gayageum 25 / Sanjo Daegeum / Taepyeongso / Yanggeum / Saenghwang / Ajaeng / Danso / Sogeum — recorded by the National Gugak Center (Korea), gugak.go.kr &middot; Korea Open Government License Type 1 (attribution)
+- Haegeum / Sanjo Gayageum / Gayageum 25 / Sanjo Daegeum / Taepyeongso / Yanggeum / Saenghwang / Ajaeng / Danso / Sogeum / Stone Chimes (Pyeongyeong) / Bronze Bells (Pyeonjong) / Seul — recorded by the National Gugak Center (Korea), gugak.go.kr &middot; Korea Open Government License Type 1 (attribution)
 
 - Erhu / Hungarian Zither / Banjo / Lyre / Steel Pan Real — from the sfzinstruments community (github.com/sfzinstruments; D. Smolken, J. Learman et al.) &middot; Creative Commons 0 / Unlicense
 
