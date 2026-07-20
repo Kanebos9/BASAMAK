@@ -5823,6 +5823,34 @@ static const char* kSoundCatOrder[] = { "Kicks", "Snares", "Claps", "Hi-Hats", "
                                         "Percussion", "Electro Perc", "Bass", "Keys", "Pads & Choirs",
                                         "Leads", "Plucks & Strings", "Bells & Mallets", "Chords & Arps",
                                         "Risers & Falls", "Impacts & Booms", "Noise & Texture" };
+// [2026-07-20 reorg, user] FACTORY multisamples file under their instrument-ROLE category (the
+// bank's oldest rule: roles, never engine names - a "Multisamples" section broke it). Unknown
+// folders (user recordings) list under "Your Sound Bank" instead. "(Multisample)" tags stay.
+static juce::String msCategoryOf(const juce::String& n)
+{
+    static const std::pair<const char*, const char*> T[] = {
+        { "Salamander Grand", "Keys" },  { "Harpsichord Real", "Keys" },  { "Church Organ", "Keys" },
+        { "Steinway Grand", "Keys" },
+        { "BASS-SR500N", "Bass" }, { "Finger Bass Real", "Bass" }, { "Fretless Bass", "Bass" },
+        { "Nylon Guitar Real", "Plucks & Strings" }, { "Steel Guitar Real", "Plucks & Strings" },
+        { "Electric Guitar Real", "Plucks & Strings" }, { "Jazz Guitar Real", "Plucks & Strings" },
+        { "Concert Harp", "Plucks & Strings" }, { "Dan Tranh", "Plucks & Strings" },
+        { "Bowed Psaltery", "Plucks & Strings" },
+        { "Voice Oohs", "Pads & Choirs" }, { "Choir Aahs", "Pads & Choirs" }, { "Solo Voice", "Pads & Choirs" },
+        { "Violin Section", "Pads & Choirs" }, { "Cello Section", "Pads & Choirs" },
+        { "Viola Section", "Pads & Choirs" }, { "Wine Glasses", "Pads & Choirs" },
+        { "Alto Recorder", "Leads" }, { "Ocarina", "Leads" }, { "Tenor Sax", "Leads" },
+        { "Saxello", "Leads" }, { "Harmonica", "Leads" }, { "French Horn", "Leads" },
+        { "Trumpet Real", "Leads" }, { "Trombone Real", "Leads" }, { "Clarinet Real", "Leads" },
+        { "Bassoon Real", "Leads" },
+        { "Vibraphone Real", "Bells & Mallets" }, { "Marimba Real", "Bells & Mallets" },
+        { "Balafon", "Bells & Mallets" }, { "Kalimba Real", "Bells & Mallets" },
+        { "Mbira", "Bells & Mallets" }, { "Tubular Bells Real", "Bells & Mallets" },
+        { "Timpani Real", "Toms" },
+    };
+    for (auto& p : T) if (n == p.first) return p.second;
+    return {};
+}
 // Factory indices in CATEGORY cat, alphabetical; a non-empty query keeps only matches
 // (against the sound NAME or the category title - the search feature).
 // SPACE-INSENSITIVE match: hosts (Reaper) often reserve the SPACE key for their transport, so
@@ -5993,44 +6021,67 @@ private:
             rows.add(r);
         }
     }
+    std::map<int, int> numberOf;    // [2026-07-20] global browse NUMBER per id (matches next/prev)
+    juce::StringArray userTags;     // engine tag per user file (editor-fed at open; may be short)
     void rebuild()
     {
         rows.clear();
         const juce::String q = ed.getText().trim();
         auto names = Factory::mixNames();
         auto cats  = Factory::mixCategories();
+        // [2026-07-20, user: "make soundbank have numbers"] the UNFILTERED browse order numbers
+        // every sound once; rows show their stable number even while a search filters the list.
+        numberOf.clear();
+        { int counter = 0;
+          for (auto* cat : kSoundCatOrder)
+          {
+              for (int i : factoryIndicesFor(cat, names, cats, {})) numberOf[FACTORY_MIX_BASE + i] = ++counter;
+              for (int m = 0; m < msNames.size(); ++m)
+                  if (msCategoryOf(msNames[m]) == juce::String(cat)) numberOf[MS_ID_BASE + m] = ++counter;
+          }
+          for (int i = 0; i < files.size(); ++i) numberOf[i + 1] = ++counter;
+          for (int m = 0; m < msNames.size(); ++m)
+              if (msCategoryOf(msNames[m]).isEmpty()) numberOf[MS_ID_BASE + m] = ++counter; }
+        auto num = [this](int id) { auto it = numberOf.find(id);
+                                    return it == numberOf.end() ? juce::String() : juce::String(it->second) + "  "; };
         if (q.isEmpty())
         {
             juce::Array<Entry> init; init.add({ "Initialize new sound mix", ID_INIT_MIX, true });
             addSection(init);
         }
-        {   // [2026-07-20 r2, user order] MULTISAMPLES AT THE TOP of the bank
-            juce::Array<Entry> msTop;
-            for (int i = 0; i < msNames.size(); ++i)
-                if (q.isEmpty() || pickerMatch(msNames[i], q) || pickerMatch("multisample", q))
-                    msTop.add({ msNames[i] + "  (Multisample)", MS_ID_BASE + i });
-            if (! msTop.isEmpty()) { addHeader("Multisamples"); addSection(msTop); }
-        }
         for (auto* cat : kSoundCatOrder)
         {
             auto idx = factoryIndicesFor(cat, names, cats, q);
-            if (idx.isEmpty()) continue;
-            addHeader(cat);
             juce::Array<Entry> items;
             for (int i : idx)
-                items.add({ names[i] + "  (" + Factory::mixSourceTag(i) + ")", FACTORY_MIX_BASE + i });
+                items.add({ num(FACTORY_MIX_BASE + i) + names[i] + "  (" + Factory::mixSourceTag(i) + ")", FACTORY_MIX_BASE + i });
+            // [2026-07-20 reorg] factory MULTISAMPLES file under their ROLE category (user order);
+            // searchable by name, category title, and the engine word "multisample"/"sample".
+            for (int m = 0; m < msNames.size(); ++m)
+                if (msCategoryOf(msNames[m]) == juce::String(cat)
+                    && (q.isEmpty() || pickerMatch(msNames[m], q) || pickerMatch(cat, q)
+                        || pickerMatch("multisample", q)))
+                    items.add({ num(MS_ID_BASE + m) + msNames[m] + "  (Multisample)", MS_ID_BASE + m });
+            if (items.isEmpty()) continue;
+            addHeader(cat);
             addSection(items);
         }
         juce::Array<Entry> user;
         for (int i = 0; i < files.size(); ++i)
         {
             const bool inRoot = files[i].getParentDirectory() == root;
-            const juce::String label = inRoot ? files[i].getFileNameWithoutExtension()
+            juce::String label = inRoot ? files[i].getFileNameWithoutExtension()
                 : files[i].getParentDirectory().getFileName() + " / " + files[i].getFileNameWithoutExtension();
-            if (q.isEmpty() || pickerMatch(label, q)) user.add({ label, i + 1 });
+            const juce::String tag = i < userTags.size() ? userTags[i] : juce::String();
+            if (tag.isNotEmpty()) label << "  (" << tag << ")";   // [2026-07-20] engine tag (user ask)
+            if (q.isEmpty() || pickerMatch(label, q)) user.add({ num(i + 1) + label, i + 1 });
         }
+        // user-recorded (unmapped) MULTISAMPLE folders belong to "Your Sound Bank" (user spec)
+        for (int m = 0; m < msNames.size(); ++m)
+            if (msCategoryOf(msNames[m]).isEmpty()
+                && (q.isEmpty() || pickerMatch(msNames[m], q) || pickerMatch("multisample", q)))
+                user.add({ num(MS_ID_BASE + m) + msNames[m] + "  (Multisample)", MS_ID_BASE + m });
         if (! user.isEmpty()) { addHeader("Your Sound Bank"); addSection(user); }
-        // (Multisamples moved to the TOP of the list - user order 2026-07-20 r2)
         if (q.isEmpty())
         {
             addHeader("");
@@ -6585,10 +6636,40 @@ juce::File DrumSequencerEditor::getSoundMixFolder()
 void DrumSequencerEditor::rescanSoundMixes()
 {
     soundMixFiles.clear();
+    soundMixTags.clear();
     // Recursive so subfolders are picked up; read the new extension AND the legacy one.
     auto files = getSoundMixFolder().findChildFiles(juce::File::findFiles, true, kSoundWild);
     files.sort();
     for (auto& f : files) soundMixFiles.add(f);
+    // [2026-07-20, user ask] ENGINE TAGS for user sounds ("custom sounds don't say their engine"):
+    // read straight out of each file's XML at scan time - engine ints + msDir, no sound building.
+    static const char* kEngName[9] = { "Sample", "Noise", "Oscillator", "FM", "Karplus-Strong",
+                                       "Synth", "Wavetable", "Modal", "Granular" };
+    for (auto& f : soundMixFiles)
+    {
+        juce::String tag;
+        if (auto xml = juce::parseXML(f))
+        {
+            const auto t = juce::ValueTree::fromXml(*xml);
+            juce::StringArray engs;
+            std::function<void(const juce::ValueTree&)> walk = [&](const juce::ValueTree& v)
+            {
+                if (v.hasType("Slot"))
+                {
+                    const float w = (float) v.getProperty("w", 0.0f);
+                    const int   e = (int) v.getProperty("eng", -1);
+                    if (w > 0.001f && e >= 0)
+                        engs.addIfNotAlreadyThere(
+                            v.getProperty("msDir", "").toString().isNotEmpty() ? juce::String("Multisample")
+                            : e < 9 ? juce::String(kEngName[e]) : juce::String("?"));
+                }
+                for (int i = 0; i < v.getNumChildren(); ++i) walk(v.getChild(i));
+            };
+            walk(t);
+            tag = engs.size() > 1 ? juce::String("Hybrid") : engs.size() == 1 ? engs[0] : juce::String();
+        }
+        soundMixTags.add(tag);
+    }
 }
 
 // Mirror the Sound Bank folder structure into the menu: subfolders -> submenus, files -> items
@@ -6669,8 +6750,9 @@ void DrumSequencerEditor::openSoundPicker(int ch)
     panel.onPick = [this, ch](int id) { applySoundPickId(ch, id); selectChannel(ch); };
     const int qPat = currentPattern();   // capture NOW - the memory is per (pattern, channel)
     panel.onQueryChanged = [this, ch, qPat](const juce::String& q) { pickerQuery[qPat][ch] = q; };
-    panel.msNames.clear();               // [2026-07-20] the Multisamples section (fresh each open)
+    panel.msNames.clear();               // [2026-07-20] multisample folders (filed by role category)
     for (const auto& d : msFolders) panel.msNames.add(d.getFileName());
+    panel.userTags = soundMixTags;       // engine tags for user sounds
     const auto r = content.getLocalArea(&combo, combo.getLocalBounds());
     int y = r.getBottom() + 2;
     int h = content.getHeight() - y - 6;
@@ -8241,15 +8323,18 @@ void DrumSequencerEditor::stepSoundBank(int dir)
     juce::Array<int> order;                                    // the full bank in PICKER order
     auto facNames = Factory::mixNames();
     auto facCats  = Factory::mixCategories();
+    // [2026-07-20 reorg] the picker's visual order: each role category = factory sounds then its
+    // multisamples; then Your Sound Bank files; then user-recorded (unmapped) multisamples.
     for (auto* cat : kSoundCatOrder)
+    {
         for (int i : factoryIndicesFor(cat, facNames, facCats, {}))
             order.add(FACTORY_MIX_BASE + i);
-    // [2026-07-20 r2] MIDI next/prev walks the picker's visual order: Multisamples FIRST
-    juce::Array<int> order2;
-    for (int i = 0; i < msFolders.size(); ++i) order2.add(MS_ID_BASE + i);
-    order2.addArray(order);
-    for (int i = 0; i < soundMixFiles.size(); ++i) order2.add(i + 1);   // Your Sound Bank (file ids = idx+1)
-    order.swapWith(order2);
+        for (int m = 0; m < msFolders.size(); ++m)
+            if (msCategoryOf(msFolders[m].getFileName()) == juce::String(cat)) order.add(MS_ID_BASE + m);
+    }
+    for (int i = 0; i < soundMixFiles.size(); ++i) order.add(i + 1);   // Your Sound Bank (file ids = idx+1)
+    for (int m = 0; m < msFolders.size(); ++m)
+        if (msCategoryOf(msFolders[m].getFileName()).isEmpty()) order.add(MS_ID_BASE + m);
     if (order.isEmpty()) return;
     int pos = order.indexOf(currentSoundPickId(selectedChannel));
     pos = pos < 0 ? (dir > 0 ? 0 : order.size() - 1)           // Init / unknown: start at an end

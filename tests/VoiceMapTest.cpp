@@ -110,6 +110,18 @@ int main()
            CHK(es.smpEnvOn && std::abs(es.atk - 0.02f) < 1e-3 && std::abs(es.sustain - 0.75f) < 1e-3
                && std::abs(es.release - 0.4f) < 1e-3) ? "instrument env applied (OK)" : "FAIL");
 
+    // [5] SHARED DECODE (the RAM fix): the same folder on a second channel shares ONE MsSet
+    {
+        auto& ch2 = s->patterns[0].channels[1];
+        for (auto& sl : ch2.slots) sl = DrumChannel::Slot();
+        ch2.slots[0].engine = DrumChannel::SrcSample; ch2.slots[0].weight = 1.0f;
+        const bool l2 = ch2.loadMultisample(0, dir);
+        printf("[5] shared decode: loaded=%d same-set=%d -> %s\n",
+               (int) l2, (int)(ch2.msSet[0] == ch.msSet[0]),
+               CHK(l2 && ch2.msSet[0] != nullptr && ch2.msSet[0] == ch.msSet[0])
+                   ? "one decode shared (OK)" : "FAIL (duplicate decode)");
+    }
+
     dir.deleteRecursively();
     delete s;
     printf(fails == 0 ? "VoiceMapTest: ALL PASS\n" : "VoiceMapTest: %d FAILURES\n", fails);

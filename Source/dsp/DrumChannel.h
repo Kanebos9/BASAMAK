@@ -830,6 +830,8 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     float msRigDnHist[24] = {}, msRigUpHist[24] = {};
     void refreshMsRig();                             // MESSAGE THREAD loader (empty paths = unload)
     void writeMsSidecar(int slot) const;             // instrument settings -> folder/instrument.basamakinst
+    void applyMsSidecar(int slot, const juce::File& folder, int nVoices);   // [2026-07-20] slot-side sidecar
+                                                     // (gain/reverse/loop/env/rig) - shared-load path reuses it
     void msRebuildLoops(int slot);                   // [2026-07-19] per-zone AUTO-loop (deterministic; on load + toggle)
     // [2026-07-19] MULTISAMPLE SCALE/CHORD (option B): at note-on, pick each diatonic chord tone's
     // OWN nearest zone (buffer/loop/normalize/varispeed) into the voice's per-tone arrays. Called

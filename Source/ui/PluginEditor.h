@@ -4171,6 +4171,7 @@ private:
 
     //-- Sound mixes (per-channel full presets)
     juce::Array<juce::File> soundMixFiles;
+    juce::StringArray soundMixTags;   // [2026-07-20] engine tag per user sound (parsed at rescan)
     static juce::File getSoundMixFolder();
     void rescanSoundMixes();
     void addSoundFolderToMenu(juce::PopupMenu& menu, const juce::File& folder);   // Sound Bank subfolders -> submenus

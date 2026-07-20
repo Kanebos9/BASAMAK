@@ -336,6 +336,8 @@
 
 | 225 | REVERSAL of #224's write-through (user, rightly angry: env edits were remembered across channels/presets/instances - "regular synth sounds don't have that and that's the correct behaviour"): the sidecar env is the instrument's AUTHORED DEFAULT, applied on LOAD only; panel env edits are CHANNEL-LOCAL like every other sound edit; writeMsSidecar no longer writes env fields (read-modify-write preserves the authored ones); polluted local sidecars restored by re-running the authoring script. + Multisamples section moved to the TOP of the sound picker (user order), MIDI next/prev order matches | I over-implemented "instruments keep their own settings" into disk write-through - the correct reading was authored-defaults-on-load; my misread, owned | user correction |
 
+| 226 | RAM: identical multisample folders SHARE one decoded copy across all channels/patterns (weak_ptr registry keyed folder+rate+content fingerprint; frees when the last user releases). Bank REORG: factory multisamples file under ROLE categories (roles-not-engines rule), user-recorded ones under "Your Sound Bank", all "(Multisample)"-tagged + engine-searchable; every picker row shows its GLOBAL browse number; user sounds show parsed engine tags. + 5 VSCO2 instruments + Salamander 3rd layer; Church Organ/Timpani skipped (files not note-named). Factory = 35 / 426 MB (user raised the budget to 500 MB-1 GB) | user orders (RAM fix, reorg, numbers, tags, more instruments) | user orders; mechanisms mine |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

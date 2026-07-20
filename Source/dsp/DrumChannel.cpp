@@ -1383,10 +1383,71 @@ void DrumChannel::fillMsScaleVoices(SlotVoice& sv, int s, int playedMidi, float 
 // Load a multisample FOLDER (WAVs named by note) into one slot. Also loads the zone nearest
 // middle C into the slot's MAIN buffer (waveform display + a sane fallback), and RETIRES the
 // previous zone set instead of freeing it (fading voices may still hold pointers into it).
+// [2026-07-20] SHARED DECODED INSTRUMENTS (the RAM fix): identical folders loaded on N channels
+// (or mirrored across a merged group's bars) used to hold N full float decodes - a big piano
+// times 4 bars was gigabytes. One registry of weak_ptrs now dedupes them: same folder + rate +
+// content fingerprint = ONE decoded copy shared by every channel (MsSet is effectively immutable
+// after load; msRebuildLoops is idempotent/deterministic so a shared rebuild lands identically).
+// weak_ptr = memory frees itself once the last channel lets go. MESSAGE THREAD only.
+static std::map<juce::String, std::weak_ptr<DrumChannel::MsSet>>& msSetRegistry()
+{ static std::map<juce::String, std::weak_ptr<DrumChannel::MsSet>> r; return r; }
+
+static juce::String msFolderFingerprint(const juce::File& folder)
+{
+    juce::int64 acc = 0; int n = 0;
+    auto addDir = [&](const juce::File& d)
+    {
+        for (const auto& f : d.findChildFiles(juce::File::findFiles, false, "*.wav;*.aif;*.aiff;*.flac"))
+        { acc += f.getLastModificationTime().toMilliseconds() + f.getSize()
+               + (juce::int64) f.getFileName().hashCode(); ++n; }
+    };
+    addDir(folder);
+    for (const auto& d : folder.findChildFiles(juce::File::findDirectories, false))
+        if (d.getFileName().startsWithIgnoreCase("voice")) addDir(d);
+    // the sidecar shapes zones (tune map) - changes must break sharing too
+    const auto sc = folder.getChildFile("instrument.basamakinst");
+    if (sc.existsAsFile()) acc += sc.getLastModificationTime().toMilliseconds() + sc.getSize();
+    return juce::String(acc) + ":" + juce::String(n);
+}
+
 bool DrumChannel::loadMultisample(int slot, const juce::File& folder)
 {
     if (slot < 0 || slot >= NUM_SLOTS || ! folder.isDirectory()) return false;
     const double hostRate = engineOS > 0 ? sr / (double) engineOS : sr;
+    // registry hit = share the existing decode (zones, loops, cents all identical by construction)
+    const juce::String regKey = folder.getFullPathName() + "|" + juce::String(hostRate, 1)
+                              + "|" + msFolderFingerprint(folder);
+    {
+        auto& reg = msSetRegistry();
+        for (auto it = reg.begin(); it != reg.end();)          // purge dead entries as we pass
+            it = it->second.expired() ? reg.erase(it) : std::next(it);
+        auto it = reg.find(regKey);
+        if (it != reg.end())
+            if (auto shared = it->second.lock())
+            {
+                fadeOutVoices(retrigFadeSec());
+                {
+                    const juce::ScopedLock sl2(sampleLock);
+                    int best = 0;
+                    for (int i = 1; i < (int) shared->zones.size(); ++i)
+                        if (std::abs(shared->zones[(size_t) i].root - 60) < std::abs(shared->zones[(size_t) best].root - 60)) best = i;
+                    slotSample[slot].original = shared->zones[(size_t) best].layers.back().buf;
+                    for (auto& v : voices) v.playHead = -1.0;
+                }
+                slotSample[slot].usingUser = true;
+                slotSample[slot].file = folder;
+                slots[slot].smpPreservePitch = false;
+                applyMsSidecar(slot, folder, shared->nVoices);   // per-SLOT settings still apply
+                slotSample[slot].loadedAtRate = hostRate;
+                updateStretch(slot);
+                msSetOld[slot] = msSet[slot];
+                msSet[slot] = shared;
+                if (slots[slot].msLoopOn && ! shared->zones.empty() && ! shared->zones.front().hasLoop
+                    && shared->zones.front().layers.empty() == false)
+                    msRebuildLoops(slot);   // first sharer with loop on derives regions (idempotent)
+                return true;
+            }
+    }
     auto set = std::make_shared<MsSet>();
     set->folder = folder.getFullPathName();
     auto scanDir = [&](const juce::File& dir, int voiceIdx)
@@ -1444,32 +1505,12 @@ bool DrumChannel::loadMultisample(int slot, const juce::File& folder)
     slots[slot].smpPreservePitch = false;   // [2026-07-19] a multisample is an INSTRUMENT - always
                                             // pitch to the note (user order; re-enable by hand for
                                             // a drum-kit folder mapped across keys)
-    // [2026-07-19] apply the folder's SIDECAR (missing = defaults; the settings travel with it)
+    // [2026-07-20] slot-side sidecar (gain/reverse/loop/env/rig) - the shared-load path reuses it
+    applyMsSidecar(slot, folder, set->nVoices);
+    // set-side sidecar: the TUNE map shapes the SHARED zones (part of the registry fingerprint)
     if (auto xml = juce::parseXML(folder.getChildFile("instrument.basamakinst")))
     {
         const juce::ValueTree t = juce::ValueTree::fromXml(*xml);
-        Slot& sl2 = slots[slot];
-        sl2.msGainDb    = juce::jlimit(-24.0f, 24.0f, (float) t.getProperty("gainDb", 0.0f));
-        sl2.smpReverse  = (bool) t.getProperty("reverse", false);
-        sl2.smpLoopOn   = false;   // plain-sample loop never applies to zones
-        // [2026-07-20] voiced (syllable) instruments default Auto Loop ON - held vowels must sustain
-        sl2.msLoopOn    = (bool) t.getProperty("loop", set->nVoices > 1);
-        msRigModel = t.getProperty("rigModel", "").toString();
-        msRigIr    = t.getProperty("rigIr", "").toString();
-        refreshMsRig();
-        // [2026-07-20] the instrument's own AMP ENVELOPE (absent on old sidecars = slot untouched)
-        if (t.hasProperty("envOn"))
-        {
-            Slot& se = slots[slot];
-            se.smpEnvOn = (bool) t.getProperty("envOn", false);
-            se.atk     = juce::jlimit(0.0f, 6.0f, (float) t.getProperty("envA", se.atk));
-            se.hold    = juce::jlimit(0.0f, 6.0f, (float) t.getProperty("envH", se.hold));
-            se.dec     = juce::jlimit(0.01f, 6.0f, (float) t.getProperty("envD", se.dec));
-            se.sustain = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("envS", se.sustain));
-            se.release = juce::jlimit(0.0f, 4.0f, (float) t.getProperty("envR", se.release));
-        }
-        // [2026-07-20] per-recording TUNE map: the wizard's measured cents ("auto-tuned by
-        // construction" - sing roughly, playback compensates exactly). <tune voice root cents/>.
         for (int ci = 0; ci < t.getNumChildren(); ++ci)
         {
             const auto tc = t.getChild(ci);
@@ -1480,15 +1521,45 @@ bool DrumChannel::loadMultisample(int slot, const juce::File& folder)
                     z.cents = juce::jlimit(-100.0f, 100.0f, (float) tc.getProperty("cents", 0.0f));
         }
     }
-    else if (set->nVoices > 1) slots[slot].msLoopOn = true;   // no sidecar yet: voiced = loop on
     slotSample[slot].loadedAtRate = hostRate;
     updateStretch(slot);
     msSetOld[slot] = msSet[slot];     // graveyard: old pointers stay valid through the fade
     msSet[slot] = set;
+    msSetRegistry()[regKey] = set;    // [2026-07-20] future identical loads SHARE this decode
     // [2026-07-20] BUG FIX: this used to run BEFORE the swap above = it derived loops on the OLD
     // set, so a fresh sidecar-enabled load never actually looped until the button was re-toggled.
     if (slots[slot].msLoopOn) msRebuildLoops(slot);   // AUTO-loop: per-zone regions on the NEW set
     return true;
+}
+
+// [2026-07-20] the SLOT half of the sidecar (the zone-side tune map stays with the set build).
+void DrumChannel::applyMsSidecar(int slot, const juce::File& folder, int nVoices)
+{
+    if (auto xml = juce::parseXML(folder.getChildFile("instrument.basamakinst")))
+    {
+        const juce::ValueTree t = juce::ValueTree::fromXml(*xml);
+        Slot& sl2 = slots[slot];
+        sl2.msGainDb    = juce::jlimit(-24.0f, 24.0f, (float) t.getProperty("gainDb", 0.0f));
+        sl2.smpReverse  = (bool) t.getProperty("reverse", false);
+        sl2.smpLoopOn   = false;   // plain-sample loop never applies to zones
+        // [2026-07-20] voiced (syllable) instruments default Auto Loop ON - held vowels must sustain
+        sl2.msLoopOn    = (bool) t.getProperty("loop", nVoices > 1);
+        msRigModel = t.getProperty("rigModel", "").toString();
+        msRigIr    = t.getProperty("rigIr", "").toString();
+        refreshMsRig();
+        // the instrument's own AMP ENVELOPE (absent on old sidecars = slot untouched)
+        if (t.hasProperty("envOn"))
+        {
+            Slot& se = slots[slot];
+            se.smpEnvOn = (bool) t.getProperty("envOn", false);
+            se.atk     = juce::jlimit(0.0f, 6.0f, (float) t.getProperty("envA", se.atk));
+            se.hold    = juce::jlimit(0.0f, 6.0f, (float) t.getProperty("envH", se.hold));
+            se.dec     = juce::jlimit(0.01f, 6.0f, (float) t.getProperty("envD", se.dec));
+            se.sustain = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("envS", se.sustain));
+            se.release = juce::jlimit(0.0f, 4.0f, (float) t.getProperty("envR", se.release));
+        }
+    }
+    else if (nVoices > 1) slots[slot].msLoopOn = true;   // no sidecar yet: voiced = loop on
 }
 
 // [2026-07-18] 23-tap HALF-BAND FIR (Hamming-windowed sinc) shared by the NAM stage's 2:1
