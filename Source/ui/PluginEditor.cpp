@@ -6004,6 +6004,13 @@ private:
             juce::Array<Entry> init; init.add({ "Initialize new sound mix", ID_INIT_MIX, true });
             addSection(init);
         }
+        {   // [2026-07-20 r2, user order] MULTISAMPLES AT THE TOP of the bank
+            juce::Array<Entry> msTop;
+            for (int i = 0; i < msNames.size(); ++i)
+                if (q.isEmpty() || pickerMatch(msNames[i], q) || pickerMatch("multisample", q))
+                    msTop.add({ msNames[i] + "  (Multisample)", MS_ID_BASE + i });
+            if (! msTop.isEmpty()) { addHeader("Multisamples"); addSection(msTop); }
+        }
         for (auto* cat : kSoundCatOrder)
         {
             auto idx = factoryIndicesFor(cat, names, cats, q);
@@ -6023,13 +6030,7 @@ private:
             if (q.isEmpty() || pickerMatch(label, q)) user.add({ label, i + 1 });
         }
         if (! user.isEmpty()) { addHeader("Your Sound Bank"); addSection(user); }
-        // [2026-07-20] MULTISAMPLES join the one browse surface (user: they were hidden away in
-        // the slot engine dropdown). One row per instrument folder; picking loads it onto slot 1.
-        juce::Array<Entry> msEntries;
-        for (int i = 0; i < msNames.size(); ++i)
-            if (q.isEmpty() || pickerMatch(msNames[i], q) || pickerMatch("multisample", q))
-                msEntries.add({ msNames[i] + "  (Multisample)", MS_ID_BASE + i });
-        if (! msEntries.isEmpty()) { addHeader("Multisamples"); addSection(msEntries); }
+        // (Multisamples moved to the TOP of the list - user order 2026-07-20 r2)
         if (q.isEmpty())
         {
             addHeader("");
@@ -8243,8 +8244,12 @@ void DrumSequencerEditor::stepSoundBank(int dir)
     for (auto* cat : kSoundCatOrder)
         for (int i : factoryIndicesFor(cat, facNames, facCats, {}))
             order.add(FACTORY_MIX_BASE + i);
-    for (int i = 0; i < soundMixFiles.size(); ++i) order.add(i + 1);   // Your Sound Bank (file ids = idx+1)
-    for (int i = 0; i < msFolders.size(); ++i) order.add(MS_ID_BASE + i);   // [2026-07-20] Multisamples too
+    // [2026-07-20 r2] MIDI next/prev walks the picker's visual order: Multisamples FIRST
+    juce::Array<int> order2;
+    for (int i = 0; i < msFolders.size(); ++i) order2.add(MS_ID_BASE + i);
+    order2.addArray(order);
+    for (int i = 0; i < soundMixFiles.size(); ++i) order2.add(i + 1);   // Your Sound Bank (file ids = idx+1)
+    order.swapWith(order2);
     if (order.isEmpty()) return;
     int pos = order.indexOf(currentSoundPickId(selectedChannel));
     pos = pos < 0 ? (dir > 0 ? 0 : order.size() - 1)           // Init / unknown: start at an end
@@ -11116,11 +11121,7 @@ void DrumSequencerEditor::setupComponents()
                 && sl.sustain < 1.0e-4f)
             { sl.atk = 0.001f; sl.hold = 0.0f; sl.sustain = 1.0f; sl.release = 0.03f; }
         }
-        {   // the toggle travels with a multisample instrument too
-            auto& ch2 = proc.sequencer.channel(selectedChannel);
-            const int si = envTargetSlot();
-            if (ch2.msSet[si] != nullptr) ch2.writeMsSidecar(si);
-        }
+        // (env toggle is channel-local too - the sidecar stays the authored default)
         proc.sequencer.channel(selectedChannel).markDspDirty();
         loadEnvIntoEditor();
         if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel);
@@ -12643,13 +12644,10 @@ void DrumSequencerEditor::applyEnvToTargets(float a, float h, float d, float s, 
     } else {
         sl.atk = a; sl.hold = h; sl.dec = d; sl.sustain = s; sl.release = r;
     }
-    // [2026-07-20] the envelope travels WITH a multisample instrument (like gain/loop): every
-    // edit writes through to its sidecar, so the instrument remembers your shape everywhere.
-    {
-        auto& ch2 = proc.sequencer.channel(selectedChannel);
-        const int si = envTargetSlot();
-        if (ch2.msSet[si] != nullptr) ch2.writeMsSidecar(si);
-    }
+    // [2026-07-20 r2, user - "this is idiotic... regular synth sounds don't have that"]: env
+    // edits are CHANNEL-LOCAL, like every other sound edit. The sidecar env is the instrument's
+    // AUTHORED default, applied on load only - never written back by panel edits. (The write-
+    // through made a tweak on one channel global/permanent across presets and instances.)
 }
 
 // Apply the dragged pitch envelope to the selected slot's per-engine fields.

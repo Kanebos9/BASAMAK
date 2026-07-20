@@ -1642,12 +1642,10 @@ void DrumChannel::writeMsSidecar(int slot) const
     t.setProperty("loop",    sl.msLoopOn,     nullptr);   // [2026-07-19] per-zone AUTO-loop on/off
     t.setProperty("rigModel", msRigModel,     nullptr);
     t.setProperty("rigIr",    msRigIr,        nullptr);
-    // [2026-07-20] the AMP ENVELOPE travels WITH the instrument (user design: "Steinway should
-    // have some decay and release by default... each with their own settings") - like gain/loop.
-    t.setProperty("envOn", sl.smpEnvOn, nullptr);
-    t.setProperty("envA", sl.atk, nullptr);     t.setProperty("envH", sl.hold, nullptr);
-    t.setProperty("envD", sl.dec, nullptr);     t.setProperty("envS", sl.sustain, nullptr);
-    t.setProperty("envR", sl.release, nullptr);
+    // [2026-07-20 r2] the sidecar env (envOn/envA..envR) is the instrument's AUTHORED DEFAULT,
+    // read at load only - deliberately NOT written here (user: edits must be channel-local like
+    // every other sound; the write-through made one channel's tweak global and permanent).
+    // Read-modify-write above preserves any authored env untouched.
     if (auto xml = t.createXml())
         xml->writeTo(sc);
 }
