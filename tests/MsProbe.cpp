@@ -10,7 +10,7 @@ int main(int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI ji;
     if (argc < 2) { printf("usage: MsProbe <folder> [semi ...]\n"); return 1; }
-    juce::File dir { juce::String(argv[1]) };
+    juce::File dir { juce::String::fromUTF8(argv[1]) };   // argv is UTF-8 - plain String() mangles non-ASCII paths
     if (dir.existsAsFile())   // audio-file mode: print the file's own pitch over time
     {
         juce::AudioFormatManager fm; fm.registerBasicFormats();

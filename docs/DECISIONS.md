@@ -346,6 +346,8 @@
 
 | 230 | r9: octave audit - 28 shipped instruments renamed +-12/+24 (VCSL/VSCO2 names run octave-low per instrument; measured + octave-snapped; bell family trusts sibling convention over the partial-fooled detector; Cathedral Organ fixed per-file); 9 new instruments (FreePats CC0 organs = the Hammond ask, VCSL upright/mallets/strumstick/didgeridoo); koto dropped (unverifiable license); 5-language hunt confirms the commons is fully mined; ms dropdown = 2-3 columns | audit + user orders | wide-hunt round |
 
+| 231 | r10 world-archive gathering: 10 Korean instruments (National Gugak Center, KOGL-1, scripted download + silence-slice + measured naming), 6 Karoryfer CC0 (bagpipes/baritone sax/tuba/tagelharpa/double bass pizz/solo cello), 3 Casa da Musica gamelan (Artistic 2.0, real slendro cents). License bar = redistribution + no-NC + provenance, never CC0-only. Factory 74 / ~720 MB. Synth bank octave-checked: no bug (subs/chords/bells by design) | user push (multilingual, gather-first) | gathering round |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

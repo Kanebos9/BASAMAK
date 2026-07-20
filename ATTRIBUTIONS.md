@@ -16,6 +16,12 @@ license text ships alongside the samples). Credits are given as a courtesy to th
 
 - Drawbar Organ Real / Rock Organ — from the FreePats project, recorded from the setBfree organ emulator by Roberto (freepats.zenvoid.org) &middot; Creative Commons 0
 
+- Bagpipes / Baritone Sax / Folk Tuba / Tagelharpa / Double Bass Pizz / Solo Cello — by Karoryfer Samples (karoryfer.com), via github.com/sfzinstruments &middot; Creative Commons 0
+
+- Gamelan Saron / Gamelan Gender / Gamelan Bonang — from the Casa da Musica Gamelan Sample Library (Digitopia, Porto) &middot; Artistic License 2.0
+
+- Haegeum / Sanjo Gayageum / Gayageum 25 / Sanjo Daegeum / Taepyeongso / Yanggeum / Saenghwang / Ajaeng / Danso / Sogeum — recorded by the National Gugak Center (Korea), gugak.go.kr &middot; Korea Open Government License Type 1 (attribution)
+
 ## Drum & FX samples (freesound.org)
 
 - Acoustic kick 1 — aacoustic kick.wav by KEVOY  &middot; https://freesound.org/s/82279/  &middot; License: Creative Commons 0

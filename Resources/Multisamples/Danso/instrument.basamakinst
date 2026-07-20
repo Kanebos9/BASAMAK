@@ -1,0 +1,2 @@
+<?xml version='1.0' encoding='utf-8'?>
+<BasamakInstrument envOn="1" loop="1" envA="0.01" envH="0.0" envD="2.0" envS="1.0" envR="0.25"><tune voice="0" root="68" cents="6.0" /><tune voice="0" root="70" cents="9.0" /><tune voice="0" root="75" cents="20.0" /><tune voice="0" root="77" cents="5.0" /><tune voice="0" root="80" cents="2.0" /><tune voice="0" root="85" cents="-42.0" /><tune voice="0" root="87" cents="-37.0" /><tune voice="0" root="89" cents="-29.0" /></BasamakInstrument>

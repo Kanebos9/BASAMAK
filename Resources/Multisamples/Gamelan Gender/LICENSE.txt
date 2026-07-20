@@ -1,0 +1,2 @@
+Samples from the Casa da Musica Gamelan Sample Library (Digitopia, Casa da Musica, Porto) - Artistic License 2.0. Source: github.com/Digitopia/CDM-GAMELAN-SAMPLE-LIBRARY
+The zones keep the gamelan's own slendro tuning via measured cents - it is SUPPOSED to sit off the western grid.

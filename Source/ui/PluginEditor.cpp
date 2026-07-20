@@ -5856,6 +5856,15 @@ static juce::String msCategoryOf(const juce::String& n)
         { "Upright Piano Real", "Keys" }, { "Glockenspiel Real", "Bells & Mallets" },
         { "Xylophone Real", "Bells & Mallets" }, { "Strumstick", "Plucks & Strings" },
         { "Didgeridoo", "Noise & Texture" },
+        { "Bagpipes", "Leads" }, { "Baritone Sax", "Leads" }, { "Solo Cello", "Leads" },
+        { "Folk Tuba", "Bass" }, { "Double Bass Pizz", "Bass" },
+        { "Tagelharpa", "Plucks & Strings" },
+        { "Gamelan Saron", "Bells & Mallets" }, { "Gamelan Gender", "Bells & Mallets" },
+        { "Gamelan Bonang", "Bells & Mallets" },
+        { "Haegeum", "Leads" }, { "Sanjo Daegeum", "Leads" }, { "Danso", "Leads" },
+        { "Sogeum", "Leads" }, { "Taepyeongso", "Leads" }, { "Saenghwang", "Pads & Choirs" },
+        { "Ajaeng", "Leads" }, { "Sanjo Gayageum", "Plucks & Strings" },
+        { "Gayageum 25", "Plucks & Strings" }, { "Yanggeum", "Plucks & Strings" },
     };
     for (auto& p : T) if (n == p.first) return p.second;
     return {};
