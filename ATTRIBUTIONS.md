@@ -6,8 +6,8 @@ license text ships alongside the samples). Credits are given as a courtesy to th
 
 ## Multisample instruments
 
-- Voice Oohs / Choir Aahs / Ooh Aah Voices / Babble Voices — extracted from the **FluidR3 GM soundfont** by Frank Wen &middot; https://archive.org/details/fluidr3-gm-gs &middot; License: MIT (license text included with the samples)
-- Alto Recorder / Vibraphone Real / Concert Harp / Steinway Grand / Marimba Real / Tenor Sax / Harmonica / Wine Glasses / Dan Tranh — from the **Versilian Community Sample Library (VCSL)** by Versilian Studios LLC and contributors &middot; https://versilian-studios.com/vcsl/ &middot; License: Creative Commons 0
+- Voice Oohs / Choir Aahs / Vowel Choir — extracted from the **FluidR3 GM soundfont** by Frank Wen &middot; https://archive.org/details/fluidr3-gm-gs &middot; License: MIT (license text included with the samples)
+- Alto Recorder / Vibraphone Real / Concert Harp / Steinway Grand / Marimba Real / Tenor Sax / Harmonica / Wine Glasses / Dan Tranh / Harpsichord Real / Ocarina / Balafon / Bowed Psaltery — from the **Versilian Community Sample Library (VCSL)** by Versilian Studios LLC and contributors &middot; https://versilian-studios.com/vcsl/ &middot; License: Creative Commons 0
 
 ## Drum & FX samples (freesound.org)
 

@@ -11105,6 +11105,17 @@ void DrumSequencerEditor::setupComponents()
         auto& sl = proc.sequencer.channel(selectedChannel).slots[envTargetSlot()];
         if (sl.engine != DrumChannel::SrcSample) return;
         sl.smpEnvOn = ! sl.smpEnvOn;
+        // [2026-07-20] IDENTITY-ON-ENABLE (the user's "wouldn't a default attack change the
+        // sound?" guarantee): enabling on an UNTOUCHED slot starts as a flat line at full -
+        // zero attack, sustain 1, the existing release - so the moment of enabling is silent.
+        // A previously shaped envelope comes back exactly as the user left it.
+        if (sl.smpEnvOn)
+        {
+            const DrumChannel::Slot d;
+            if (std::abs(sl.atk - d.atk) < 1.0e-4f && std::abs(sl.dec - d.dec) < 1.0e-4f
+                && sl.sustain < 1.0e-4f)
+            { sl.atk = 0.001f; sl.hold = 0.0f; sl.sustain = 1.0f; sl.release = 0.03f; }
+        }
         proc.sequencer.channel(selectedChannel).markDspDirty();
         loadEnvIntoEditor();
         if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel);
@@ -12558,7 +12569,9 @@ void DrumSequencerEditor::loadEnvIntoEditor()
     // Hold/Sustain (they don't fit a struck body). For Physical the Strike sustains the string so a slow strike hits full.
     envEditor.setStrikeRing(s.engine == DrumChannel::SrcPhys || isModal,
                             /*allowSus: both bodies can be HELD now (string ebow / bell bow)*/ true);
-    envEditor.setSusRelVisible(! isSample);   // samples don't gate - hide the meaningless S/R
+    // [2026-07-20] env-ON sample slots get the FULL AHDSR (sustain holds held/looped notes,
+    // release fades them) - S/R only hide while the sample env is off (nothing to gate then).
+    envEditor.setSusRelVisible(! isSample || s.smpEnvOn);
 }
 
 // The pitch-envelope X-axis length. For samples it's the (trimmed) SAMPLE length taken

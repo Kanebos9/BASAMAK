@@ -4043,13 +4043,19 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                         }
                         else
                         {
+                            // [2026-07-20] env-on + a HELD note (keys / gated roll) = the FULL AHDSR
+                            // (sustain holds while the key is down, release after). Step-Length gates
+                            // keep the decay-rescale path below untouched (hard rule).
+                            if (c.smpEnv && v.isKey)
+                                env = keyAdsr(t, v.keyOff, c.atk, c.hold, c.dec, c.sustain, c.release);
+                            else
                             env = (c.smpEnv || sv.gateDec > 0.0f) ? ahdsEnv(t, c.atk, c.hold, sv.gateDec > 0.0f ? sv.gateDec : c.dec, c.sustain, c.release) : 1.0f;
                             // [2026-07-19] MULTISAMPLE = INSTRUMENT semantics (user: "shouldn't the
                             // sound end when I release my finger?"): a ZONE voice's key release /
                             // gate end fades the note with the sound's Release (min 30 ms) instead
                             // of ringing to the file end. Plain single samples keep the drum
                             // one-shot default (enable the amp env / a loop for gating there).
-                            if (ms)
+                            if (ms && ! (c.smpEnv && v.isKey))   // keyAdsr above already releases
                             {
                                 const long tOff = v.isKey ? (long) v.keyOff
                                                  : (v.gateLen > 0 ? (long) v.gateLen : -1L);
