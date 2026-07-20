@@ -594,18 +594,19 @@ public:
                    "- Notes between recordings are pitched from the nearest one - every 2-3 st is "
                    "usually inaudible; every 1 st = maximum realism, more work.";
         if (voRect().contains(p))
-            return "VOICES: turns this into a SINGING instrument (1 = a normal multisample).\n\n"
-                   "- Each voice = ONE syllable you sing (any sounds you like: da, le, ma, lo, na, "
-                   "le-le, hey...). The range records once per voice.\n"
-                   "- Playback maps keys to voices in a repeating CYCLE (C = voice 1, C# = voice 2, "
-                   "...), so stepwise melodies babble naturally.\n"
-                   "- 3 voices = the SWEET SPOT: whole-step melodies visit ALL the voices, and the "
-                   "pattern tiles the octave exactly (every C = voice 1 in every octave). EVEN "
-                   "counts repeat half their voices on whole-step runs; 5/7 shift across octaves.\n"
-                   "- Sing each syllable HELD (daaaa) - the attack is the consonant, the held vowel "
-                   "loops for long notes (Auto Loop turns on by itself).\n"
-                   "- Pitch accuracy is NOT required: the wizard plays the target, you match it "
-                   "roughly, and the measured pitch is mapped + retuned exactly.";
+            return "VOICES turns this into a singing instrument. Leave it at 1 for a normal multisample.\n\n"
+                   "- Each voice is one syllable you sing, and you can sing anything: da, le, ma, lo, "
+                   "na, le-le, hey. The note range gets recorded once for every voice.\n"
+                   "- The keyboard cycles through the voices as you go up: C sings voice 1, C# sings "
+                   "voice 2, and so on, starting over after the last one. Because neighbouring keys "
+                   "sing different syllables, melodies babble on their own.\n"
+                   "- 3 voices works especially well. Ordinary melodies still reach every syllable, "
+                   "and the cycle lines up with the octave, so every C always sings the same voice.\n"
+                   "- Hold each syllable while you record it, like \"daaaa\". The start of the "
+                   "recording carries the consonant, and the held vowel is what loops when you play "
+                   "long notes. Auto Loop turns itself on for these instruments.\n"
+                   "- You do not need to sing accurately. The wizard plays you the target note, you "
+                   "match it roughly, and whatever pitch it hears is mapped and retuned exactly.";
         if (listRect().contains(p))
             return "THE NOTE MAP: every note of the range = a row.\n\n"
                    "- Click a note = open its layers (LOUDEST first; another note's click closes it).\n"
@@ -679,13 +680,12 @@ public:
         if (phase == Setup)
         {
             g.setColour(juce::Colour(0xffaebada)); g.setFont(11.5f);
-            g.drawFittedText("Play each note when asked - the wizard PLAYS the target first (match it by ear; the "
-                             "measured pitch is what gets mapped, so rough is fine). Recording ARMS at \"Start at\", "
-                             "ENDS under \"End below\" (or Max time). "
+            g.drawFittedText("The wizard plays each target note first - match it by ear, roughly is fine, since "
+                             "the pitch it hears is what gets mapped. Recording arms itself at \"Start at\" and "
+                             "ends under \"End below\" or at Max time. "
                              + juce::String(pendingCountForRange() * juce::jmax(1, nVoices)) + " takes to record.\n"
-                             "VOICES > 1 = a SINGING instrument: the range records once per voice - sing ONE "
-                             "syllable per voice, HELD steady (da, le, ma, lo, na... or le-le / hey). Keys then "
-                             "cycle the voices note by note.\n"
+                             "Raise Voices to make a singing instrument: the range records once per voice, and "
+                             "you sing one held syllable for each (da, le, ma, lo, na, le-le, hey - anything).\n"
                              "Standalone: enable your input device under Options (input starts muted). "
                              "DAW: route audio into BASAMAK's input bus.",
                              b.getX() + 12, b.getY() + 160, lw - 24, 66, juce::Justification::topLeft, 6);
