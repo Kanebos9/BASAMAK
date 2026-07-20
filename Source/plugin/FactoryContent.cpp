@@ -1253,6 +1253,20 @@ static void kHum(DC& c) {          // [2026-07-20] SOLO closed-mouth "mmm" - the
     c.keysPolyMode = false; c.keysLegato = true; c.keysGlide = 0.2f; // a singer: mono-legato, ~80 ms slide
     c.reverbSend = 0.22f; c.volume = 0.72f;
 }
+static void kOooVoice(DC& c) {     // [2026-07-20] SOLO open-mouth "ooo" - the Hum's brighter sibling
+                                   // (open vowel vs closed mmm; ONE voice vs Choir Ooh's ensemble).
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = 7; s.oscFreq = 261.63f;               // Vowel O, C4
+    s.oscUnison = 1;                                                 // solo - a person, not a section
+    s.atk = 0.10f; s.dec = 1.5f; s.sustain = 0.85f; s.release = 0.4f;
+    s.vibrato = 0.34f; s.drift = 0.22f;
+    s.filterType = DC::LowPass; s.filterCutoff = 2200.0f; s.filterReso = 0.8f;   // open mouth, soft top
+    auto& n = mkSlot2(c, DC::SrcNoise, 0.93f);                       // 7% air
+    n.noiseType = 1; n.noiseCenter = 2400.0f; n.noiseRes = 0.5f;
+    n.atk = 0.12f; n.dec = 0.9f; n.sustain = 0.45f; n.release = 0.35f;
+    c.keysPolyMode = false; c.keysLegato = true; c.keysGlide = 0.18f;
+    c.reverbSend = 0.25f; c.volume = 0.7f;
+}
 static void kDarkPad(DC& c) {      // subterranean pad: low square through a nearly-shut filter
     auto& s = mkSlot(c, DC::SrcOsc);
     s.oscShape = s.oscShapeB = DC::WvSquare; s.oscFreq = 130.81f;    // C3
@@ -2655,6 +2669,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Warm Pad", kWarmPad, "Pads & Choirs" },
     { "Choir Ooh", kChoirOoh, "Pads & Choirs" },
     { "Hum", kHum, "Pads & Choirs" },                 // [2026-07-20] the GENERATE vocal-guide voice (solo "mmm")
+    { "Ooo Voice", kOooVoice, "Pads & Choirs" },      // [2026-07-20] its brighter open-mouth sibling (solo "ooo")
     { "Dark Pad", kDarkPad, "Pads & Choirs" },
     { "Shimmer Pad", kShimmerPad, "Pads & Choirs" },
     { "Motion Pad", kMotionPad, "Pads & Choirs" },

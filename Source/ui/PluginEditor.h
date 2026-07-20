@@ -3476,7 +3476,10 @@ private:
     void applyUndoState(const UndoEntry& e);
     void doUndo();
     void doRedo();
-    juce::String pickerQuery[Sequencer::NUM_CHANNELS];   // each channel's sound-search text (kept until cleared)
+    // [2026-07-20, user order] each PATTERN+CHANNEL's sound-search text (was per-channel; the same
+    // everything-scopes-per-pattern-channel rule as steps/sounds). Cleared on preset load + Init.
+    juce::String pickerQuery[Sequencer::NUM_PATTERNS][Sequencer::NUM_CHANNELS];
+    void clearPickerQueries() { for (auto& p : pickerQuery) for (auto& q : p) q.clear(); }
     // MIDI sound browsing (ui_sound_next/prev CCs -> the SELECTED channel's Sound Bank pick):
     void stepSoundBank(int dir);              // previous/next sound in the picker's order (wraps)
     int  currentSoundPickId(int ch) const;    // the channel's current sound as a picker id (by mixName; 0 = none)

@@ -50,7 +50,7 @@ machine), **Arturia Pigments** (hybrid), **Scaler 2 / Komplete Kontrol** (scale/
 | Mono glide/portamento + recordable per-note glide flag | yes | synth standard | [=] |
 | Arpeggiator | SH-101-style offset riff, step-synced, align/hold/gate | synth arps arp held chords | [~] user-designed; different animal, documented |
 | Scale harmonizer | per-slot diatonic chords, 10 scales, snap | Scaler 2 / Komplete Kontrol | [=] genuinely competitive |
-| Part generator (v1.5.4) | GENERATE in the roll: role-based (bassline/melody/hum/riff), reads the groove + key symbolically, seed-locked iteration (same-rhythm/same-notes/vary), one-shot dice, singable mode | Captain Melody / Scaler 2 phrases / Orb Producer | [=] rule-based like theirs; ours reads the user's OWN groove + writes editable roll notes; vocal-guide (hum + record-your-own-hum multisample) combo is unique |
+| Part generator (v1.5.4) | GENERATE in the roll: role-based (bassline/melody/hum/riff), phrase FORMS (Hook/AABA, Call & answer w/ cadences, Free), hit-exact rhythm (locks onto 7/11-step grooves precisely), per-beat harmony, seed-locked iteration (same-rhythm/same-notes/vary), one-shot dice, singable mode | Captain Melody / Scaler 2 phrases / Orb Producer | [+] rule-based like theirs, but ours reads the user's OWN groove (incl. odd step counts - mainstream tools can't), writes editable roll notes; vocal-guide (hum + record-your-own-hum multisample) combo is unique |
 | Live chord naming | 3 readouts, full dictionary to 13ths | Scaler 2 | [=] |
 | Key guide (dim non-scale keys) | yes | Komplete Kontrol light guide | [=] |
 | Split keyboard | channel pairing, per-half 4-oct windows, per-half recording | workstation splits | [=] |

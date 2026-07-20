@@ -2633,8 +2633,10 @@ void DrumSequencerProcessor::copyPattern(int src, int dst)
 
     auto& S = sequencer.patterns[src];
     auto& D = sequencer.patterns[dst];
-    D.playMode = S.playMode; D.repeatTarget = S.repeatTarget; D.gotoPattern = S.gotoPattern;
-    D.chainLen = S.chainLen; for (int k = 0; k < Sequencer::CHAIN_MAX; ++k) { D.chainSeq[k] = S.chainSeq[k]; D.chainLoops[k] = S.chainLoops[k]; }
+    // [2026-07-20, user order] pattern copy moves CONTENT, never FLOW: play mode / chain /
+    // merge flags stay the DESTINATION's (the channel-copy keeps-routing precedent). Copying a
+    // chain into a merged group re-imported foreign per-bar chain entries = the "plays the next
+    // pattern no matter what" bug class. DECISIONS #211.
     D.swing = S.swing; D.master = S.master;
 
     for (int c = 0; c < Sequencer::NUM_CHANNELS; ++c)

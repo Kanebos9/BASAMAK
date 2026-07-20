@@ -3463,7 +3463,7 @@ static const char* const kGenReg[]     = { "Low", "Mid", "High" };
 static const char* const kGenColor[]   = { "Safe", "Spicy", "Colorful" };
 static const char* const kGenRhythm[]  = { "Flowing", "In the pockets", "Driving" };
 static const char* const kGenContour[] = { "Auto", "Arch", "Rising", "Falling", "Wave" };
-static const char* const kGenPhrase[]  = { "Repeat & vary", "Evolve" };
+static const char* const kGenPhrase[]  = { "Hook (AABA)", "Call & answer", "Free" };   // [v2] FORMS
 static const char* const kGenActions[] = { "NEW IDEA", "VARY", "Same rhythm, new notes", "Same notes, new rhythm" };
 static const juce::Colour kGenAccent { 0xffa0e8b0 };   // the Generate green (roll-operations family)
 }
@@ -3554,7 +3554,7 @@ void GeneratePanel::paint(juce::Graphics& g)
     chips(4, "Color",    kGenColor,   3, color, false);
     chips(5, "Rhythm",   kGenRhythm,  3, rhythm, false);
     chips(6, "Contour",  kGenContour, 5, contour, false);
-    chips(7, "Phrase",   kGenPhrase,  2, phrase, bars < 2);
+    chips(7, "Form",     kGenPhrase,  3, phrase, bars < 2);
     { const auto sr = singableRect();
       g.setColour(singable ? kGenAccent : juce::Colour(0xff33335a)); g.fillRoundedRectangle(sr.toFloat(), 4.0f);
       g.setColour(singable ? juce::Colours::black : juce::Colour(0xffb8b8d0));
@@ -3594,7 +3594,7 @@ void GeneratePanel::mouseDown(const juce::MouseEvent& e)
     if (hitChips(4, 3, color))         return;
     if (hitChips(5, 3, rhythm))        return;
     if (hitChips(6, 5, contour))       return;
-    if (bars >= 2 && hitChips(7, 2, phrase)) return;
+    if (bars >= 2 && hitChips(7, 3, phrase)) return;
     if (singableRect().contains(pos))  { singable = ! singable; repaint(); return; }
     if (keyRect().contains(pos))
     {
@@ -3647,8 +3647,12 @@ juce::String GeneratePanel::getTooltip()
     if (inRow(7) && singableRect().contains(pos))
                   return "SINGABLE: about one octave, mostly stepwise, leaps capped at a fifth, a breath at phrase "
                          "ends - a line a human could actually hum. The vocal-guide special.";
-    if (inRow(7)) return "PHRASE (2+ bars): Repeat & vary = bar 1's idea echoed with small changes (call-and-response). "
-                         "Evolve = through-composed, no repeats.";
+    if (inRow(7)) return "FORM (2+ bars): the melody's STRUCTURE across the bars.\n\n"
+                         "- Hook (AABA): a repeated hook, a contrasting bridge, the hook returns - "
+                         "the classic song form. Echoes keep the opening, vary the ending.\n"
+                         "- Call & answer: long question phrases answered by phrases that share the "
+                         "opening and RESOLVE home - the vocal-sentence feel, arcs across bars.\n"
+                         "- Free: through-composed, no repeats.";
     if (actionRect(0).contains(pos)) return "NEW IDEA: a full reroll - fresh rhythm AND fresh notes.";
     if (actionRect(1).contains(pos)) return "VARY: keep this melody's skeleton, change ~a third of the notes (same idea, new ornaments).";
     if (actionRect(2).contains(pos)) return "SAME RHYTHM, NEW NOTES: the onsets stay exactly where they are; only the pitches reroll.";
@@ -6631,14 +6635,15 @@ void DrumSequencerEditor::openSoundPicker(int ch)
     panel.clickIgnore = &combo;
     panel.onClosed = [&combo] { combo.hidePopup(); };   // free the menuActive latch for the next click
     panel.onPick = [this, ch](int id) { applySoundPickId(ch, id); selectChannel(ch); };
-    panel.onQueryChanged = [this, ch](const juce::String& q) { pickerQuery[ch] = q; };
+    const int qPat = currentPattern();   // capture NOW - the memory is per (pattern, channel)
+    panel.onQueryChanged = [this, ch, qPat](const juce::String& q) { pickerQuery[qPat][ch] = q; };
     const auto r = content.getLocalArea(&combo, combo.getLocalBounds());
     int y = r.getBottom() + 2;
     int h = content.getHeight() - y - 6;
     if (h < 300) { h = juce::jmin(620, content.getHeight() - 12); y = content.getHeight() - h - 6; }
     h = juce::jmin(h, 620);
     panel.setBounds(juce::jlimit(2, juce::jmax(2, content.getWidth() - 902), r.getX()), y, 900, h);   // 3 columns
-    panel.openWith(soundMixFiles, getSoundMixFolder(), currentSoundPickId(ch), pickerQuery[ch]);   // highlight + remembered search
+    panel.openWith(soundMixFiles, getSoundMixFolder(), currentSoundPickId(ch), pickerQuery[qPat][ch]);   // highlight + remembered search
 }
 
 void DrumSequencerEditor::applySoundPickId(int ch, int id)
@@ -7320,6 +7325,7 @@ void DrumSequencerEditor::handlePresetChange()
     const bool isLoad = (id >= FACTORY_PST_BASE && id < FACTORY_PST_BASE + Factory::presetNames().size())
                         || id == ID_INIT_PRESET || (id >= 1 && id <= presetFiles.size());
     if (isLoad && proc.sequencer.isCurrentlyPlaying && ! proc.sequencer.dawSync) proc.standaloneStop();
+    if (isLoad) clearPickerQueries();   // [2026-07-20] a fresh preset forgets the old kit's searches (all 3 load paths land here)
 
     if (id >= FACTORY_PST_BASE && id < FACTORY_PST_BASE + Factory::presetNames().size())
     {
@@ -7776,7 +7782,10 @@ void DrumSequencerEditor::openGeneratePanel()
                            : cat == "Pads & Choirs" ? PartGen::RoleHum
                            : cat == "Chords & Arps" ? PartGen::RoleRiff
                                                     : PartGen::RoleMelody;
-        if (generatePanel.role == PartGen::RoleHum) generatePanel.singable = true;   // the vocal-guide default
+        if (generatePanel.role == PartGen::RoleHum)
+        { generatePanel.singable = true; generatePanel.phrase = PartGen::FormQA; }   // the vocal-guide
+                                                                                    // defaults: singable
+                                                                                    // + question/answer arcs
     }
     genHadNotes = false;
     for (int b = head; b <= end; ++b)
@@ -7842,19 +7851,32 @@ void DrumSequencerEditor::genAction(int action)
                 }
             }
             else
-            {   // drum/step material -> the 16th-grid groove map
+            {   // drum/step material -> the 16th-grid accent map AND the EXACT hit list [v2]
                 for (int i = 0; i < cc.numSteps; ++i)
                     if (cc.steps[i])
                     {
                         const int pos16 = juce::jlimit(0, 15, i * 16 / juce::jmax(1, cc.numSteps));
                         auto& gcell = ctx.grooveHit[b * 16 + pos16];
                         gcell += cc.stepVel[i]; grooveMax = juce::jmax(grooveMax, gcell);
+                        // exact position: 384 divides every step count, so a 7-step channel's hits
+                        // land EXACTLY here - Driving/Pockets read these, never a rounded grid
+                        const int col = b * DrumChannel::DRAW_RES
+                                      + i * DrumChannel::DRAW_RES / juce::jmax(1, cc.numSteps);
+                        int f = -1;
+                        for (int h = 0; h < ctx.nHits; ++h) if (ctx.hitCol[h] == col) { f = h; break; }
+                        if (f >= 0) ctx.hitStr[f] = juce::jmin(1.0f, ctx.hitStr[f] + cc.stepVel[i] * 0.5f);
+                        else if (ctx.nHits < PartGen::Ctx::MAX_HITS)
+                        { ctx.hitCol[ctx.nHits] = col; ctx.hitStr[ctx.nHits] = juce::jmin(1.0f, cc.stepVel[i]); ++ctx.nHits; }
                     }
             }
         }
     }
     if (grooveMax > 0.0f)
         for (int i = 0; i < bars * 16; ++i) ctx.grooveHit[i] = juce::jmin(1.0f, ctx.grooveHit[i] / grooveMax);
+    // hit list must be SORTED (Pockets walks the gaps in order); channels interleave, so sort now
+    for (int a = 1; a < ctx.nHits; ++a)
+        for (int b2 = a; b2 > 0 && ctx.hitCol[b2] < ctx.hitCol[b2 - 1]; --b2)
+        { std::swap(ctx.hitCol[b2], ctx.hitCol[b2 - 1]); std::swap(ctx.hitStr[b2], ctx.hitStr[b2 - 1]); }
     // ---- options straight from the panel + the seeds ----
     PartGen::Options o;
     o.role         = generatePanel.role;

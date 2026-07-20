@@ -112,14 +112,18 @@ int main()
         CHECK(late && bounded && monoOk(n), "[7] 4-bar group: fills later bars, stays in range, mono");
     }
 
-    // [8] phrase echo: repeat-with-variation shares the bar-1 rhythm in bar 2 (2-bar group)
+    // [8] CALL & ANSWER (2 bars): the answer keeps the question's opening and RESOLVES home
     {
         Ctx c2; c2.bars = 2;
-        Options o; o.scale = kMajor; o.phrase = 0; o.rhythmSeed = 21; o.pitchSeed = 8;
+        Options o; o.scale = kMajor; o.phrase = 1; o.rhythmSeed = 21; o.pitchSeed = 8;   // FormQA
         auto n = generate(o, c2);
         std::set<int> b1, b2;
         for (auto& x : n) (x.start < 384 ? b1 : b2).insert(x.start % 384);
-        CHECK(! b1.empty() && b1 == b2, "[8] phrase echo repeats the rhythm across bars");
+        bool openingShared = ! b1.empty() && ! b2.empty();
+        for (int col : b1) if (col < 384 * 4 / 10 && ! b2.count(col)) openingShared = false;
+        const int lastPc = ((n.back().semi % 12) + 12) % 12;
+        CHECK(openingShared, "[8a] Q&A: the answer keeps the question's opening onsets");
+        CHECK(lastPc == 0 || lastPc == 4, "[8b] Q&A: the final note RESOLVES (tonic or third)");
     }
 
     // [9] riff: the cell tiles every bar (identical bar-local onsets)
@@ -175,6 +179,55 @@ int main()
                 if (n.start % 96 == 0) { ++total; if (((n.semi % 12) + 12) % 12 == 2) ++dCount; }
         }
         CHECK(total > 0 && dCount * 2 >= total, "[12] chroma steers bass roots to the heard chord");
+    }
+
+    // [13] HOOK form (AABA in 4 bars): bars 2 + 4 recap A's opening; bar 3 (the bridge) contrasts
+    {
+        Options o; o.scale = kMajor; o.phrase = 0; o.rhythmSeed = 14; o.pitchSeed = 9;   // FormHook
+        auto n = generate(o, ctx4);
+        int first[4] = { -1, -1, -1, -1 };
+        std::set<int> rel[4];
+        for (auto& x : n)
+        {
+            const int b = std::min(3, x.start / 384);
+            rel[b].insert(x.start % 384);
+            if (first[b] < 0) first[b] = x.start % 384;
+        }
+        CHECK(first[0] >= 0 && first[1] == first[0] && first[3] == first[0],
+              "[13a] AABA: bars 2+4 open with the hook's first onset");
+        CHECK(! rel[2].empty() && rel[2] != rel[0], "[13b] AABA: the bridge (bar 3) contrasts the hook");
+    }
+
+    // [14] HIT-EXACT rhythm: a 7-step groove, Driving -> every onset lands ON a real hit
+    {
+        Ctx c7; c7.bars = 1;
+        std::set<int> hitSet;
+        for (int k = 0; k < 7; ++k)
+        { c7.hitCol[k] = k * 384 / 7; c7.hitStr[k] = 1.0f; hitSet.insert(k * 384 / 7); }
+        c7.nHits = 7;
+        bool ok = true; int cnt = 0;
+        for (uint32_t s = 1; s <= 4; ++s)
+        {
+            Options o; o.scale = kMajor; o.rhythm = RhDriving; o.density = 2;
+            o.rhythmSeed = s; o.pitchSeed = s + 40;
+            for (auto& x : generate(o, c7)) { ++cnt; if (! hitSet.count(x.start)) ok = false; }
+        }
+        CHECK(ok && cnt > 0, "[14] Driving locks EXACTLY onto a 7-step groove's hits (4 seeds)");
+    }
+
+    // [15] VOCAL ARC: Hum + Flowing + singable = long notes crossing the bar, breath at phrase ends
+    {
+        Ctx c2; c2.bars = 2;
+        Options o; o.scale = kMajor; o.role = RoleHum; o.rhythm = RhFlowing; o.density = 0;
+        o.singable = true; o.phrase = 1; o.rhythmSeed = 6; o.pitchSeed = 11;
+        auto n = generate(o, c2);
+        bool longArc = false, breath = true;
+        for (auto& x : n)
+        {
+            if (x.len >= 96 * 3 / 2) longArc = true;                    // >= 1.5 beats = an arc, not a blip
+            if (x.start + x.len > 2 * 384 - 20) breath = false;         // phrase end leaves air
+        }
+        CHECK(! n.empty() && longArc && breath, "[15] hum sings arcs and breathes at phrase ends");
     }
 
     printf(fails == 0 ? "GenTest: ALL PASS\n" : "GenTest: %d FAILURES\n", fails);
