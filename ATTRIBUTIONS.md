@@ -6,11 +6,13 @@ license text ships alongside the samples). Credits are given as a courtesy to th
 
 ## Multisample instruments
 
-- Voice Oohs / Choir Aahs / Solo Voice / Nylon Guitar Real / Steel Guitar Real / Finger Bass Real / Fretless Bass / Jazz Guitar Real / Electric Guitar Real — extracted from the **FluidR3 GM soundfont** by Frank Wen &middot; https://archive.org/details/fluidr3-gm-gs &middot; License: MIT (license text included with the samples)
-- Alto Recorder / Vibraphone Real / Concert Harp / Steinway Grand / Marimba Real / Tenor Sax / Harmonica / Wine Glasses / Dan Tranh / Harpsichord Real / Ocarina / Balafon / Bowed Psaltery / Kalimba Real / Mbira / Tubular Bells Real / Saxello / Drum Kit Real / Darbuka Kit / VCSL Percussion one-shots — from the **Versilian Community Sample Library (VCSL)** by Versilian Studios LLC and contributors &middot; https://versilian-studios.com/vcsl/ &middot; License: Creative Commons 0
+- Voice Oohs / Choir Aahs / Solo Voice / Nylon Guitar Real / Steel Guitar Real / Finger Bass Real / Fretless Bass / Jazz Guitar Real / Electric Guitar Real / Church Organ / Electric Piano Real / Celesta Real / Timpani Real — extracted from the **FluidR3 GM soundfont** by Frank Wen &middot; https://archive.org/details/fluidr3-gm-gs &middot; License: MIT (license text included with the samples)
+- Alto Recorder / Vibraphone Real / Concert Harp / Steinway Grand / Marimba Real / Tenor Sax / Harmonica / Wine Glasses / Dan Tranh / Harpsichord Real / Ocarina / Balafon / Bowed Psaltery / Kalimba Real / Mbira / Tubular Bells Real / Saxello / VCSL Percussion one-shots / Flute Real / Oboe Real / Solo Violin / Solo Contrabass / Pizzicato Strings — from the **Versilian Community Sample Library (VCSL)** by Versilian Studios LLC and contributors &middot; https://versilian-studios.com/vcsl/ &middot; License: Creative Commons 0
 
 - Violin Section / Cello Section / Viola Section / French Horn / Trumpet Real / Trombone Real / Clarinet Real / Bassoon Real — from **VSCO 2 Community Edition** by Versilian Studios LLC and contributors &middot; https://versilian-studios.com/vsco-community/ &middot; License: Creative Commons 0
 - Salamander Grand — **Salamander Grand Piano v3** by Alexander Holm &middot; https://freepats.zenvoid.org/Piano/acoustic-grand-piano.html &middot; License: CC-BY 3.0 (attribution: Alexander Holm)
+
+- Da Loo Ne — recorded and sung by Oguzhan Yazici (the BASAMAK author) &middot; Creative Commons 0
 
 ## Drum & FX samples (freesound.org)
 

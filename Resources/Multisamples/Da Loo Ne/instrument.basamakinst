@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<BasamakInstrument>
+  <tune voice="0" root="46" cents="27.0"/>
+  <tune voice="1" root="48" cents="46.0"/>
+  <tune voice="2" root="47" cents="36.0"/>
+  <tune voice="1" root="50" cents="-28.0"/>
+</BasamakInstrument>

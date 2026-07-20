@@ -5847,7 +5847,10 @@ static juce::String msCategoryOf(const juce::String& n)
         { "Balafon", "Bells & Mallets" }, { "Kalimba Real", "Bells & Mallets" },
         { "Mbira", "Bells & Mallets" }, { "Tubular Bells Real", "Bells & Mallets" },
         { "Timpani Real", "Toms" },
-        { "Drum Kit Real", "Percussion" }, { "Darbuka Kit", "Percussion" },
+        { "Flute Real", "Leads" }, { "Oboe Real", "Leads" }, { "Solo Violin", "Leads" },
+        { "Solo Contrabass", "Bass" }, { "Pizzicato Strings", "Plucks & Strings" },
+        { "Electric Piano Real", "Keys" }, { "Celesta Real", "Bells & Mallets" },
+        { "Da Loo Ne", "Pads & Choirs" },   // the user's OWN recorded syllable voice - factory now
     };
     for (auto& p : T) if (n == p.first) return p.second;
     return {};
