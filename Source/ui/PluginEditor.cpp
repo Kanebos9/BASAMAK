@@ -5865,6 +5865,9 @@ static juce::String msCategoryOf(const juce::String& n)
         { "Sogeum", "Leads" }, { "Taepyeongso", "Leads" }, { "Saenghwang", "Pads & Choirs" },
         { "Ajaeng", "Leads" }, { "Sanjo Gayageum", "Plucks & Strings" },
         { "Gayageum 25", "Plucks & Strings" }, { "Yanggeum", "Plucks & Strings" },
+        { "Erhu", "Leads" }, { "Hungarian Zither", "Plucks & Strings" },
+        { "Banjo", "Plucks & Strings" }, { "Lyre", "Plucks & Strings" },
+        { "Steel Pan Real", "Bells & Mallets" },
     };
     for (auto& p : T) if (n == p.first) return p.second;
     return {};

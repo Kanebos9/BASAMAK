@@ -22,6 +22,8 @@ license text ships alongside the samples). Credits are given as a courtesy to th
 
 - Haegeum / Sanjo Gayageum / Gayageum 25 / Sanjo Daegeum / Taepyeongso / Yanggeum / Saenghwang / Ajaeng / Danso / Sogeum — recorded by the National Gugak Center (Korea), gugak.go.kr &middot; Korea Open Government License Type 1 (attribution)
 
+- Erhu / Hungarian Zither / Banjo / Lyre / Steel Pan Real — from the sfzinstruments community (github.com/sfzinstruments; D. Smolken, J. Learman et al.) &middot; Creative Commons 0 / Unlicense
+
 ## Drum & FX samples (freesound.org)
 
 - Acoustic kick 1 — aacoustic kick.wav by KEVOY  &middot; https://freesound.org/s/82279/  &middot; License: Creative Commons 0

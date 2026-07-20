@@ -348,6 +348,8 @@
 
 | 231 | r10 world-archive gathering: 10 Korean instruments (National Gugak Center, KOGL-1, scripted download + silence-slice + measured naming), 6 Karoryfer CC0 (bagpipes/baritone sax/tuba/tagelharpa/double bass pizz/solo cello), 3 Casa da Musica gamelan (Artistic 2.0, real slendro cents). License bar = redistribution + no-NC + provenance, never CC0-only. Factory 74 / ~720 MB. Synth bank octave-checked: no bug (subs/chords/bells by design) | user push (multilingual, gather-first) | gathering round |
 
+| 232 | r11: sfzinstruments org license sweep -> Erhu/Hungarian Zither/Banjo/Lyre/Steel Pan Real (CC0/Unlicense). Zither drone strings mask melody pitch = author names trusted, ear-flagged. GATHERING COMPLETE at 78 instruments / 767 MB | user push | final gathering |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.
