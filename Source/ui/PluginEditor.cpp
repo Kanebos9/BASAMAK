@@ -2,6 +2,7 @@
 #include "FactoryMidiMaps.h"   // [2026-07-14 23:20] embedded "Launchpad + Launchkey" MIDI-learn map
 #include "../plugin/FactoryContent.h"
 #include "../plugin/UserPaths.h"
+#include "../dsp/PartGen.h"    // [2026-07-20] the GENERATE feature's melody engine
 #include <cstring>
 
 // ================================================================================================
@@ -3448,6 +3449,212 @@ static inline int uiScaleSemis(int scaleType, int k) {
     const int8_t* S = kUiScaleTab[scaleType]; const int N = kUiScaleLen[scaleType];
     const int td = 2 * k, oct = td / N, idx = td - oct * N;
     return (int) S[idx] + 12 * oct;
+}
+
+//==============================================================================
+// GeneratePanel [2026-07-20] - drawn chips + hit tests (the ArpEditor/roll-header idiom; no child
+// components). Implemented HERE so it can read kUiScaleName/kUiNoteName (declared just above).
+//==============================================================================
+namespace {
+struct GenRowDef { const char* label; const char* const* items; int count; };
+static const char* const kGenRoles[]   = { "Bassline", "Melody", "Hum", "Riff" };
+static const char* const kGenDens[]    = { "Sparse", "Medium", "Busy" };
+static const char* const kGenReg[]     = { "Low", "Mid", "High" };
+static const char* const kGenColor[]   = { "Safe", "Spicy", "Colorful" };
+static const char* const kGenRhythm[]  = { "Flowing", "In the pockets", "Driving" };
+static const char* const kGenContour[] = { "Auto", "Arch", "Rising", "Falling", "Wave" };
+static const char* const kGenPhrase[]  = { "Repeat & vary", "Evolve" };
+static const char* const kGenActions[] = { "NEW IDEA", "VARY", "Same rhythm, new notes", "Same notes, new rhythm" };
+static const juce::Colour kGenAccent { 0xffa0e8b0 };   // the Generate green (roll-operations family)
+}
+
+juce::Rectangle<int> GeneratePanel::panelRect() const
+{
+    const int w = 470, h = 486;
+    return { getWidth() - w - 14, juce::jmax(8, (getHeight() - h) / 2), w, h };
+}
+juce::Rectangle<int> GeneratePanel::rowRect(int row) const
+{
+    const auto p = panelRect();
+    return { p.getX() + 12, p.getY() + 42 + row * 36, p.getWidth() - 24, 30 };
+}
+juce::Rectangle<int> GeneratePanel::chipRect(int row, int idx, int count) const
+{
+    auto r = rowRect(row).withTrimmedLeft(68);
+    if (row == 7) r = r.withTrimmedRight(104);   // Phrase row shares with the Singable toggle
+    const int w = (r.getWidth() - (count - 1) * 4) / count;
+    return { r.getX() + idx * (w + 4), r.getY() + 2, w, 26 };
+}
+juce::Rectangle<int> GeneratePanel::singableRect() const
+{ const auto r = rowRect(7); return { r.getRight() - 98, r.getY() + 2, 98, 26 }; }
+juce::Rectangle<int> GeneratePanel::keyRect() const
+{ const auto r = rowRect(1); return { r.getX() + 68, r.getY() + 2, 64, 26 }; }
+juce::Rectangle<int> GeneratePanel::scaleRect() const
+{ const auto r = rowRect(1); return { r.getX() + 138, r.getY() + 2, 96, 26 }; }
+juce::Rectangle<int> GeneratePanel::actionRect(int idx) const
+{
+    const auto p = panelRect();
+    const int w = (p.getWidth() - 24 - 8) / 2;
+    return { p.getX() + 12 + (idx % 2) * (w + 8),
+             p.getY() + 42 + 8 * 36 + 6 + (idx / 2) * 40, w, 34 };
+}
+juce::Rectangle<int> GeneratePanel::closeRect() const
+{ const auto p = panelRect(); return { p.getRight() - 32, p.getY() + 8, 24, 24 }; }
+
+void GeneratePanel::paint(juce::Graphics& g)
+{
+    const auto p = panelRect();
+    g.setColour(juce::Colour(0xf01b1b30)); g.fillRoundedRectangle(p.toFloat(), 8.0f);
+    g.setColour(juce::Colour(0xff4a6a55)); g.drawRoundedRectangle(p.toFloat(), 8.0f, 1.6f);
+    g.setColour(kGenAccent); g.setFont(juce::Font(17.0f, juce::Font::bold));
+    g.drawText("GENERATE", p.getX() + 14, p.getY() + 8, 110, 24, juce::Justification::centredLeft, false);
+    g.setColour(juce::Colour(0xff9aa4c0)); g.setFont(juce::Font(12.5f, juce::Font::bold));
+    g.drawFittedText(soundName + (bars > 1 ? "  (" + juce::String(bars) + " bars)" : juce::String()),
+                     p.getX() + 128, p.getY() + 8, p.getWidth() - 170, 24, juce::Justification::centredLeft, 1, 0.6f);
+    { const auto cl = closeRect();
+      g.setColour(juce::Colour(0xff5a2a2a)); g.fillRoundedRectangle(cl.toFloat(), 4.0f);
+      g.setColour(juce::Colours::white); g.setFont(juce::Font(14.0f, juce::Font::bold));
+      g.drawText("x", cl, juce::Justification::centred, false); }
+
+    auto chips = [&](int row, const char* label, const char* const* items, int count, int sel, bool dim)
+    {
+        const auto r = rowRect(row);
+        g.setColour(juce::Colour(0xff8a94b0)); g.setFont(juce::Font(12.0f, juce::Font::bold));
+        g.drawText(label, r.getX(), r.getY(), 64, r.getHeight(), juce::Justification::centredLeft, false);
+        for (int i = 0; i < count; ++i)
+        {
+            const auto cr = chipRect(row, i, count);
+            const bool on = (i == sel) && ! dim;
+            g.setColour(on ? kGenAccent : juce::Colour(0xff33335a).withAlpha(dim ? 0.4f : 1.0f));
+            g.fillRoundedRectangle(cr.toFloat(), 4.0f);
+            g.setColour(on ? juce::Colours::black : juce::Colour(0xffb8b8d0).withAlpha(dim ? 0.4f : 1.0f));
+            g.setFont(juce::Font(12.0f, juce::Font::bold));
+            g.drawFittedText(items[i], cr, juce::Justification::centred, 1, 0.6f);
+        }
+    };
+    chips(0, "Role",     kGenRoles,   4, role, false);
+    { // KEY + SCALE row: two popup buttons + the honesty tag (where the prefill came from)
+        const auto r = rowRect(1);
+        g.setColour(juce::Colour(0xff8a94b0)); g.setFont(juce::Font(12.0f, juce::Font::bold));
+        g.drawText("Key", r.getX(), r.getY(), 64, r.getHeight(), juce::Justification::centredLeft, false);
+        auto btn = [&](juce::Rectangle<int> b, const juce::String& t)
+        {
+            g.setColour(juce::Colour(0xff223046)); g.fillRoundedRectangle(b.toFloat(), 4.0f);
+            g.setColour(juce::Colour(0xff9fd1ff)); g.setFont(juce::Font(12.5f, juce::Font::bold));
+            g.drawFittedText(t, b, juce::Justification::centred, 1, 0.7f);
+        };
+        btn(keyRect(),   kUiNoteName[juce::jlimit(0, 11, key)]);
+        btn(scaleRect(), kUiScaleName[juce::jlimit(0, 9, scaleType)]);
+        g.setColour(juce::Colour(0xff6a7490)); g.setFont(juce::Font(11.0f));
+        g.drawText("(" + keyTag + ")", scaleRect().getRight() + 8, r.getY(), r.getRight() - scaleRect().getRight() - 8,
+                   r.getHeight(), juce::Justification::centredLeft, false);
+    }
+    chips(2, "Density",  kGenDens,    3, density, false);
+    chips(3, "Register", kGenReg,     3, registerBand, false);
+    chips(4, "Color",    kGenColor,   3, color, false);
+    chips(5, "Rhythm",   kGenRhythm,  3, rhythm, false);
+    chips(6, "Contour",  kGenContour, 5, contour, false);
+    chips(7, "Phrase",   kGenPhrase,  2, phrase, bars < 2);
+    { const auto sr = singableRect();
+      g.setColour(singable ? kGenAccent : juce::Colour(0xff33335a)); g.fillRoundedRectangle(sr.toFloat(), 4.0f);
+      g.setColour(singable ? juce::Colours::black : juce::Colour(0xffb8b8d0));
+      g.setFont(juce::Font(12.0f, juce::Font::bold));
+      g.drawText("Singable", sr, juce::Justification::centred, false); }
+
+    for (int i = 0; i < 4; ++i)
+    {
+        const auto ar = actionRect(i);
+        const bool big = i < 2;
+        g.setColour(big ? juce::Colour(0xff2a4a3a) : juce::Colour(0xff26263c));
+        g.fillRoundedRectangle(ar.toFloat(), 5.0f);
+        g.setColour(big ? kGenAccent : juce::Colour(0xffcfd6e6));
+        g.setFont(juce::Font(big ? 14.5f : 12.5f, juce::Font::bold));
+        g.drawFittedText(kGenActions[i], ar, juce::Justification::centred, 1, 0.7f);
+    }
+    g.setColour(juce::Colour(0xff6a7490)); g.setFont(juce::Font(11.5f));
+    g.drawFittedText("Notes land in the roll behind - press Play and reroll until it fits. Undo restores.",
+                     p.getX() + 12, actionRect(3).getBottom() + 6, p.getWidth() - 24, 24,
+                     juce::Justification::centred, 2, 0.8f);
+}
+
+void GeneratePanel::mouseDown(const juce::MouseEvent& e)
+{
+    const auto pos = e.getPosition();
+    if (! panelRect().contains(pos)) { setVisible(false); if (onClose) onClose(); return; }
+    if (closeRect().contains(pos))   { setVisible(false); if (onClose) onClose(); return; }
+    auto hitChips = [&](int row, int count, int& field) -> bool
+    {
+        for (int i = 0; i < count; ++i)
+            if (chipRect(row, i, count).contains(pos)) { field = i; repaint(); return true; }
+        return false;
+    };
+    if (hitChips(0, 4, role))          return;
+    if (hitChips(2, 3, density))       return;
+    if (hitChips(3, 3, registerBand))  return;
+    if (hitChips(4, 3, color))         return;
+    if (hitChips(5, 3, rhythm))        return;
+    if (hitChips(6, 5, contour))       return;
+    if (bars >= 2 && hitChips(7, 2, phrase)) return;
+    if (singableRect().contains(pos))  { singable = ! singable; repaint(); return; }
+    if (keyRect().contains(pos))
+    {
+        juce::PopupMenu m;
+        for (int i = 0; i < 12; ++i) m.addItem(i + 1, kUiNoteName[i], true, i == key);
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(
+                            localAreaToGlobal(keyRect())),
+                        [this](int r) { if (r > 0) { key = r - 1; keyTag = "your pick"; repaint(); } });
+        return;
+    }
+    if (scaleRect().contains(pos))
+    {
+        juce::PopupMenu m;
+        for (int i = 0; i < 10; ++i) m.addItem(i + 1, kUiScaleName[i], true, i == scaleType);
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(
+                            localAreaToGlobal(scaleRect())),
+                        [this](int r) { if (r > 0) { scaleType = r - 1; keyTag = "your pick"; repaint(); } });
+        return;
+    }
+    for (int i = 0; i < 4; ++i)
+        if (actionRect(i).contains(pos)) { if (onAction) onAction(i); return; }
+}
+
+juce::String GeneratePanel::getTooltip()
+{
+    const auto pos = getMouseXYRelative();
+    if (! panelRect().contains(pos)) return {};
+    if (closeRect().contains(pos))   return "Close the Generate panel (the notes stay).";
+    auto inRow = [&](int r) { return rowRect(r).contains(pos); };
+    if (inRow(0)) return "ROLE: which rule-set writes the part.\n\n"
+                         "- Bassline: low, root-heavy, locks against the kick.\n"
+                         "- Melody: mid register, phrases with variation.\n"
+                         "- Hum: sparse legato vocal-guide line (pairs with the Hum/choir sounds - or your own "
+                         "recorded hum multisample).\n"
+                         "- Riff: one short cell repeated every bar, transposed with the harmony.\n\n"
+                         "Defaults from the loaded sound's bank category.";
+    if (inRow(1)) return "KEY + SCALE the generator writes in. Prefilled from this channel's Scale mode, or "
+                         "DETECTED from your pitched piano-roll channels - correct it here if the guess is wrong.";
+    if (inRow(2)) return "DENSITY: fewer, longer notes vs more movement.";
+    if (inRow(3)) return "REGISTER: where the line sits. Bassline treats High as mid-low (a bass stays a bass).";
+    if (inRow(4)) return "COLOR: how far outside the safe notes it reaches.\n\n"
+                         "- Safe: chord tones on strong beats, scale steps between.\n"
+                         "- Spicy: occasional passing tones + wider leaps.\n"
+                         "- Colorful: chromatic neighbours + off-beat landings.";
+    if (inRow(5)) return "RHYTHM stance vs YOUR groove (read from the other channels' steps):\n\n"
+                         "- Flowing: long legato notes floating over the beat.\n"
+                         "- In the pockets: fills the gaps BETWEEN your drum hits.\n"
+                         "- Driving: locks onto the drum hits.";
+    if (inRow(6)) return "CONTOUR: the phrase's overall shape (visible immediately in the roll). Auto picks one per phrase.";
+    if (inRow(7) && singableRect().contains(pos))
+                  return "SINGABLE: about one octave, mostly stepwise, leaps capped at a fifth, a breath at phrase "
+                         "ends - a line a human could actually hum. The vocal-guide special.";
+    if (inRow(7)) return "PHRASE (2+ bars): Repeat & vary = bar 1's idea echoed with small changes (call-and-response). "
+                         "Evolve = through-composed, no repeats.";
+    if (actionRect(0).contains(pos)) return "NEW IDEA: a full reroll - fresh rhythm AND fresh notes.";
+    if (actionRect(1).contains(pos)) return "VARY: keep this melody's skeleton, change ~a third of the notes (same idea, new ornaments).";
+    if (actionRect(2).contains(pos)) return "SAME RHYTHM, NEW NOTES: the onsets stay exactly where they are; only the pitches reroll.";
+    if (actionRect(3).contains(pos)) return "SAME NOTES, NEW RHYTHM: keep the pitch idea, reroll where the notes land.";
+    return "GENERATE: writes a part for THIS channel from your groove + key. One-shot dice - playback stays "
+           "deterministic; the result is ordinary notes you can edit. Undo restores the previous take.";
 }
 
 void VoiceModDisplay::setValues(int unison, int scaleUnison, float detune, float vibrato, bool centreOn, int detuneMode, bool scaleOnIn, int scaleTypeIn, int scaleKeyIn, float uniSpreadIn, float driftIn)
@@ -7490,6 +7697,199 @@ void DrumSequencerEditor::commitUndoNow()
     if (h != lastUndoHash) { pushUndoSnapshot(); lastUndoHash = h; undoDirty = false; undoStableTicks = 0; }
 }
 
+//==============================================================================
+// GENERATE [2026-07-20] - the part-generator feature (v1.5.4). The panel holds the options;
+// these three members own the seeds, the musical context and the note write. Merged groups are
+// native: context is gathered per group bar, notes come back in CONCAT columns and are split
+// per bar exactly like onDrawNotesChanged does.
+//==============================================================================
+int DrumSequencerEditor::detectGenKey(int& scaleTypeOut)
+{
+    // pitch-class histogram over every PIANO-ROLL channel in the viewed group (the roll is the
+    // C4-absolute world, so pitch classes are exact; step-mode pitches are knob-relative = unknowable).
+    auto& sq = proc.sequencer;
+    const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
+    float hist[12] = {}; float total = 0.0f;
+    for (int b = head; b <= end; ++b)
+        for (int chn = 0; chn < Sequencer::NUM_CHANNELS; ++chn)
+        {
+            const auto& cc = sq.patterns[b].channels[chn];
+            if (! cc.drawMode || chn == selectedChannel) continue;
+            for (int i = 0; i < cc.drawNoteCount; ++i)
+            {
+                const auto& n = cc.drawNotes[i];
+                const int p = ((n.semi % 12) + 12) % 12;
+                const float w = (float) n.vel / 255.0f * (1.0f + (float) n.len / 384.0f);
+                hist[p] += w; total += w;
+            }
+        }
+    scaleTypeOut = 0;
+    if (total < 0.01f) return 0;   // nothing pitched -> C major default
+    // Krumhansl-lite templates: tonic + fifth dominate, chord tones next, scale members last.
+    static const float majT[12] = { 3.0f, 0.0f, 1.0f, 0.0f, 2.0f, 1.0f, 0.0f, 2.5f, 0.0f, 1.0f, 0.0f, 1.0f };
+    static const float minT[12] = { 3.0f, 0.0f, 1.0f, 2.0f, 0.0f, 1.0f, 0.0f, 2.5f, 1.0f, 0.0f, 1.0f, 0.0f };
+    int bestKey = 0, bestMode = 0; float best = -1.0f;
+    for (int k = 0; k < 12; ++k)
+        for (int m = 0; m < 2; ++m)
+        {
+            const float* T = m == 0 ? majT : minT;
+            float sc = 0.0f;
+            for (int p = 0; p < 12; ++p) sc += hist[p] * T[((p - k) % 12 + 12) % 12];
+            if (sc > best) { best = sc; bestKey = k; bestMode = m; }
+        }
+    scaleTypeOut = bestMode;   // 0 = Major, 1 = Natural Minor (kUiScaleTab order)
+    return bestKey;
+}
+
+void DrumSequencerEditor::openGeneratePanel()
+{
+    auto& sq = proc.sequencer;
+    const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
+    auto& c = sq.patterns[head].channels[selectedChannel];
+    if (! c.drawMode) return;   // roll-only (the button only exists in the big roll editor)
+    generatePanel.bars = juce::jlimit(1, StepGridComponent::GRP_MAX, end - head + 1);
+    // KEY + SCALE prefill: this channel's Scale mode wins; else detect; else C major.
+    int k = -1, st = 0;
+    for (int s = 0; s < DrumChannel::NUM_SLOTS; ++s)
+        if (c.slots[s].scaleOn) { k = c.slots[s].scaleKey; st = c.slots[s].scaleType; break; }
+    if (k >= 0)
+    {
+        if (st >= 10) st = (st == 11 ? 1 : 0);   // guitar/power voicings -> parent scale
+        generatePanel.keyTag = "from Scale mode";
+    }
+    else
+    {
+        k = detectGenKey(st);
+        generatePanel.keyTag = st >= 0 && k >= 0 ? "detected" : "default";
+        if (k == 0 && st == 0) generatePanel.keyTag = "detected / default";
+    }
+    generatePanel.key = juce::jlimit(0, 11, k);
+    generatePanel.scaleType = juce::jlimit(0, 9, st);
+    // ROLE default from the sound's bank category (Bass -> Bassline, choirs/pads -> Hum, arps -> Riff)
+    generatePanel.soundName = c.mixName.isNotEmpty() ? c.mixName
+                            : "Channel " + juce::String(selectedChannel + 1);
+    {
+        auto names = Factory::mixNames(); auto cats = Factory::mixCategories();
+        const int idx = names.indexOf(c.mixName);
+        const juce::String cat = idx >= 0 && idx < cats.size() ? cats[idx] : juce::String();
+        generatePanel.role = cat == "Bass"          ? PartGen::RoleBass
+                           : cat == "Pads & Choirs" ? PartGen::RoleHum
+                           : cat == "Chords & Arps" ? PartGen::RoleRiff
+                                                    : PartGen::RoleMelody;
+        if (generatePanel.role == PartGen::RoleHum) generatePanel.singable = true;   // the vocal-guide default
+    }
+    genHadNotes = false;
+    for (int b = head; b <= end; ++b)
+        if (sq.patterns[b].channels[selectedChannel].drawNoteCount > 0) genHadNotes = true;
+    genWarned = false;
+    genVaryCount = 0;
+    auto& rnd = juce::Random::getSystemRandom();
+    genRhythmSeed = (uint32_t) rnd.nextInt(); genPitchSeed = (uint32_t) rnd.nextInt();
+    generatePanel.setBounds(content.getLocalBounds());
+    generatePanel.show();
+}
+
+void DrumSequencerEditor::genAction(int action)
+{
+    auto& sq = proc.sequencer;
+    const int ch = selectedChannel;
+    const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
+    if (! sq.patterns[head].channels[ch].drawMode) return;
+    if (genHadNotes && ! genWarned)
+    {   // the clear-on-switch convention: warn ONCE per panel-open before replacing hand-made notes
+        juce::PopupMenu m;
+        m.addSectionHeader("Generate REPLACES this channel's current notes");
+        m.addItem(1, "Replace them (undo restores)");
+        m.addItem(2, "Cancel");
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&generatePanel),
+                        [this, action](int r) { if (r == 1) { genWarned = true; genAction(action); } });
+        return;
+    }
+    auto& rnd = juce::Random::getSystemRandom();
+    switch (action)
+    {
+        case 0: genRhythmSeed = (uint32_t) rnd.nextInt();
+                genPitchSeed  = (uint32_t) rnd.nextInt(); genVaryCount = 0; break;   // New idea
+        case 1: ++genVaryCount; break;                                               // Vary
+        case 2: genPitchSeed  = (uint32_t) rnd.nextInt(); genVaryCount = 0; break;   // Same rhythm, new notes
+        case 3: genRhythmSeed = (uint32_t) rnd.nextInt(); genVaryCount = 0; break;   // Same notes, new rhythm
+    }
+    // ---- musical context: the OTHER channels' groove (steps) + harmony (roll notes) ----
+    PartGen::Ctx ctx;
+    const int bars = juce::jlimit(1, PartGen::MAX_BARS, end - head + 1);
+    ctx.bars = bars;
+    float grooveMax = 0.0f;
+    for (int b = 0; b < bars; ++b)
+    {
+        const auto& pat = sq.patterns[head + b];
+        const bool solos = Sequencer::anySoloIn(pat);
+        for (int chn = 0; chn < Sequencer::NUM_CHANNELS; ++chn)
+        {
+            if (chn == ch) continue;
+            const auto& cc = pat.channels[chn];
+            if (cc.mute || (solos && ! cc.solo)) continue;   // silent channels don't shape the part
+            if (cc.drawMode)
+            {   // pitched material -> per-beat chroma (the roll is C4-absolute, so pcs are exact)
+                for (int i = 0; i < cc.drawNoteCount; ++i)
+                {
+                    const auto& n = cc.drawNotes[i];
+                    const int p = ((n.semi % 12) + 12) % 12;
+                    const int bt0 = b * 4 + juce::jlimit(0, 3, (int) n.start / 96);
+                    const int bt1 = juce::jlimit(bt0, bars * 4 - 1,
+                                                 b * 4 + juce::jlimit(0, 3, ((int) n.start + (int) n.len - 1) / 96));
+                    for (int bt = bt0; bt <= bt1; ++bt)
+                    { ctx.chroma[bt][p] += (float) n.vel / 255.0f; ctx.chromaValid = true; }
+                }
+            }
+            else
+            {   // drum/step material -> the 16th-grid groove map
+                for (int i = 0; i < cc.numSteps; ++i)
+                    if (cc.steps[i])
+                    {
+                        const int pos16 = juce::jlimit(0, 15, i * 16 / juce::jmax(1, cc.numSteps));
+                        auto& gcell = ctx.grooveHit[b * 16 + pos16];
+                        gcell += cc.stepVel[i]; grooveMax = juce::jmax(grooveMax, gcell);
+                    }
+            }
+        }
+    }
+    if (grooveMax > 0.0f)
+        for (int i = 0; i < bars * 16; ++i) ctx.grooveHit[i] = juce::jmin(1.0f, ctx.grooveHit[i] / grooveMax);
+    // ---- options straight from the panel + the seeds ----
+    PartGen::Options o;
+    o.role         = generatePanel.role;
+    o.key          = generatePanel.key;
+    o.scale        = kUiScaleTab[juce::jlimit(0, 9, generatePanel.scaleType)];
+    o.scaleLen     = kUiScaleLen[juce::jlimit(0, 9, generatePanel.scaleType)];
+    o.density      = generatePanel.density;
+    o.registerBand = generatePanel.registerBand;
+    o.color        = generatePanel.color;
+    o.rhythm       = generatePanel.rhythm;
+    o.contour      = generatePanel.contour;
+    o.phrase       = generatePanel.phrase;
+    o.singable     = generatePanel.singable;
+    o.rhythmSeed   = genRhythmSeed;
+    o.pitchSeed    = genPitchSeed;
+    o.varyCount    = genVaryCount;
+    const auto notes = PartGen::generate(o, ctx);
+    // ---- write: undoable, cleared + split per group bar (the onDrawNotesChanged discipline) ----
+    commitUndoNow();
+    for (int b = 0; b < bars; ++b) sq.patterns[head + b].channels[ch].clearDrawNotes();
+    for (const auto& n : notes)
+    {
+        const int b = juce::jlimit(0, bars - 1, n.start / DrumChannel::DRAW_RES);
+        DrumChannel::DrawNote dn;                       // whole-struct push (the field-drop lesson)
+        dn.start = (int16_t) (n.start - b * DrumChannel::DRAW_RES);
+        dn.len   = (int16_t) juce::jmax(1, n.len);
+        dn.semi  = (int8_t)  juce::jlimit(-48, 48, n.semi);
+        dn.vel   = (uint8_t) juce::jlimit(0, 255, n.vel);
+        sq.patterns[head + b].channels[ch].addDrawNote(dn);
+    }
+    genHadNotes = true; genWarned = true;   // rerolls replace OUR OWN notes without re-asking
+    stepGrid.update(proc.sequencer, proc.anySolo);
+    stepGrid.repaint();
+}
+
 void DrumSequencerEditor::applyUndoState(const UndoEntry& e)
 {
     applyingUndo = true;
@@ -8923,6 +9323,7 @@ void DrumSequencerEditor::setupComponents()
     proc.sequencer.uiGridDiv = juce::jmax(1, stepGrid.gridDiv());   // keep the DSP's grid divisor in sync from the start
     // QUANTIZE (one-time): type 1/N, snap every note's START (and clamp length to >= one cell) to
     // that grid for the channel shown in the big editor. Independent of the live snap grid; undoable.
+    stepGrid.onGenerateEdit = [this] { openGeneratePanel(); };   // [2026-07-20] roll-header Generate
     stepGrid.onQuantizeEdit = [this] {
         auto* aw = new juce::AlertWindow("Quantize notes", "Snap note starts to 1/N of the bar (1-64):",
                                          juce::MessageBoxIconType::NoIcon);
@@ -9898,6 +10299,9 @@ void DrumSequencerEditor::setupComponents()
     };
     lfoDisplay.onOpenCurveEditor = [this](int dest) { openLfoCurveEditor(dest); };   // click the wave in Custom
     content.addChildComponent(letRingPrompt);   // [2026-07-19] in-plugin Let Ring ms prompt
+    content.addChildComponent(generatePanel);   // [2026-07-20] GENERATE options panel (roll header)
+    generatePanel.onAction = [this](int a) { genAction(a); };
+    generatePanel.onClose  = [] {};
     letRingPrompt.onDone = [this](int ms) {
         auto& cc = proc.sequencer.channel(selectedChannel);
         cc.keysLetRingMs = juce::jlimit(10, 1000, ms);
@@ -13481,6 +13885,8 @@ void DrumSequencerEditor::zoomToGroup(juce::Rectangle<int> designRect)
     lfoCurveEd.setVisible(false);
     letRingPrompt.setBounds(content.getLocalBounds());   // [2026-07-19] full-cover dim; hidden until opened
     letRingPrompt.setVisible(false);
+    generatePanel.setBounds(content.getLocalBounds());   // [2026-07-20] GENERATE panel: same rule -
+    generatePanel.setVisible(false);                     // any relayout closes it (the overlay convention)
     routePicker.setVisible(false);
     remapEd.setVisible(false);
     fxTypeList.close();   // anchored under a combo that just moved (close() frees the combo latch)

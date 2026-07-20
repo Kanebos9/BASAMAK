@@ -1,7 +1,7 @@
 # BASAMAK - a free, open-source drum & sample step-sequencer plugin (VST3 / AU / Standalone).
 # Copyright (C) 2026 Oguzhan Yazici. Licensed under the GNU AGPL v3 (see LICENSE).
 cmake_minimum_required(VERSION 3.22)
-project(BASAMAK VERSION 1.5.3)   # [2026-07-19] 1.5.3 = multisample Scale/Chord + Let Ring mode + loop/trim/wizard fixes
+project(BASAMAK VERSION 1.5.4)   # [2026-07-20] 1.5.4 = GENERATE (part generator: bassline/melody/hum/riff from the groove) + Hum sound
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -97,7 +97,7 @@ juce_generate_juce_header(BASAMAK)
 # builds are untouched. Run tests/run.sh BEFORE EVERY RELEASE - each test exits non-zero on FAIL.
 option(BASAMAK_TESTS "Build the offline DSP regression tests" OFF)
 if(BASAMAK_TESTS)
-    foreach(T PolyTest PRollTest MergeTest PresetTest DuckTest NudgeTest SlotNoteTest GlideTest ArpTest TunerTest GateWrapTest LiveRollTest RollAbsoluteTest WavetableTest AliveTest GrainTest ModMatrixTest NamTest BankAudit UIAudit MixDump)
+    foreach(T PolyTest PRollTest MergeTest PresetTest DuckTest NudgeTest SlotNoteTest GlideTest ArpTest TunerTest GateWrapTest LiveRollTest RollAbsoluteTest WavetableTest AliveTest GrainTest ModMatrixTest NamTest GenTest BankAudit UIAudit MixDump)
         juce_add_console_app(${T})
         juce_generate_juce_header(${T})
         target_sources(${T} PRIVATE

@@ -1235,6 +1235,24 @@ static void kChoirOoh(DC& c) {     // darker "ooh" choir (Vowel O vs Choir Aah's
     s.atk = 0.22f; s.dec = 1.6f; s.sustain = 0.85f; s.release = 0.9f;
     c.reverbSend = 0.3f; c.volume = 0.66f;
 }
+static void kHum(DC& c) {          // [2026-07-20] SOLO closed-mouth "mmm" - the GENERATE feature's
+                                   // vocal-guide voice. INTIMATE single hum, not a choir wall: one
+                                   // voice, strong fundamental, shut top, a nasal band, breath in
+                                   // the nose, and singer manners (mono-legato + light portamento).
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvHump; s.oscFreq = 261.63f;      // rounded near-fundamental tone, C4
+    s.oscUnison = 1;                                                 // ONE voice - a person, not a section
+    s.atk = 0.12f; s.dec = 1.4f; s.sustain = 0.85f; s.release = 0.35f;
+    s.vibrato = 0.3f; s.drift = 0.25f;                               // gentle wobble + living pitch
+    s.filterType  = DC::LowPass; s.filterCutoff  = 950.0f;  s.filterReso  = 0.9f;   // the closed mouth
+    s.filterType2 = DC::Bell;    s.filterCutoff2 = 300.0f;  s.filterReso2 = 1.4f;   // the nasal "m"
+    s.filterGain2 = 5.0f;
+    auto& n = mkSlot2(c, DC::SrcNoise, 0.92f);                       // 8% breath through the nose
+    n.noiseType = 1; n.noiseCenter = 1400.0f; n.noiseRes = 0.6f;
+    n.atk = 0.15f; n.dec = 0.8f; n.sustain = 0.4f; n.release = 0.3f;
+    c.keysPolyMode = false; c.keysLegato = true; c.keysGlide = 0.2f; // a singer: mono-legato, ~80 ms slide
+    c.reverbSend = 0.22f; c.volume = 0.72f;
+}
 static void kDarkPad(DC& c) {      // subterranean pad: low square through a nearly-shut filter
     auto& s = mkSlot(c, DC::SrcOsc);
     s.oscShape = s.oscShapeB = DC::WvSquare; s.oscFreq = 130.81f;    // C3
@@ -2636,6 +2654,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Choir Aah", kChoir, "Pads & Choirs" },
     { "Warm Pad", kWarmPad, "Pads & Choirs" },
     { "Choir Ooh", kChoirOoh, "Pads & Choirs" },
+    { "Hum", kHum, "Pads & Choirs" },                 // [2026-07-20] the GENERATE vocal-guide voice (solo "mmm")
     { "Dark Pad", kDarkPad, "Pads & Choirs" },
     { "Shimmer Pad", kShimmerPad, "Pads & Choirs" },
     { "Motion Pad", kMotionPad, "Pads & Choirs" },

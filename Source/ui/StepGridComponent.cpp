@@ -516,6 +516,7 @@ static juce::Rectangle<int> prHdrSlot (const juce::Rectangle<int>& ov, int i)
 static juce::Rectangle<int> prHdrClose(const juce::Rectangle<int>& ov)        { return { ov.getRight() - 30, ov.getY() + 4, 24, 24 }; }
 static juce::Rectangle<int> prHdrTune (const juce::Rectangle<int>& ov)        { return { ov.getX() + 522, ov.getY() + 4, 96, 24 }; }
 static juce::Rectangle<int> prHdrQuant(const juce::Rectangle<int>& ov)        { return { ov.getX() + 626, ov.getY() + 4, 92, 24 }; }
+static juce::Rectangle<int> prHdrGen  (const juce::Rectangle<int>& ov)        { return { ov.getX() + 726, ov.getY() + 4, 92, 24 }; }   // [2026-07-20] GENERATE
 
 // Piano-roll note colours by slot target - the SAME family as the keyboard highlight:
 // slot 1 = yellow, slot 2 = pink, both = the 50/50 orange blend.
@@ -776,9 +777,13 @@ void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle
             g.setColour(juce::Colour(0xff8fd0a0)); g.setFont(juce::Font(13.0f, juce::Font::bold));
             g.drawText("Quantize", qr, juce::Justification::centred, false);
         }
-        g.setColour(juce::Colour(0xff9aa4c0)); g.setFont(juce::Font(12.0f, juce::Font::bold));
-        g.drawText("drag=draw - dbl-click=delete - RIGHT-CLICK=note menu - RIGHT-DRAG=select area",
-                   rect.getX() + 724, rect.getY(), rect.getWidth() - 724 - 34, PR_HEAD, juce::Justification::centredLeft, false);
+        { // [2026-07-20] GENERATE: opens the part-generator panel (writes a melody/bass/hum/riff into
+          // this roll). The old gesture-hint text lived here - it duplicated the grid tooltip word-for-word.
+            const auto gr2 = prHdrGen(rect);
+            g.setColour(juce::Colour(0xff2a4a3a)); g.fillRoundedRectangle(gr2.toFloat(), 4.0f);
+            g.setColour(juce::Colour(0xffa0e8b0)); g.setFont(juce::Font(13.0f, juce::Font::bold));
+            g.drawText("Generate", gr2, juce::Justification::centred, false);
+        }
         const auto cl = prHdrClose(rect);
         g.setColour(juce::Colour(0xff5a2a2a)); g.fillRoundedRectangle(cl.toFloat(), 4.0f);
         g.setColour(juce::Colours::white); g.setFont(juce::Font(15.0f, juce::Font::bold));
@@ -980,6 +985,9 @@ juce::String StepGridComponent::getTooltip()
                             "- TUNE (header fader): shifts the WHOLE bar up to +-50 cents (tape-style detune). The "
                             "keyboard follows it on this channel, and switching to steps keeps the transposed "
                             "0-point on the Base Freq knob.\n\n"
+                            "- GENERATE (header button, big editor): writes a bassline / melody / hum / riff that "
+                            "fits YOUR groove and key into this roll - reroll until you like it, then edit the notes "
+                            "like any others (undo restores).\n\n"
                             "Humanize/Strum apply here too. Pick a step count in the dropdown to QUANTISE the roll "
                             "to steps.");
     return juce::String("STEP GRID. Click = toggle steps; the buttons top-right switch edit modes (Vel/Len/Pitch/"
@@ -1269,6 +1277,8 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
             { if (onGridDivEdit) onGridDivEdit(); return; }
             if (prHdrQuant(ov).contains(p))  // QUANTIZE: type 1/N, snap note starts once
             { if (onQuantizeEdit) onQuantizeEdit(); return; }
+            if (prHdrGen(ov).contains(p))    // [2026-07-20] GENERATE: open the part-generator panel
+            { if (onGenerateEdit) onGenerateEdit(); return; }
             if (prHdrTune(ov).contains(p))   // TUNE fader: absolute drag across the box (Arp-Rate style)
             {
                 prMode = 7;

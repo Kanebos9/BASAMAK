@@ -296,6 +296,16 @@
 
 | 205 | Let Ring highlight follows REAL audibility (per-voice ampNow) so a decayed note un-lights while a sustaining one stays lit; "Stop ring" = a MIDI-learn palm-mute (100 ms fade, no transport stop) in selection-controls; the ms prompt is an in-plugin overlay (not a desktop dialog that floats over other apps); REC-stop damps the ring (else held voices double the loaded take = "gets loud") | user field-test: "keys stay lit after silent"; "pop up can be seen even after i open other apps... should NOT be like that"; "stop ring 100 ms"; "when recording when i STOP it gets loud" | user orders |
 
+| 206 | GENERATE (v1.5.4) is ONE-SHOT and seed-split: dice roll once on the message thread (playback stays deterministic - the no-probability rule holds); rhythm + pitch use SEPARATE seeds so "Same rhythm, new notes" / "Same notes, new rhythm" are exact by construction; Vary = same seeds + a counter-derived mutation of ~30% of pitches | user-approved design (the full option set + 4 iterate buttons agreed in the planning chat); the seed split is my mechanism for the agreed buttons | user design, mechanism mine |
+
+| 207 | The generator reads the project SYMBOLICALLY, never audio: groove = the step channels' active steps/velocities on a 16th grid (muted/un-soloed channels excluded); harmony/key-detection = PIANO-ROLL channels ONLY (the roll is the C4-absolute world - step-mode pitches are knob-relative, so their pitch classes are unknowable and would poison the key guess) | follows the pitch-system contract; a wrong silent key guess was the named failure mode, so the panel SHOWS the key + its source tag ("from Scale mode" / "detected") and lets the user correct it | mine, disclosed in the panel |
+
+| 208 | Generate writes ordinary gated roll notes (slot = both, no strum/pan flags) onto the SELECTED channel only; merged groups native (context per group bar, concat output split per bar like onDrawNotesChanged); replaces existing notes after ONE PopupMenu warn per panel-open (rerolls of its own output never re-ask); every action is individually undoable (commitUndoNow per action) | the clear-on-switch warning convention + the whole-struct push lesson; warning on every reroll would make iteration unusable | convention, gap-fills mine |
+
+| 209 | The roll header's gesture-hint text ("drag=draw - dbl-click=delete...") was DELETED to seat the Generate button - it duplicated the grid tooltip word-for-word (removing a redundant copy, not shrinking text; the text-never-shrinks rule untouched) | agreed in the planning chat ("deleting a duplicate isn't squeezing text") | user-approved |
+
+| 210 | "Hum" factory sound (Pads & Choirs, bank = 265) = the generator's vocal-guide voice: SOLO closed-mouth "mmm" (1 osc voice Hump + LP 950 + nasal Bell +5 dB @ 300 + 8% pink breath) with singer manners baked per-sound (Mono Legato + ~80 ms glide + vibrato/drift). Ships as a normal keep/kill audition candidate - the feature does NOT depend on it | user: "okay hum doesnt sound too bad then" - the bank's other vocal sounds are ensemble open-vowel walls; a solo hum is the one honest gap | user-approved candidate |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

@@ -32,6 +32,7 @@ public:
     std::function<void(int ch)> onDrawModeMaybeChanged;               // ch's roll-vs-step may have changed (fade buttons)
     std::function<void()> onGridDivEdit;   // clicking the snap-grid header: type a value (1-64, 0 = off)
     std::function<void()> onQuantizeEdit;  // clicking the Quantize header: type 1/N, snap note starts once
+    std::function<void()> onGenerateEdit;  // [2026-07-20] clicking Generate: open the part-generator panel
     std::function<void(int ch, float cents)> onDrawTuneChanged;   // the roll's TUNE fader (-50..+50 cents)
     float drawTune[Sequencer::NUM_CHANNELS] = {};                 // mirror of each channel's drawTuneCents
     std::function<void(int semi)> onRollPreview;   // AUDITION while drawing/moving a note (hear the pitch live)
@@ -1528,6 +1529,48 @@ public:
 private:
     juce::Rectangle<float> panel() const
     { const float w = 560.0f, h = 300.0f; return { (getWidth() - w) * 0.5f, (getHeight() - h) * 0.5f, w, h }; }
+};
+
+//==============================================================================
+// GeneratePanel [2026-07-20] - the GENERATE feature's options panel (v1.5.4). Opened from the
+// piano-roll header's Generate button; a content child (never an OS window). Anchored RIGHT so
+// the roll stays visible - every action writes notes into the roll BEHIND it live, so the user
+// rerolls while watching (and hearing, if the transport runs). Click outside the panel = close.
+// The panel only holds the OPTION STATE + drawn chips; the editor owns seeds, context gathering,
+// PartGen calls and the note write (see openGeneratePanel / genAction in PluginEditor.cpp).
+//==============================================================================
+class GeneratePanel : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    // option state (defaults = one-click-good; the editor prefills key/scale/role on open)
+    int  role = 1;            // 0 Bassline | 1 Melody | 2 Hum | 3 Riff
+    int  key = 0;             // 0 = C .. 11 = B
+    int  scaleType = 0;       // 0..9 (kUiScaleTab)
+    int  density = 1;         // Sparse | Medium | Busy
+    int  registerBand = 1;    // Low | Mid | High
+    int  color = 0;           // Safe | Spicy | Colorful
+    int  rhythm = 1;          // Flowing | In the pockets | Driving
+    int  contour = 0;         // Auto | Arch | Rising | Falling | Wave
+    int  phrase = 0;          // Repeat & vary | Evolve (multi-bar only)
+    bool singable = false;
+    int  bars = 1;            // set by the editor before show() (merged-group size)
+    juce::String keyTag;      // "from Scale mode" / "detected" / "default" - honesty about the prefill
+    juce::String soundName;   // title context: the channel's loaded sound
+    std::function<void(int action)> onAction;   // 0 New idea | 1 Vary | 2 Same rhythm | 3 Same notes
+    std::function<void()> onClose;
+    void show() { setVisible(true); toFront(true); repaint(); }
+    void paint(juce::Graphics&) override;
+    void mouseDown(const juce::MouseEvent&) override;
+    juce::String getTooltip() override;
+private:
+    juce::Rectangle<int> panelRect() const;
+    juce::Rectangle<int> rowRect(int row) const;                    // option rows 0..7
+    juce::Rectangle<int> chipRect(int row, int idx, int count) const;
+    juce::Rectangle<int> singableRect() const;
+    juce::Rectangle<int> actionRect(int idx) const;                 // 0..3 (2x2)
+    juce::Rectangle<int> closeRect() const;
+    juce::Rectangle<int> keyRect() const;
+    juce::Rectangle<int> scaleRect() const;
 };
 
 //==============================================================================
@@ -3425,6 +3468,11 @@ private:
     bool applyingUndo = false;
     void pushUndoSnapshot();
     void commitUndoNow();   // force-commit the CURRENT state as an undo entry (before a destructive edit)
+    // GENERATE [2026-07-20]: the part-generator feature (PartGen.h is the engine)
+    void openGeneratePanel();               // prefill key/scale/role + show the panel
+    void genAction(int action);             // an action button fired: roll seeds, generate, write notes
+    int  detectGenKey(int& scaleTypeOut);   // pitch-class histogram over the roll channels -> best key
+                                            // (groove/chroma context gathering lives inside genAction)
     void applyUndoState(const UndoEntry& e);
     void doUndo();
     void doRedo();
@@ -3732,6 +3780,10 @@ private:
     MsRecordWizard msWizard;  // [2026-07-18] multisample recording wizard (content child; X-close only)
     LfoCurveEditor lfoCurveEd;             // LFO SHAPER overlay (draw the Custom LFO cycle)
     LetRingPrompt  letRingPrompt;          // [2026-07-19] in-plugin "Let Ring" ms prompt (contained)
+    GeneratePanel  generatePanel;          // [2026-07-20] GENERATE options panel (roll-header button)
+    uint32_t genRhythmSeed = 1, genPitchSeed = 2;   // the two iteration seeds (rhythm | pitch)
+    int  genVaryCount = 0;                          // Vary presses since the last reroll
+    bool genHadNotes = false, genWarned = false;    // replace-existing-notes warning (once per open)
     ModFaderMatrix  modFaders;             // 12 route faders (6x2) inline in the MODULATION box
     RoutePicker     routePicker;           // its right-click source|target chooser (overlay)
     RemapEditor     remapEd;               // [2026-07-14] the per-route REMAP curve overlay (opened from the picker)
