@@ -55,8 +55,6 @@ void StepGridComponent::update(const Sequencer& seq, bool hasSolo)
     const int gEnd  = seq.groupEnd(seq.currentPattern);
     grpBars = juce::jlimit(1, GRP_MAX, gEnd - gHead + 1);
     grpHeadPat = gHead;
-    grpStartBar = (seq.startMarker >= 0 && seq.groupHead(seq.startMarker) == gHead)   // [1.5.1] start marker
-                    ? juce::jlimit(0, grpBars - 1, seq.startMarker - gHead) : 0;
     const bool playingGroup = seq.isCurrentlyPlaying
                               && seq.groupHead(seq.playPattern) == gHead
                               && seq.playPattern - gHead < grpBars;
@@ -945,24 +943,11 @@ void StepGridComponent::paint(juce::Graphics& g)
         }
     }
 
-    paintStartTabs(g);   // [1.5.1] the playback-start tabs draw over everything
+    // ([2026-07-20] the playback-start tabs are gone - the marker lives on the pattern buttons)
 }
 
 juce::String StepGridComponent::getTooltip()
 {
-    // [1.5.1] the playback-start tabs get their own tip
-    if (grpBars > 1)
-    {
-        const auto p = getMouseXYRelative().toFloat();
-        if (p.y <= 19.0f)
-            for (int b = 0; b < grpBars; ++b)
-                if (startTabRect(b).expanded(3.0f, 2.0f).contains(p))
-                    return "PLAYBACK START: click a tab to choose which bar of the merged group the next "
-                           "Play begins from (the lit tab = the current start; Stop parks here too).\n\n"
-                           "- Clicking while playing only moves the marker - it takes effect on the next start.\n"
-                           "- Recording always runs the group first-to-last regardless.\n"
-                           "- Not saved with the project (a reload starts from the first bar again).";
-    }
     const int dch = firstRow + juce::jmax(0, getMouseXYRelative().y) / juce::jmax(1, rowH);
     if (dch >= 0 && dch < NCH && drawMode[dch])
         return juce::String("PIANO ROLL (free notes; pitch 0 = C4 (middle C), always).\n\n"
@@ -1202,42 +1187,12 @@ void StepGridComponent::mouseMove(const juce::MouseEvent& e)
 
 // [1.5.1] the clickable PLAYBACK-START tabs at the top of each bar of a merged group (incl. bar 1).
 // Big + bright on purpose (user: "big enough to draw attention and easy to click").
-juce::Rectangle<float> StepGridComponent::startTabRect(int b) const
-{
-    const float bx = (float) getWidth() * (float) b / (float) juce::jmax(1, grpBars);
-    return { bx + 2.0f, 0.0f, 46.0f, 18.0f };
-}
-void StepGridComponent::paintStartTabs(juce::Graphics& g)
-{
-    if (grpBars <= 1) return;
-    for (int b = 0; b < grpBars; ++b)
-    {
-        const auto tr = startTabRect(b);
-        const bool act = (b == grpStartBar);
-        g.setColour(act ? juce::Colour(0xffe8bf4d) : juce::Colour(0xe61f1f36));
-        g.fillRoundedRectangle(tr, 5.0f);
-        g.setColour(juce::Colour(0xffe8bf4d).withAlpha(act ? 1.0f : 0.8f));
-        g.drawRoundedRectangle(tr.reduced(0.6f), 5.0f, act ? 1.6f : 1.1f);
-        juce::Path tri;   // play glyph = "starts HERE"
-        tri.addTriangle(tr.getX() + 7.0f, tr.getY() + 4.0f,
-                        tr.getX() + 7.0f, tr.getBottom() - 4.0f,
-                        tr.getX() + 16.0f, tr.getCentreY());
-        g.setColour(act ? juce::Colour(0xff161626) : juce::Colour(0xffe8bf4d));
-        g.fillPath(tri);
-        g.setFont(juce::Font(11.0f, juce::Font::bold));
-        g.drawText("P" + juce::String(grpHeadPat + b + 1),
-                   (int) tr.getX() + 18, (int) tr.getY() + 2, (int) tr.getWidth() - 20, (int) tr.getHeight() - 4,
-                   juce::Justification::centredLeft, false);
-    }
-}
+// [2026-07-20] The playback-start TABS are GONE (they collided with the roll-editor header;
+// user design): the start marker lives on the PATTERN BUTTONS now - clicking any member of a
+// merged group aims playback there (amber wedge on the button = the current start).
 
 void StepGridComponent::mouseDown(const juce::MouseEvent& e)
 {
-    // [1.5.1] START TABS win over everything in their area (they overlap row 1's top edge).
-    if (grpBars > 1 && e.y <= 19.0f)
-        for (int b = 0; b < grpBars; ++b)
-            if (startTabRect(b).expanded(3.0f, 2.0f).contains(e.position))
-            { grpStartBar = b; if (onStartBarClick) onStartBarClick(b); repaint(); return; }
     const auto p = e.getPosition();
     // [2026-07-15 23:00] floating LOOP-CONDITION cell: clicks inside edit it, outside close it
     // (the click is swallowed either way so nothing underneath reacts).

@@ -25,6 +25,11 @@
 //    bar's average.
 //  - Phrase-shaped DYNAMICS: velocity swells toward the phrase peak.
 //
+// v3 [same day]: the FORM enum surface became LINES + RELATION (user: forms were jargon; he
+// thinks in "one/two lines of my lyrics"). lines = how many sentences (0 = Auto, 1 = one arc
+// across the WHOLE group - any bar count incl. 3), relation = what later lines do (repeat /
+// answer / new / Auto). AABA etc. now EMERGE from Auto instead of being a menu.
+//
 // Standing rules: ONE-SHOT dice on the message thread (playback deterministic);
 // TWO seeds - rhythmSeed places every onset, pitchSeed picks every pitch, so
 // "Same rhythm, new notes" is exact by construction; varyCount mutates on top;
@@ -44,10 +49,12 @@ static constexpr int CELL16 = COLS / 16;   // one 16th
 static constexpr int BEAT   = COLS / 4;    // one beat
 static constexpr int MAX_BARS = 8;
 
-enum Role    { RoleBass = 0, RoleMelody, RoleHum, RoleRiff };
-enum Rhythm  { RhFlowing = 0, RhPockets, RhDriving };
-enum Contour { CtAuto = 0, CtArch, CtRising, CtFalling, CtWave };
-enum Form    { FormHook = 0, FormQA, FormFree };
+enum Role     { RoleBass = 0, RoleMelody, RoleHum, RoleRiff };
+enum Rhythm   { RhFlowing = 0, RhPockets, RhDriving };
+enum Contour  { CtAuto = 0, CtArch, CtRising, CtFalling, CtWave };   // internal (Auto-rolled; no UI row)
+// [2026-07-20 v3, user design] structure = LINES, not form jargon: how many melodic sentences
+// the group holds + what the later lines do. "One line of my lyrics across 3 bars" = lines 1.
+enum Relation { RelAuto = 0, RelRepeat, RelAnswer, RelNew };
 
 struct Options
 {
@@ -59,8 +66,9 @@ struct Options
     int  registerBand = 1;        // 0 low | 1 mid | 2 high (Bassline caps at mid-low)
     int  color      = 0;          // 0 safe | 1 spicy | 2 colorful
     int  rhythm     = RhPockets;
-    int  contour    = CtAuto;
-    int  phrase     = FormHook;   // the FORM (kept the old field name for API stability)
+    int  contour    = CtAuto;     // internal - the panel no longer exposes it (Auto rolls per line)
+    int  lines      = 0;          // melodic sentences in the group: 0 = Auto, 1..4 explicit
+    int  relation   = RelAuto;    // what lines 2+ do vs line 1: repeat / answer / new / Auto
     bool singable   = false;
     uint32_t rhythmSeed = 1;
     uint32_t pitchSeed  = 2;
@@ -397,24 +405,33 @@ static inline void makeLengths(const Options& o, std::vector<Note>& notes, int t
 // 'n' answer (opening kept ~40%, fresh tail) | 'B' contrast | 'F' free. Last phrase resolves.
 struct Phrase { int startBar, lenBars; char tag; bool resolved; };
 
-static inline void planForm(int bars, int form, std::vector<Phrase>& out)
+// [v3] LINES model: split the group into `lines` sentences (earlier lines take the extra bar -
+// 3 bars at 2 lines = 2 + 1), then decide what each later line does. AABA and friends EMERGE
+// from Auto instead of being a jargon menu. lines 1 = ONE arc across the whole group.
+static inline void planForm(int bars, int lines, int relation, std::vector<Phrase>& out)
 {
     out.clear();
-    // HOOK reaches its B section: 4 bars = 1-bar units (a true AABA); 8 bars = 2-bar units (the
-    // big AABA). Q&A/Free favour LONG phrases (2-bar questions/arcs) - the "spread across bars" feel.
-    const int pb = form == FormHook ? (bars >= 8 ? 2 : 1) : (bars >= 4 ? 2 : 1);
-    int i = 0;
-    for (int b = 0; b < bars; b += pb, ++i)
+    int L = lines;
+    if (L <= 0) L = bars <= 1 ? 1 : (bars >= 6 ? 4 : 2);   // Auto: long arcs by default
+    L = std::max(1, std::min(std::min(4, bars), L));
+    const int baseB = bars / L, extra = bars % L;
+    int b = 0;
+    for (int i = 0; i < L; ++i)
     {
-        Phrase p; p.startBar = b; p.lenBars = std::min(pb, bars - b); p.resolved = false;
-        if (form == FormFree)      p.tag = 'F';
-        else if (form == FormQA)   p.tag = (i % 2 == 0) ? (i == 0 ? 'A' : 'a') : 'n';
-        else /* FormHook */        { static const char cyc[4] = { 'A', 'a', 'B', 'a' }; p.tag = cyc[i % 4]; }
+        Phrase p; p.startBar = b; p.lenBars = baseB + (i < extra ? 1 : 0); p.resolved = false;
+        if (i == 0) p.tag = 'A';
+        else if (relation == RelRepeat) p.tag = 'a';
+        else if (relation == RelAnswer) p.tag = 'n';
+        else if (relation == RelNew)    p.tag = 'F';
+        else   // Auto: 2 lines = question/answer; 3 = Q/A/echo; 4 = hook/echo/contrast/echo (AABA)
+            p.tag = (L == 2) ? 'n'
+                  : (L == 3) ? (i == 1 ? 'n' : 'a')
+                             : (i == 1 ? 'a' : i == 2 ? 'B' : 'a');
+        b += p.lenBars;
         out.push_back(p);
     }
     if (! out.empty()) out.back().resolved = true;
-    // Q&A: answers resolve, questions stay open (the last phrase already resolves regardless)
-    if (form == FormQA) for (auto& p : out) if (p.tag == 'n') p.resolved = true;
+    for (auto& p : out) if (p.tag == 'n') p.resolved = true;   // answers always resolve
 }
 } // namespace detail
 
@@ -462,7 +479,7 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& c)
     else
     {
         std::vector<Phrase> plan;
-        planForm(bars, o.phrase, plan);
+        planForm(bars, o.lines, o.relation, plan);
         // the MOTIF = phrase A's material (onsets + pitches), the identity every echo/answer keeps
         std::vector<int>  motifOns;    // bar-local (relative to its phrase start)
         std::vector<Note> motifNotes;  // pitched A notes (phrase-relative starts)
@@ -618,6 +635,33 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& c)
     for (size_t i = 0; i + 1 < notes.size(); ++i)
         notes[i].len = std::max(1, std::min(notes[i].len, notes[i + 1].start - notes[i].start));
     if (! notes.empty()) notes.back().len = std::max(1, std::min(notes.back().len, total - notes.back().start));
+
+    // FINAL CADENCE GUARD [v3]: the vary/singable passes run AFTER the per-phrase cadence snap
+    // and can move the last note - re-land it home (the "last phrase resolves" promise must
+    // survive every later pass). Riff excluded (its cell tiles verbatim, no cadence promise).
+    if (o.role != RoleRiff && ! notes.empty())
+    {
+        auto& last = notes.back();
+        bool cad[12] = {};
+        cad[pc(o.key + o.scale[0])] = true;
+        if (o.role != RoleBass) cad[pc(o.key + o.scale[2 % o.scaleLen])] = true;
+        if (! cad[pc(last.semi)])
+        {
+            const int prev = notes.size() >= 2 ? notes[notes.size() - 2].semi : 999;
+            const int centre = registerCentre(o);
+            std::vector<int> lad;
+            buildLadder(o, centre - (o.singable ? 6 : 8), centre + (o.singable ? 6 : 8), lad);
+            int best = last.semi, bd = 1 << 20;
+            for (int s2 : lad)
+            {
+                if (! cad[pc(s2)]) continue;
+                if (o.singable && prev != 999 && std::abs(s2 - prev) > 7) continue;
+                const int d = std::abs(s2 - last.semi);
+                if (d < bd) { bd = d; best = s2; }
+            }
+            last.semi = best;
+        }
+    }
     return notes;
 }
 } // namespace PartGen

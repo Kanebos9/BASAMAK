@@ -2802,6 +2802,15 @@ void PatternButton::paint(juce::Graphics& g)
         juce::Path tri; tri.addTriangle(b.getX() + 4, b.getY() + 3, b.getX() + 4, b.getY() + 11, b.getX() + 11, b.getY() + 7);
         g.fillPath(tri);
     }
+    // [2026-07-20] START marker (merged groups): the amber wedge = "the next Play begins on this
+    // bar" - clicking any member button moves it (replaced the roll's overlapping start tabs).
+    if (isStartBar)
+    {
+        g.setColour(juce::Colour(0xffe8bf4d));
+        juce::Path tri; tri.addTriangle(b.getX() + 4, b.getBottom() - 11, b.getX() + 4, b.getBottom() - 3,
+                                        b.getX() + 11, b.getBottom() - 7);
+        g.fillPath(tri);
+    }
 
     if (midiLearn && midiLearn->isLearning() && midiLearn->getLearningParam() == paramId())
     {
@@ -3462,8 +3471,10 @@ static const char* const kGenDens[]    = { "Sparse", "Medium", "Busy" };
 static const char* const kGenReg[]     = { "Low", "Mid", "High" };
 static const char* const kGenColor[]   = { "Safe", "Spicy", "Colorful" };
 static const char* const kGenRhythm[]  = { "Flowing", "In the pockets", "Driving" };
-static const char* const kGenContour[] = { "Auto", "Arch", "Rising", "Falling", "Wave" };
-static const char* const kGenPhrase[]  = { "Hook (AABA)", "Call & answer", "Free" };   // [v2] FORMS
+// [v3] structure = LINES (how many melodic sentences) + what the later lines do. No form jargon;
+// the Contour row is GONE (Auto rolls it internally - it was the least predictable control).
+static const char* const kGenLines[]   = { "Auto", "1", "2", "3", "4" };
+static const char* const kGenRel[]     = { "Auto", "Repeat", "Answer", "New" };
 static const char* const kGenActions[] = { "NEW IDEA", "VARY", "Same rhythm, new notes", "Same notes, new rhythm" };
 static const juce::Colour kGenAccent { 0xffa0e8b0 };   // the Generate green (roll-operations family)
 }
@@ -3553,8 +3564,8 @@ void GeneratePanel::paint(juce::Graphics& g)
     chips(3, "Register", kGenReg,     3, registerBand, false);
     chips(4, "Color",    kGenColor,   3, color, false);
     chips(5, "Rhythm",   kGenRhythm,  3, rhythm, false);
-    chips(6, "Contour",  kGenContour, 5, contour, false);
-    chips(7, "Form",     kGenPhrase,  3, phrase, bars < 2);
+    chips(6, "Lines",    kGenLines,   5, lines, bars < 2);
+    chips(7, "Next lines", kGenRel,   4, relation, bars < 2);
     { const auto sr = singableRect();
       g.setColour(singable ? kGenAccent : juce::Colour(0xff33335a)); g.fillRoundedRectangle(sr.toFloat(), 4.0f);
       g.setColour(singable ? juce::Colours::black : juce::Colour(0xffb8b8d0));
@@ -3593,8 +3604,8 @@ void GeneratePanel::mouseDown(const juce::MouseEvent& e)
     if (hitChips(3, 3, registerBand))  return;
     if (hitChips(4, 3, color))         return;
     if (hitChips(5, 3, rhythm))        return;
-    if (hitChips(6, 5, contour))       return;
-    if (bars >= 2 && hitChips(7, 3, phrase)) return;
+    if (bars >= 2 && hitChips(6, 5, lines))    return;
+    if (bars >= 2 && hitChips(7, 4, relation)) return;
     if (singableRect().contains(pos))  { singable = ! singable; repaint(); return; }
     if (keyRect().contains(pos))
     {
@@ -3643,16 +3654,20 @@ juce::String GeneratePanel::getTooltip()
                          "- Flowing: long legato notes floating over the beat.\n"
                          "- In the pockets: fills the gaps BETWEEN your drum hits.\n"
                          "- Driving: locks onto the drum hits.";
-    if (inRow(6)) return "CONTOUR: the phrase's overall shape (visible immediately in the roll). Auto picks one per phrase.";
+    if (inRow(6)) return "LINES: how many melodic SENTENCES the melody has across this group - like lines "
+                         "of lyrics.\n\n"
+                         "- 1 = ONE arc spanning ALL the bars (even 3 bars = one long line).\n"
+                         "- 2 = a question and its answer.\n"
+                         "- 3 / 4 = more sentences (4 on Auto relations = the classic hook/bridge/hook shape).\n"
+                         "- Auto picks by group length (long arcs by default).";
     if (inRow(7) && singableRect().contains(pos))
                   return "SINGABLE: about one octave, mostly stepwise, leaps capped at a fifth, a breath at phrase "
                          "ends - a line a human could actually hum. The vocal-guide special.";
-    if (inRow(7)) return "FORM (2+ bars): the melody's STRUCTURE across the bars.\n\n"
-                         "- Hook (AABA): a repeated hook, a contrasting bridge, the hook returns - "
-                         "the classic song form. Echoes keep the opening, vary the ending.\n"
-                         "- Call & answer: long question phrases answered by phrases that share the "
-                         "opening and RESOLVE home - the vocal-sentence feel, arcs across bars.\n"
-                         "- Free: through-composed, no repeats.";
+    if (inRow(7)) return "NEXT LINES: what lines 2+ do compared to line 1.\n\n"
+                         "- Repeat: same line again, ending varied (hooks live here).\n"
+                         "- Answer: shares line 1's opening, then answers and lands HOME (the sung-sentence feel).\n"
+                         "- New: every line is fresh material.\n"
+                         "- Auto: question/answer for 2 lines, hook + contrast for 4.";
     if (actionRect(0).contains(pos)) return "NEW IDEA: a full reroll - fresh rhythm AND fresh notes.";
     if (actionRect(1).contains(pos)) return "VARY: keep this melody's skeleton, change ~a third of the notes (same idea, new ornaments).";
     if (actionRect(2).contains(pos)) return "SAME RHYTHM, NEW NOTES: the onsets stay exactly where they are; only the pitches reroll.";
@@ -7783,9 +7798,9 @@ void DrumSequencerEditor::openGeneratePanel()
                            : cat == "Chords & Arps" ? PartGen::RoleRiff
                                                     : PartGen::RoleMelody;
         if (generatePanel.role == PartGen::RoleHum)
-        { generatePanel.singable = true; generatePanel.phrase = PartGen::FormQA; }   // the vocal-guide
-                                                                                    // defaults: singable
-                                                                                    // + question/answer arcs
+        { generatePanel.singable = true; generatePanel.relation = PartGen::RelAnswer; }   // vocal-guide
+                                                                                          // defaults: singable
+                                                                                          // + answering lines
     }
     genHadNotes = false;
     for (int b = head; b <= end; ++b)
@@ -7810,7 +7825,8 @@ void DrumSequencerEditor::genAction(int action)
         m.addSectionHeader("Generate REPLACES this channel's current notes");
         m.addItem(1, "Replace them (undo restores)");
         m.addItem(2, "Cancel");
-        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&generatePanel),
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(
+                            generatePanel.actionScreenArea(action)),   // anchor AT the clicked button
                         [this, action](int r) { if (r == 1) { genWarned = true; genAction(action); } });
         return;
     }
@@ -7887,8 +7903,8 @@ void DrumSequencerEditor::genAction(int action)
     o.registerBand = generatePanel.registerBand;
     o.color        = generatePanel.color;
     o.rhythm       = generatePanel.rhythm;
-    o.contour      = generatePanel.contour;
-    o.phrase       = generatePanel.phrase;
+    o.lines        = generatePanel.lines;      // [v3] structure = lines + relation (contour = Auto internal)
+    o.relation     = generatePanel.relation;
     o.singable     = generatePanel.singable;
     o.rhythmSeed   = genRhythmSeed;
     o.pitchSeed    = genPitchSeed;
@@ -8623,7 +8639,11 @@ void DrumSequencerEditor::setupComponents()
                              [doMerge](int r) { if (r == 1) doMerge(); });
         };
         pb.setTooltip("Pattern " + juce::String(p + 1) + " - click to view + edit it.\n\n"
-                      "- DRAG onto another pattern = copy its steps, swing, play-mode + FX there.\n"
+                      "- In a MERGED group, clicking any member = the PLAYBACK START (amber wedge): the next "
+                      "Play begins on that bar (stopped = plays from it right away; playing = takes effect on "
+                      "the next start). Not saved with the project.\n"
+                      "- DRAG onto another pattern = copy its CONTENT (steps, sounds, swing, FX) there - the "
+                      "destination keeps its own play mode / chain / merge.\n"
                       "- SHIFT+CLICK = MERGE with the pattern before it: merged patterns edit + view as one "
                       "longer piece (sounds + step counts mirror the FIRST bar). EVERY bar keeps its OWN "
                       "play mode - merging defaults them to chain-through and loop the group; the play-mode "
@@ -9373,15 +9393,7 @@ void DrumSequencerEditor::setupComponents()
                 stepGrid.update(proc.sequencer, proc.anySolo);
             }), true);
     };
-    // [1.5.1] PLAYBACK-START tabs: clicking a bar's amber tab makes it the start of the merged
-    // group - the marker survives Stop (Stop parks there) and the next Play begins from it.
-    stepGrid.onStartBarClick = [this](int b) {
-        auto& sq = proc.sequencer;
-        const int gh = sq.groupHead(sq.currentPattern);
-        const int bar = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, gh + b);
-        sq.startMarker = bar;
-        if (! sq.isCurrentlyPlaying) sq.playPattern = bar;   // stopped: park playback there right away
-    };
+    // ([2026-07-20] the start-tab callback is gone - selectPattern moves the marker via the buttons)
     stepGrid.onDrawNotesChanged = [this](int ch, const DrumChannel::DrawNote* notes, int count) {
         // PIANO ROLL: the grid pushes its whole mirror list (CONCAT columns in a merged group) -
         // split it back into per-bar note lists (a note belongs to the bar its start column is in).
@@ -12849,8 +12861,11 @@ void DrumSequencerEditor::selectPattern(int p)
     const int clicked = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, p);
     p = proc.sequencer.groupHead(p);   // a merged group is viewed as ONE unit - always at its head
     proc.sequencer.setCurrentPattern(p);
-    // Clicking a MIDDLE bar of a group: playback (when it next starts) begins from THAT bar and runs
-    // on through the rest of the group (setCurrentPattern parked playPattern at the head).
+    // [2026-07-20, user design - replaces the roll's start TABS] the CLICKED bar is the START
+    // MARKER: clicking any member of a merged group aims playback there (stopped = park + play
+    // from it; playing = the NEXT start begins there). parkBar() only honours the marker inside
+    // the playing group, so casual view-switching can never hijack another group's start.
+    proc.sequencer.startMarker = clicked;
     if (! proc.sequencer.isCurrentlyPlaying && clicked != p)
         proc.sequencer.playPattern = clicked;
     stepGrid.currentPattern = p;
@@ -13285,6 +13300,11 @@ void DrumSequencerEditor::refreshPatternButtons()
     {
         patternBtns[p].isCurrent = (p == cur);
         patternBtns[p].isPlaying = (p == play) && proc.sequencer.isCurrentlyPlaying;
+        {   // [2026-07-20] amber start wedge: which member of a merged group the next Play starts from
+            const int mk = proc.sequencer.startMarker;
+            const bool grp = mk >= 0 && proc.sequencer.groupEnd(proc.sequencer.groupHead(mk)) > proc.sequencer.groupHead(mk);
+            patternBtns[p].isStartBar = grp && (p == mk);
+        }
         patternBtns[p].repaint();
     }
 }

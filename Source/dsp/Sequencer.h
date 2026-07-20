@@ -162,7 +162,8 @@ public:
     // so it moves playPattern too; while PLAYING it only changes the view (playback
     // continues on its own pattern - clicking a pattern never hijacks playback).
     // [1.5.1] PLAYBACK-START MARKER (user feature): which bar of a merged group the next Play
-    // starts from (also set by the grid's clickable amber bar tabs). -1 = none = the group head.
+    // starts from (set by clicking any member's PATTERN BUTTON - the amber wedge marks it;
+    // [2026-07-20] the grid's start tabs are gone). -1 = none = the group head.
     // Session-runtime, NOT persisted (reload starts at bar 1 - disclosed).
     int startMarker = -1;
     int parkBar() const

@@ -115,7 +115,7 @@ int main()
     // [8] CALL & ANSWER (2 bars): the answer keeps the question's opening and RESOLVES home
     {
         Ctx c2; c2.bars = 2;
-        Options o; o.scale = kMajor; o.phrase = 1; o.rhythmSeed = 21; o.pitchSeed = 8;   // FormQA
+        Options o; o.scale = kMajor; o.lines = 2; o.relation = RelAnswer; o.rhythmSeed = 21; o.pitchSeed = 8;
         auto n = generate(o, c2);
         std::set<int> b1, b2;
         for (auto& x : n) (x.start < 384 ? b1 : b2).insert(x.start % 384);
@@ -183,7 +183,7 @@ int main()
 
     // [13] HOOK form (AABA in 4 bars): bars 2 + 4 recap A's opening; bar 3 (the bridge) contrasts
     {
-        Options o; o.scale = kMajor; o.phrase = 0; o.rhythmSeed = 14; o.pitchSeed = 9;   // FormHook
+        Options o; o.scale = kMajor; o.lines = 4; o.relation = RelAuto; o.rhythmSeed = 14; o.pitchSeed = 9;   // Auto 4 lines = A a B a
         auto n = generate(o, ctx4);
         int first[4] = { -1, -1, -1, -1 };
         std::set<int> rel[4];
@@ -219,7 +219,7 @@ int main()
     {
         Ctx c2; c2.bars = 2;
         Options o; o.scale = kMajor; o.role = RoleHum; o.rhythm = RhFlowing; o.density = 0;
-        o.singable = true; o.phrase = 1; o.rhythmSeed = 6; o.pitchSeed = 11;
+        o.singable = true; o.lines = 2; o.relation = RelAnswer; o.rhythmSeed = 6; o.pitchSeed = 11;
         auto n = generate(o, c2);
         bool longArc = false, breath = true;
         for (auto& x : n)
@@ -228,6 +228,29 @@ int main()
             if (x.start + x.len > 2 * 384 - 20) breath = false;         // phrase end leaves air
         }
         CHECK(! n.empty() && longArc && breath, "[15] hum sings arcs and breathes at phrase ends");
+    }
+
+    // [16] LINES=1 on 3 bars: ONE melodic arc across the whole group (the "one line of my
+    // lyrics" case) - some note crosses a bar line, the final note resolves
+    {
+        Ctx c3; c3.bars = 3;
+        Options o; o.scale = kMajor; o.role = RoleHum; o.rhythm = RhFlowing;
+        o.lines = 1; o.singable = true; o.rhythmSeed = 3; o.pitchSeed = 7;
+        auto n = generate(o, c3);
+        // ONE line = no breaths at the internal bar ends (a multi-line take gets capped a 16th
+        // short of each phrase end; one arc runs straight through those points)
+        bool runsThrough = false, bounded = true, longNote = false;
+        for (auto& x : n)
+        {
+            const int endC = x.start + x.len;
+            if (endC > 3 * 384) bounded = false;
+            if (x.len >= 96 * 3 / 2) longNote = true;
+            for (int k = 1; k <= 2; ++k)
+                if (x.start < k * 384 && endC > k * 384 - 24) runsThrough = true;
+        }
+        const int lastPc = n.empty() ? -1 : ((n.back().semi % 12) + 12) % 12;
+        CHECK(! n.empty() && runsThrough && longNote && bounded && (lastPc == 0 || lastPc == 4),
+              "[16] lines=1 on 3 bars: one unbroken arc (no internal breaths), resolves home");
     }
 
     printf(fails == 0 ? "GenTest: ALL PASS\n" : "GenTest: %d FAILURES\n", fails);

@@ -27,7 +27,6 @@ public:
     std::function<void(int ch, int step, bool on)> onStepMergeChanged;
     // PIANO ROLL: any note-list edit pushes the grid's WHOLE mirror list back to the channel.
     std::function<void(int ch, const DrumChannel::DrawNote*, int count)> onDrawNotesChanged;
-    std::function<void(int)> onStartBarClick;   // [1.5.1] a playback-start tab was clicked (concat bar index)
     std::function<void(int ch, float vel, float pan)> onDrawVelPan;   // whole-channel Pan (+ default Vel) in piano-roll mode
     std::function<void(int ch)> onDrawModeMaybeChanged;               // ch's roll-vs-step may have changed (fade buttons)
     std::function<void()> onGridDivEdit;   // clicking the snap-grid header: type a value (1-64, 0 = off)
@@ -106,10 +105,7 @@ private:
     // piano roll spans grpBars * DRAW_RES columns. Edits go back to the right bar via the editor's
     // decode (concat step -> bar + local step; concat roll column -> bar + local column).
     int    grpBars = 1;
-    int    grpHeadPat = 0;      // [1.5.1] the group's head pattern id (labels the start tabs)
-    int    grpStartBar = 0;     // [1.5.1] which bar the START MARKER sits on (0 = head); fed by update()
-    juce::Rectangle<float> startTabRect(int b) const;   // [1.5.1] the clickable start tab of bar b
-    void paintStartTabs(juce::Graphics& g);
+    int    grpHeadPat = 0;      // the group's head pattern id
     int    barStep0[NCH][GRP_MAX + 1] = {};            // per channel: concat step where each bar begins (+ total)
     int    totalCols() const { return DrumChannel::DRAW_RES * grpBars; }
 
@@ -1550,8 +1546,8 @@ public:
     int  registerBand = 1;    // Low | Mid | High
     int  color = 0;           // Safe | Spicy | Colorful
     int  rhythm = 1;          // Flowing | In the pockets | Driving
-    int  contour = 0;         // Auto | Arch | Rising | Falling | Wave
-    int  phrase = 0;          // Repeat & vary | Evolve (multi-bar only)
+    int  lines = 0;           // [v3] melodic sentences: 0 = Auto, 1..4 (1 = one arc across the group)
+    int  relation = 0;        // [v3] what lines 2+ do: Auto | Repeat | Answer | New
     bool singable = false;
     int  bars = 1;            // set by the editor before show() (merged-group size)
     juce::String keyTag;      // "from Scale mode" / "detected" / "default" - honesty about the prefill
@@ -1562,6 +1558,8 @@ public:
     void paint(juce::Graphics&) override;
     void mouseDown(const juce::MouseEvent&) override;
     juce::String getTooltip() override;
+    // screen area of an action button - the replace-warning menu anchors HERE, not top-left
+    juce::Rectangle<int> actionScreenArea(int idx) { return localAreaToGlobal(actionRect(idx)); }
 private:
     juce::Rectangle<int> panelRect() const;
     juce::Rectangle<int> rowRect(int row) const;                    // option rows 0..7
@@ -2474,6 +2472,7 @@ public:
     int index = 0;
     bool isCurrent = false;  // the VIEWED/selected pattern (updated by editor)
     bool isPlaying = false;  // the pattern the transport is currently playing
+    bool isStartBar = false; // [2026-07-20] this member of a merged group = the playback START (amber wedge)
     bool dragOver  = false;  // a pattern is being dragged over this one (drop highlight)
     MidiLearnManager* midiLearn = nullptr;
     std::function<void()> onSelect;
