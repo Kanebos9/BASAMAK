@@ -352,6 +352,8 @@
 
 | 233 | r12: Winds category (21 ms remapped); 3 uniques = Stone Chimes / Bronze Bells / Seul (Gugak KOGL-1); hurdy-gurdy dropped (GPL sounds); factory 81 | user orders | winds + uniques |
 
+| 234 | r13: chronology-vs-measurement compare (user design): 11 Korean instruments re-sliced single-technique, Stone Chimes + Bronze Bells deleted by the >25%-violation rule, Seul healed by the general rule; synth winds -> Winds | user method | repair round |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

@@ -2719,7 +2719,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Scatter Lead", grScatterLead, "Leads" },   // GRANULAR
     { "Singing Lead", oSingingLead, "Leads" },    // ORIGINALS: Mod Wheel -> vibrato + brightness (push it and it sings)
     { "Talkbox", mTalkbox, "Leads" },
-    { "Whistle", mWhistle, "Leads" },
+    { "Whistle", mWhistle, "Winds" },
     { "Pulse Lead", kPulseLead, "Leads" },
     { "FM Lead", kFMLead, "Leads" },
     { "Square Lead", kSquareLead, "Leads" },
@@ -2732,8 +2732,8 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Quint Lead", aQuintLead, "Leads" },
     { "Bloom Lead", sBloomLead, "Leads" },
     { "Drift Lead", wDriftLead, "Leads" },
-    { "Clarinet", aClarinet, "Leads" },
-    { "Flute", aFlute, "Leads" },
+    { "Clarinet", aClarinet, "Winds" },
+    { "Flute", aFlute, "Winds" },
     { "Reed Piano", aOboe, "Keys" },
     // ---- Plucks & Strings ----
     { "Pluck", mPluck, "Plucks & Strings" },

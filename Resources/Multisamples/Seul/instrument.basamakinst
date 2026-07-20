@@ -1,2 +1,2 @@
 <?xml version='1.0' encoding='utf-8'?>
-<BasamakInstrument envOn="0" loop="0"><tune voice="0" root="38" cents="4.0" /><tune voice="0" root="39" cents="-2.0" /><tune voice="0" root="40" cents="-2.0" /><tune voice="0" root="42" cents="-15.0" /><tune voice="0" root="43" cents="5.0" /><tune voice="0" root="44" cents="3.0" /><tune voice="0" root="45" cents="-4.0" /><tune voice="0" root="47" cents="4.0" /><tune voice="0" root="61" cents="-17.0" /></BasamakInstrument>
+<BasamakInstrument envOn="0" loop="0"><tune voice="0" root="38" cents="4.0" /><tune voice="0" root="39" cents="-2.0" /><tune voice="0" root="42" cents="-12.0" /><tune voice="0" root="43" cents="5.0" /><tune voice="0" root="45" cents="-3.0" /><tune voice="0" root="46" cents="2.0" /></BasamakInstrument>
