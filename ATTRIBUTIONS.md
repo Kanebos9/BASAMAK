@@ -1,6 +1,15 @@
 # Sample Attributions
 
-All samples bundled with BASAMAK are **Creative Commons 0 (CC0 / public domain)** - no rights reserved. They are credited here as a courtesy to the original creators (sourced from freesound.org).
+Samples bundled with BASAMAK are **Creative Commons 0 (CC0 / public domain)** unless a different
+license is named below (the multisample instruments section includes MIT-licensed material, whose
+license text ships alongside the samples). Credits are given as a courtesy to the original creators.
+
+## Multisample instruments
+
+- Voice Oohs / Choir Aahs / Ooh Aah Voices — extracted from the **FluidR3 GM soundfont** by Frank Wen &middot; https://archive.org/details/fluidr3-gm-gs &middot; License: MIT (license text included with the samples)
+- Alto Recorder / Vibraphone Real / Concert Harp / Steinway Grand / Marimba Real — from the **Versilian Community Sample Library (VCSL)** by Versilian Studios LLC and contributors &middot; https://versilian-studios.com/vcsl/ &middot; License: Creative Commons 0
+
+## Drum & FX samples (freesound.org)
 
 - Acoustic kick 1 — aacoustic kick.wav by KEVOY  &middot; https://freesound.org/s/82279/  &middot; License: Creative Commons 0
 - Acoustic kick 2 — KB_Kick_Acoustic_2.wav by KaBlazik_Samples  &middot; https://freesound.org/s/561007/  &middot; License: Creative Commons 0
