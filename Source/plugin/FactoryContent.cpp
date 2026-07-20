@@ -1253,6 +1253,26 @@ static void kHum(DC& c) {          // [2026-07-20] SOLO closed-mouth "mmm" - the
     c.keysPolyMode = false; c.keysLegato = true; c.keysGlide = 0.2f; // a singer: mono-legato, ~80 ms slide
     c.reverbSend = 0.22f; c.volume = 0.72f;
 }
+static void kGibberish(DC& c) {    // [2026-07-20] GIBBERISH VOICE (user-approved): every NOTE sings a
+                                   // different VOWEL - Random(per-note) -> Formant with an ~80 ms LAG so
+                                   // the mouth GLIDES between shapes instead of clicking; a sharp breath
+                                   // transient at each onset reads as a soft consonant. Babble, not hum.
+    auto& s = mkSlot(c, DC::SrcOsc);
+    s.oscShape = s.oscShapeB = DC::WvSaw; s.oscFreq = 261.63f;       // rich source for the vowel filter
+    s.oscUnison = 1;                                                 // solo - one mouth
+    s.atk = 0.03f; s.dec = 1.3f; s.sustain = 0.8f; s.release = 0.3f;
+    s.vibrato = 0.28f; s.drift = 0.22f;
+    s.fxFormant = 0.5f;                                              // the vowel morph, mid position
+    modRoute(s, DC::MSRandom, DC::MTFormant, 0.85f);
+    for (auto& r : s.mod)                                            // the mouth-movement lag
+        if (r.src == DC::MSRandom && r.tgt == DC::MTFormant) { r.lagMs = 80.0f; break; }
+    s.filterType = DC::LowPass; s.filterCutoff = 3400.0f; s.filterReso = 0.8f;
+    auto& n = mkSlot2(c, DC::SrcNoise, 0.9f);                        // 10% articulation + breath
+    n.noiseType = 1; n.noiseCenter = 2600.0f; n.noiseRes = 0.7f;
+    n.atk = 0.002f; n.hold = 0.012f; n.dec = 0.12f; n.sustain = 0.22f; n.release = 0.2f;
+    c.keysPolyMode = false; c.keysLegato = true; c.keysGlide = 0.15f;
+    c.reverbSend = 0.22f; c.volume = 0.7f;
+}
 static void kOooVoice(DC& c) {     // [2026-07-20] SOLO open-mouth "ooo" - the Hum's brighter sibling
                                    // (open vowel vs closed mmm; ONE voice vs Choir Ooh's ensemble).
     auto& s = mkSlot(c, DC::SrcOsc);
@@ -2670,6 +2690,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Choir Ooh", kChoirOoh, "Pads & Choirs" },
     { "Hum", kHum, "Pads & Choirs" },                 // [2026-07-20] the GENERATE vocal-guide voice (solo "mmm")
     { "Ooo Voice", kOooVoice, "Pads & Choirs" },      // [2026-07-20] its brighter open-mouth sibling (solo "ooo")
+    { "Gibberish Voice", kGibberish, "Pads & Choirs" },   // [2026-07-20] per-note random vowels + lag = babble
     { "Dark Pad", kDarkPad, "Pads & Choirs" },
     { "Shimmer Pad", kShimmerPad, "Pads & Choirs" },
     { "Motion Pad", kMotionPad, "Pads & Choirs" },

@@ -5907,6 +5907,7 @@ public:
     ~SoundPickerPanel() override { juce::Desktop::getInstance().removeGlobalMouseListener(&closer); }
 
     std::function<void(const juce::String&)> onQueryChanged;   // editor remembers it per channel
+    juce::StringArray msNames;   // [2026-07-20] multisample instrument folders (editor-fed, menu order)
     void openWith(const juce::Array<juce::File>& userFiles, const juce::File& userRoot, int currentId,
                   const juce::String& rememberedQuery)
     {
@@ -6022,6 +6023,13 @@ private:
             if (q.isEmpty() || pickerMatch(label, q)) user.add({ label, i + 1 });
         }
         if (! user.isEmpty()) { addHeader("Your Sound Bank"); addSection(user); }
+        // [2026-07-20] MULTISAMPLES join the one browse surface (user: they were hidden away in
+        // the slot engine dropdown). One row per instrument folder; picking loads it onto slot 1.
+        juce::Array<Entry> msEntries;
+        for (int i = 0; i < msNames.size(); ++i)
+            if (q.isEmpty() || pickerMatch(msNames[i], q) || pickerMatch("multisample", q))
+                msEntries.add({ msNames[i] + "  (Multisample)", MS_ID_BASE + i });
+        if (! msEntries.isEmpty()) { addHeader("Multisamples"); addSection(msEntries); }
         if (q.isEmpty())
         {
             addHeader("");
@@ -6652,6 +6660,8 @@ void DrumSequencerEditor::openSoundPicker(int ch)
     panel.onPick = [this, ch](int id) { applySoundPickId(ch, id); selectChannel(ch); };
     const int qPat = currentPattern();   // capture NOW - the memory is per (pattern, channel)
     panel.onQueryChanged = [this, ch, qPat](const juce::String& q) { pickerQuery[qPat][ch] = q; };
+    panel.msNames.clear();               // [2026-07-20] the Multisamples section (fresh each open)
+    for (const auto& d : msFolders) panel.msNames.add(d.getFileName());
     const auto r = content.getLocalArea(&combo, combo.getLocalBounds());
     int y = r.getBottom() + 2;
     int h = content.getHeight() - y - 6;
@@ -6671,6 +6681,7 @@ void DrumSequencerEditor::applySoundPickId(int ch, int id)
     const float keepVol = c.volume;
     const bool mutating = id == ID_INIT_MIX
                        || (id >= FACTORY_MIX_BASE && id < FACTORY_MIX_BASE + Factory::mixNames().size())
+                       || (id >= MS_ID_BASE && id < MS_ID_BASE + msFolders.size())   // [2026-07-20]
                        || (id >= 1 && id <= soundMixFiles.size());
     // [2026-07-15 22:10] FADE any ringing/stuck voice BEFORE the slots change under it: a live
     // voice rendering brand-new slot data (new engine, stale phases) screamed continuously when
@@ -6697,6 +6708,24 @@ void DrumSequencerEditor::applySoundPickId(int ch, int id)
         c.markDspDirty();
         c.mixName = Factory::mixNames()[fi]; c.mixModified = false; c.mixHash = channelSoundHash(c);
         if (ch == selectedChannel) { refreshDetailPanel(); refreshSampleSel(); updateVisuals(); }
+        updateStripMixLabel(ch);
+    }
+    else if (id >= MS_ID_BASE && id < MS_ID_BASE + msFolders.size())
+    {   // [2026-07-20] MULTISAMPLES in the picker (user ask: they were hidden in the slot engine
+        // dropdown): Init the sound, load the instrument onto SLOT 1 - one browse surface for
+        // every sound. mixName = the folder = title/highlight/next-prev all work.
+        const juce::File dir = msFolders[id - MS_ID_BASE];
+        const bool keepDraw = c.drawMode;   // a sound pick must never flip the roll/steps world
+        resetChannelToDefault(c, ch);       // fresh sound state (the Init path's own reset)
+        c.drawMode = keepDraw;
+        c.slots[0].engine = DrumChannel::SrcSample; c.slots[0].weight = 1.0f;
+        if (c.loadMultisample(0, dir))
+        {
+            if (c.msSet[0] != nullptr && c.msSet[0]->nVoices > 1)
+                c.drawMode = true;          // a SINGING instrument opens in the roll (the Keys-bank rule)
+            c.mixName = dir.getFileName(); c.mixModified = false;
+            c.markDspDirty(); c.mixHash = channelSoundHash(c);
+        }
         updateStripMixLabel(ch);
     }
     else if (id >= 1 && id <= soundMixFiles.size())
@@ -7802,6 +7831,27 @@ void DrumSequencerEditor::openGeneratePanel()
                                                                                           // defaults: singable
                                                                                           // + answering lines
     }
+    // [2026-07-20] SLOT-BASED detection beats the bank (works however the sound was loaded):
+    // a multisample with VOICE folders is a vocal syllable instrument by construction - default
+    // Hum + Singable + answering lines; a single-voice one whose recordings sit low is a bass.
+    for (int sIdx = 0; sIdx < DrumChannel::NUM_SLOTS; ++sIdx)
+    {
+        if (c.msSet[sIdx] == nullptr || c.msSet[sIdx]->zones.empty()) continue;
+        const auto& mset = *c.msSet[sIdx];
+        generatePanel.soundName = juce::File(mset.folder).getFileName();
+        if (mset.nVoices > 1)
+        {
+            generatePanel.role = PartGen::RoleHum;
+            generatePanel.singable = true;
+            generatePanel.relation = PartGen::RelAnswer;
+        }
+        else
+        {
+            int sum = 0; for (const auto& z : mset.zones) sum += z.root;
+            if (sum / (int) mset.zones.size() < 48) generatePanel.role = PartGen::RoleBass;
+        }
+        break;
+    }
     genHadNotes = false;
     for (int b = head; b <= end; ++b)
         if (sq.patterns[b].channels[selectedChannel].drawNoteCount > 0) genHadNotes = true;
@@ -7979,6 +8029,8 @@ int DrumSequencerEditor::currentSoundPickId(int ch) const
         if (name == facNames[i]) return FACTORY_MIX_BASE + i;
     for (int i = 0; i < soundMixFiles.size(); ++i)
         if (name == soundMixFiles[i].getFileNameWithoutExtension()) return i + 1;
+    for (int i = 0; i < msFolders.size(); ++i)                     // [2026-07-20] picker highlight
+        if (name == msFolders[i].getFileName()) return MS_ID_BASE + i;
     return 0;
 }
 
@@ -8184,6 +8236,7 @@ void DrumSequencerEditor::stepSoundBank(int dir)
         for (int i : factoryIndicesFor(cat, facNames, facCats, {}))
             order.add(FACTORY_MIX_BASE + i);
     for (int i = 0; i < soundMixFiles.size(); ++i) order.add(i + 1);   // Your Sound Bank (file ids = idx+1)
+    for (int i = 0; i < msFolders.size(); ++i) order.add(MS_ID_BASE + i);   // [2026-07-20] Multisamples too
     if (order.isEmpty()) return;
     int pos = order.indexOf(currentSoundPickId(selectedChannel));
     pos = pos < 0 ? (dir > 0 ? 0 : order.size() - 1)           // Init / unknown: start at an end

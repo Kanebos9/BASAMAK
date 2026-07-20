@@ -1392,6 +1392,30 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         //   0 dBFS. Any stray spike (10, 50, whatever) is bounded to at most ONE full-scale sample (a faint
         //   tick, never a loud burst); legit signal below 0.85 is untouched; hot mixes saturate musically.
         //   This is the standard "you cannot exceed full-scale" master ceiling every plugin has.
+        // [2026-07-20] WIZARD GUIDE TONE: the target note played audibly so the user can match
+        // it by ear ("how do I sing the correct pitch" - you don't; you match what you hear and
+        // the measured-pitch mapping does the rest). Soft sine, ramped edges, hard-bounded.
+        if (msToneRemain.load(std::memory_order_relaxed) > 0)
+        {
+            const double hz = msToneHz.load(std::memory_order_relaxed);
+            juce::int64 rem = msToneRemain.load(std::memory_order_relaxed);
+            if (hz > 20.0 && audio.getNumChannels() >= 2)
+            {
+                float* o0 = audio.getWritePointer(0); float* o1 = audio.getWritePointer(1);
+                const double inc = 2.0 * juce::MathConstants<double>::pi * hz / juce::jmax(8000.0, getSampleRate());
+                const juce::int64 tot = juce::jmax((juce::int64) 1, msToneTotal);
+                for (int i = 0; i < numSamples && rem > 0; ++i, --rem)
+                {
+                    const double done = (double)(tot - rem);
+                    const float env = (float) juce::jmin(1.0, juce::jmin(done / 400.0, (double) rem / 4000.0));
+                    const float v = 0.2f * env * (float) std::sin(msTonePh);
+                    msTonePh += inc; if (msTonePh > 6.2831853) msTonePh -= 6.2831853;
+                    o0[i] += v; o1[i] += v;
+                }
+            }
+            else rem = 0;
+            msToneRemain.store(rem, std::memory_order_relaxed);
+        }
         // [2026-07-19] WIZARD TAKE PREVIEW mix-in (before the soft-clip so it's bounded too).
         // First the DYING slot: an interrupted preview ramps to zero over ~4 ms instead of
         // being chopped mid-wave (fast re-clicks were a click per click - user report).

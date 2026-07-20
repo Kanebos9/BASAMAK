@@ -229,6 +229,17 @@ public:
     std::atomic<juce::AudioBuffer<float>*> msPrevDying { nullptr };
     std::atomic<juce::int64> msPrevDyePos { -1 };
     std::atomic<int> msPrevDyeRemain { 0 }, msPrevDyeTotal { 256 };
+    // [2026-07-20] wizard GUIDE TONE: the target note, audible (soft ramped sine ~0.8 s)
+    std::atomic<double> msToneHz { 0.0 };
+    std::atomic<juce::int64> msToneRemain { 0 };
+    juce::int64 msToneTotal = 1; double msTonePh = 0.0;
+    void playGuideTone(double hz)
+    {
+        msToneHz.store(hz, std::memory_order_relaxed);
+        msToneTotal = (juce::int64) (juce::jmax(8000.0, getSampleRate()) * 0.8);
+        msTonePh = 0.0;
+        msToneRemain.store(msToneTotal, std::memory_order_release);
+    }
     void previewFile(const juce::File& f);            // MESSAGE THREAD
     void previewStop()
     {

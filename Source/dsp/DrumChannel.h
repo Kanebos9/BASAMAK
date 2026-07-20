@@ -1178,8 +1178,14 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     static constexpr int MS_LAYERS = 5;
     struct MsLayer { juce::AudioBuffer<float> buf; float peak = 0.0f; };   // peak = measured at load (the ladder the closest-take pick walks)
     struct MsZone  { std::vector<MsLayer> layers; int root = 60;
-                     float loopLo = 0.0f, loopHi = 0.0f; bool hasLoop = false; };  // [2026-07-19] per-zone AUTO-loop
-    struct MsSet   { std::vector<MsZone> zones; juce::String folder; };
+                     float loopLo = 0.0f, loopHi = 0.0f; bool hasLoop = false;   // [2026-07-19] per-zone AUTO-loop
+                     int   voice = 0;      // [2026-07-20] which "voice N" subfolder this zone came from (syllables)
+                     float cents = 0.0f;   // [2026-07-20] measured tuning of the RECORDING vs its named root
+                                           // (sidecar <tune>) - playback compensates = auto-tuned by construction
+                   };
+    struct MsSet   { std::vector<MsZone> zones; juce::String folder;
+                     int nVoices = 1; };   // [2026-07-20] CYCLIC VOICE MAPPING (user design): semitone ->
+                                           // voice folder, repeating (C=v1, C#=v2, D=v3, D#=v1...); 1 = off
     std::shared_ptr<MsSet> msSet[NUM_SLOTS], msSetOld[NUM_SLOTS];
     bool loadMultisample(int slot, const juce::File& folder);   // message thread; false = no usable WAVs
     void clearMultisample(int slot) { msSetOld[slot] = msSet[slot]; msSet[slot] = nullptr; }

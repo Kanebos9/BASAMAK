@@ -1308,6 +1308,27 @@ static bool msFindLoop(const juce::AudioBuffer<float>& buf, double sr, float& lo
     return true;
 }
 
+// [2026-07-20] VOICE-AWARE zone pick: with nVoices > 1 the target semitone chooses the voice
+// folder (the user's cyclic mapping: note mod nVoices), then the nearest root WITHIN that voice;
+// nVoices 1 (or an empty voice) = the plain global nearest = the old behaviour exactly.
+static int msZoneNearest(const std::vector<DrumChannel::MsZone>& zs, int nVoices, int want)
+{
+    int best = -1;
+    if (nVoices > 1)
+    {
+        const int v = ((want % nVoices) + nVoices) % nVoices;
+        for (int zi = 0; zi < (int) zs.size(); ++zi)
+            if (zs[(size_t) zi].voice == v
+                && (best < 0 || std::abs(zs[(size_t) zi].root - want) < std::abs(zs[(size_t) best].root - want)))
+                best = zi;
+    }
+    if (best < 0)
+        for (int zi = 0; zi < (int) zs.size(); ++zi)
+            if (best < 0 || std::abs(zs[(size_t) zi].root - want) < std::abs(zs[(size_t) best].root - want))
+                best = zi;
+    return best;
+}
+
 static void msPickLayer(const DrumChannel::MsZone& z, float vel,
                         const juce::AudioBuffer<float>*& a, float& gA)
 {
@@ -1347,14 +1368,12 @@ void DrumChannel::fillMsScaleVoices(SlotVoice& sv, int s, int playedMidi, float 
     for (int k = 0; k < nv; ++k)
     {
         const int tgt = juce::jlimit(0, 127, playedMidi + (int) std::lround((double) sv.uniSemis[k]));
-        int best = 0;                                            // this tone picks its OWN nearest zone
-        for (int zi = 1; zi < (int) zs.size(); ++zi)
-            if (std::abs(zs[(size_t) zi].root - tgt) < std::abs(zs[(size_t) best].root - tgt)) best = zi;
+        const int best = msZoneNearest(zs, msSet[s]->nVoices, tgt);   // this tone picks its OWN zone (voice-aware)
         const juce::AudioBuffer<float>* buf = nullptr; float g1 = 1.0f;
         msPickLayer(zs[(size_t) best], velocity, buf, g1);       // velocity layer (same as the single-note path)
         sv.msBufN[k] = buf; sv.msG1N[k] = g1;
         sv.msPitchN[k] = sl.smpPreservePitch ? 1.0f              // varispeed the zone from its root to this tone
-                       : (float) std::pow(2.0, (double)(tgt - zs[(size_t) best].root) / 12.0);
+                       : (float) std::pow(2.0, ((double) tgt - zs[(size_t) best].root - zs[(size_t) best].cents * 0.01) / 12.0);
         if (sl.msLoopOn && zs[(size_t) best].hasLoop && buf != nullptr)
         { const int L = buf->getNumSamples();
           sv.msLoopLoN[k] = zs[(size_t) best].loopLo * (float) L; sv.msLoopHiN[k] = zs[(size_t) best].loopHi * (float) L; }
@@ -1370,24 +1389,42 @@ bool DrumChannel::loadMultisample(int slot, const juce::File& folder)
     const double hostRate = engineOS > 0 ? sr / (double) engineOS : sr;
     auto set = std::make_shared<MsSet>();
     set->folder = folder.getFullPathName();
-    for (const auto& f : folder.findChildFiles(juce::File::findFiles, false, "*.wav;*.aif;*.aiff;*.flac"))
+    auto scanDir = [&](const juce::File& dir, int voiceIdx)
     {
-        // [2026-07-19] LAYERS: "E1.wav" and "E1 v2.wav" (any suffix after the note token) are
-        // the SAME note - extra files = extra velocity layers, ordered by MEASURED peak below.
-        const juce::String base = f.getFileNameWithoutExtension().trim();
-        const int root = noteNameToMidi(base.upToFirstOccurrenceOf(" ", false, false));
-        if (root < 0) continue;
-        juce::AudioBuffer<float> buf;
-        if (! sampleFileCache().get(f, hostRate, buf) || buf.getNumSamples() < 64) continue;
-        MsZone* z = nullptr;
-        for (auto& zz : set->zones) if (zz.root == root) { z = &zz; break; }
-        if (z == nullptr) { set->zones.push_back({}); z = &set->zones.back(); z->root = root; }
-        if ((int) z->layers.size() >= MS_LAYERS) continue;   // cap 5 layers per note
-        MsLayer ly; ly.buf = std::move(buf);
-        for (int i = 0; i < ly.buf.getNumSamples(); ++i)
-            ly.peak = juce::jmax(ly.peak, std::abs(ly.buf.getSample(0, i)));
-        z->layers.push_back(std::move(ly));
+        for (const auto& f : dir.findChildFiles(juce::File::findFiles, false, "*.wav;*.aif;*.aiff;*.flac"))
+        {
+            // [2026-07-19] LAYERS: "E1.wav" and "E1 v2.wav" (any suffix after the note token) are
+            // the SAME note - extra files = extra velocity layers, ordered by MEASURED peak below.
+            const juce::String base = f.getFileNameWithoutExtension().trim();
+            const int root = noteNameToMidi(base.upToFirstOccurrenceOf(" ", false, false));
+            if (root < 0) continue;
+            juce::AudioBuffer<float> buf;
+            if (! sampleFileCache().get(f, hostRate, buf) || buf.getNumSamples() < 64) continue;
+            MsZone* z = nullptr;
+            for (auto& zz : set->zones) if (zz.root == root && zz.voice == voiceIdx) { z = &zz; break; }
+            if (z == nullptr) { set->zones.push_back({}); z = &set->zones.back(); z->root = root; z->voice = voiceIdx; }
+            if ((int) z->layers.size() >= MS_LAYERS) continue;   // cap 5 layers per note
+            MsLayer ly; ly.buf = std::move(buf);
+            for (int i = 0; i < ly.buf.getNumSamples(); ++i)
+                ly.peak = juce::jmax(ly.peak, std::abs(ly.buf.getSample(0, i)));
+            z->layers.push_back(std::move(ly));
+        }
+    };
+    // [2026-07-20] SYLLABLE VOICES (user design): subfolders named "voice N" = the cyclic voice
+    // set (semitone -> voice, repeating). When voice folders exist they ARE the instrument (root
+    // files are ignored - the strict rule keeps stray folders/backups from becoming voices).
+    juce::Array<juce::File> vdirs;
+    for (const auto& d : folder.findChildFiles(juce::File::findDirectories, false))
+        if (d.getFileName().startsWithIgnoreCase("voice")) vdirs.add(d);
+    std::sort(vdirs.begin(), vdirs.end(), [](const juce::File& a, const juce::File& b)
+              { return a.getFileName().retainCharacters("0123456789").getIntValue()
+                     < b.getFileName().retainCharacters("0123456789").getIntValue(); });
+    if (! vdirs.isEmpty())
+    {
+        for (int v = 0; v < vdirs.size(); ++v) scanDir(vdirs[v], v);
+        set->nVoices = juce::jmax(1, vdirs.size());
     }
+    else scanDir(folder, 0);
     if (set->zones.empty()) return false;
     std::sort(set->zones.begin(), set->zones.end(), [](const MsZone& a, const MsZone& b){ return a.root < b.root; });
     for (auto& z : set->zones)   // layers soft -> loud (velocity maps across them)
@@ -1415,16 +1452,31 @@ bool DrumChannel::loadMultisample(int slot, const juce::File& folder)
         sl2.msGainDb    = juce::jlimit(-24.0f, 24.0f, (float) t.getProperty("gainDb", 0.0f));
         sl2.smpReverse  = (bool) t.getProperty("reverse", false);
         sl2.smpLoopOn   = false;   // plain-sample loop never applies to zones
-        sl2.msLoopOn    = (bool) t.getProperty("loop", false);   // [2026-07-19] per-zone AUTO-loop
+        // [2026-07-20] voiced (syllable) instruments default Auto Loop ON - held vowels must sustain
+        sl2.msLoopOn    = (bool) t.getProperty("loop", set->nVoices > 1);
         msRigModel = t.getProperty("rigModel", "").toString();
         msRigIr    = t.getProperty("rigIr", "").toString();
         refreshMsRig();
+        // [2026-07-20] per-recording TUNE map: the wizard's measured cents ("auto-tuned by
+        // construction" - sing roughly, playback compensates exactly). <tune voice root cents/>.
+        for (int ci = 0; ci < t.getNumChildren(); ++ci)
+        {
+            const auto tc = t.getChild(ci);
+            if (! tc.hasType("tune")) continue;
+            const int tv = (int) tc.getProperty("voice", 0), tr = (int) tc.getProperty("root", -1);
+            for (auto& z : set->zones)
+                if (z.voice == tv && z.root == tr)
+                    z.cents = juce::jlimit(-100.0f, 100.0f, (float) tc.getProperty("cents", 0.0f));
+        }
     }
-    if (slots[slot].msLoopOn) msRebuildLoops(slot);   // [2026-07-19] AUTO-loop: derive per-zone regions
+    else if (set->nVoices > 1) slots[slot].msLoopOn = true;   // no sidecar yet: voiced = loop on
     slotSample[slot].loadedAtRate = hostRate;
     updateStretch(slot);
     msSetOld[slot] = msSet[slot];     // graveyard: old pointers stay valid through the fade
     msSet[slot] = set;
+    // [2026-07-20] BUG FIX: this used to run BEFORE the swap above = it derived loops on the OLD
+    // set, so a fresh sidecar-enabled load never actually looped until the button was re-toggled.
+    if (slots[slot].msLoopOn) msRebuildLoops(slot);   // AUTO-loop: per-zone regions on the NEW set
     return true;
 }
 
@@ -1894,11 +1946,9 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         {   // nearest zone to the played note (steps/roll: C4 + step pitch; keyDown re-picks below)
             const auto& zs = msSet[s]->zones;
             const int want = juce::jlimit(0, 127, 60 + juce::roundToInt(pitchSemis));
-            int best = 0;
-            for (int zi = 1; zi < (int) zs.size(); ++zi)
-                if (std::abs(zs[zi].root - want) < std::abs(zs[best].root - want)) best = zi;
+            const int best = msZoneNearest(zs, msSet[s]->nVoices, want);
             msPickLayer(zs[(size_t) best], velocityGain, sv.msBuf, sv.msG1);
-            sv.msSemiAdj = (float)(60 - zs[(size_t) best].root);
+            sv.msSemiAdj = (float)(60 - zs[(size_t) best].root) - zs[(size_t) best].cents * 0.01f;
             if (sl.msLoopOn && zs[(size_t) best].hasLoop && sv.msBuf != nullptr)
             { const int L = sv.msBuf->getNumSamples();
               sv.msLoopLo = zs[(size_t) best].loopLo * (float) L; sv.msLoopHi = zs[(size_t) best].loopHi * (float) L; }
@@ -2268,12 +2318,10 @@ int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly,
                 {
                     const auto& zs = msSet[s]->zones;
                     const int want = juce::jlimit(0, 127, midiNote - (s == 1 ? slot2Down : 0));
-                    int best = 0;
-                    for (int zi = 1; zi < (int) zs.size(); ++zi)
-                        if (std::abs(zs[zi].root - want) < std::abs(zs[best].root - want)) best = zi;
+                    const int best = msZoneNearest(zs, msSet[s]->nVoices, want);
                     msPickLayer(zs[(size_t) best], velocity, sv.msBuf, sv.msG1);
                     sv.msSemiAdj = sl.smpPreservePitch ? 0.0f
-                                 : (float)(60 - zs[(size_t) best].root);
+                                 : (float)(60 - zs[(size_t) best].root) - zs[(size_t) best].cents * 0.01f;
                     sv.msLoopLo = sv.msLoopHi = 0.0f;
                     if (sl.msLoopOn && zs[(size_t) best].hasLoop && sv.msBuf != nullptr)
                     { const int L = sv.msBuf->getNumSamples();

@@ -525,7 +525,7 @@ public:
         skipBtn.onClick  = [this] {
             if (targetNote >= 0) { targetNote = -1; replaceFile = juce::File();
                                    rebuildPending(); phase = pending.isEmpty() ? DoneAll : Listen; }
-            else skipped.addIfNotAlreadyThere(curTarget());
+            else skipped.addIfNotAlreadyThere(enc(curVoice, curTarget()));   // [2026-07-20] per (voice, note)
             rebuildPending(); repaint(); syncButtons(); };
         finishBtn.onClick = [this] { finishSession(); };
     }
@@ -593,6 +593,16 @@ public:
             return "RECORD EVERY N SEMITONES: how densely the range is sampled.\n\n"
                    "- Notes between recordings are pitched from the nearest one - every 2-3 st is "
                    "usually inaudible; every 1 st = maximum realism, more work.";
+        if (voRect().contains(p))
+            return "VOICES: turns this into a SINGING instrument (1 = a normal multisample).\n\n"
+                   "- Each voice = ONE syllable you sing (any sounds you like: da, le, ma, lo, na, "
+                   "le-le, hey...). The range records once per voice.\n"
+                   "- Playback maps keys to voices in a repeating CYCLE (C = voice 1, C# = voice 2, "
+                   "...), so stepwise melodies babble naturally. ODD counts (3, 5) vary the most.\n"
+                   "- Sing each syllable HELD (daaaa) - the attack is the consonant, the held vowel "
+                   "loops for long notes (Auto Loop turns on by itself).\n"
+                   "- Pitch accuracy is NOT required: the wizard plays the target, you match it "
+                   "roughly, and the measured pitch is mapped + retuned exactly.";
         if (listRect().contains(p))
             return "THE NOTE MAP: every note of the range = a row.\n\n"
                    "- Click a note = open its layers (LOUDEST first; another note's click closes it).\n"
@@ -657,6 +667,7 @@ public:
         box(loRect(),  "Lowest note",  juce::MidiMessage::getMidiNoteName(loNote, true, true, 4));
         box(hiRect(),  "Highest note", juce::MidiMessage::getMidiNoteName(hiNote, true, true, 4));
         box(spRect(),  "Record every", juce::String(spacing) + " st");
+        box(voRect(),  "Voices",       nVoices <= 1 ? juce::String("1 (off)") : juce::String(nVoices));
         box(mxRect(),  "Max time",     juce::String(maxSec, 1) + " s");
         box(adRect(),  "Start at",     juce::String(armDb) + " dB");
         box(edRect(),  "End below",    juce::String(endDb) + " dB");
@@ -665,23 +676,34 @@ public:
         if (phase == Setup)
         {
             g.setColour(juce::Colour(0xffaebada)); g.setFont(11.5f);
-            g.drawFittedText("Play each note when asked - recording ARMS when the input crosses \"Start at\", ENDS "
-                             "once the ring falls under \"End below\" (or at Max time). Every box above stays "
-                             "adjustable WHILE recording. " + juce::String(pendingCountForRange()) + " notes to record.\n"
+            g.drawFittedText("Play each note when asked - the wizard PLAYS the target first (match it by ear; the "
+                             "measured pitch is what gets mapped, so rough is fine). Recording ARMS at \"Start at\", "
+                             "ENDS under \"End below\" (or Max time). "
+                             + juce::String(pendingCountForRange() * juce::jmax(1, nVoices)) + " takes to record.\n"
+                             "VOICES > 1 = a SINGING instrument: the range records once per voice - sing ONE "
+                             "syllable per voice, HELD steady (da, le, ma, lo, na... or le-le / hey). Keys then "
+                             "cycle the voices note by note.\n"
                              "Standalone: enable your input device under Options (input starts muted). "
                              "DAW: route audio into BASAMAK's input bus.",
-                             b.getX() + 12, b.getY() + 160, lw - 24, 52, juce::Justification::topLeft, 4);
+                             b.getX() + 12, b.getY() + 160, lw - 24, 66, juce::Justification::topLeft, 6);
         }
         else if (phase == Listen || phase == Capture || phase == Review)
         {
             const int target = curTarget();
+            if (nVoices > 1)
+            {   // [2026-07-20] which SYLLABLE voice this pass records (sing ONE sound per voice)
+                g.setColour(juce::Colour(0xffe8bf4d)); g.setFont(juce::Font(13.5f, juce::Font::bold));
+                g.drawText("VOICE " + juce::String(curVoice + 1) + " of " + juce::String(nVoices)
+                               + " - one syllable, HELD (daaaa / looo / le-le...)",
+                           b.getX(), b.getY() + 136, lw, 16, juce::Justification::centred);
+            }
             g.setColour(phase == Capture ? juce::Colour(0xffd21f1f) : juce::Colours::white);
             g.setFont(juce::Font(40.0f, juce::Font::bold));
             g.drawText(target >= 0 ? juce::MidiMessage::getMidiNoteName(target, true, true, 4) : juce::String("-"),
                        b.getX(), b.getY() + 152, lw, 44, juce::Justification::centred);
             g.setFont(juce::Font(12.5f, juce::Font::bold));
             if (phase == Listen)
-            { g.setColour(juce::Colour(0xff35b56a)); g.drawText("PLAY THE NOTE - recording arms itself when it hears you",
+            { g.setColour(juce::Colour(0xff35b56a)); g.drawText("MATCH THE NOTE YOU JUST HEARD (click the name to replay) - roughly is fine",
                   b.getX(), b.getY() + 198, lw, 16, juce::Justification::centred); }
             else if (phase == Capture)
             { g.setColour(juce::Colour(0xffd21f1f)); g.drawText("RECORDING... let the note ring, then stay silent",
@@ -693,11 +715,19 @@ public:
                 juce::String hs = heardHz > 0.0 ? ("Heard: " + juce::MidiMessage::getMidiNoteName(heardNote, true, true, 4)
                                                     + (heardCents >= 0 ? " +" : " ") + juce::String(heardCents) + "c")
                                                 : juce::String("Heard: no clear pitch");
-                if (! match) hs << "  (expected " + juce::MidiMessage::getMidiNoteName(target, true, true, 4) + " - Retry, or Keep anyway)";
+                if (! match) hs << (heardHz > 0.0 && std::abs(heardNote - target) <= 4
+                                    ? "  (KEEP maps it as what you sang - auto-tuned)"
+                                    : "  (expected " + juce::MidiMessage::getMidiNoteName(target, true, true, 4) + " - Retry, or Keep anyway)");
                 g.drawText(hs, b.getX(), b.getY() + 198, lw, 16, juce::Justification::centred);
                 g.setColour(juce::Colour(0xffaebada)); g.setFont(11.0f);
                 g.drawText(juce::String(capBuf.size() / juce::jmax(1.0, rate()), 2) + " s recorded",
                            b.getX(), b.getY() + 214, lw, 14, juce::Justification::centred);
+                if (nVoices > 1 && capBuf.size() < (size_t)(rate() * 1.6))
+                {   // [2026-07-20] a clipped syllable can't loop = held notes won't sustain
+                    g.setColour(juce::Colour(0xffffc24a)); g.setFont(juce::Font(11.0f, juce::Font::bold));
+                    g.drawText("Short take - held notes won't sustain. RETRY and HOLD it (daaaa).",
+                               b.getX(), b.getY() + 228, lw, 14, juce::Justification::centred);
+                }
             }
         }
         else if (phase == DoneAll)
@@ -760,23 +790,25 @@ public:
                 const auto rr = listRowRect(r);
                 if (! row.isLayer)
                 {
-                    const int cnt = takesFor(row.note);
-                    const bool open = row.note == expandedNote;
+                    const int cnt = takesFor(row.note, row.voice);
+                    const bool open = row.note == expandedNote && row.voice == expandedVoice;
                     g.setColour(open ? juce::Colour(0xff2a2a4c) : juce::Colour(0xff20203a));
                     g.fillRoundedRectangle(rr.toFloat().reduced(1.0f), 3.0f);
                     g.setColour(cnt > 0 ? juce::Colours::white : juce::Colour(0xff8a8aa6));
                     g.setFont(juce::Font(13.5f, juce::Font::bold));   // readable note names (user)
-                    g.drawText(juce::MidiMessage::getMidiNoteName(row.note, true, true, 4),
-                               rr.getX() + 6, rr.getY(), 44, rr.getHeight(), juce::Justification::centredLeft);
+                    g.drawText((nVoices > 1 ? "v" + juce::String(row.voice + 1) + " " : juce::String())
+                                   + juce::MidiMessage::getMidiNoteName(row.note, true, true, 4),
+                               rr.getX() + 6, rr.getY(), nVoices > 1 ? 66 : 44, rr.getHeight(), juce::Justification::centredLeft);
                     g.setColour(juce::Colour(0xffaebada)); g.setFont(11.0f);
                     if (cnt > 0)
                     {
                         float pk = -90.0f;
-                        for (const auto& t : takes) if (t.note == row.note) pk = juce::jmax(pk, t.peakDb);
+                        for (const auto& t : takes) if (t.note == row.note && t.voice == row.voice) pk = juce::jmax(pk, t.peakDb);
+                        const int tx = nVoices > 1 ? 74 : 52;   // voiced rows carry a "vN " prefix
                         g.drawText(juce::String(cnt) + (cnt == 1 ? " layer" : " layers"),
-                                   rr.getX() + 52, rr.getY(), 62, rr.getHeight(), juce::Justification::centredLeft);
+                                   rr.getX() + tx, rr.getY(), 58, rr.getHeight(), juce::Justification::centredLeft);
                         g.drawText(juce::String(juce::roundToInt(pk)) + " dB",
-                                   rr.getX() + 118, rr.getY(), 44, rr.getHeight(), juce::Justification::centredLeft);
+                                   rr.getX() + tx + 60, rr.getY(), 40, rr.getHeight(), juce::Justification::centredLeft);
                         if (cnt < DrumChannel::MS_LAYERS)
                         {   // +LAYER (record ANOTHER dynamic - any time, incl. long after finishing)
                             g.setColour(juce::Colour(0xff35b56a)); g.setFont(juce::Font(10.5f, juce::Font::bold));
@@ -829,14 +861,15 @@ public:
                     const int x = e.getPosition().x;
                     if (! row.isLayer)
                     {
-                        const int cnt = takesFor(row.note);
+                        const int cnt = takesFor(row.note, row.voice);
                         if (cnt == 0 && x >= rr.getRight() - 48)            // REC an empty note
-                            beginNoteTarget(row.note, {});
+                            beginNoteTarget(row.note, {}, row.voice);
                         else if (cnt > 0 && cnt < DrumChannel::MS_LAYERS && x >= rr.getRight() - 58)
-                            beginNoteTarget(row.note, {});                  // +LAYER (cap 5 enforced by the hidden button)
+                            beginNoteTarget(row.note, {}, row.voice);       // +LAYER (cap 5 enforced by the hidden button)
                         else
-                        {   // expand/collapse (one open at a time - user spec)
-                            expandedNote = expandedNote == row.note ? -1 : row.note;
+                        {   // expand/collapse (one open at a time - user spec; keyed (voice, note))
+                            const bool same = expandedNote == row.note && expandedVoice == row.voice;
+                            expandedNote = same ? -1 : row.note; expandedVoice = row.voice;
                             repaint();
                         }
                     }
@@ -844,15 +877,18 @@ public:
                     {
                         if (x >= rr.getRight() - 22)
                         {   // delete this LAYER; an empty note just shows as a recordable row again
-                            const int dn = takes[(size_t) row.takeIdx].note;
-                            takes[(size_t) row.takeIdx].file.deleteFile();
+                            const auto& dt = takes[(size_t) row.takeIdx];
+                            const int dn = dt.note;
+                            satisfied.removeAllInstancesOf(enc(dt.voice, dt.grid >= 0 ? dt.grid : dn));   // re-queue
+                            dt.file.deleteFile();
                             takes.erase(takes.begin() + row.takeIdx);
                             if (layerNote == dn) layerNote = -1;
+                            curVoice = juce::jmin(curVoice, row.voice);          // the hole re-queues first
                             rebuildPending();
                             syncButtons(); repaint();
                         }
                         else if (x >= rr.getRight() - 52)                   // RE = record OVER this layer
-                            beginNoteTarget(row.note, takes[(size_t) row.takeIdx].file);
+                            beginNoteTarget(row.note, takes[(size_t) row.takeIdx].file, row.voice);
                         else if (proc != nullptr)                           // play
                             proc->previewFile(takes[(size_t) row.takeIdx].file);
                     }
@@ -867,9 +903,17 @@ public:
         else if (adRect().contains(e.getPosition())) dragBox = 5;
         else if (edRect().contains(e.getPosition())) dragBox = 6;
         else if (prRect().contains(e.getPosition())) dragBox = 7;
+        else if (voRect().contains(e.getPosition())) dragBox = 8;   // [2026-07-20] voices count
         dragBase = dragBox == 1 ? loNote : dragBox == 2 ? hiNote : dragBox == 3 ? spacing
                  : dragBox == 4 ? (int) std::lround(maxSec * 2.0f) : dragBox == 5 ? armDb
-                 : dragBox == 6 ? endDb : preMs;
+                 : dragBox == 6 ? endDb : dragBox == 8 ? nVoices : preMs;
+        // [2026-07-20] clicking the BIG target note replays the guide tone (match it by ear)
+        if (dragBox == 0 && (phase == Listen || phase == Review) && curTarget() >= 0 && proc != nullptr
+            && juce::Rectangle<int>(0, 148, leftW(), 52).contains(e.getPosition()))
+        {
+            proc->playGuideTone(440.0 * std::pow(2.0, (curTarget() - 69) / 12.0));
+            toneUntil = juce::Time::getMillisecondCounter() + 1100;
+        }
     }
     void mouseDrag(const juce::MouseEvent& e) override
     {
@@ -882,7 +926,8 @@ public:
         else if (dragBox == 5) armDb  = juce::jlimit(-60, -10, dragBase + d);
         else if (dragBox == 6) endDb  = juce::jlimit(-80, -20, dragBase + d);
         else if (dragBox == 7) preMs  = juce::jlimit(0, 100, dragBase + d * 2);
-        if (dragBox <= 3 && phase != Setup) { rebuildPending(); syncButtons(); }   // range change re-queues
+        else if (dragBox == 8) nVoices = juce::jlimit(1, 12, dragBase + d);   // [2026-07-20] syllable voices
+        if ((dragBox <= 3 || dragBox == 8) && phase != Setup) { rebuildPending(); syncButtons(); }   // re-queue
         repaint();
     }
     void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
@@ -903,15 +948,27 @@ private:
     int   armDb  = -10, endDb = -30;                          // start / end gates (user defaults 2026-07-19)
     int   preMs  = 10;                                        // pre-roll kept before the Start gate fires
     float noiseFloorPk = 0.0f; juce::int64 floorFrames = 0;   // measured while listening (warning only)
-    struct Take { int note = 0; int layer = 1; juce::File file; float lenSec = 0.0f; float peakDb = -90.0f; };
+    struct Take { int note = 0; int layer = 1; juce::File file; float lenSec = 0.0f; float peakDb = -90.0f;
+                  int voice = 0;                              // [2026-07-20] which "voice N" folder it lives in
+                  int grid = -1; };                           // the GRID target it answered (measured naming
+                                                              // can differ from the target; -1 = same as note)
     std::vector<Take> takes;                                  // kept notes, sorted by note
     juce::Array<int>  pending;                                // still to record (head = current target)
-    juce::Array<int>  skipped;                                // user-skipped (not re-queued)
+    juce::Array<int>  skipped;                                // user-skipped (encoded voice*200+note when voiced)
+    // [2026-07-20] SYLLABLE VOICES: the session records the whole range once PER VOICE (sing ONE
+    // syllable per voice, held). satisfied = grid targets already answered (the file may be NAMED
+    // by the MEASURED pitch, so takes alone can't answer "is grid note k done").
+    int nVoices = 1, curVoice = 0;
+    juce::Array<int> satisfied;
+    int  enc(int v, int note) const { return v * 200 + note; }
+    juce::File voiceDir(int v) const
+    { return nVoices > 1 ? sessionDir.getChildFile("voice " + juce::String(v + 1)) : sessionDir; }
+    int lastToneNote = -999; juce::uint32 toneUntil = 0;      // guide-tone dedupe + arm-suppression window
     int  layerNote = -1;                                      // LAYER+: stay on this note for another take
     bool editExisting = false;                                // dropdown-picked instrument = edit IN PLACE
     // [2026-07-19 r2] the ACCORDION NOTE MAP (user design): every grid note gets a row (empty =
     // recordable); clicking a note expands its layers (LOUDEST first) with per-layer actions.
-    struct ListRow { bool isLayer = false; int note = 0; int takeIdx = -1; };
+    struct ListRow { bool isLayer = false; int note = 0; int takeIdx = -1; int voice = 0; };
     std::vector<ListRow> listRows;                            // rebuilt by buildListRows()
     int  expandedNote = -1;                                   // one note open at a time
     int  targetNote = -1;                                     // note-EXACT record target (beats the grid queue)
@@ -936,9 +993,10 @@ private:
     int  listVisRows() const { return (listRect().getHeight() - 24) / 21; }
     juce::Rectangle<int> listRowRect(int r) const
     { const auto lc = listRect(); return { lc.getX() + 3, lc.getY() + 22 + r * 21, lc.getWidth() - 6, 20 }; }
-    juce::Rectangle<int> loRect() const { return { leftW() / 2 - 170, 66,  100, 24 }; }
-    juce::Rectangle<int> hiRect() const { return { leftW() / 2 - 50,  66,  100, 24 }; }
-    juce::Rectangle<int> spRect() const { return { leftW() / 2 + 70,  66,  100, 24 }; }
+    juce::Rectangle<int> loRect() const { return { leftW() / 2 - 218, 66,  96, 24 }; }
+    juce::Rectangle<int> hiRect() const { return { leftW() / 2 - 112, 66,  96, 24 }; }
+    juce::Rectangle<int> spRect() const { return { leftW() / 2 - 6,   66,  96, 24 }; }
+    juce::Rectangle<int> voRect() const { return { leftW() / 2 + 100, 66,  96, 24 }; }   // [2026-07-20] VOICES
     juce::Rectangle<int> mxRect() const { return { leftW() / 2 - 188, 112, 88, 24 }; }
     juce::Rectangle<int> adRect() const { return { leftW() / 2 - 92,  112, 88, 24 }; }
     juce::Rectangle<int> edRect() const { return { leftW() / 2 + 4,   112, 88, 24 }; }
@@ -955,29 +1013,36 @@ private:
         if (g.isEmpty() || g.getLast() != hiNote) g.add(hiNote);
         return g;
     }
-    int takesFor(int note) const { int n = 0; for (const auto& t : takes) if (t.note == note) ++n; return n; }
+    int takesFor(int note, int v) const
+    { int n = 0; for (const auto& t : takes) if (t.note == note && t.voice == v) ++n; return n; }
+    int expandedVoice = 0;   // [2026-07-20] the accordion key is (voice, note) now
     void buildListRows()
     {
         listRows.clear();
-        juce::Array<int> notes = gridNotes();
-        for (const auto& t : takes) notes.addIfNotAlreadyThere(t.note);   // off-grid recordings still show
-        std::sort(notes.begin(), notes.end());
-        for (int nt : notes)
+        const int nv = juce::jmax(1, nVoices);
+        for (int v = 0; v < nv; ++v)
         {
-            listRows.push_back({ false, nt, -1 });
-            if (nt != expandedNote) continue;
-            // layers of the open note, LOUDEST FIRST (user spec; playback still maps soft->loud)
-            std::vector<int> idx;
-            for (int i = 0; i < (int) takes.size(); ++i) if (takes[(size_t) i].note == nt) idx.push_back(i);
-            std::sort(idx.begin(), idx.end(),
-                      [this](int a, int b){ return takes[(size_t) a].peakDb > takes[(size_t) b].peakDb; });
-            for (int i : idx) listRows.push_back({ true, nt, i });
+            juce::Array<int> notes = gridNotes();
+            for (const auto& t : takes) if (t.voice == v) notes.addIfNotAlreadyThere(t.note);
+            std::sort(notes.begin(), notes.end());
+            for (int nt : notes)
+            {
+                listRows.push_back({ false, nt, -1, v });
+                if (nt != expandedNote || v != expandedVoice) continue;
+                std::vector<int> idx;
+                for (int i = 0; i < (int) takes.size(); ++i)
+                    if (takes[(size_t) i].note == nt && takes[(size_t) i].voice == v) idx.push_back(i);
+                std::sort(idx.begin(), idx.end(),
+                          [this](int a, int b){ return takes[(size_t) a].peakDb > takes[(size_t) b].peakDb; });
+                for (int i : idx) listRows.push_back({ true, nt, i, v });
+            }
         }
     }
     // Jump the recorder to ONE note (row buttons; works in ANY phase incl. after "finished" -
     // the edit-later flow the user asked for). replaceF = overwrite that layer's file on keep.
-    void beginNoteTarget(int note, const juce::File& replaceF)
+    void beginNoteTarget(int note, const juce::File& replaceF, int voice = -1)
     {
+        if (voice >= 0) curVoice = juce::jlimit(0, juce::jmax(0, nVoices - 1), voice);
         if (! sessionDir.isDirectory())
         {   // acting on rows straight from Setup = start the session implicitly
             juce::String nm = juce::File::createLegalFileName(nameEd.getText().trim());
@@ -1002,16 +1067,24 @@ private:
     // range mid-session ASKS for the new notes, and a deleted take comes back in order.
     void rebuildPending()
     {
+        // [2026-07-20] VOICE-AWARE queue: the range is recorded once per voice, voice 1 first.
+        // "satisfied" answers per (voice, grid note) - the FILE may be named by the MEASURED
+        // pitch (auto-tune mapping), so takes alone can't answer whether grid note k is done.
         pending.clear();
-        auto want = [this](int k)
+        for (int v = juce::jmax(0, curVoice); v < juce::jmax(1, nVoices); ++v)
         {
-            if (k == layerNote) return true;   // LAYER+ keeps the note queued for another take
-            for (const auto& t : takes) if (t.note == k) return false;
-            return ! skipped.contains(k);
-        };
-        for (int k = loNote; k <= hiNote; k += spacing) if (want(k)) pending.add(k);
-        if (pending.isEmpty() || pending.getLast() != hiNote)
-            if (want(hiNote) && ! pending.contains(hiNote)) pending.add(hiNote);
+            auto want = [this, v](int k)
+            {
+                if (v == curVoice && k == layerNote) return true;   // LAYER+ keeps the note queued
+                if (satisfied.contains(enc(v, k))) return false;
+                for (const auto& t : takes) if (t.voice == v && t.note == k) return false;
+                return ! skipped.contains(enc(v, k));
+            };
+            for (int k = loNote; k <= hiNote; k += spacing) if (want(k)) pending.add(k);
+            if (pending.isEmpty() || pending.getLast() != hiNote)
+                if (want(hiNote) && ! pending.contains(hiNote)) pending.add(hiNote);
+            if (! pending.isEmpty()) { curVoice = v; break; }
+        }
         if (pending.isEmpty() && phase != Setup) phase = DoneAll;
         else if (phase == DoneAll && ! pending.isEmpty()) { phase = Listen; readCur = tapNow(); capBuf.clear(); }
     }
@@ -1044,6 +1117,7 @@ private:
                     takes.clear(); pending.clear(); skipped.clear(); capBuf.clear();
                     expandedNote = -1; targetNote = -1; replaceFile = juce::File();
                     layerNote = -1; listOff = 0; topNote = -1;
+                    curVoice = 0; satisfied.clear(); nVoices = 1; lastToneNote = -999;   // [2026-07-20]
                     nameEd.setText("My Instrument", juce::dontSendNotification);
                     syncButtons(); repaint();
                     return;
@@ -1061,27 +1135,42 @@ private:
         takes.clear(); skipped.clear(); capBuf.clear(); layerNote = -1; listOff = 0; topNote = -1;
         expandedNote = -1; targetNote = -1; replaceFile = juce::File();
         juce::AudioFormatManager fm; fm.registerBasicFormats();
-        auto files = dir.findChildFiles(juce::File::findFiles, false, "*.wav;*.aif;*.aiff;*.flac");
-        files.sort();
         int lo2 = 128, hi2 = -1;
-        for (auto& f : files)
+        // [2026-07-20] VOICED instruments: "voice N" subfolders are the voices (mirror of
+        // loadMultisample's rule); a flat folder = one voice, exactly as before.
+        juce::Array<juce::File> vdirs;
+        for (const auto& d : dir.findChildFiles(juce::File::findDirectories, false))
+            if (d.getFileName().startsWithIgnoreCase("voice")) vdirs.add(d);
+        std::sort(vdirs.begin(), vdirs.end(), [](const juce::File& a, const juce::File& b)
+                  { return a.getFileName().retainCharacters("0123456789").getIntValue()
+                         < b.getFileName().retainCharacters("0123456789").getIntValue(); });
+        nVoices = juce::jmax(1, vdirs.size()); curVoice = 0; satisfied.clear(); lastToneNote = -999;
+        auto scanTakes = [&](const juce::File& d, int voice)
         {
-            const int note = DrumChannel::noteNameToMidi(
-                f.getFileNameWithoutExtension().trim().upToFirstOccurrenceOf(" ", false, false));
-            if (note < 0) continue;
-            std::unique_ptr<juce::AudioFormatReader> r2(fm.createReaderFor(f));
-            if (r2 == nullptr || r2->lengthInSamples <= 0) continue;
-            Take t; t.note = note; t.file = f;
-            for (const auto& t2 : takes) if (t2.note == note) ++t.layer;
-            t.lenSec = (float)(r2->lengthInSamples / juce::jmax(1.0, r2->sampleRate));
-            juce::AudioBuffer<float> pb(1, (int) juce::jmin(r2->lengthInSamples, (juce::int64) (1 << 20)));   // [2026-07-19] cast, NOT jmin<int64> (Linux SIMD gotcha)
-            r2->read(&pb, 0, pb.getNumSamples(), 0, true, false);
-            float pk = 0.0f;
-            for (int i = 0; i < pb.getNumSamples(); ++i) pk = juce::jmax(pk, std::abs(pb.getSample(0, i)));
-            t.peakDb = juce::Decibels::gainToDecibels(juce::jmax(1.0e-5f, pk));
-            takes.push_back(t);
-            lo2 = juce::jmin(lo2, note); hi2 = juce::jmax(hi2, note);
-        }
+            auto files = d.findChildFiles(juce::File::findFiles, false, "*.wav;*.aif;*.aiff;*.flac");
+            files.sort();
+            for (auto& f : files)
+            {
+                const int note = DrumChannel::noteNameToMidi(
+                    f.getFileNameWithoutExtension().trim().upToFirstOccurrenceOf(" ", false, false));
+                if (note < 0) continue;
+                std::unique_ptr<juce::AudioFormatReader> r2(fm.createReaderFor(f));
+                if (r2 == nullptr || r2->lengthInSamples <= 0) continue;
+                Take t; t.note = note; t.file = f; t.voice = voice; t.grid = note;
+                for (const auto& t2 : takes) if (t2.note == note && t2.voice == voice) ++t.layer;
+                t.lenSec = (float)(r2->lengthInSamples / juce::jmax(1.0, r2->sampleRate));
+                juce::AudioBuffer<float> pb(1, (int) juce::jmin(r2->lengthInSamples, (juce::int64) (1 << 20)));   // [2026-07-19] cast, NOT jmin<int64> (Linux SIMD gotcha)
+                r2->read(&pb, 0, pb.getNumSamples(), 0, true, false);
+                float pk = 0.0f;
+                for (int i = 0; i < pb.getNumSamples(); ++i) pk = juce::jmax(pk, std::abs(pb.getSample(0, i)));
+                t.peakDb = juce::Decibels::gainToDecibels(juce::jmax(1.0e-5f, pk));
+                takes.push_back(t);
+                satisfied.addIfNotAlreadyThere(enc(voice, note));   // existing files answer their own note
+                lo2 = juce::jmin(lo2, note); hi2 = juce::jmax(hi2, note);
+            }
+        };
+        if (! vdirs.isEmpty()) { for (int v = 0; v < vdirs.size(); ++v) scanTakes(vdirs[v], v); }
+        else                   scanTakes(dir, 0);
         std::sort(takes.begin(), takes.end(),
                   [](const Take& a, const Take& b){ return a.note != b.note ? a.note < b.note : a.layer < b.layer; });
         if (hi2 >= 0) { loNote = lo2; hiNote = juce::jmax(lo2, hi2); }
@@ -1099,7 +1188,7 @@ private:
         startBtn.setVisible(phase == Setup); nameEd.setVisible(phase == Setup);
         retryBtn.setVisible(phase == Review); keepBtn.setVisible(phase == Review);
         int curLayers = 0;
-        for (const auto& t : takes) if (t.note == curTarget()) ++curLayers;
+        for (const auto& t : takes) if (t.note == curTarget() && t.voice == curVoice) ++curLayers;
         layerBtn.setVisible(phase == Review && curLayers < DrumChannel::MS_LAYERS - 1);
         skipBtn.setVisible(phase == Listen || phase == Capture || phase == Review);
         finishBtn.setVisible(phase == DoneAll);
@@ -1120,6 +1209,7 @@ private:
         layerNote = -1; editExisting = false;
         expandedNote = -1; targetNote = -1; replaceFile = juce::File();
         noiseFloorPk = 0.0f; floorFrames = 0;
+        curVoice = 0; satisfied.clear(); lastToneNote = -999;   // [2026-07-20] voices restart at voice 1
         rebuildPending();
         readCur = tapNow(); phase = pending.isEmpty() ? DoneAll : Listen; syncButtons(); repaint();
     }
@@ -1127,11 +1217,22 @@ private:
     {
         repaint();   // meter always live
         if (proc == nullptr || (phase != Listen && phase != Capture)) return;
+        // [2026-07-20] GUIDE TONE: a fresh Listen target plays its note audibly (match by ear;
+        // the measured-pitch mapping forgives whatever you land on). While the tone rings, the
+        // ARM SCAN is suspended - speakers would otherwise trip the Start gate.
+        if (phase == Listen && curTarget() >= 0 && curTarget() != lastToneNote)
+        {
+            lastToneNote = curTarget();
+            proc->playGuideTone(440.0 * std::pow(2.0, (curTarget() - 69) / 12.0));
+            toneUntil = juce::Time::getMillisecondCounter() + 1100;
+        }
         const juce::int64 wr = tapNow();
         if (wr <= readCur) return;
         const int n = (int) juce::jmin(wr - readCur, (juce::int64) 32768);
         std::vector<float> blk((size_t) n);
         proc->readMsTap(readCur, blk.data(), n);
+        if (phase == Listen && juce::Time::getMillisecondCounter() < toneUntil)
+        { readCur = wr; return; }   // tone still sounding: don't let it arm the recorder
         if (phase == Listen)
         {
             const float arm = armThresh();               // the user's "Start at" gate (live)
@@ -1219,9 +1320,18 @@ private:
         const double sr = rate();
         const int target = curTarget();
         if (target < 0) { rebuildPending(); syncButtons(); repaint(); return; }
+        // [2026-07-20] MEASURED-PITCH MAPPING ("auto-tuned by construction"): the file is named
+        // by the note you ACTUALLY sang (nearest), and the exact cents land in the sidecar so
+        // playback retunes precisely. Sanity-gated to within a 3rd of the target (octave-error
+        // guard); no clear pitch = the target name, cents 0 (the old behaviour).
+        int mapNote = target, mapCents = 0;
+        if (heardHz > 40.0 && std::abs(heardNote - target) <= 4)
+        { mapNote = heardNote; mapCents = juce::jlimit(-100, 100, heardCents); }
         int layerNo = 1;
-        for (const auto& t : takes) if (t.note == target) ++layerNo;   // layer index (display only)
-        const juce::String base = juce::MidiMessage::getMidiNoteName(target, true, true, 4);
+        for (const auto& t : takes) if (t.note == mapNote && t.voice == curVoice) ++layerNo;   // display only
+        const juce::String base = juce::MidiMessage::getMidiNoteName(mapNote, true, true, 4);
+        const juce::File dir = voiceDir(curVoice);                    // [2026-07-20] voices = subfolders
+        dir.createDirectory();
         juce::File f = replaceFile;
         if (f.getFullPathName().isEmpty())
         {   // [2026-07-19] NEW-take names are probed against the DISK, never the in-memory count:
@@ -1229,9 +1339,9 @@ private:
             // first" recipe silently DESTROYED earlier kept layers with the same name. A new
             // take now always lands on the first FREE filename; only an explicit RERECORD
             // (replaceFile) may ever overwrite, and layers beyond the cap are refused here too.
-            int k = 1; juce::File cand = sessionDir.getChildFile(base + ".wav");
+            int k = 1; juce::File cand = dir.getChildFile(base + ".wav");
             while (cand.existsAsFile() && k < 99)
-            { ++k; cand = sessionDir.getChildFile(base + " v" + juce::String(k) + ".wav"); }
+            { ++k; cand = dir.getChildFile(base + " v" + juce::String(k) + ".wav"); }
             if (k > DrumChannel::MS_LAYERS || cand.existsAsFile())
             { capBuf.clear(); targetNote = -1; replaceFile = juce::File();
               rebuildPending(); phase = pending.isEmpty() ? DoneAll : Listen;
@@ -1281,13 +1391,17 @@ private:
                     if (t.file == replaceFile) { t.lenSec = lenS; t.peakDb = pkDb; replaced = true; break; }
             if (! replaced)
             {
-                Take t; t.note = target; t.layer = layerNo; t.file = f;
-                t.lenSec = lenS; t.peakDb = pkDb;
+                Take t; t.note = mapNote; t.layer = layerNo; t.file = f;
+                t.lenSec = lenS; t.peakDb = pkDb; t.voice = curVoice; t.grid = target;
                 takes.push_back(t);
                 std::sort(takes.begin(), takes.end(),
                           [](const Take& a, const Take& b){ return a.note != b.note ? a.note < b.note : a.layer < b.layer; });
             }
-            expandedNote = target;   // show what just landed
+            satisfied.addIfNotAlreadyThere(enc(curVoice, target));   // the GRID target is answered
+            // [2026-07-20] sidecar TUNE entry: the measured cents (per voice+root) - playback
+            // compensates, so rough singing comes back perfectly in tune.
+            if (mapCents != 0) writeTuneEntry(curVoice, mapNote, (float) mapCents);
+            expandedNote = mapNote; expandedVoice = curVoice;   // show what just landed
         }
         capBuf.clear();
         layerNote = stayForLayer && wrote ? target : -1;   // LAYER+ = same note again
@@ -1302,6 +1416,28 @@ private:
         const juce::File dir = sessionDir;
         close();
         if (any && onDone) onDone(slotIdx, dir);   // (edit-in-place reloads the same folder = updated zones)
+    }
+    // [2026-07-20] read-modify-write ONE <tune voice root cents> entry in the instrument sidecar
+    // (loadMultisample reads these back = the auto-tune). Replaces an existing same-voice+root entry.
+    void writeTuneEntry(int voice, int root, float cents)
+    {
+        const juce::File sc = sessionDir.getChildFile("instrument.basamakinst");
+        juce::ValueTree t("instrument");
+        if (auto xml = juce::parseXML(sc)) t = juce::ValueTree::fromXml(*xml);
+        if (! t.isValid() || ! t.hasType("instrument")) t = juce::ValueTree("instrument");
+        for (int i = t.getNumChildren(); --i >= 0;)
+        {
+            const auto c = t.getChild(i);
+            if (c.hasType("tune") && (int) c.getProperty("voice", 0) == voice
+                                  && (int) c.getProperty("root", -1) == root)
+                t.removeChild(i, nullptr);
+        }
+        juce::ValueTree tu("tune");
+        tu.setProperty("voice", voice, nullptr);
+        tu.setProperty("root", root, nullptr);
+        tu.setProperty("cents", cents, nullptr);
+        t.addChild(tu, -1, nullptr);
+        sc.replaceWithText(t.toXmlString());
     }
 };
 
