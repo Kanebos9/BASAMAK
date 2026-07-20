@@ -5936,6 +5936,7 @@ public:
 
     std::function<void(const juce::String&)> onQueryChanged;   // editor remembers it per channel
     juce::StringArray msNames;   // [2026-07-20] multisample instrument folders (editor-fed, menu order)
+    juce::StringArray userTags;  // engine tag per user file (editor-fed at open; may be short)
     void openWith(const juce::Array<juce::File>& userFiles, const juce::File& userRoot, int currentId,
                   const juce::String& rememberedQuery)
     {
@@ -6022,7 +6023,6 @@ private:
         }
     }
     std::map<int, int> numberOf;    // [2026-07-20] global browse NUMBER per id (matches next/prev)
-    juce::StringArray userTags;     // engine tag per user file (editor-fed at open; may be short)
     void rebuild()
     {
         rows.clear();
