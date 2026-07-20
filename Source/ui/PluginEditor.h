@@ -1505,28 +1505,29 @@ public:
         const auto p = panel();
         g.setColour(juce::Colour(0xff1b1b2e)); g.fillRoundedRectangle(p, 8.0f);
         g.setColour(juce::Colour(0xff4a4a70)); g.drawRoundedRectangle(p, 8.0f, 1.5f);
-        g.setColour(juce::Colour(0xff9fd1ff)); g.setFont(juce::Font(16.0f, juce::Font::bold));
-        g.drawText("Let Ring", p.reduced(16, 10).withHeight(22), juce::Justification::topLeft, false);
-        g.setColour(juce::Colour(0xffcfd6e6)); g.setFont(juce::Font(12.5f));
+        g.setColour(juce::Colour(0xff9fd1ff)); g.setFont(juce::Font(19.0f, juce::Font::bold));
+        g.drawText("Let Ring", p.reduced(18, 12).withHeight(26), juce::Justification::topLeft, false);
+        g.setColour(juce::Colour(0xffcfd6e6)); g.setFont(juce::Font(15.0f));   // [2026-07-20] was 12.5 - user: too small
         g.drawFittedText(
             "Strum WINDOW in ms: notes struck this close count as ONE strum that keeps ringing until the "
             "next strum lands (bigger than a strum, smaller than the gap between strums). Typical 60-140 ms.\n\n"
             "The last chord rings on. To damp it live without stopping the transport, assign \"Stop ring\" "
             "under the MIDI menu -> \"MIDI-learn: selection controls\" to a footswitch/pad (a palm-mute).",
-            p.reduced(16).withTrimmedTop(30).withTrimmedBottom(64).toNearestInt(),
-            juce::Justification::topLeft, 10);
+            p.reduced(18).withTrimmedTop(36).withTrimmedBottom(76).toNearestInt(),
+            juce::Justification::topLeft, 12);
     }
     void resized() override
     {
         const auto p = panel().toNearestInt();
-        msEd.setBounds(p.getX() + 16, p.getBottom() - 60, p.getWidth() - 32, 26);
-        okBtn.setBounds(p.getRight() - 162, p.getBottom() - 30, 70, 22);
-        cancelBtn.setBounds(p.getRight() - 86, p.getBottom() - 30, 70, 22);
+        msEd.setBounds(p.getX() + 18, p.getBottom() - 70, p.getWidth() - 36, 30);
+        msEd.applyFontToAllText(juce::Font(16.0f));   // the typed ms value, readable
+        okBtn.setBounds(p.getRight() - 182, p.getBottom() - 34, 78, 26);
+        cancelBtn.setBounds(p.getRight() - 96, p.getBottom() - 34, 78, 26);
     }
     void mouseDown(const juce::MouseEvent& e) override { if (! panel().contains(e.position.toFloat())) setVisible(false); }  // outside = cancel
 private:
     juce::Rectangle<float> panel() const
-    { const float w = 460.0f, h = 250.0f; return { (getWidth() - w) * 0.5f, (getHeight() - h) * 0.5f, w, h }; }
+    { const float w = 560.0f, h = 300.0f; return { (getWidth() - w) * 0.5f, (getHeight() - h) * 0.5f, w, h }; }
 };
 
 //==============================================================================
