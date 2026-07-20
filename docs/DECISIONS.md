@@ -344,6 +344,8 @@
 
 | 229 | r8 tuning: pitch measurement = SUSTAIN median (5 mid-body windows), never the loudest window (= the attack; sung onsets run 2-4 st sharp - the Da Loo Ne flat-playback incident); multisample zones self-verify at load (audio wins over filename beyond 0.6 st, octave-folded, keepPitch kits exempt); wizard rerecords rename to the measured note; MsProbe = informational heard-vs-expected tool | root-caused from the user's "E3 shows C3" report | fix + locks |
 
+| 230 | r9: octave audit - 28 shipped instruments renamed +-12/+24 (VCSL/VSCO2 names run octave-low per instrument; measured + octave-snapped; bell family trusts sibling convention over the partial-fooled detector; Cathedral Organ fixed per-file); 9 new instruments (FreePats CC0 organs = the Hammond ask, VCSL upright/mallets/strumstick/didgeridoo); koto dropped (unverifiable license); 5-language hunt confirms the commons is fully mined; ms dropdown = 2-3 columns | audit + user orders | wide-hunt round |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

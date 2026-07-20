@@ -25,6 +25,21 @@ int main(int argc, char** argv)
             const double m = hz > 0 ? 69.0 + 12.0 * std::log2(hz / 440.0) : 0.0;
             printf("t=%.1fs  %.1f Hz  midi %.2f\n", t, hz, m);
         }
+        // the ROBUST one-number answer (energy-gated median of body windows - same helper the
+        // load verify + wizard use); percussive tails/room noise are skipped automatically
+        const double sh = basamakMeasureSustainPitch(b.getReadPointer(0), b.getNumSamples(), r->sampleRate);
+        printf("sustain: %.1f Hz midi %.2f\n", sh, sh > 0 ? 69.0 + 12.0 * std::log2(sh / 440.0) : 0.0);
+        {   // percussive fallback: the LOUDEST window (struck bars/plucks are AT pitch from the hit;
+            // the onset-scoop problem is a sung/blown thing, and those are covered by sustain above)
+            const int N = b.getNumSamples(), Wf = juce::jmin(N / 2, 8192);
+            const float* x = b.getReadPointer(0);
+            int bo = 0; double be = -1.0;
+            for (int off = 0; off <= N - Wf; off += 2048)
+            {   double e2 = 0.0; for (int i = 0; i < Wf; i += 4) e2 += (double) x[off+i]*x[off+i];
+                if (e2 > be) { be = e2; bo = off; } }
+            const double ah = Wf >= 2048 ? basamakDetectPitch(x + bo, Wf, r->sampleRate) : 0.0;
+            printf("attack: %.1f Hz midi %.2f\n", ah, ah > 0 ? 69.0 + 12.0 * std::log2(ah / 440.0) : 0.0);
+        }
         return 0;
     }
     std::vector<int> semis;

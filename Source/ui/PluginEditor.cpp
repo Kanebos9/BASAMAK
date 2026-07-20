@@ -5851,6 +5851,11 @@ static juce::String msCategoryOf(const juce::String& n)
         { "Solo Contrabass", "Bass" }, { "Pizzicato Strings", "Plucks & Strings" },
         { "Electric Piano Real", "Keys" }, { "Celesta Real", "Bells & Mallets" },
         { "Da Loo Ne", "Pads & Choirs" },   // the user's OWN recorded syllable voice - factory now
+        { "Drawbar Organ Real", "Keys" }, { "Rock Organ", "Keys" },
+        { "Renaissance Organ", "Keys" }, { "Cathedral Organ", "Keys" },
+        { "Upright Piano Real", "Keys" }, { "Glockenspiel Real", "Bells & Mallets" },
+        { "Xylophone Real", "Bells & Mallets" }, { "Strumstick", "Plucks & Strings" },
+        { "Didgeridoo", "Noise & Texture" },
     };
     for (auto& p : T) if (n == p.first) return p.second;
     return {};
@@ -6358,8 +6363,21 @@ void DrumSequencerEditor::buildMsMenu(juce::PopupMenu& menu)
                     && v.getNumberOfChildFiles(juce::File::findFiles, "*.wav;*.aif;*.aiff;*.flac") > 0)
                 { hasAudio = true; break; }
         if (! hasAudio) continue;
-        menu.addItem(MS_ID_BASE + msFolders.size(), d.getFileName());
         msFolders.add(d);
+    }
+    // [2026-07-21] the list outgrew one column (user) - split into 2/3 columns so the whole
+    // instrument set is visible at once (addColumnBreak works inside submenus; rows read
+    // top-to-bottom within each column)
+    {
+        const int n = msFolders.size();
+        const int cols = n > 44 ? 3 : (n > 22 ? 2 : 1);
+        const int perCol = (n + cols - 1) / juce::jmax(1, cols);
+        for (int i = 0; i < n; ++i)
+        {
+            if (i > 0 && cols > 1 && i % perCol == 0) menu.addColumnBreak();
+            menu.addItem(MS_ID_BASE + i, msFolders[i].getFileName());
+        }
+        if (cols > 1) menu.addColumnBreak();   // commands land in their own final column
     }
     if (msFolders.isEmpty()) menu.addItem(-1, "(no multisample folders yet)", false);
     menu.addSeparator();
