@@ -1105,7 +1105,14 @@ private:
         int id = 1000;
         for (auto& d : dirs)
         {
-            if (d.getNumberOfChildFiles(juce::File::findFiles, "*.wav;*.aif;*.aiff;*.flac") == 0) { ++id; continue; }
+            // [2026-07-20] voiced instruments keep audio in "voice N" subfolders - count those too
+            bool hasAudio = d.getNumberOfChildFiles(juce::File::findFiles, "*.wav;*.aif;*.aiff;*.flac") > 0;
+            if (! hasAudio)
+                for (const auto& v : d.findChildFiles(juce::File::findDirectories, false))
+                    if (v.getFileName().startsWithIgnoreCase("voice")
+                        && v.getNumberOfChildFiles(juce::File::findFiles, "*.wav;*.aif;*.aiff;*.flac") > 0)
+                    { hasAudio = true; break; }
+            if (! hasAudio) { ++id; continue; }
             m.addItem(id, d.getFileName(), true, d == sessionDir);
             ++id;
         }

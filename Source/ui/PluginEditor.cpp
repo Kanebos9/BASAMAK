@@ -6289,7 +6289,15 @@ void DrumSequencerEditor::buildMsMenu(juce::PopupMenu& menu)
     dirs.sort();
     for (auto& d : dirs)
     {
-        if (d.getNumberOfChildFiles(juce::File::findFiles, "*.wav;*.aif;*.aiff;*.flac") == 0) continue;
+        // [2026-07-20] BUG FIX (user screenshot): a VOICED instrument keeps its audio inside
+        // "voice N" subfolders - the top level holds none, so these were invisible everywhere.
+        bool hasAudio = d.getNumberOfChildFiles(juce::File::findFiles, "*.wav;*.aif;*.aiff;*.flac") > 0;
+        if (! hasAudio)
+            for (const auto& v : d.findChildFiles(juce::File::findDirectories, false))
+                if (v.getFileName().startsWithIgnoreCase("voice")
+                    && v.getNumberOfChildFiles(juce::File::findFiles, "*.wav;*.aif;*.aiff;*.flac") > 0)
+                { hasAudio = true; break; }
+        if (! hasAudio) continue;
         menu.addItem(MS_ID_BASE + msFolders.size(), d.getFileName());
         msFolders.add(d);
     }
