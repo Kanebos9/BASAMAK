@@ -1547,6 +1547,9 @@ void DrumChannel::applyMsSidecar(int slot, const juce::File& folder, int nVoices
         msRigModel = t.getProperty("rigModel", "").toString();
         msRigIr    = t.getProperty("rigIr", "").toString();
         refreshMsRig();
+        // [2026-07-20 r6] DRUM-KIT instruments: keepPitch=1 keeps every zone at ITS OWN pitch
+        // (keys select drums, never transpose them) - overrides the instrument force-off.
+        if ((bool) t.getProperty("keepPitch", false)) sl2.smpPreservePitch = true;
         // the instrument's own AMP ENVELOPE (absent on old sidecars = slot untouched)
         if (t.hasProperty("envOn"))
         {

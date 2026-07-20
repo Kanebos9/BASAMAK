@@ -338,6 +338,8 @@
 
 | 226 | RAM: identical multisample folders SHARE one decoded copy across all channels/patterns (weak_ptr registry keyed folder+rate+content fingerprint; frees when the last user releases). Bank REORG: factory multisamples file under ROLE categories (roles-not-engines rule), user-recorded ones under "Your Sound Bank", all "(Multisample)"-tagged + engine-searchable; every picker row shows its GLOBAL browse number; user sounds show parsed engine tags. + 5 VSCO2 instruments + Salamander 3rd layer; Church Organ/Timpani skipped (files not note-named). Factory = 35 / 426 MB (user raised the budget to 500 MB-1 GB) | user orders (RAM fix, reorg, numbers, tags, more instruments) | user orders; mechanisms mine |
 
+| 227 | r6: Steinway deleted (Salamander is the denser twin); user-tag BUG = .basamaksound is BINARY ValueTree, the XML-only parse silently failed (binary-first now); overlays consume wheel events (short picker lists bubbled scrolling to the channels); sidecar keepPitch flag -> DRUM KITS as multisamples (Drum Kit Real + Darbuka Kit, keys select drums at fixed pitch, velocity layers) + an 18-shot "VCSL Percussion" set into Resources/Samples (user: his own freesound finds are bad; old files left in place - installers never delete) | user orders + user bug reports | user round |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

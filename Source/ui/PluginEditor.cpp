@@ -5847,6 +5847,7 @@ static juce::String msCategoryOf(const juce::String& n)
         { "Balafon", "Bells & Mallets" }, { "Kalimba Real", "Bells & Mallets" },
         { "Mbira", "Bells & Mallets" }, { "Tubular Bells Real", "Bells & Mallets" },
         { "Timpani Real", "Toms" },
+        { "Drum Kit Real", "Percussion" }, { "Darbuka Kit", "Percussion" },
     };
     for (auto& p : T) if (n == p.first) return p.second;
     return {};
@@ -5937,6 +5938,10 @@ public:
     std::function<void(const juce::String&)> onQueryChanged;   // editor remembers it per channel
     juce::StringArray msNames;   // [2026-07-20] multisample instrument folders (editor-fed, menu order)
     juce::StringArray userTags;  // engine tag per user file (editor-fed at open; may be short)
+    // [2026-07-20 r6, user report] SWALLOW wheel events: a SHORT result list has nothing to
+    // scroll, so the ListBox let the wheel BUBBLE UP to the channel scroller behind the panel
+    // ("middle mouse moves the channels"). An overlay consumes its wheel, full stop.
+    void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override {}
     void openWith(const juce::Array<juce::File>& userFiles, const juce::File& userRoot, int currentId,
                   const juce::String& rememberedQuery)
     {
@@ -6648,9 +6653,17 @@ void DrumSequencerEditor::rescanSoundMixes()
     for (auto& f : soundMixFiles)
     {
         juce::String tag;
-        if (auto xml = juce::parseXML(f))
+        // [2026-07-20 r6 BUG FIX, user report] .basamaksound is BINARY ValueTree, not XML - the
+        // XML parse silently failed on every file = no tags. Binary first, XML as legacy fallback.
+        juce::ValueTree t;
         {
-            const auto t = juce::ValueTree::fromXml(*xml);
+            juce::FileInputStream in(f);
+            if (in.openedOk()) t = juce::ValueTree::readFromStream(in);
+        }
+        if (! t.isValid())
+            if (auto xml = juce::parseXML(f)) t = juce::ValueTree::fromXml(*xml);
+        if (t.isValid())
+        {
             juce::StringArray engs;
             std::function<void(const juce::ValueTree&)> walk = [&](const juce::ValueTree& v)
             {
