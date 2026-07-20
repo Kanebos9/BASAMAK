@@ -6,7 +6,7 @@ license text ships alongside the samples). Credits are given as a courtesy to th
 
 ## Multisample instruments
 
-- Voice Oohs / Choir Aahs / Solo Voice / Nylon Guitar Real / Steel Guitar Real / Finger Bass Real / Fretless Bass / Jazz Guitar Real — extracted from the **FluidR3 GM soundfont** by Frank Wen &middot; https://archive.org/details/fluidr3-gm-gs &middot; License: MIT (license text included with the samples)
+- Voice Oohs / Choir Aahs / Solo Voice / Nylon Guitar Real / Steel Guitar Real / Finger Bass Real / Fretless Bass / Jazz Guitar Real / Electric Guitar Real — extracted from the **FluidR3 GM soundfont** by Frank Wen &middot; https://archive.org/details/fluidr3-gm-gs &middot; License: MIT (license text included with the samples)
 - Alto Recorder / Vibraphone Real / Concert Harp / Steinway Grand / Marimba Real / Tenor Sax / Harmonica / Wine Glasses / Dan Tranh / Harpsichord Real / Ocarina / Balafon / Bowed Psaltery / Kalimba Real / Mbira / Tubular Bells Real / Saxello — from the **Versilian Community Sample Library (VCSL)** by Versilian Studios LLC and contributors &middot; https://versilian-studios.com/vcsl/ &middot; License: Creative Commons 0
 
 ## Drum & FX samples (freesound.org)

@@ -11107,8 +11107,20 @@ void DrumSequencerEditor::setupComponents()
     envEditor.onDragEnd = auditionEnd;
     // Sample slots: double-click the amp-env graph = toggle the OPT-IN sample envelope on/off.
     envEditor.onToggleRequest = [this] {
-        auto& sl = proc.sequencer.channel(selectedChannel).slots[envTargetSlot()];
+        auto& ch0 = proc.sequencer.channel(selectedChannel);
+        auto& sl = ch0.slots[envTargetSlot()];
         if (sl.engine != DrumChannel::SrcSample) return;
+        // [2026-07-20 r3, user] on a MULTISAMPLE, double-click = RESET TO NEUTRAL (a flat
+        // envelope = plays exactly as if the env feature never existed) - never a hide/off
+        // toggle. Plain samples keep the classic on/off toggle below.
+        if (ch0.msSet[envTargetSlot()] != nullptr && sl.smpEnvOn)
+        {
+            sl.atk = 0.001f; sl.hold = 0.0f; sl.sustain = 1.0f; sl.release = 0.03f;
+            ch0.markDspDirty();
+            loadEnvIntoEditor();
+            if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel);
+            return;
+        }
         sl.smpEnvOn = ! sl.smpEnvOn;
         // [2026-07-20] IDENTITY-ON-ENABLE (the user's "wouldn't a default attack change the
         // sound?" guarantee): enabling on an UNTOUCHED slot starts as a flat line at full -
