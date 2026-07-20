@@ -11116,6 +11116,11 @@ void DrumSequencerEditor::setupComponents()
                 && sl.sustain < 1.0e-4f)
             { sl.atk = 0.001f; sl.hold = 0.0f; sl.sustain = 1.0f; sl.release = 0.03f; }
         }
+        {   // the toggle travels with a multisample instrument too
+            auto& ch2 = proc.sequencer.channel(selectedChannel);
+            const int si = envTargetSlot();
+            if (ch2.msSet[si] != nullptr) ch2.writeMsSidecar(si);
+        }
         proc.sequencer.channel(selectedChannel).markDspDirty();
         loadEnvIntoEditor();
         if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel);
@@ -12637,6 +12642,13 @@ void DrumSequencerEditor::applyEnvToTargets(float a, float h, float d, float s, 
         sl.sustain = s; sl.release = r;
     } else {
         sl.atk = a; sl.hold = h; sl.dec = d; sl.sustain = s; sl.release = r;
+    }
+    // [2026-07-20] the envelope travels WITH a multisample instrument (like gain/loop): every
+    // edit writes through to its sidecar, so the instrument remembers your shape everywhere.
+    {
+        auto& ch2 = proc.sequencer.channel(selectedChannel);
+        const int si = envTargetSlot();
+        if (ch2.msSet[si] != nullptr) ch2.writeMsSidecar(si);
     }
 }
 

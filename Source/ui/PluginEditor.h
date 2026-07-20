@@ -1432,9 +1432,11 @@ private:
     void writeTuneEntry(int voice, int root, float cents)
     {
         const juce::File sc = sessionDir.getChildFile("instrument.basamakinst");
-        juce::ValueTree t("instrument");
-        if (auto xml = juce::parseXML(sc)) t = juce::ValueTree::fromXml(*xml);
-        if (! t.isValid() || ! t.hasType("instrument")) t = juce::ValueTree("instrument");
+        juce::ValueTree t("BasamakInstrument");
+        if (auto xml = juce::parseXML(sc))
+        { const auto old = juce::ValueTree::fromXml(*xml); if (old.isValid()) t = old; }   // [2026-07-20]
+                                                           // ANY root type accepted - the panel's writer
+                                                           // and this one must never clobber each other
         for (int i = t.getNumChildren(); --i >= 0;)
         {
             const auto c = t.getChild(i);

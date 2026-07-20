@@ -1457,6 +1457,17 @@ bool DrumChannel::loadMultisample(int slot, const juce::File& folder)
         msRigModel = t.getProperty("rigModel", "").toString();
         msRigIr    = t.getProperty("rigIr", "").toString();
         refreshMsRig();
+        // [2026-07-20] the instrument's own AMP ENVELOPE (absent on old sidecars = slot untouched)
+        if (t.hasProperty("envOn"))
+        {
+            Slot& se = slots[slot];
+            se.smpEnvOn = (bool) t.getProperty("envOn", false);
+            se.atk     = juce::jlimit(0.0f, 6.0f, (float) t.getProperty("envA", se.atk));
+            se.hold    = juce::jlimit(0.0f, 6.0f, (float) t.getProperty("envH", se.hold));
+            se.dec     = juce::jlimit(0.01f, 6.0f, (float) t.getProperty("envD", se.dec));
+            se.sustain = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("envS", se.sustain));
+            se.release = juce::jlimit(0.0f, 4.0f, (float) t.getProperty("envR", se.release));
+        }
         // [2026-07-20] per-recording TUNE map: the wizard's measured cents ("auto-tuned by
         // construction" - sing roughly, playback compensates exactly). <tune voice root cents/>.
         for (int ci = 0; ci < t.getNumChildren(); ++ci)
@@ -1618,15 +1629,27 @@ void DrumChannel::writeMsSidecar(int slot) const
     if (slot < 0 || slot >= NUM_SLOTS || msSet[slot] == nullptr) return;
     const juce::File dir(msSet[slot]->folder);
     if (! dir.isDirectory()) return;
+    // [2026-07-20] READ-MODIFY-WRITE (bug fix): this used to build a FRESH tree, wiping the
+    // wizard's <tune> children (the auto-tune map) on every panel edit - and the wizard's own
+    // writer used a different root type, so the two writers clobbered each other's data.
+    const juce::File sc = dir.getChildFile("instrument.basamakinst");
     juce::ValueTree t("BasamakInstrument");
+    if (auto xml = juce::parseXML(sc))
+    { const auto old = juce::ValueTree::fromXml(*xml); if (old.isValid()) t = old; }
     const Slot& sl = slots[slot];
     t.setProperty("gainDb",  sl.msGainDb,     nullptr);
     t.setProperty("reverse", sl.smpReverse,   nullptr);
     t.setProperty("loop",    sl.msLoopOn,     nullptr);   // [2026-07-19] per-zone AUTO-loop on/off
     t.setProperty("rigModel", msRigModel,     nullptr);
     t.setProperty("rigIr",    msRigIr,        nullptr);
+    // [2026-07-20] the AMP ENVELOPE travels WITH the instrument (user design: "Steinway should
+    // have some decay and release by default... each with their own settings") - like gain/loop.
+    t.setProperty("envOn", sl.smpEnvOn, nullptr);
+    t.setProperty("envA", sl.atk, nullptr);     t.setProperty("envH", sl.hold, nullptr);
+    t.setProperty("envD", sl.dec, nullptr);     t.setProperty("envS", sl.sustain, nullptr);
+    t.setProperty("envR", sl.release, nullptr);
     if (auto xml = t.createXml())
-        xml->writeTo(dir.getChildFile("instrument.basamakinst"));
+        xml->writeTo(sc);
 }
 
 // Rebuild slotSample[slot].buf from its .original at slots[slot].smpStretch (pitch-preserving time-stretch).

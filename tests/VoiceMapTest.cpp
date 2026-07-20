@@ -57,6 +57,10 @@ int main()
         juce::ValueTree tu("tune"); tu.setProperty("voice", 0, nullptr);
         tu.setProperty("root", 60, nullptr); tu.setProperty("cents", -100.0f, nullptr);
         t.addChild(tu, -1, nullptr);
+        // [2026-07-20] the instrument's OWN envelope (user design: instruments arrive finished)
+        t.setProperty("envOn", true, nullptr);
+        t.setProperty("envA", 0.02f, nullptr); t.setProperty("envS", 0.75f, nullptr);
+        t.setProperty("envR", 0.4f, nullptr);
         dir.getChildFile("instrument.basamakinst").replaceWithText(t.toXmlString());
     }
     printf("[0] fixture written: %s\n", wrote ? "OK" : "FAIL"); if (! wrote) return 1;
@@ -98,6 +102,13 @@ int main()
     const double late = W(1.62, 1.86, C4);
     printf("[3] held-note energy late in a short source: %.3f -> %s\n", late,
            CHK(late > 0.02) ? "auto loop sustains (OK)" : "FAIL (loop dead on fresh load)");
+
+    // [4] the sidecar ENVELOPE travelled with the instrument (envOn + the authored values)
+    const auto& es = ch.slots[0];
+    printf("[4] sidecar env: on=%d A=%.3f S=%.2f R=%.2f -> %s\n",
+           (int) es.smpEnvOn, es.atk, es.sustain, es.release,
+           CHK(es.smpEnvOn && std::abs(es.atk - 0.02f) < 1e-3 && std::abs(es.sustain - 0.75f) < 1e-3
+               && std::abs(es.release - 0.4f) < 1e-3) ? "instrument env applied (OK)" : "FAIL");
 
     dir.deleteRecursively();
     delete s;
