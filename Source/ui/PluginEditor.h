@@ -1302,21 +1302,11 @@ private:
         capBuf.resize(juce::jmin(capBuf.size(), last + fade));
         for (size_t i = last; i < capBuf.size(); ++i)
             capBuf[i] *= 1.0f - (float)(i - last) / (float) juce::jmax((size_t) 1, fade);
-        // pitch: the LOUDEST sustained window (a blind offset could land on noise or the pluck
-        // transient); the ONE shared NSDF/MPM detector = the same maths as the live tuner.
-        heardHz = 0.0;
-        const int W = juce::jmin((int) capBuf.size() / 2, 8192);
-        if (W > 2048)
-        {
-            size_t bestOff = 0; double bestE = -1.0;
-            const size_t step = 2048, lim = capBuf.size() - (size_t) W;
-            for (size_t off = juce::jmin((size_t)(sr * 0.04), lim); off <= lim; off += step)
-            {   double e2 = 0.0;
-                for (int i = 0; i < W; i += 4) e2 += (double) capBuf[off + (size_t) i] * capBuf[off + (size_t) i];
-                if (e2 > bestE) { bestE = e2; bestOff = off; }
-                if (off + step > lim) break; }
-            heardHz = basamakDetectPitch(capBuf.data() + bestOff, W, sr);
-        }
+        // pitch: MEDIAN of mid-body windows (basamakMeasureSustainPitch) - NOT the loudest
+        // window: the loudest window is the ATTACK, and a sung "da" onset runs SHARP of where
+        // the note settles (the Da Loo Ne incident: takes were named ~2.5 st above their
+        // sustain, so playback compensated audibly flat). The name must be the note you HOLD.
+        heardHz = basamakMeasureSustainPitch(capBuf.data(), (int) capBuf.size(), sr);
         if (heardHz > 0.0)
         {
             const double m = 69.0 + 12.0 * std::log2(heardHz / 440.0);
@@ -1343,6 +1333,15 @@ private:
         const juce::File dir = voiceDir(curVoice);                    // [2026-07-20] voices = subfolders
         dir.createDirectory();
         juce::File f = replaceFile;
+        if (f.getFullPathName().isNotEmpty())
+        {
+            // [2026-07-20] a RERECORD may keep the old FILE only while the new take is still the
+            // SAME note - otherwise the name would lie about the audio and playback compensates
+            // out of tune (the Da Loo Ne 4-semitone incident). Different note = delete the old
+            // file and fall through to a fresh save under the MEASURED name.
+            const juce::String oldTok = f.getFileNameWithoutExtension().upToFirstOccurrenceOf(" ", false, false);
+            if (! oldTok.equalsIgnoreCase(base)) { f.deleteFile(); f = juce::File(); }
+        }
         if (f.getFullPathName().isEmpty())
         {   // [2026-07-19] NEW-take names are probed against the DISK, never the in-memory count:
             // the state-wipe incident restarted the counter and the old "count -> name + delete

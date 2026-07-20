@@ -340,6 +340,10 @@
 
 | 227 | r6: Steinway deleted (Salamander is the denser twin); user-tag BUG = .basamaksound is BINARY ValueTree, the XML-only parse silently failed (binary-first now); overlays consume wheel events (short picker lists bubbled scrolling to the channels); sidecar keepPitch flag -> DRUM KITS as multisamples (Drum Kit Real + Darbuka Kit, keys select drums at fixed pitch, velocity layers) + an 18-shot "VCSL Percussion" set into Resources/Samples (user: his own freesound finds are bad; old files left in place - installers never delete) | user orders + user bug reports | user round |
 
+| 228 | r7: drum kits DELETED (nearest-drum key mapping with no visual map = "users don't know what they're playing"; keepPitch flag + one-shots stay); "Da Loo Ne" = the user's OWN recorded 3-voice syllable instrument ships as factory (CC0, credited); orchestra/keys round (9 instruments; Drawbar Organ dropped at 1 zone). Factory = 44 / 502 MB | user verdicts + his recording | user round |
+
+| 229 | r8 tuning: pitch measurement = SUSTAIN median (5 mid-body windows), never the loudest window (= the attack; sung onsets run 2-4 st sharp - the Da Loo Ne flat-playback incident); multisample zones self-verify at load (audio wins over filename beyond 0.6 st, octave-folded, keepPitch kits exempt); wizard rerecords rename to the measured note; MsProbe = informational heard-vs-expected tool | root-caused from the user's "E3 shows C3" report | fix + locks |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

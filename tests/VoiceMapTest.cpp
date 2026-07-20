@@ -122,6 +122,33 @@ int main()
                    ? "one decode shared (OK)" : "FAIL (duplicate decode)");
     }
 
+    // [6] LOAD-TIME PITCH VERIFY (the Da Loo Ne incident): a file NAMED C4 whose audio is really
+    // A3 (e.g. a rerecord kept the old name) must HEAL at load - the zone re-roots to the
+    // MEASURED pitch, so asking for C4 plays a true C4 instead of an unshifted A3.
+    {
+        juce::File dir2 = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("BasamakVerifyTest");
+        dir2.deleteRecursively();
+        writeSine(dir2.getChildFile("C4.wav"), 220.0, 0.4, 48000.0);   // named C4, truly A3
+        auto& ch3 = s->patterns[0].channels[2];
+        for (auto& sl : ch3.slots) sl = DrumChannel::Slot();
+        ch3.slots[0].engine = DrumChannel::SrcSample; ch3.slots[0].weight = 1.0f;
+        ch3.drawMode = true; ch3.addDrawNote(0, 88, 0, 255, 0);
+        ch.mute = true; s->patterns[0].channels[1].mute = true;        // solo the healed channel
+        const bool l3 = ch3.loadMultisample(0, dir2);
+        const int healedRoot = (l3 && ch3.msSet[0] && ! ch3.msSet[0]->zones.empty())
+                                   ? ch3.msSet[0]->zones.front().root : -1;
+        s->stopStandalone(); s->startStandalone();
+        std::vector<float> out2;
+        for (int b = 0; b < (int)(0.5 * SR / bs) + 1; ++b)
+        { buf.clear(); s->processBlock(buf, SR, bs, nullptr); for (int i = 0; i < bs; ++i) out2.push_back(buf.getSample(0, i)); }
+        auto W2 = [&](double f){ return goertzel(out2, (size_t)(0.08*SR), (size_t)(0.42*SR), f, SR); };
+        const double atC4 = W2(C4), atA3 = W2(220.0);
+        printf("[6] heal: root=%d (want 57) C4=%.3f A3=%.3f -> %s\n", healedRoot, atC4, atA3,
+               CHK(l3 && healedRoot == 57 && atC4 > 0.03 && atA3 < atC4 * 0.2)
+                   ? "mis-named zone healed (OK)" : "FAIL (name trusted over audio)");
+        dir2.deleteRecursively();
+    }
+
     dir.deleteRecursively();
     delete s;
     printf(fails == 0 ? "VoiceMapTest: ALL PASS\n" : "VoiceMapTest: %d FAILURES\n", fails);

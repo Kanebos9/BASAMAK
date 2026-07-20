@@ -102,6 +102,39 @@ static inline double basamakDetectPitch(const float* x, int W, double fs) noexce
     return -1.0;
 }
 
+// [2026-07-20] SUSTAIN pitch = the MEDIAN of several mid-body windows. A single loudest-window
+// measurement lands on the ATTACK, and sung/plucked onsets run audibly SHARP of the sustain
+// (the Da Loo Ne incident: the wizard named a vocal take ~2.5 st above the note it settles on).
+// Windows probe 30..78% of the length; near-silent windows (< 10% of the strongest) are
+// skipped; the median throws away the outliers a scoop or wobble leaves behind.
+static inline double basamakMeasureSustainPitch(const float* x, int N, double fs) noexcept
+{
+    const int W = (N / 2 < 8192) ? N / 2 : 8192;
+    if (W < 2048 || fs <= 0) return 0.0;
+    constexpr double frac[5] = { 0.30, 0.42, 0.54, 0.66, 0.78 };
+    double eng[5]; double eMax = 0.0;
+    int offs[5];
+    for (int k = 0; k < 5; ++k)
+    {
+        offs[k] = (int)(frac[k] * (double)(N - W));
+        double e2 = 0.0;
+        for (int i = 0; i < W; i += 4) e2 += (double) x[offs[k] + i] * x[offs[k] + i];
+        eng[k] = e2; if (e2 > eMax) eMax = e2;
+    }
+    double cand[5]; int nc = 0;
+    for (int k = 0; k < 5; ++k)
+    {
+        if (eng[k] < eMax * 0.1) continue;
+        const double hz = basamakDetectPitch(x + offs[k], W, fs);
+        if (hz > 0.0) cand[nc++] = hz;
+    }
+    if (nc == 0) return 0.0;
+    for (int i = 1; i < nc; ++i)             // insertion sort - 5 elements, no <algorithm> dep
+        for (int j = i; j > 0 && cand[j] < cand[j - 1]; --j)
+        { const double t = cand[j]; cand[j] = cand[j - 1]; cand[j - 1] = t; }
+    return cand[nc / 2];
+}
+
 struct TunerTap
 {
     static constexpr int DECIM = 4;      // engine rate / 4 (e.g. 96k -> 24k): high notes need the lag

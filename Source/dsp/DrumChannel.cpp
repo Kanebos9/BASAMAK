@@ -1508,9 +1508,11 @@ bool DrumChannel::loadMultisample(int slot, const juce::File& folder)
     // [2026-07-20] slot-side sidecar (gain/reverse/loop/env/rig) - the shared-load path reuses it
     applyMsSidecar(slot, folder, set->nVoices);
     // set-side sidecar: the TUNE map shapes the SHARED zones (part of the registry fingerprint)
+    bool msKeepPitch = false;
     if (auto xml = juce::parseXML(folder.getChildFile("instrument.basamakinst")))
     {
         const juce::ValueTree t = juce::ValueTree::fromXml(*xml);
+        msKeepPitch = (bool) t.getProperty("keepPitch", false);
         for (int ci = 0; ci < t.getNumChildren(); ++ci)
         {
             const auto tc = t.getChild(ci);
@@ -1519,6 +1521,35 @@ bool DrumChannel::loadMultisample(int slot, const juce::File& folder)
             for (auto& z : set->zones)
                 if (z.voice == tv && z.root == tr)
                     z.cents = juce::jlimit(-100.0f, 100.0f, (float) tc.getProperty("cents", 0.0f));
+        }
+    }
+    // [2026-07-20] LOAD-TIME PITCH VERIFY (self-healing): re-recorded / mis-named files can make
+    // the filename + tune map LIE about the audio, and playback then "compensates" audibly out
+    // of tune (the Da Loo Ne 4-semitone incident: a rerecord kept the old note name). Measure
+    // each zone's REAL pitch (loudest sustained window - the wizard's exact recipe) and, when it
+    // disagrees with the claim by more than 0.6 st, trust the AUDIO. The measurement is first
+    // FOLDED to within a tritone of the claim, so a detector octave slip can never re-tune a
+    // correctly named factory zone; vibrato snapshots (< 0.6 st) keep the name. keepPitch kits
+    // skip it entirely (drum "pitch" must never remap the keys).
+    if (! msKeepPitch)
+    {
+        for (auto& z : set->zones)
+        {
+            if (z.layers.empty()) continue;
+            const auto& b = z.layers.back().buf;
+            // SUSTAIN median, not the loudest window: the loudest window is the ATTACK, and a
+            // sung/plucked onset runs sharp of where the note settles (the actual Da Loo Ne bug).
+            const double hz = basamakMeasureSustainPitch(b.getReadPointer(0), b.getNumSamples(), hostRate);
+            if (hz <= 0.0) continue;
+            double m = 69.0 + 12.0 * std::log2(hz / 440.0);
+            const double claim = (double) z.root + z.cents * 0.01;
+            while (m < claim - 6.0) m += 12.0;
+            while (m > claim + 6.0) m -= 12.0;
+            if (std::abs(m - claim) > 0.6)
+            {
+                z.root  = juce::roundToInt(m);
+                z.cents = juce::jlimit(-100.0f, 100.0f, (float)((m - z.root) * 100.0));
+            }
         }
     }
     slotSample[slot].loadedAtRate = hostRate;
