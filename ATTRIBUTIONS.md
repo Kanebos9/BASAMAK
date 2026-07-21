@@ -18,7 +18,7 @@ license text ships alongside the samples). Credits are given as a courtesy to th
 
 - Bagpipes / Baritone Sax / Folk Tuba / Tagelharpa / Double Bass Pizz / Solo Cello — by Karoryfer Samples (karoryfer.com), via github.com/sfzinstruments &middot; Creative Commons 0
 
-- Gamelan Saron / Gamelan Gender / Gamelan Bonang — from the Casa da Musica Gamelan Sample Library (Digitopia, Porto) &middot; Artistic License 2.0
+- Gamelan Saron / Gamelan Gender — from the Casa da Musica Gamelan Sample Library (Digitopia, Porto) &middot; Artistic License 2.0
 
 - Haegeum / Sanjo Gayageum / Gayageum 25 / Sanjo Daegeum / Taepyeongso / Yanggeum / Saenghwang / Ajaeng / Danso / Sogeum / Seul — recorded by the National Gugak Center (Korea), gugak.go.kr &middot; Korea Open Government License Type 1 (attribution)
 
