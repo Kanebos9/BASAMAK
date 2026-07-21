@@ -3467,7 +3467,8 @@ static inline int uiScaleSemis(int scaleType, int k) {
 //==============================================================================
 namespace {
 struct GenRowDef { const char* label; const char* const* items; int count; };
-static const char* const kGenRoles[]   = { "Bassline", "Melody", "Hum", "Riff" };
+// [r20] + Chords (comping) + Drum Kit (multi-channel step kit - the style-DNA centerpiece)
+static const char* const kGenRoles[]   = { "Bassline", "Melody", "Hum", "Riff", "Chords", "Drum Kit" };
 static const char* const kGenDens[]    = { "Sparse", "Medium", "Busy" };
 static const char* const kGenReg[]     = { "Low", "Mid", "High" };
 static const char* const kGenColor[]   = { "Safe", "Spicy", "Colorful" };
@@ -3482,17 +3483,24 @@ static const char* const kGenHum[]     = { "Off", "Subtle", "Loose" };
 static const char* const kGenFills[]   = { "Off", "Last bar", "Every phrase" };
 static const char* const kGenProgs[]   = { "Auto (detected)", "I-V-vi-IV", "I-vi-IV-V",
                                            "i-VI-III-VII", "ii-V-I", "I-IV-V", "12-bar blues" };
-static const char* const kGenActions[] = { "NEW IDEA", "VARY", "Same rhythm, new notes", "Same notes, new rhythm" };
+// [r20] Style (DrumGen::kStyleName order) + the Write-as output row
+static const char* const kGenStyles[]  = { "House", "Techno", "Boom-bap", "Trap", "DnB",
+                                           "Reggaeton", "Funk", "Pop" };
+static const char* const kGenOut[]     = { "Auto", "Steps", "Piano Roll" };
+static const char* const kGenActions[] = { "NEW IDEA", "VARY", "Same rhythm, new notes", "Same notes, new rhythm",
+                                           "KEEP MY NOTES (augment)..." };
 static const juce::Colour kGenAccent { 0xffa0e8b0 };   // the Generate green (roll-operations family)
-// [P1] rows live in three labeled BANDS: What (0-2) | Feel (3-8) | Form (9-11)
-static inline int genBandOf(int row) { return row < 3 ? 0 : (row < 9 ? 1 : 2); }
+// [r20] rows live in three labeled BANDS: What (0-4) | Feel (5-10) | Form (11-13)
+//   0 Role | 1 Key | 2 Chords | 3 Style | 4 Write as || 5 Density | 6 Register | 7 Color |
+//   8 Rhythm | 9 Intensity | 10 Humanize || 11 Lines | 12 Next lines | 13 Fills + Singable
+static inline int genBandOf(int row) { return row < 5 ? 0 : (row < 11 ? 1 : 2); }
 // [P1] the pattern-row Generate button opens the panel over the COLLAPSED (editor-hidden) view
 // too, whose content is only ~480px tall - geometry compacts when the host area is short.
 struct GenGeom { int pitch, hdr, chipH, actH, actPitch, panelH; };
 static inline GenGeom genGeom(int totalH)
 {
-    if (totalH >= 650) return { 33, 18, 26, 34, 40, 634 };
-    return { 24, 12, 20, 28, 32, 470 };
+    if (totalH >= 780) return { 33, 18, 26, 34, 40, 740 };
+    return { 20, 10, 17, 24, 28, 460 };
 }
 }
 
@@ -3511,12 +3519,12 @@ juce::Rectangle<int> GeneratePanel::rowRect(int row) const
 juce::Rectangle<int> GeneratePanel::chipRect(int row, int idx, int count) const
 {
     auto r = rowRect(row).withTrimmedLeft(68);
-    if (row == 11) r = r.withTrimmedRight(104);   // Fills row shares with the Singable toggle
+    if (row == 13) r = r.withTrimmedRight(104);   // Fills row shares with the Singable toggle
     const int w = (r.getWidth() - (count - 1) * 4) / count;
     return { r.getX() + idx * (w + 4), r.getY() + 1, w, genGeom(getHeight()).chipH };
 }
 juce::Rectangle<int> GeneratePanel::singableRect() const
-{ const auto r = rowRect(11); return { r.getRight() - 98, r.getY() + 1, 98, genGeom(getHeight()).chipH }; }
+{ const auto r = rowRect(13); return { r.getRight() - 98, r.getY() + 1, 98, genGeom(getHeight()).chipH }; }
 juce::Rectangle<int> GeneratePanel::keyRect() const
 { const auto r = rowRect(1); return { r.getX() + 68, r.getY() + 1, 64, genGeom(getHeight()).chipH }; }
 juce::Rectangle<int> GeneratePanel::scaleRect() const
@@ -3528,8 +3536,11 @@ juce::Rectangle<int> GeneratePanel::actionRect(int idx) const
     const auto p = panelRect();
     const auto gg = genGeom(getHeight());
     const int w = (p.getWidth() - 24 - 8) / 2;
+    if (idx >= 4)   // [r20] KEEP MY NOTES: a full-width third action row
+        return { p.getX() + 12, rowRect(13).getBottom() + 6 + 2 * gg.actPitch,
+                 p.getWidth() - 24, gg.actH };
     return { p.getX() + 12 + (idx % 2) * (w + 8),
-             rowRect(11).getBottom() + 6 + (idx / 2) * gg.actPitch, w, gg.actH };
+             rowRect(13).getBottom() + 6 + (idx / 2) * gg.actPitch, w, gg.actH };
 }
 juce::Rectangle<int> GeneratePanel::closeRect() const
 { const auto p = panelRect(); return { p.getRight() - 32, p.getY() + 8, 24, 24 }; }
@@ -3567,6 +3578,7 @@ void GeneratePanel::paint(juce::Graphics& g)
     };
     // [P1] band headers: What (the material) | Feel (how it plays) | Form (how it is shaped)
     const auto gg = genGeom(getHeight());
+    const bool drums = role == 5;   // [r20] Drum Kit: the style drives it; melodic rows sleep
     auto bandHdr = [&](int firstRow, const char* t)
     {
         const auto r = rowRect(firstRow);
@@ -3575,19 +3587,21 @@ void GeneratePanel::paint(juce::Graphics& g)
                          juce::Justification::centredLeft, 1, 0.8f);
     };
     bandHdr(0, "WHAT");
-    chips(0, "Role",     kGenRoles,   4, role, false);
-    auto btn = [&](juce::Rectangle<int> b, const juce::String& t)
+    chips(0, "Role",     kGenRoles,   6, role, false);
+    auto btn = [&](juce::Rectangle<int> b, const juce::String& t, bool dim)
     {
-        g.setColour(juce::Colour(0xff223046)); g.fillRoundedRectangle(b.toFloat(), 4.0f);
-        g.setColour(juce::Colour(0xff9fd1ff)); g.setFont(juce::Font(12.5f, juce::Font::bold));
+        g.setColour(juce::Colour(0xff223046).withAlpha(dim ? 0.4f : 1.0f));
+        g.fillRoundedRectangle(b.toFloat(), 4.0f);
+        g.setColour(juce::Colour(0xff9fd1ff).withAlpha(dim ? 0.4f : 1.0f));
+        g.setFont(juce::Font(12.5f, juce::Font::bold));
         g.drawFittedText(t, b, juce::Justification::centred, 1, 0.7f);
     };
     { // KEY + SCALE row: two popup buttons + the honesty tag (where the prefill came from)
         const auto r = rowRect(1);
         g.setColour(juce::Colour(0xff8a94b0)); g.setFont(juce::Font(12.0f, juce::Font::bold));
         g.drawText("Key", r.getX(), r.getY(), 64, r.getHeight(), juce::Justification::centredLeft, false);
-        btn(keyRect(),   kUiNoteName[juce::jlimit(0, 11, key)]);
-        btn(scaleRect(), kUiScaleName[juce::jlimit(0, 9, scaleType)]);
+        btn(keyRect(),   kUiNoteName[juce::jlimit(0, 11, key)], drums);
+        btn(scaleRect(), kUiScaleName[juce::jlimit(0, 9, scaleType)], drums);
         g.setColour(juce::Colour(0xff6a7490)); g.setFont(juce::Font(11.0f));
         g.drawText("(" + keyTag + ")", scaleRect().getRight() + 8, r.getY(), r.getRight() - scaleRect().getRight() - 8,
                    r.getHeight(), juce::Justification::centredLeft, false);
@@ -3596,46 +3610,57 @@ void GeneratePanel::paint(juce::Graphics& g)
         const auto r = rowRect(2);
         g.setColour(juce::Colour(0xff8a94b0)); g.setFont(juce::Font(12.0f, juce::Font::bold));
         g.drawText("Chords", r.getX(), r.getY(), 64, r.getHeight(), juce::Justification::centredLeft, false);
-        btn(chordsRect(), kGenProgs[juce::jlimit(0, 6, progression)]);
+        btn(chordsRect(), kGenProgs[juce::jlimit(0, 6, progression)], drums);
     }
-    bandHdr(3, "FEEL");
-    chips(3, "Density",  kGenDens,    3, density, false);
-    chips(4, "Register", kGenReg,     3, registerBand, false);
-    chips(5, "Color",    kGenColor,   3, color, false);
-    chips(6, "Rhythm",   kGenRhythm,  3, rhythm, false);
-    chips(7, "Intensity", kGenInt,    3, intensity, false);
-    chips(8, "Humanize", kGenHum,     3, humanize, false);
-    bandHdr(9, "FORM");
-    chips(9,  "Lines",    kGenLines,  5, lines, bars < 2);
-    chips(10, "Next lines", kGenRel,  4, relation, bars < 2);
-    chips(11, "Fills",    kGenFills,  3, fills, false);
+    // [r20] STYLE (genre DNA): the Drum Kit's canon; melodic roles borrow it as the virtual
+    // groove when nothing is heard. WRITE AS = the universal output row (drums are step-native).
+    chips(3, "Style",    kGenStyles,  8, style, false);
+    chips(4, "Write as", kGenOut,     3, outMode, drums);
+    bandHdr(5, "FEEL");
+    chips(5, "Density",  kGenDens,    3, density, false);
+    chips(6, "Register", kGenReg,     3, registerBand, drums);
+    chips(7, "Color",    kGenColor,   3, color, drums);
+    chips(8, "Rhythm",   kGenRhythm,  3, rhythm, drums);
+    chips(9, "Intensity", kGenInt,    3, intensity, false);
+    chips(10, "Humanize", kGenHum,    3, humanize, false);
+    bandHdr(11, "FORM");
+    chips(11, "Lines",    kGenLines,  5, lines, bars < 2 || drums);
+    chips(12, "Next lines", kGenRel,  4, relation, bars < 2 || drums);
+    chips(13, "Fills",    kGenFills,  3, fills, false);
     { const auto sr = singableRect();
-      g.setColour(singable ? kGenAccent : juce::Colour(0xff33335a)); g.fillRoundedRectangle(sr.toFloat(), 4.0f);
-      g.setColour(singable ? juce::Colours::black : juce::Colour(0xffb8b8d0));
+      const bool dim = drums;
+      g.setColour((singable && ! dim ? kGenAccent : juce::Colour(0xff33335a)).withAlpha(dim ? 0.4f : 1.0f));
+      g.fillRoundedRectangle(sr.toFloat(), 4.0f);
+      g.setColour((singable && ! dim ? juce::Colours::black : juce::Colour(0xffb8b8d0)).withAlpha(dim ? 0.4f : 1.0f));
       g.setFont(juce::Font(12.0f, juce::Font::bold));
       g.drawText("Singable", sr, juce::Justification::centred, false); }
 
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < 5; ++i)
     {
         const auto ar = actionRect(i);
         const bool big = i < 2;
-        g.setColour(big ? juce::Colour(0xff2a4a3a) : juce::Colour(0xff26263c));
+        const bool dim = i == 4 && ! hadNotes;   // Keep-my-notes needs notes to keep
+        g.setColour((big ? juce::Colour(0xff2a4a3a) : juce::Colour(0xff26263c)).withAlpha(dim ? 0.4f : 1.0f));
         g.fillRoundedRectangle(ar.toFloat(), 5.0f);
-        g.setColour(big ? kGenAccent : juce::Colour(0xffcfd6e6));
+        g.setColour((big ? kGenAccent : juce::Colour(0xffcfd6e6)).withAlpha(dim ? 0.4f : 1.0f));
         g.setFont(juce::Font(big ? 14.5f : 12.5f, juce::Font::bold));
         g.drawFittedText(kGenActions[i], ar, juce::Justification::centred, 1, 0.7f);
     }
-    g.setColour(juce::Colour(0xff6a7490)); g.setFont(juce::Font(11.5f));
-    const int hintY = actionRect(3).getBottom() + 4;
-    g.drawFittedText("Lands in the channel behind (roll notes, or STEPS on a step channel) - reroll until it fits. Undo restores.",
-                     p.getX() + 12, hintY, p.getWidth() - 24, gg.panelH > 500 ? 24 : 18,
-                     juce::Justification::centred, 2, 0.7f);
+    const int hintY = actionRect(4).getBottom() + 4;
+    if (gg.panelH > 500)
+    {
+        g.setColour(juce::Colour(0xff6a7490)); g.setFont(juce::Font(11.5f));
+        g.drawFittedText("Lands in the channel behind (Write as picks steps or roll; Drum Kit writes steps "
+                         "across your drum channels). Undo restores.",
+                         p.getX() + 12, hintY, p.getWidth() - 24, 24,
+                         juce::Justification::centred, 2, 0.7f);
+    }
     // [1.5.7 r18] the CONTEXT READOUT: what the last gather actually heard - starvation is never
     // silent. Non-interactive drawn text; squeeze (never ellipsis) via drawFittedText's min scale.
     if (contextLine.isNotEmpty())
     {
         g.setColour(juce::Colour(0xff8fb0d8)); g.setFont(juce::Font(11.5f, juce::Font::bold));
-        g.drawFittedText(contextLine, p.getX() + 12, hintY + (gg.panelH > 500 ? 26 : 19),
+        g.drawFittedText(contextLine, p.getX() + 12, hintY + (gg.panelH > 500 ? 26 : 0),
                          p.getWidth() - 24, gg.panelH > 500 ? 26 : 20,
                          juce::Justification::centred, 2, 0.55f);
     }
@@ -3652,17 +3677,21 @@ void GeneratePanel::mouseDown(const juce::MouseEvent& e)
             if (chipRect(row, i, count).contains(pos)) { field = i; repaint(); return true; }
         return false;
     };
-    if (hitChips(0, 4, role))          return;
-    if (hitChips(3, 3, density))       return;
-    if (hitChips(4, 3, registerBand))  return;
-    if (hitChips(5, 3, color))         return;
-    if (hitChips(6, 3, rhythm))        return;
-    if (hitChips(7, 3, intensity))     return;
-    if (hitChips(8, 3, humanize))      return;
-    if (bars >= 2 && hitChips(9, 5, lines))     return;
-    if (bars >= 2 && hitChips(10, 4, relation)) return;
-    if (hitChips(11, 3, fills))        return;
-    if (singableRect().contains(pos))  { singable = ! singable; repaint(); return; }
+    const bool drums = role == 5;   // [r20] dimmed rows ignore clicks while Drum Kit is the role
+    if (hitChips(0, 6, role))          return;
+    if (hitChips(3, 8, style))         return;
+    if (! drums && hitChips(4, 3, outMode))       return;
+    if (hitChips(5, 3, density))       return;
+    if (! drums && hitChips(6, 3, registerBand))  return;
+    if (! drums && hitChips(7, 3, color))         return;
+    if (! drums && hitChips(8, 3, rhythm))        return;
+    if (hitChips(9, 3, intensity))     return;
+    if (hitChips(10, 3, humanize))     return;
+    if (bars >= 2 && ! drums && hitChips(11, 5, lines))     return;
+    if (bars >= 2 && ! drums && hitChips(12, 4, relation))  return;
+    if (hitChips(13, 3, fills))        return;
+    if (! drums && singableRect().contains(pos))  { singable = ! singable; repaint(); return; }
+    if (drums && (rowRect(1).contains(pos) || rowRect(2).contains(pos))) return;   // sleeping rows
     if (chordsRect().contains(pos))
     {   // [P1] the Chords override: Auto (detected) or a stock progression steering chordCols
         juce::PopupMenu m;
@@ -3692,6 +3721,17 @@ void GeneratePanel::mouseDown(const juce::MouseEvent& e)
     }
     for (int i = 0; i < 4; ++i)
         if (actionRect(i).contains(pos)) { if (onAction) onAction(i); return; }
+    if (actionRect(4).contains(pos))
+    {   // [r20 item I] KEEP MY NOTES: augment the hand-written material instead of replacing it
+        if (! hadNotes) return;   // nothing to keep - the button is dimmed
+        juce::PopupMenu m;
+        m.addSectionHeader("Augment YOUR notes (undo restores)");
+        m.addItem(1, "Keep my RHYTHM - write new notes over it");
+        m.addItem(2, "Keep my NOTES - write a new rhythm under them");
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(localAreaToGlobal(actionRect(4))),
+                        [this](int r) { if (r >= 1 && onAction) onAction(r == 1 ? 4 : 5); });
+        return;
+    }
 }
 
 juce::String GeneratePanel::getTooltip()
@@ -3705,7 +3745,11 @@ juce::String GeneratePanel::getTooltip()
                          "- Melody: mid register, phrases with variation.\n"
                          "- Hum: sparse legato vocal-guide line (pairs with the Hum/choir sounds - or your own "
                          "recorded hum multisample).\n"
-                         "- Riff: one short cell repeated every bar, transposed with the harmony.\n\n"
+                         "- Riff: one short cell repeated every bar, transposed with the harmony.\n"
+                         "- Chords: block comping voicings (needs a poly sound + the roll; degrades to an "
+                         "arpeggiated line on steps/mono).\n"
+                         "- Drum Kit: writes a WHOLE interlocking kit as STEPS across your kick/snare/hat "
+                         "channels in one pass (one undo).\n\n"
                          "Defaults from the loaded sound's bank category.";
     if (inRow(1)) return "KEY + SCALE the generator writes in. Prefilled from this channel's Scale mode, or "
                          "DETECTED from your pitched piano-roll channels - correct it here if the guess is wrong.";
@@ -3713,51 +3757,74 @@ juce::String GeneratePanel::getTooltip()
                          "- Auto: detected from your other channels' notes (stock changes when nothing is heard).\n"
                          "- Or pick a classic progression - it overrides detection for every role.\n"
                          "- Basslines land the ROOT on every change and walk an approach note into it.";
-    if (inRow(3)) return "DENSITY: fewer, longer notes vs more movement. Busy also doubles the harmonic "
-                         "rhythm (two chords per bar).";
-    if (inRow(4)) return "REGISTER: where the line sits. Bassline treats High as mid-low (a bass stays a bass).";
-    if (inRow(5)) return "COLOR: how far outside the safe notes it reaches.\n\n"
+    if (inRow(3)) return "STYLE: the genre DNA.\n\n"
+                         "- Drum Kit: it IS the pattern - kick canon, hat language, backbeat scheme, ghosts "
+                         "and the genre's swing (written to this pattern's Swing, disclosed below).\n"
+                         "- Melodic roles: when NO drums are heard, the style's canon kit becomes the "
+                         "virtual groove the part phrases against (instead of the bare meter).";
+    if (inRow(4)) return "WRITE AS: where the part lands.\n\n"
+                         "- Auto: the channel's current mode wins (step channel = steps, roll = roll notes).\n"
+                         "- Steps: ANY role writes step data - the count is chosen to hold the part's "
+                         "timing (velocity, pitch vs the Freq knob, gate + Slide per step); a roll channel "
+                         "is SWITCHED to steps (its roll notes clear - undo restores).\n"
+                         "- Piano Roll: always roll notes; a step channel switches to the roll.\n"
+                         "- Drum Kit ignores this row: drums are step-native.";
+    if (inRow(5)) return "DENSITY: fewer, longer notes vs more movement. Busy also doubles the harmonic "
+                         "rhythm (two chords per bar); on drums it widens the ghost/perc budget.";
+    if (inRow(6)) return "REGISTER: where the line sits. Bassline treats High as mid-low (a bass stays a bass).";
+    if (inRow(7)) return "COLOR: how far outside the safe notes it reaches.\n\n"
                          "- Safe: chord tones on strong beats, scale steps between.\n"
                          "- Spicy: occasional passing tones + chromatic bass approaches.\n"
                          "- Colorful: chromatic neighbours + off-beat landings.";
-    if (inRow(6)) return "RHYTHM stance vs YOUR groove (read from the other channels' steps):\n\n"
+    if (inRow(8)) return "RHYTHM stance vs YOUR groove (read from the other channels' steps):\n\n"
                          "- Flowing: long legato notes floating over the beat.\n"
                          "- In the pockets: fills the gaps BETWEEN your drum hits.\n"
                          "- Driving: locks onto the drum hits.\n"
                          "- A Bassline reads the stance against the KICK: Driving = with it, "
                          "In the pockets = between it, Flowing = never rings into it.";
-    if (inRow(7)) return "INTENSITY: how hard the part plays.\n\n"
+    if (inRow(9)) return "INTENSITY: how hard the part plays.\n\n"
                          "- Soft: quieter, shallow accents.\n"
                          "- Hard: louder, deep accents (about twice the accent spread - the way a hard "
                          "take measures against a soft one).";
-    if (inRow(8)) return "HUMANIZE: small velocity + timing jitter, like a player.\n\n"
+    if (inRow(10)) return "HUMANIZE: small velocity + timing jitter, like a player.\n\n"
                          "- Subtle: ~10 ms of drift.  Loose: ~30 ms.\n"
+                         "- Drums jitter velocities by the genre's measured spread.\n"
                          "- Deterministic from the seeds - the same idea always plays back identically.";
-    if (inRow(9)) return "LINES: how many melodic SENTENCES the melody has across this group - like lines "
+    if (inRow(11)) return "LINES: how many melodic SENTENCES the melody has across this group - like lines "
                          "of lyrics.\n\n"
                          "- 1 = ONE arc spanning ALL the bars (even 3 bars = one long line).\n"
                          "- 2 = a question and its answer.\n"
                          "- 3 / 4 = more sentences (4 on Auto relations = the classic hook/bridge/hook shape).\n"
                          "- Auto picks by group length (long arcs by default).";
-    if (inRow(11) && singableRect().contains(pos))
+    if (inRow(13) && singableRect().contains(pos))
                   return "SINGABLE: about one octave, mostly stepwise, leaps capped at a fifth, a breath at phrase "
                          "ends - a line a human could actually hum. The vocal-guide special.";
-    if (inRow(10)) return "NEXT LINES: what lines 2+ do compared to line 1.\n\n"
+    if (inRow(12)) return "NEXT LINES: what lines 2+ do compared to line 1.\n\n"
                          "- Repeat: same line again, ending varied (hooks live here).\n"
                          "- Answer: shares line 1's opening, then answers and lands HOME (the sung-sentence feel).\n"
                          "- New: every line is fresh material.\n"
                          "- Auto: question/answer for 2 lines, hook + contrast for 4.";
-    if (inRow(11)) return "FILLS: an end-of-line density bump (extra notes in the bar's last quarter).\n\n"
+    if (inRow(13)) return "FILLS: an end-of-line density bump (extra notes in the bar's last quarter).\n\n"
                          "- Last bar: only the group's final bar fills.\n"
-                         "- Every phrase: each line's final bar fills.";
-    if (actionRect(0).contains(pos)) return "NEW IDEA: a full reroll - fresh rhythm AND fresh notes.";
-    if (actionRect(1).contains(pos)) return "VARY: keep this melody's skeleton, change ~a third of the notes (same idea, new ornaments).";
+                         "- Every phrase: each line's final bar fills.\n"
+                         "- Drum Kit: one fill per 4-bar phrase end - snare crescendo, subdivision "
+                         "doubling, or (Trap) hat-roll ratchets.";
+    if (actionRect(4).contains(pos)) return "KEEP MY NOTES: augment what YOU wrote instead of replacing it.\n\n"
+                         "- Keep my RHYTHM: your onsets + lengths stay; the pitches are rewritten with the "
+                         "melody rules.\n"
+                         "- Keep my NOTES: your pitch sequence stays (in order); a fresh rhythm is written "
+                         "under it.\n"
+                         "- Undo restores; dimmed when the channel is empty.";
+    if (actionRect(0).contains(pos)) return "NEW IDEA: a full reroll - fresh rhythm AND fresh notes "
+                         "(Drum Kit: the canon stays, its free cells reroll).";
+    if (actionRect(1).contains(pos)) return "VARY: keep this melody's skeleton, change ~a third of the notes (same idea, new ornaments). "
+                         "Drum Kit: re-pick the pattern's free cells within the genre canon (max 2 kick cells move).";
     if (actionRect(2).contains(pos)) return "SAME RHYTHM, NEW NOTES: the onsets stay exactly where they are; only the pitches reroll.";
     if (actionRect(3).contains(pos)) return "SAME NOTES, NEW RHYTHM: keep the pitch idea, reroll where the notes land.";
     return "GENERATE: writes a part for THIS channel from your groove + key. One-shot dice - playback stays "
            "deterministic; the result is ordinary notes you can edit. Undo restores the previous take.\n\n"
-           "- A PIANO-ROLL channel gets roll notes; a STEP-MODE channel gets STEPS - the step count is "
-           "chosen to fit the part's timing (velocity, pitch, gate and Slide written per step).";
+           "- WRITE AS picks the output: roll notes or STEPS (count chosen to fit the timing).\n"
+           "- DRUM KIT writes a whole kit as steps across your drum channels, one undo.";
 }
 
 void VoiceModDisplay::setValues(int unison, int scaleUnison, float detune, float vibrato, bool centreOn, int detuneMode, bool scaleOnIn, int scaleTypeIn, int scaleKeyIn, float uniSpreadIn, float driftIn)
@@ -8049,8 +8116,14 @@ void DrumSequencerEditor::openGeneratePanel()
         auto names = Factory::mixNames(); auto cats = Factory::mixCategories();
         const int idx = names.indexOf(c.mixName);
         const juce::String cat = idx >= 0 && idx < cats.size() ? cats[idx] : juce::String();
-        generatePanel.role = cat == "Bass"          ? PartGen::RoleBass
+        // [r20] a drum-family sound defaults to the DRUM KIT role (the kit writes across every
+        // drum channel; the selected one anchors its own lane)
+        const bool drumCat = cat == "Kicks" || cat == "Snares" || cat == "Claps" || cat == "Hi-Hats"
+                          || cat == "Cymbals" || cat == "Toms" || cat == "Percussion" || cat == "Electro Perc";
+        generatePanel.role = drumCat                ? 5
+                           : cat == "Bass"          ? PartGen::RoleBass
                            : cat == "Pads & Choirs" ? PartGen::RoleHum
+                           : cat == "Keys"          ? PartGen::RoleChords
                            : cat == "Chords & Arps" ? PartGen::RoleRiff
                                                     : PartGen::RoleMelody;
         if (generatePanel.role == PartGen::RoleHum)
@@ -8086,14 +8159,12 @@ void DrumSequencerEditor::openGeneratePanel()
     }
     genHadNotes = false;
     for (int b = head; b <= end; ++b)
-    {
+    {   // [r20] BOTH sides count - the Write-as row can target either world
         auto& cb = sq.patterns[b].channels[selectedChannel];
-        if (cb.drawMode ? (cb.drawNoteCount > 0)
-                        : [&cb] { for (int i = 0; i < cb.numSteps; ++i)   // [P1] steps count too
-                                      if (cb.steps[i]) return true;
-                                  return false; }())
-            genHadNotes = true;
+        if (cb.drawNoteCount > 0) genHadNotes = true;
+        for (int i = 0; i < cb.numSteps; ++i) if (cb.steps[i]) genHadNotes = true;
     }
+    generatePanel.hadNotes = genHadNotes;   // dims/undims the Keep-my-notes action
     genWarned = false;
     genVaryCount = 0;
     auto& rnd = juce::Random::getSystemRandom();
@@ -8107,12 +8178,74 @@ void DrumSequencerEditor::genAction(int action)
     auto& sq = proc.sequencer;
     const int ch = selectedChannel;
     const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
-    // [P1 item 3] a STEP-MODE target gets STEP OUTPUT (count authority + steps); roll keeps roll
-    const bool stepOut = ! sq.patterns[head].channels[ch].drawMode;
-    if (genHadNotes && ! genWarned)
+    const bool isDrums = generatePanel.role == 5;        // [r20] the multi-channel Drum Kit role
+    const bool keepMode = action == 4 || action == 5;    // [r20 item I] augment, never replace
+
+    // ---- [r20 item B] DRUM KIT channel targets, resolved up front so the replace warning
+    // covers THEM (the kit writes wherever the drum channels live, not the selected channel).
+    struct KitTgt { int kick = -1, snare = -1, hat = -1, open = -1, perc = -1; };
+    KitTgt kt;
+    if (isDrums)
+    {
+        const auto facNames = Factory::mixNames();
+        const auto facCats  = Factory::mixCategories();
+        auto roleOf = [&](int chn)
+        {
+            const auto& name = sq.patterns[head].channels[chn].mixName;
+            const int fi = facNames.indexOf(name);
+            return GenContext::classifyDrumRole(fi >= 0 && fi < facCats.size() ? facCats[fi]
+                                                                               : juce::String(), name);
+        };
+        auto isOpenName = [&](int chn)
+        {
+            const auto n = sq.patterns[head].channels[chn].mixName.toLowerCase();
+            return n.contains("open") || n.contains(" oh") || n.endsWith(" oh") || n == "oh";
+        };
+        for (int pass = 0; pass < 2; ++pass)   // pass 0 = first-found; pass 1 = the SELECTED channel wins its role
+            for (int chn = 0; chn < Sequencer::NUM_CHANNELS; ++chn)
+            {
+                if (pass == 1 && chn != ch) continue;
+                const int r = roleOf(chn);
+                auto claim = [&](int& slot) { if (pass == 1 || slot < 0) slot = chn; };
+                if      (r == GenContext::DrumKick)  claim(kt.kick);
+                else if (r == GenContext::DrumSnare) claim(kt.snare);
+                else if (r == GenContext::DrumHat)   { if (isOpenName(chn)) claim(kt.open); else claim(kt.hat); }
+                else if (r == GenContext::DrumPerc)  claim(kt.perc);
+            }
+        if (kt.hat < 0 && kt.open >= 0) { kt.hat = kt.open; kt.open = -1; }   // only an "open"-named hat = THE hat
+        if (kt.kick < 0 && kt.snare < 0 && kt.hat < 0)
+        {   // no drum channels anywhere: the SELECTED channel gets the single lane matching ITS
+            // classification (a kick channel gets the kick part; generic/perc = the kick groove)
+            const int r = roleOf(ch);
+            if      (r == GenContext::DrumSnare) kt.snare = ch;
+            else if (r == GenContext::DrumHat)   kt.hat   = ch;
+            else                                 kt.kick  = ch;
+        }
+    }
+
+    // ---- replace warning (once per panel-open) over whatever we are about to write ----
+    auto chanHasNotes = [&](int chn)
+    {
+        for (int b = head; b <= end; ++b)
+        {
+            const auto& cb = sq.patterns[b].channels[chn];
+            if (cb.drawNoteCount > 0) return true;
+            for (int i = 0; i < cb.numSteps; ++i) if (cb.steps[i]) return true;
+        }
+        return false;
+    };
+    bool willReplace = genHadNotes;
+    if (isDrums)
+    {
+        willReplace = false;
+        for (int t : { kt.kick, kt.snare, kt.hat, kt.open, kt.perc })
+            if (t >= 0 && chanHasNotes(t)) willReplace = true;
+    }
+    if (willReplace && ! genWarned && ! keepMode)   // Keep-my-notes IS the explicit augment consent
     {   // the clear-on-switch convention: warn ONCE per panel-open before replacing hand-made notes
         juce::PopupMenu m;
-        m.addSectionHeader("Generate REPLACES this channel's current notes");
+        m.addSectionHeader(isDrums ? juce::String("Generate REPLACES your drum channels' current steps")
+                                   : juce::String("Generate REPLACES this channel's current notes"));
         m.addItem(1, "Replace them (undo restores)");
         m.addItem(2, "Cancel");
         m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(
@@ -8128,7 +8261,82 @@ void DrumSequencerEditor::genAction(int action)
         case 1: ++genVaryCount; break;                                               // Vary
         case 2: genPitchSeed  = (uint32_t) rnd.nextInt(); genVaryCount = 0; break;   // Same rhythm, new notes
         case 3: genRhythmSeed = (uint32_t) rnd.nextInt(); genVaryCount = 0; break;   // Same notes, new rhythm
+        case 4: genPitchSeed  = (uint32_t) rnd.nextInt(); genVaryCount = 0; break;   // Keep my RHYTHM (repitch)
+        case 5: genRhythmSeed = (uint32_t) rnd.nextInt(); genVaryCount = 0; break;   // Keep my NOTES (new rhythm)
     }
+
+    // ---- [r20 item B] the DRUM KIT branch: style DNA -> per-lane steps, one undo ----
+    if (isDrums)
+    {
+        DrumGen::Options d;
+        d.style      = juce::jlimit(0, DrumGen::NUM_STYLES - 1, generatePanel.style);
+        d.bars       = juce::jlimit(1, PartGen::MAX_BARS, end - head + 1);
+        d.density    = generatePanel.density;
+        d.intensity  = generatePanel.intensity;
+        d.humanize   = generatePanel.humanize;
+        d.fills      = generatePanel.fills;
+        d.wantOpenHat = kt.open >= 0;
+        d.wantPerc    = kt.perc >= 0;
+        d.rhythmSeed = genRhythmSeed;
+        d.auxSeed    = genPitchSeed;
+        d.varyCount  = genVaryCount;
+        const auto out = DrumGen::generate(d);
+        commitUndoNow();   // ONE undo covers every lane + the swing write
+        juce::String desc; int chans = 0;
+        auto put = [&](int chn, int lane, const char* nm)
+        {
+            if (chn < 0 || out.lane[lane].empty()) return;
+            const auto r = GenContext::writeDrumLane(sq, head, d.bars, chn, out.lane[lane]);
+            desc += juce::String(desc.isEmpty() ? "" : " / ") + nm + " " + juce::String(r.written);
+            ++chans;
+        };
+        put(kt.kick,  DrumGen::LKick,    "kick");
+        put(kt.snare, DrumGen::LSnare,   "snare");
+        put(kt.hat,   DrumGen::LHat,     "hat");
+        put(kt.open,  DrumGen::LOpenHat, "open hat");
+        put(kt.perc,  DrumGen::LPerc,    "perc");
+        // D9: the style's swing is PART of the groove - written group-wide (the r17/r18 edit
+        // unit), mirrored on the fader, and DISCLOSED in the readout below.
+        for (int b = head; b <= end; ++b) sq.patterns[b].swing = out.swing;
+        sliderSwing.setValue(out.swing, juce::dontSendNotification);
+        refreshSwingLabel();
+        // D4's choke: open hat choked by the closed hat - ONLY when trivially safe (both
+        // channels un-choked + a completely free group exists); else skipped silently.
+        juce::String choked;
+        if (kt.open >= 0 && kt.hat >= 0 && kt.open != kt.hat
+            && sq.patterns[0].channels[kt.open].chokeGroup == 0
+            && sq.patterns[0].channels[kt.hat].chokeGroup == 0)
+        {
+            bool used[9] = {};
+            for (int c2 = 0; c2 < Sequencer::NUM_CHANNELS; ++c2)
+            {
+                const int gG = sq.patterns[0].channels[c2].chokeGroup;
+                if (gG >= 1 && gG <= 8) used[gG] = true;
+            }
+            for (int gG = 1; gG <= 8; ++gG)
+                if (! used[gG])
+                {
+                    for (int p = 0; p < Sequencer::NUM_PATTERNS; ++p)   // choke groups are channel-wide
+                    {
+                        sq.patterns[p].channels[kt.open].chokeGroup = gG;
+                        sq.patterns[p].channels[kt.hat].chokeGroup  = gG;
+                    }
+                    choked = "  Open hat choked by the closed hat (group " + juce::String(gG) + ").";
+                    break;
+                }
+        }
+        generatePanel.contextLine = "Kit (" + juce::String(DrumGen::kStyleName[d.style]) + "): wrote "
+            + desc + " steps to " + juce::String(chans) + (chans == 1 ? " channel." : " channels.")
+            + "  Swing -> " + juce::String(juce::roundToInt(50.0f + 25.0f * out.swing))
+            + "% (group-wide)." + choked;
+        genHadNotes = true; genWarned = true;
+        refreshDrawModeButtons();
+        stepGrid.update(proc.sequencer, proc.anySolo);
+        stepGrid.repaint();
+        generatePanel.repaint();
+        return;
+    }
+
     // ---- musical context: the OTHER channels' groove (steps) + harmony (roll notes + pitched
     // step channels) - the whole gather lives in GenContext::build [1.5.7 r18], headless-tested
     // by GenTest, and feeds the panel's honest readout line at the same time.
@@ -8136,9 +8344,19 @@ void DrumSequencerEditor::genAction(int action)
     PartGen::Ctx ctx = GenContext::build(sq, head, end, ch, &ro);
     const int bars = ctx.bars;
     generatePanel.contextLine = genReadoutLine(generatePanel, ro);
+    // [r20 item F] FROM-SCRATCH STYLE DNA: no drums heard = the picked style's CANON kit becomes
+    // the virtual groove the part phrases against (instead of the bare meter grid).
+    if (ctx.nHits == 0)
+    {
+        DrumGen::applyStyleSkeleton(juce::jlimit(0, DrumGen::NUM_STYLES - 1, generatePanel.style), ctx);
+        generatePanel.contextLine = "No drums heard - phrasing against the "
+            + juce::String(DrumGen::kStyleName[juce::jlimit(0, DrumGen::NUM_STYLES - 1, generatePanel.style)])
+            + " style's groove skeleton.  Key: " + juce::String(kUiNoteName[juce::jlimit(0, 11, generatePanel.key)])
+            + " " + kUiScaleName[juce::jlimit(0, 9, generatePanel.scaleType)] + " (" + generatePanel.keyTag + ").";
+    }
     // ---- options straight from the panel + the seeds ----
     PartGen::Options o;
-    o.role         = generatePanel.role;
+    o.role         = juce::jlimit(0, (int) PartGen::RoleChords, generatePanel.role);
     o.key          = generatePanel.key;
     o.scale        = kUiScaleTab[juce::jlimit(0, 9, generatePanel.scaleType)];
     o.scaleLen     = kUiScaleLen[juce::jlimit(0, 9, generatePanel.scaleType)];
@@ -8153,34 +8371,95 @@ void DrumSequencerEditor::genAction(int action)
     o.humanize     = generatePanel.humanize;
     o.fills        = generatePanel.fills;
     o.progression  = generatePanel.progression;
+    o.styleAccent  = DrumGen::accentTable(juce::jlimit(0, DrumGen::NUM_STYLES - 1, generatePanel.style));
     o.rhythmSeed   = genRhythmSeed;
     o.pitchSeed    = genPitchSeed;
     o.varyCount    = genVaryCount;
-    const auto notes = PartGen::generate(o, ctx);
+    // [r20 item A] WRITE AS: Auto = the channel's mode | Steps | Piano Roll. Chords voicings
+    // need the roll's polyphony - an explicit/auto STEP target degrades them to an arpeggiated
+    // single line (H9), disclosed in the readout.
+    const bool chanStep = ! sq.patterns[head].channels[ch].drawMode;
+    const bool stepOut  = generatePanel.outMode == 1 || (generatePanel.outMode == 0 && chanStep);
+    if (o.role == PartGen::RoleChords && stepOut) o.forceMono = true;
+
+    // ---- [r20 item I] KEEP MY NOTES: the channel's own notes are the seed skeleton ----
+    std::vector<PartGen::Note> notes;
+    juce::String keptTag;
+    if (keepMode)
+    {
+        std::vector<PartGen::Note> ex;
+        const int baseMidi = GenContext::stepChannelBaseMidi(sq.patterns[head].channels[ch]);
+        for (int b = 0; b < bars; ++b)
+        {
+            const auto& cb = sq.patterns[head + b].channels[ch];
+            if (cb.drawMode)
+                for (int i = 0; i < cb.drawNoteCount; ++i)
+                {
+                    const auto& dn = cb.drawNotes[i];
+                    ex.push_back({ b * DrumChannel::DRAW_RES + dn.start, dn.len, dn.semi, dn.vel, false });
+                }
+            else
+                for (int i = 0; i < cb.numSteps; ++i)
+                    if (cb.steps[i])
+                    {
+                        const int span = DrumChannel::DRAW_RES / juce::jmax(1, cb.numSteps);
+                        const int semi = baseMidi >= 0
+                                       ? (baseMidi + juce::roundToInt(cb.stepPitch[i])) - 60
+                                       : juce::roundToInt(cb.stepPitch[i]);
+                        ex.push_back({ b * DrumChannel::DRAW_RES + i * span,
+                                       cb.stepNoteLen[i] > 0.01f ? juce::jmax(1, (int) (cb.stepNoteLen[i] * (float) span)) : span,
+                                       juce::jlimit(-48, 48, semi),
+                                       juce::jlimit(0, 255, (int) (cb.stepVel[i] * 255.0f)), false });
+                    }
+        }
+        std::sort(ex.begin(), ex.end(),
+                  [](const PartGen::Note& a, const PartGen::Note& b) { return a.start < b.start; });
+        if (ex.empty())
+        {
+            generatePanel.contextLine = "Nothing to keep - this channel has no notes yet.";
+            generatePanel.repaint();
+            return;
+        }
+        if (action == 4)
+        {   // keep my RHYTHM: the user's onsets + lengths stay; the pitches are rewritten
+            notes = ex;
+            PartGen::repitch(o, ctx, notes);
+            keptTag = "  Kept your rhythm - repitched " + juce::String((int) notes.size()) + " notes.";
+        }
+        else
+        {   // keep my NOTES: a fresh rhythm, the user's pitch SEQUENCE poured over it in order
+            notes = PartGen::generate(o, ctx);
+            for (size_t i = 0; i < notes.size(); ++i)
+                notes[i].semi = ex[i % ex.size()].semi;
+            keptTag = "  Kept your notes - wrote a new rhythm under " + juce::String((int) ex.size()) + " pitches.";
+        }
+    }
+    else
+        notes = PartGen::generate(o, ctx);
+
     // ---- write: undoable, cleared + split per group bar (the onDrawNotesChanged discipline) ----
-    commitUndoNow();   // ONE undo covers count + content, both output modes
+    commitUndoNow();   // ONE undo covers count + content + any mode switch, both output modes
     if (stepOut)
-    {   // [P1 item 3] STEP OUTPUT: the writer picks the smallest valid step count that holds
-        // every onset, then writes steps + velocity + pitch-vs-Freq-knob + Slide + gate lengths.
+    {   // [P1 item 3 + r20 item A] STEP OUTPUT for ANY role: the writer picks the smallest valid
+        // step count that holds every onset, writes steps + velocity + pitch-vs-Freq-knob +
+        // Slide + gate lengths, and SWITCHES a roll channel to steps (clear-on-switch, undoable).
         const auto res = GenContext::writeStepOutput(sq, head, bars, ch, notes);
-        generatePanel.contextLine += "  Wrote " + juce::String(res.written) + " notes as "
-                                   + juce::String(res.count) + " steps to fit the groove.";
+        generatePanel.contextLine += keptTag + "  Wrote " + juce::String(res.written) + " notes as "
+                                   + juce::String(res.count)
+                                   + (res.switched ? " steps (channel switched to steps)." : " steps.");
+        if (o.role == PartGen::RoleChords)
+            generatePanel.contextLine += "  Chords arpeggiated (steps hold one note per step).";
     }
     else
     {
-        for (int b = 0; b < bars; ++b) sq.patterns[head + b].channels[ch].clearDrawNotes();
-        for (const auto& n : notes)
-        {
-            const int b = juce::jlimit(0, bars - 1, n.start / DrumChannel::DRAW_RES);
-            DrumChannel::DrawNote dn;                       // whole-struct push (the field-drop lesson)
-            dn.start = (int16_t) (n.start - b * DrumChannel::DRAW_RES);
-            dn.len   = (int16_t) juce::jmax(1, n.len);
-            dn.semi  = (int8_t)  juce::jlimit(-48, 48, n.semi);
-            dn.vel   = (uint8_t) juce::jlimit(0, 255, n.vel);
-            sq.patterns[head + b].channels[ch].addDrawNote(dn);
-        }
+        const auto res = GenContext::writeRollOutput(sq, head, bars, ch, notes);
+        generatePanel.contextLine += keptTag + "  Wrote " + juce::String(res.written)
+                                   + (res.switched ? " notes to the piano roll (channel switched to the roll)."
+                                                   : " notes to the piano roll.");
     }
     genHadNotes = true; genWarned = true;   // rerolls replace OUR OWN notes without re-asking
+    generatePanel.hadNotes = true;
+    refreshDrawModeButtons();               // a Write-as switch changes the edit-mode button states
     stepGrid.update(proc.sequencer, proc.anySolo);
     stepGrid.repaint();
     generatePanel.repaint();   // [r18] the context readout line follows each gather

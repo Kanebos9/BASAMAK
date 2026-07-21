@@ -1699,7 +1699,7 @@ class GeneratePanel : public juce::Component, public juce::SettableTooltipClient
 {
 public:
     // option state (defaults = one-click-good; the editor prefills key/scale/role on open)
-    int  role = 1;            // 0 Bassline | 1 Melody | 2 Hum | 3 Riff
+    int  role = 1;            // 0 Bassline | 1 Melody | 2 Hum | 3 Riff | 4 Chords | 5 Drum Kit [r20]
     int  key = 0;             // 0 = C .. 11 = B
     int  scaleType = 0;       // 0..9 (kUiScaleTab)
     int  density = 1;         // Sparse | Medium | Busy
@@ -1714,26 +1714,33 @@ public:
     int  humanize = 0;        // Off | Subtle | Loose (seed-deterministic vel + start jitter)
     int  fills = 0;           // Off | Last bar | Every phrase (end-of-line density bump)
     int  progression = 0;     // Chords row: 0 = Auto (detected) | 1..6 stock progressions
+    // [2026-07-22 r20] the drum-kit + universal-output round
+    int  style = 0;           // DrumGen::Style - drives the Drum Kit fully; melodic roles use it
+                              // as the virtual groove when no drums are heard (from-scratch DNA)
+    int  outMode = 0;         // Write as: 0 Auto (channel mode wins) | 1 Steps | 2 Piano Roll
+    bool hadNotes = false;    // channel had notes at open (dims the Keep-my-notes action)
     int  bars = 1;            // set by the editor before show() (merged-group size)
     juce::String keyTag;      // "from Scale mode" / "detected" / "default" - honesty about the prefill
     juce::String soundName;   // title context: the channel's loaded sound
     juce::String contextLine; // [1.5.7 r18] the CONTEXT READOUT: what the last gather heard (groove
                               // hits / key source) - set by the editor on open + after each action;
                               // drawn non-interactive under the hint line (squeeze, never ellipsis)
-    std::function<void(int action)> onAction;   // 0 New idea | 1 Vary | 2 Same rhythm | 3 Same notes
+    // 0 New idea | 1 Vary | 2 Same rhythm | 3 Same notes | [r20] 4 keep RHYTHM (repitch) |
+    // 5 keep PITCHES (new rhythm) - 4/5 fire from the Keep-my-notes button's popup
+    std::function<void(int action)> onAction;
     std::function<void()> onClose;
     void show() { setVisible(true); toFront(true); repaint(); }
     void paint(juce::Graphics&) override;
     void mouseDown(const juce::MouseEvent&) override;
     juce::String getTooltip() override;
     // screen area of an action button - the replace-warning menu anchors HERE, not top-left
-    juce::Rectangle<int> actionScreenArea(int idx) { return localAreaToGlobal(actionRect(idx)); }
+    juce::Rectangle<int> actionScreenArea(int idx) { return localAreaToGlobal(actionRect(idx < 4 ? idx : 4)); }
 private:
     juce::Rectangle<int> panelRect() const;
-    juce::Rectangle<int> rowRect(int row) const;                    // option rows 0..11 (3 bands)
+    juce::Rectangle<int> rowRect(int row) const;                    // option rows 0..13 (3 bands) [r20]
     juce::Rectangle<int> chipRect(int row, int idx, int count) const;
     juce::Rectangle<int> singableRect() const;
-    juce::Rectangle<int> actionRect(int idx) const;                 // 0..3 (2x2)
+    juce::Rectangle<int> actionRect(int idx) const;                 // 0..3 (2x2) + 4 = Keep my notes (full row)
     juce::Rectangle<int> closeRect() const;
     juce::Rectangle<int> keyRect() const;
     juce::Rectangle<int> scaleRect() const;
