@@ -60,12 +60,24 @@ static GenScore scoreGen(const std::vector<PartGen::Note>& ns,
         }
     }
     sc.prox = tot > 0 ? (float) steps / (float) tot : 1.0f;
-    int dup = 0, tg = 0;                    // motif economy: repeated interval 3-grams
+    // [r20] motif economy metric = repeated DIATONIC-interval 3-grams: a sequence (the cell
+    // transposed a scale step) is a TRANSFORM of the motif, so it must count as similarity -
+    // semitone trigrams were blind to it (major-scale steps are 1 or 2 semis).
+    auto degOf = [&](int semi)
+    {
+        const int p = ((semi - o.key) % 12 + 12) % 12;
+        int di = 0, bd = 99;
+        for (int i = 0; i < o.scaleLen; ++i)
+        { const int d = std::abs(o.scale[i] % 12 - p); if (d < bd) { bd = d; di = i; } }
+        return (int) std::floor((double) (semi - o.key) / 12.0) * o.scaleLen + di;
+    };
+    int dup = 0, tg = 0;
     std::vector<long> seen;
     for (size_t i = 3; i < ns.size(); ++i)
     {
         long key = 0;
-        for (int k = 0; k < 3; ++k) key = key * 200 + (long) (ns[i - 2 + k].semi - ns[i - 3 + k].semi + 90);
+        for (int k = 0; k < 3; ++k)
+            key = key * 60 + (long) (degOf(ns[i - 2 + k].semi) - degOf(ns[i - 3 + k].semi) + 30);
         ++tg;
         if (std::find(seen.begin(), seen.end(), key) != seen.end()) ++dup; else seen.push_back(key);
     }
@@ -882,6 +894,172 @@ int main()
                kn > 0 ? 100.0f * (float) inCanon / (float) kn : 0.0f,
                bb > 0.0f ? 100.0f * gh / bb : 0.0f, 50.0f + 25.0f * so.swing);
         CHECK(kn > 0 && inCanon == kn, "[39b] drum scorecard: every kick inside canon + optional cells");
+    }
+
+    // ---- [r20 item E] the melodic-identity round: M10-M14, G3 full band, G4 push, accents ----
+
+    // [40] M10 MOTIF ECONOMY: >= 60% of onsets sit on the cell's rhythm offsets (transforms
+    // preserve the rhythm), and the pitch identity shows as repeated DIATONIC trigrams on a
+    // majority of seeds (sequences count - the scorecard's upgraded ngram)
+    {
+        Ctx c4m; c4m.bars = 4;
+        bool covOk = true; int ngramSeeds = 0, seeds = 0;
+        for (uint32_t s = 1; s <= 4; ++s)
+        {
+            Options o; o.scale = kMajor; o.role = RoleMelody; o.rhythm = RhFlowing; o.density = 2;
+            o.rhythmSeed = s; o.pitchSeed = s + 3;
+            auto n = generate(o, c4m);
+            std::vector<int> cell;
+            for (auto& x : n) if (x.start < 192) cell.push_back(x.start % 192);
+            int match = 0;
+            for (auto& x : n)
+            {
+                bool m = false;
+                for (int cOf : cell) if ((x.start % 192) == cOf) m = true;
+                if (m) ++match;
+            }
+            if (n.empty() || (float) match / (float) n.size() < 0.6f) covOk = false;
+            const auto sc = scoreGen(n, o, c4m);
+            ++seeds; if (sc.ngram > 0.0f) ++ngramSeeds;
+        }
+        CHECK(covOk, "[40a] M10: >= 60% of onsets are motif-cell transforms (rhythm coverage)");
+        CHECK(ngramSeeds * 2 >= seeds, "[40b] M10: diatonic-trigram similarity > 0 on most seeds");
+    }
+
+    // [41] M11 Q/A degree ends: the question ends on 2/5/7, the answer on 1/3 (C major pcs)
+    {
+        Ctx c2q; c2q.bars = 2;
+        bool qOk = true, aOk = true;
+        for (uint32_t s = 1; s <= 5; ++s)
+        {
+            Options o; o.scale = kMajor; o.role = RoleMelody; o.lines = 2; o.relation = RelAnswer;
+            o.rhythmSeed = s; o.pitchSeed = s + 6;
+            auto n = generate(o, c2q);
+            PartGen::Note* qLast = nullptr; PartGen::Note* aLast = nullptr;
+            for (auto& x : n) { if (x.start < 384) qLast = &x; aLast = &x; }
+            if (qLast == nullptr || aLast == nullptr || qLast == aLast) { qOk = aOk = false; continue; }
+            const int qp = ((qLast->semi % 12) + 12) % 12, ap = ((aLast->semi % 12) + 12) % 12;
+            if (! (qp == 2 || qp == 7 || qp == 11)) qOk = false;   // D / G / B
+            if (! (ap == 0 || ap == 4))             aOk = false;   // C / E
+        }
+        CHECK(qOk, "[41a] M11: the question ends OPEN (2nd / 5th / 7th) on every seed");
+        CHECK(aOk, "[41b] M11: the answer ends HOME (tonic / 3rd) on every seed");
+    }
+
+    // [42] G3 FULL BAND: meter-only melody sits inside the doc's [2,6] band on average
+    // (the floor injection lifts under-syncopated bars; the ceiling still caps)
+    {
+        Ctx cb2; cb2.bars = 2;
+        float worst = 99.0f, best = -1.0f; bool capOk = true;
+        for (uint32_t s = 1; s <= 5; ++s)
+        {
+            Options o; o.scale = kMajor; o.role = RoleMelody; o.rhythm = RhFlowing; o.density = 2;
+            o.rhythmSeed = s; o.pitchSeed = s + 8;
+            auto n = generate(o, cb2);
+            float mean = 0.0f;
+            for (int b = 0; b < 2; ++b)
+            {
+                const int sc2 = lhlBarScore(n, b);
+                if (sc2 > 6) capOk = false;
+                mean += (float) sc2;
+            }
+            mean *= 0.5f;
+            worst = std::min(worst, mean); best = std::max(best, mean);
+        }
+        CHECK(capOk && worst >= 1.0f, "[42] G3 band: melody mean LHL >= 1 per take, every bar <= 6");
+    }
+
+    // [43] G4/M13 anticipation: over seeds, SOME change-note arrives one cell early (still the
+    // new chord's tone), and no two consecutive changes are both pushed
+    {
+        Ctx cg4; cg4.bars = 4;
+        bool pushed = false, pairOk = true, toneOk = true;
+        for (uint32_t s = 1; s <= 8; ++s)
+        {
+            Options o; o.scale = kMajor; o.role = RoleBass; o.rhythm = RhDriving; o.density = 1;
+            o.progression = 5;   // I-IV-V(-I): changes at every bar line (density 1 = 1 chord/bar)
+            o.rhythmSeed = s; o.pitchSeed = s + 2;
+            auto n = generate(o, cg4);
+            bool prevP = false;
+            for (int b = 1; b < 4; ++b)
+            {
+                bool thisP = false;
+                for (auto& x : n)
+                    if (x.start == b * 384 - 24)
+                    {
+                        thisP = true; pushed = true;
+                        static const int prog[4] = { 0, 3, 4, 0 };
+                        const int wantPc = (0 + kMajor[prog[b % 4]]) % 12;
+                        if (((x.semi % 12) + 12) % 12 != wantPc) toneOk = false;
+                    }
+                if (thisP && prevP) pairOk = false;
+                prevP = thisP;
+            }
+        }
+        CHECK(pushed && pairOk, "[43a] G4: pushes happen, never two consecutive changes");
+        CHECK(toneOk, "[43b] M13: a pushed note carries the NEW chord's tone (the bass root)");
+    }
+
+    // [44] M14 breath: <= 12 onsets per bar-pair, and a melody phrase end leaves air
+    {
+        Ctx c4b; c4b.bars = 4;
+        bool capOk = true, airOk = true;
+        for (uint32_t s = 1; s <= 4; ++s)
+        {
+            Options o; o.scale = kMajor; o.role = RoleMelody; o.rhythm = RhPockets; o.density = 2;
+            o.lines = 2; o.rhythmSeed = s; o.pitchSeed = s + 5;
+            auto n = generate(o, c4b);
+            for (int w = 0; w < 2; ++w)
+            {
+                int cnt = 0;
+                for (auto& x : n) if (x.start >= w * 768 && x.start < (w + 1) * 768) ++cnt;
+                if (cnt > 12) capOk = false;
+            }
+            for (auto& x : n)   // lines=2 on 4 bars: the phrase boundary at bar 2's end breathes
+                if (x.start < 768 && x.start + x.len > 768 - 12) airOk = false;
+        }
+        CHECK(capOk, "[44a] M14: never more than 12 onsets in a bar-pair");
+        CHECK(airOk, "[44b] M14: melody phrases leave air at the phrase boundary");
+    }
+
+    // [45] mined ACCENT wiring: with a style accent table, backbeat-position notes out-vote the
+    // weak inner 16ths on average (the hiphop row's 104-vs-44 shape must be audible)
+    {
+        static const uint8_t hiphop[16] = { 76,44,61,47,104,48,53,44,72,47,66,52,97,58,70,49 };
+        Ctx c2a; c2a.bars = 2;
+        float strongSum = 0, weakSum = 0; int sN = 0, wN = 0;
+        for (uint32_t s = 1; s <= 6; ++s)
+        {
+            Options o; o.scale = kMajor; o.role = RoleMelody; o.rhythm = RhFlowing; o.density = 2;
+            o.styleAccent = hiphop; o.rhythmSeed = s; o.pitchSeed = s + 9;
+            for (auto& x : generate(o, c2a))
+            {
+                const int pos = (x.start % 384) / 24;
+                if (pos == 4 || pos == 12) { strongSum += (float) x.vel; ++sN; }
+                if (pos == 1 || pos == 3 || pos == 5)  { weakSum += (float) x.vel; ++wN; }
+            }
+        }
+        CHECK(sN > 0 && (wN == 0 || strongSum / (float) sN > weakSum / (float) wN + 10.0f),
+              "[45] styleAccent: backbeat-position notes measurably louder than inner 16ths");
+    }
+
+    // [46] KEEP MY NOTES (engine half): repitch keeps every onset + length EXACTLY, moves pitches
+    {
+        Ctx c1k; c1k.bars = 1;
+        std::vector<PartGen::Note> user;
+        for (int i = 0; i < 5; ++i) user.push_back({ i * 72 + 12, 48, 7, 200, false });
+        auto notes = user;
+        Options o; o.scale = kMajor; o.pitchSeed = 77;
+        PartGen::repitch(o, c1k, notes);
+        bool rhythmSame = notes.size() == user.size(), pitchMoved = false, inScaleOk = true;
+        for (size_t i = 0; i < notes.size() && rhythmSame; ++i)
+        {
+            rhythmSame = notes[i].start == user[i].start && notes[i].len == user[i].len;
+            if (notes[i].semi != user[i].semi) pitchMoved = true;
+            if (! inScale(notes[i].semi, 0, kMajor, 7)) inScaleOk = false;
+        }
+        CHECK(rhythmSame && pitchMoved && inScaleOk,
+              "[46] keep-my-rhythm: onsets + lengths exact, pitches rewritten in scale");
     }
 
     printf(fails == 0 ? "GenTest: ALL PASS\n" : "GenTest: %d FAILURES\n", fails);
