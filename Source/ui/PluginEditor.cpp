@@ -3486,39 +3486,50 @@ static const char* const kGenActions[] = { "NEW IDEA", "VARY", "Same rhythm, new
 static const juce::Colour kGenAccent { 0xffa0e8b0 };   // the Generate green (roll-operations family)
 // [P1] rows live in three labeled BANDS: What (0-2) | Feel (3-8) | Form (9-11)
 static inline int genBandOf(int row) { return row < 3 ? 0 : (row < 9 ? 1 : 2); }
+// [P1] the pattern-row Generate button opens the panel over the COLLAPSED (editor-hidden) view
+// too, whose content is only ~480px tall - geometry compacts when the host area is short.
+struct GenGeom { int pitch, hdr, chipH, actH, actPitch, panelH; };
+static inline GenGeom genGeom(int totalH)
+{
+    if (totalH >= 650) return { 33, 18, 26, 34, 40, 634 };
+    return { 24, 12, 20, 28, 32, 470 };
+}
 }
 
 juce::Rectangle<int> GeneratePanel::panelRect() const
 {
-    const int w = 470, h = 634;
+    const int w = 470, h = genGeom(getHeight()).panelH;
     return { getWidth() - w - 14, juce::jmax(8, (getHeight() - h) / 2), w, h };
 }
 juce::Rectangle<int> GeneratePanel::rowRect(int row) const
 {
     const auto p = panelRect();
-    return { p.getX() + 12, p.getY() + 36 + (genBandOf(row) + 1) * 18 + row * 33, p.getWidth() - 24, 30 };
+    const auto gg = genGeom(getHeight());
+    return { p.getX() + 12, p.getY() + 34 + (genBandOf(row) + 1) * gg.hdr + row * gg.pitch,
+             p.getWidth() - 24, gg.pitch - 3 };
 }
 juce::Rectangle<int> GeneratePanel::chipRect(int row, int idx, int count) const
 {
     auto r = rowRect(row).withTrimmedLeft(68);
     if (row == 11) r = r.withTrimmedRight(104);   // Fills row shares with the Singable toggle
     const int w = (r.getWidth() - (count - 1) * 4) / count;
-    return { r.getX() + idx * (w + 4), r.getY() + 2, w, 26 };
+    return { r.getX() + idx * (w + 4), r.getY() + 1, w, genGeom(getHeight()).chipH };
 }
 juce::Rectangle<int> GeneratePanel::singableRect() const
-{ const auto r = rowRect(11); return { r.getRight() - 98, r.getY() + 2, 98, 26 }; }
+{ const auto r = rowRect(11); return { r.getRight() - 98, r.getY() + 1, 98, genGeom(getHeight()).chipH }; }
 juce::Rectangle<int> GeneratePanel::keyRect() const
-{ const auto r = rowRect(1); return { r.getX() + 68, r.getY() + 2, 64, 26 }; }
+{ const auto r = rowRect(1); return { r.getX() + 68, r.getY() + 1, 64, genGeom(getHeight()).chipH }; }
 juce::Rectangle<int> GeneratePanel::scaleRect() const
-{ const auto r = rowRect(1); return { r.getX() + 138, r.getY() + 2, 96, 26 }; }
+{ const auto r = rowRect(1); return { r.getX() + 138, r.getY() + 1, 96, genGeom(getHeight()).chipH }; }
 juce::Rectangle<int> GeneratePanel::chordsRect() const
-{ const auto r = rowRect(2); return { r.getX() + 68, r.getY() + 2, 200, 26 }; }
+{ const auto r = rowRect(2); return { r.getX() + 68, r.getY() + 1, 200, genGeom(getHeight()).chipH }; }
 juce::Rectangle<int> GeneratePanel::actionRect(int idx) const
 {
     const auto p = panelRect();
+    const auto gg = genGeom(getHeight());
     const int w = (p.getWidth() - 24 - 8) / 2;
     return { p.getX() + 12 + (idx % 2) * (w + 8),
-             rowRect(11).getBottom() + 8 + (idx / 2) * 40, w, 34 };
+             rowRect(11).getBottom() + 6 + (idx / 2) * gg.actPitch, w, gg.actH };
 }
 juce::Rectangle<int> GeneratePanel::closeRect() const
 { const auto p = panelRect(); return { p.getRight() - 32, p.getY() + 8, 24, 24 }; }
@@ -3555,11 +3566,13 @@ void GeneratePanel::paint(juce::Graphics& g)
         }
     };
     // [P1] band headers: What (the material) | Feel (how it plays) | Form (how it is shaped)
+    const auto gg = genGeom(getHeight());
     auto bandHdr = [&](int firstRow, const char* t)
     {
         const auto r = rowRect(firstRow);
         g.setColour(kGenAccent.withAlpha(0.7f)); g.setFont(juce::Font(11.0f, juce::Font::bold));
-        g.drawText(t, r.getX(), r.getY() - 16, 200, 14, juce::Justification::centredLeft, false);
+        g.drawFittedText(t, r.getX(), r.getY() - gg.hdr + 2, 200, gg.hdr - 3,
+                         juce::Justification::centredLeft, 1, 0.8f);
     };
     bandHdr(0, "WHAT");
     chips(0, "Role",     kGenRoles,   4, role, false);
@@ -3613,16 +3626,18 @@ void GeneratePanel::paint(juce::Graphics& g)
         g.drawFittedText(kGenActions[i], ar, juce::Justification::centred, 1, 0.7f);
     }
     g.setColour(juce::Colour(0xff6a7490)); g.setFont(juce::Font(11.5f));
+    const int hintY = actionRect(3).getBottom() + 4;
     g.drawFittedText("Lands in the channel behind (roll notes, or STEPS on a step channel) - reroll until it fits. Undo restores.",
-                     p.getX() + 12, actionRect(3).getBottom() + 6, p.getWidth() - 24, 24,
-                     juce::Justification::centred, 2, 0.8f);
+                     p.getX() + 12, hintY, p.getWidth() - 24, gg.panelH > 500 ? 24 : 18,
+                     juce::Justification::centred, 2, 0.7f);
     // [1.5.7 r18] the CONTEXT READOUT: what the last gather actually heard - starvation is never
     // silent. Non-interactive drawn text; squeeze (never ellipsis) via drawFittedText's min scale.
     if (contextLine.isNotEmpty())
     {
         g.setColour(juce::Colour(0xff8fb0d8)); g.setFont(juce::Font(11.5f, juce::Font::bold));
-        g.drawFittedText(contextLine, p.getX() + 12, actionRect(3).getBottom() + 32,
-                         p.getWidth() - 24, 26, juce::Justification::centred, 2, 0.55f);
+        g.drawFittedText(contextLine, p.getX() + 12, hintY + (gg.panelH > 500 ? 26 : 19),
+                         p.getWidth() - 24, gg.panelH > 500 ? 26 : 20,
+                         juce::Justification::centred, 2, 0.55f);
     }
 }
 
