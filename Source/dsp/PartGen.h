@@ -70,6 +70,11 @@ struct Options
     int  lines      = 0;          // melodic sentences in the group: 0 = Auto, 1..4 explicit
     int  relation   = RelAuto;    // what lines 2+ do vs line 1: repeat / answer / new / Auto
     bool singable   = false;
+    // [2026-07-21 P1] the competitive-surface trio + the harmony override (GENERATE-THEORY v2/v4)
+    int  intensity  = 1;          // 0 soft | 1 medium | 2 hard - velocity level + accent depth
+    int  humanize   = 0;          // 0 off | 1 subtle | 2 loose - seed-deterministic vel + start jitter
+    int  fills      = 0;          // 0 off | 1 last bar | 2 every phrase - end-of-line density bump
+    int  progression = 0;         // 0 = Auto (detected/stock) | 1..6 = stock progression override
     uint32_t rhythmSeed = 1;
     uint32_t pitchSeed  = 2;
     int  varyCount  = 0;
@@ -87,9 +92,40 @@ struct Ctx
     int   nHits = 0;
     int   hitCol[MAX_HITS] = {};
     float hitStr[MAX_HITS] = {};             // strength 0..1
+    // [P1] per-ROLE drum-hit lists beside the combined list (GenContext classifies by bank
+    // category + name keywords; perc/generic hits live only in the combined list). The bass
+    // listens to the KICK (G2), melody phrases around the SNARE (G8).
+    int   nKick = 0, nSnare = 0, nHat = 0;
+    int   kickCol[MAX_HITS]  = {};  float kickStr[MAX_HITS]  = {};
+    int   snareCol[MAX_HITS] = {};  float snareStr[MAX_HITS] = {};
+    int   hatCol[MAX_HITS]   = {};  float hatStr[MAX_HITS]   = {};
+    // [P1] register map: each OTHER roll channel's min/median/max pitch (H5's arrangement lanes;
+    // data only in P1 - the comp/counter roles consume it in P3). Semis are C4-relative.
+    static constexpr int MAX_REG = 16;
+    int   nReg = 0;
+    int   regMin[MAX_REG] = {}, regMed[MAX_REG] = {}, regMax[MAX_REG] = {};
+    // [P1 H4] chordCols[] - the SHARED harmonic-rhythm timeline: change points on STRONG cols
+    // (bar starts; Busy density adds the half-bar), each with its scale-degree root. Built by
+    // prepareChords() from the chroma / stock progression / the panel's progression override;
+    // every role reads chords through it (chordRootDegAt consults it first).
+    static constexpr int MAX_CHORDS = MAX_BARS * 4;
+    int   nChords = 0;
+    int   chordColAt[MAX_CHORDS] = {};
+    int   chordDegAt[MAX_CHORDS] = {};
+    bool  chordColsValid = false;
+    // [P1 H8/H9] TARGET-sound introspection: the selected channel's first audible slot (env
+    // times gate the length/density rules; mono/scaleOn document the single-line guarantee).
+    bool  sndValid = false;
+    float sndAtk = 0.0f, sndDec = 0.0f, sndSus = 0.0f, sndRel = 0.0f;
+    bool  sndMono = false, sndScaleOn = false;
+    int   sndMsLo = -1, sndMsHi = -1;        // multisample zone-root span (MIDI), -1 = none
 };
 
-struct Note { int start = 0, len = 1, semi = 0, vel = 235; };
+struct Note
+{
+    int start = 0, len = 1, semi = 0, vel = 235;
+    bool approach = false;   // [P1 G9] bass approach note INTO a chord change (step writer -> Slide)
+};
 
 // --- deterministic RNG (xorshift32) --------------------------------------------------------------
 struct Rng
@@ -152,10 +188,65 @@ static inline int stockDeg(const Options& o, int bars, int bar)
 // (tiny local clamp so this header stays JUCE-free)
 static inline int juceLikeClamp(int lo, int hi, int v) { return v < lo ? lo : (v > hi ? hi : v); }
 
-// PER-BEAT chord root [v2]: the beat's own chroma when it speaks, the bar's aggregate when that
-// beat is silent, the stock progression when nothing pitched exists at all.
+// [P1 H4] stock progressions (the panel's Chords override; 0 = Auto). Degrees are 0-based scale
+// degrees - in a minor scale i-VI-III-VII reads {0,5,2,6} against the natural-minor intervals.
+static const int kProgLen[7]     = { 0, 4, 4, 4, 3, 3, 12 };
+static const int kProgDeg[7][12] = { {},
+    { 0, 4, 5, 3 },                          // I-V-vi-IV
+    { 0, 5, 3, 4 },                          // I-vi-IV-V
+    { 0, 5, 2, 6 },                          // i-VI-III-VII
+    { 1, 4, 0 },                             // ii-V-I
+    { 0, 3, 4 },                             // I-IV-V
+    { 0, 0, 0, 0, 3, 3, 0, 0, 4, 3, 0, 4 } };// 12-bar blues
+
+// [P1 H4] build the SHARED chordCols[] harmonic-rhythm timeline into c: change points on strong
+// cols (bar starts; Busy adds the half-bar), degree = the segment's chroma (bestDegFromWeights),
+// the stock progression when nothing pitched speaks, or the explicit override when the user
+// picked one. Every role reads harmony through this ONE timeline.
+static inline void prepareChordsImpl(const Options& o, Ctx& c)
+{
+    c.nChords = 0;
+    const int perBar = (o.density >= 2) ? 2 : 1;   // H4: sparse/medium = 1 chord/bar, busy = 2
+    for (int b = 0; b < c.bars && c.nChords < Ctx::MAX_CHORDS; ++b)
+        for (int h = 0; h < perBar && c.nChords < Ctx::MAX_CHORDS; ++h)
+        {
+            const int col = b * COLS + h * (COLS / 2);
+            int deg = -1;
+            if (o.progression >= 1 && o.progression <= 6)
+                deg = kProgDeg[o.progression][b % kProgLen[o.progression]];
+            else if (c.chromaValid)
+            {   // detected: aggregate the chroma of the beats this change point governs
+                float w[12] = {}; float tot = 0.0f;
+                const int bt0 = b * 4 + (perBar == 2 ? h * 2 : 0);
+                const int bt1 = b * 4 + (perBar == 2 ? h * 2 + 2 : 4);
+                for (int bt = bt0; bt < bt1 && bt < c.bars * 4; ++bt)
+                    for (int p = 0; p < 12; ++p) { w[p] += c.chroma[bt][p]; tot += c.chroma[bt][p]; }
+                if (tot > 0.01f)
+                {
+                    float best = 0.0f;
+                    const int d = bestDegFromWeights(o, w, best);
+                    if (best > 0.01f) deg = d;
+                }
+            }
+            if (deg < 0) deg = stockDeg(o, c.bars, b);
+            c.chordColAt[c.nChords] = col;
+            c.chordDegAt[c.nChords] = deg % (o.scaleLen > 0 ? o.scaleLen : 7);
+            ++c.nChords;
+        }
+    c.chordColsValid = c.nChords > 0;
+}
+
+// Chord root at a column: the chordCols timeline when built (P1 - the shared harmonic rhythm),
+// else the v2 per-beat chroma fallback (kept for direct/legacy callers).
 static inline int chordRootDegAt(const Options& o, const Ctx& c, int col)
 {
+    if (c.chordColsValid)
+    {
+        int deg = c.chordDegAt[0];
+        for (int i = 0; i < c.nChords; ++i)
+        { if (c.chordColAt[i] <= col) deg = c.chordDegAt[i]; else break; }
+        return deg;
+    }
     const int bar  = col / COLS;
     const int beat = juceLikeClamp(0, c.bars * 4 - 1, bar * 4 + (col % COLS) / BEAT);
     float best = 0.0f;
@@ -170,6 +261,48 @@ static inline int chordRootDegAt(const Options& o, const Ctx& c, int col)
         if (best > 0.01f) return deg;
     }
     return stockDeg(o, c.bars, bar);
+}
+
+// [P1 G3] LHL syncopation weights per 16th position (0/-1/-2/-3/-4 - GENERATE-THEORY G3) and a
+// per-bar scorer: a note on a weak position followed by SILENCE on a stronger one is syncopated;
+// its contribution = strongest-silent-weight minus the note's weight. Shared by the generator's
+// de-syncopation ceiling AND the GenTest scorecard (one implementation, never two).
+static const int kLhlW[16] = { 0, -4, -3, -4, -2, -4, -3, -4, -1, -4, -3, -4, -2, -4, -3, -4 };
+static inline int lhlBarScoreImpl(const std::vector<Note>& notes, int bar,
+                                  int* worstIdx = nullptr, int* worstTargetCol = nullptr)
+{
+    bool on[17] = {};
+    int  noteAt[16]; for (int i = 0; i < 16; ++i) noteAt[i] = -1;
+    for (size_t i = 0; i < notes.size(); ++i)
+    {
+        const int local = notes[i].start - bar * COLS;
+        if (local < 0 || local >= COLS) continue;
+        const int p = juceLikeClamp(0, 15, (local + CELL16 / 2) / CELL16);
+        if (! on[p]) { on[p] = true; noteAt[p] = (int) i; }
+    }
+    int score = 0, worstGain = 0;
+    if (worstIdx != nullptr) *worstIdx = -1;
+    for (int p = 0; p < 16; ++p)
+    {
+        if (! on[p]) continue;
+        int bestW = -99, bestQ = -1;
+        for (int q = p + 1; q <= 16; ++q)
+        {
+            if (q < 16 && on[q]) break;                  // the next onset ends the note's air
+            const int wq = q == 16 ? 0 : kLhlW[q];       // position 16 = the next downbeat
+            if (wq > bestW) { bestW = wq; bestQ = q; }
+        }
+        if (bestQ >= 0 && bestW > kLhlW[p])
+        {
+            const int gain = bestW - kLhlW[p];
+            score += gain;
+            if (gain > worstGain && bestQ < 16)
+            { worstGain = gain;
+              if (worstIdx != nullptr)       *worstIdx = noteAt[p];
+              if (worstTargetCol != nullptr) *worstTargetCol = bar * COLS + bestQ * CELL16; }
+        }
+    }
+    return score;
 }
 
 static inline float metricW(int col)
@@ -473,25 +606,48 @@ static inline void planForm(int bars, int lines, int relation, std::vector<Phras
 }
 } // namespace detail
 
+// [P1] public faces of the shared helpers (the GenTest scorecard uses the SAME implementations
+// the generator runs - one chord timeline, one LHL scorer, never two).
+static inline void prepareChords(const Options& o, Ctx& c) { detail::prepareChordsImpl(o, c); }
+static inline int  lhlBarScore(const std::vector<Note>& notes, int bar)
+{ return detail::lhlBarScoreImpl(notes, bar); }
+
 // ================================================================================================
-static inline std::vector<Note> generate(const Options& oIn, const Ctx& c)
+static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
 {
     using namespace detail;
     Options o = oIn;
     if (o.scale == nullptr || o.scaleLen < 5)
     { static const int8_t maj[7] = { 0, 2, 4, 5, 7, 9, 11 }; o.scale = maj; o.scaleLen = 7; }
+    Ctx c = cIn;   // [P1] local working copy: the chord timeline + the bass's kick view live here
     const int bars = std::max(1, std::min(MAX_BARS, c.bars));
+    c.bars = bars;
     const int total = bars * COLS;
+    prepareChordsImpl(o, c);   // [P1 H4] the ONE harmonic-rhythm timeline every role reads
+
+    // [P1 G2] BASSLINE listens to the KICK: the stance is the relationship. Driving = unison
+    // (lock onto the kick's real columns), Pockets = interlock (live in the kick gaps, stay out
+    // of the kick windows) - both come free by making the KICK list THE hit list for the bass;
+    // Flowing = avoid (meter-floating, but every note ENDS before the next kick - clipped below).
+    if (o.role == RoleBass && c.nKick > 0 && o.rhythm != RhFlowing)
+    {
+        c.nHits = c.nKick;
+        for (int i = 0; i < c.nKick; ++i) { c.hitCol[i] = c.kickCol[i]; c.hitStr[i] = c.kickStr[i]; }
+    }
 
     Rng rrng(o.rhythmSeed), prng(o.pitchSeed);
     std::vector<Note> notes;
 
     static const int base[4][3] = { { 2, 4, 5 }, { 3, 5, 6 }, { 2, 3, 4 }, { 4, 5, 6 } };
     static const float dmul[3] = { 0.6f, 1.0f, 1.5f };
+    // [P1 H8] a slow-attack sound (atk >= 120 ms) can't articulate runs - halve the onset budget
+    const bool sndSlowAtk = c.sndValid && c.sndAtk >= 0.12f;
     auto budgetFor = [&](int lenBars)
-    { return std::max(1, std::min(14, (int) std::lround((float) base[o.role][o.rhythm] * dmul[o.density] * (float) lenBars))); };
+    { const float sm = sndSlowAtk ? 0.5f : 1.0f;
+      return std::max(1, std::min(14, (int) std::lround((float) base[o.role][o.rhythm] * dmul[o.density] * sm * (float) lenBars))); };
     const bool breathe = o.singable || o.role == RoleHum;   // vocal lines breathe at phrase ends
 
+    std::vector<Phrase> plan;   // [P1] hoisted: the FILLS pass reads line ends (empty for Riff)
     if (o.role == RoleRiff)
     {
         // RIFF: one bar's cell tiled every bar, transposed with the harmony (unchanged from v1).
@@ -516,7 +672,6 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& c)
     }
     else
     {
-        std::vector<Phrase> plan;
         planForm(bars, o.lines, o.relation, plan);
         // the MOTIF = phrase A's material (onsets + pitches), the identity every echo/answer keeps
         std::vector<int>  motifOns;    // bar-local (relative to its phrase start)
@@ -622,6 +777,46 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& c)
             }
     }
 
+    // [P1] FILLS: an end-of-line density bump (calibration: fill bars run ~1.1-1.5x the groove -
+    // docs/generate-calibration.md fill mult). Extra in-scale onsets in the last quarter of the
+    // chosen bars, pitched stepwise from the nearest existing note. Seed-deterministic.
+    if (o.fills > 0 && ! notes.empty())
+    {
+        Rng fr(o.rhythmSeed ^ 0xF111C0DEu);
+        bool fillBar[MAX_BARS] = {};
+        if (o.fills == 1 || plan.empty()) fillBar[bars - 1] = true;   // Last bar (Riff always here)
+        else for (auto& ph : plan)
+            fillBar[std::max(0, std::min(bars - 1, ph.startBar + ph.lenBars - 1))] = true;
+        for (int b = 0; b < bars; ++b)
+        {
+            if (! fillBar[b]) continue;
+            const int fs = b * COLS + 3 * BEAT, fe = (b + 1) * COLS;
+            std::vector<Cand> cands; std::vector<int> ons;
+            phraseCandidates(o, c, fs, fe, cands);
+            sampleOnsets(o, fr, cands, std::max(1, budgetFor(1) / 2), fs, fe, ons);
+            for (int col : ons)
+            {
+                bool dup = false;
+                for (auto& n : notes) if (n.start == col) { dup = true; break; }
+                if (dup) continue;
+                int ref = 0, bd = 1 << 20;   // pitch: a scale step off the nearest existing note
+                for (auto& n : notes)
+                    if (std::abs(n.start - col) < bd) { bd = std::abs(n.start - col); ref = n.semi; }
+                int semi = ref;
+                std::vector<int> lad; buildLadder(o, ref - 4, ref + 4, lad);
+                if (! lad.empty())
+                {
+                    int ni = 0, nd = 1 << 20;
+                    for (int i = 0; i < (int) lad.size(); ++i)
+                        if (std::abs(lad[i] - ref) < nd) { nd = std::abs(lad[i] - ref); ni = i; }
+                    semi = lad[std::max(0, std::min((int) lad.size() - 1, ni + (fr.chance(0.5f) ? 1 : -1)))];
+                }
+                notes.push_back({ col, 1, semi, 225 });
+            }
+        }
+        makeLengths(o, notes, total);
+    }
+
     // VARY: same skeleton, new ornaments
     if (o.varyCount > 0)
     {
@@ -658,6 +853,161 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& c)
         }
     }
 
+    auto byStart = [](const Note& a, const Note& b) { return a.start < b.start; };
+
+    // [P1 G9 + G1] BASS GRAMMAR: the change-downbeat plays the ROOT; the last onset in the beat
+    // BEFORE a change becomes an APPROACH note walking into the next root (scale-step at Safe,
+    // chromatic from Spicy up - flagged for the step writer's Slide band). G1: when a kick holds
+    // the One and the bass missed it, the first note moves onto it (non-Flowing stances).
+    if (o.role == RoleBass && ! notes.empty() && c.chordColsValid)
+    {
+        std::sort(notes.begin(), notes.end(), byStart);
+        const int centre = registerCentre(o);
+        const int range  = o.singable ? 6 : 8;   // pitchPhrase's own register window - stay in it
+        std::vector<int> lad;
+        buildLadder(o, centre - range, centre + range, lad);
+        auto rootSemi = [&](int deg, int ref)
+        {
+            const int want = pc(o.key + o.scale[deg % o.scaleLen]);
+            int best = ref, bd = 1 << 20;
+            for (int s2 : lad)
+                if (pc(s2) == want && std::abs(s2 - ref) < bd) { bd = std::abs(s2 - ref); best = s2; }
+            return best;
+        };
+        if (o.rhythm != RhFlowing && c.nKick > 0 && c.kickCol[0] == 0 && notes.front().start != 0)
+            notes.front().start = 0;
+        for (int ci = 0; ci < c.nChords && ! lad.empty(); ++ci)
+        {
+            const int cc = c.chordColAt[ci];
+            Note* atC = nullptr;                        // root ON the change (first onset in a beat)
+            for (auto& n : notes)
+                if (n.start >= cc && n.start < cc + BEAT) { atC = &n; break; }
+            if (atC != nullptr) atC->semi = rootSemi(c.chordDegAt[ci], atC->semi);
+            if (ci == 0) continue;                      // nothing approaches the very first chord
+            Note* ap = nullptr;                         // approach INTO the change (last onset before)
+            for (auto& n : notes)
+                if (n.start >= cc - BEAT && n.start < cc) ap = &n;
+            if (ap == nullptr || ap == atC) continue;
+            const int prevCc = c.chordColAt[ci - 1];
+            if (ap->start >= prevCc && ap->start < prevCc + BEAT) continue;   // it IS the previous root
+            const int nextRoot = rootSemi(c.chordDegAt[ci], ap->semi);
+            if (o.color >= 1)
+                ap->semi = nextRoot + (ap->semi >= nextRoot ? 1 : -1);   // chromatic slide-in
+            else
+            {   // scale-step neighbour of the next root, on the side the line already sits
+                int best = nextRoot, bd = 1 << 20;
+                for (int s2 : lad)
+                {
+                    if (s2 == nextRoot || std::abs(s2 - nextRoot) > 2) continue;
+                    if (std::abs(s2 - ap->semi) < bd) { bd = std::abs(s2 - ap->semi); best = s2; }
+                }
+                ap->semi = best;
+            }
+            ap->approach = true;
+        }
+        for (auto& n : notes) n.semi = std::max(-48, std::min(48, n.semi));
+    }
+
+    // [P1 M1 + M2] PROXIMITY + LEAP RECOVERY (the vocal-craft rules, melody/hum): a leap > 5 st
+    // must be answered by an opposite-direction step; then the line is pulled toward >= 70%
+    // stepwise motion (the widest remaining skip shrinks to a step until the floor holds).
+    if ((o.role == RoleMelody || o.role == RoleHum) && notes.size() >= 3)
+    {
+        std::sort(notes.begin(), notes.end(), byStart);
+        const int centre = registerCentre(o);
+        const int range  = o.singable ? 6 : 8;
+        std::vector<int> lad;
+        buildLadder(o, centre - range, centre + range, lad);
+        auto recoverLeaps = [&]
+        {
+            for (size_t i = 1; i + 1 < notes.size(); ++i)
+            {
+                const int d = notes[i].semi - notes[i - 1].semi;
+                if (std::abs(d) <= 5) continue;
+                const int nd = notes[i + 1].semi - notes[i].semi;
+                if (nd != 0 && (d > 0 ? nd < 0 : nd > 0) && std::abs(nd) <= 3) continue;
+                const int dir = d > 0 ? -1 : 1;         // step back INTO the leap's hole
+                int best = notes[i].semi, bd = 1 << 20;
+                for (int s2 : lad)
+                {
+                    const int dd = (s2 - notes[i].semi) * dir;
+                    if (dd < 1 || dd > 3) continue;     // a scale step (pentatonic gaps reach 3)
+                    if (dd < bd) { bd = dd; best = s2; }
+                }
+                if (best != notes[i].semi) notes[i + 1].semi = best;
+            }
+        };
+        recoverLeaps();
+        for (int iter = 0; iter < 16; ++iter)           // M1: the 70% stepwise floor
+        {
+            int steps = 0, tot = 0, worst = -1, worstD = 0;
+            for (size_t i = 1; i < notes.size(); ++i)
+            {
+                const int d = std::abs(notes[i].semi - notes[i - 1].semi);
+                ++tot; if (d <= 2) ++steps;
+                if (d > 2 && d > worstD) { worstD = d; worst = (int) i; }
+            }
+            if (tot == 0 || worst < 0 || (float) steps / (float) tot >= 0.7f) break;
+            const int prev = notes[(size_t) worst - 1].semi;
+            const int dir  = notes[(size_t) worst].semi > prev ? 1 : -1;
+            int best = prev, bd = 1 << 20;
+            for (int s2 : lad)
+            {
+                const int dd = (s2 - prev) * dir;
+                if (dd < 1 || dd > 2) continue;
+                if (std::abs(s2 - notes[(size_t) worst].semi) < bd)
+                { bd = std::abs(s2 - notes[(size_t) worst].semi); best = s2; }
+            }
+            if (best == prev) break;
+            notes[(size_t) worst].semi = best;
+        }
+        recoverLeaps();   // the floor pass may have re-shaped a recovery - re-guarantee M2
+    }
+
+    // [P1 G3-lite] LHL SYNCOPATION CEILING per role (Bass 4, Hum 2, Melody/Riff 6): de-syncopate
+    // offenders by shifting the worst off-onset to the stronger silent col the scorer points at.
+    // Skipped for Driving-with-drums (locked to the groove's own syncopation = intentional) and
+    // when no groove exists (nothing to be in the pocket OF); bar-opening onsets never move (the
+    // phrase opening is the hook's identity), and Pockets targets respect the exclusion windows.
+    if (c.nHits > 0 && ! (o.rhythm == RhDriving) && ! notes.empty())
+    {
+        const int maxBand = o.role == RoleBass ? 4 : (o.role == RoleHum ? 2 : 6);
+        auto nearAnyHit = [&](int col)
+        {
+            for (int i = 0; i < c.nHits; ++i)
+                if (std::abs(col - c.hitCol[i]) < CELL16) return true;
+            return false;
+        };
+        for (int b = 0; b < bars; ++b)
+            for (int iter = 0; iter < 6; ++iter)
+            {
+                std::sort(notes.begin(), notes.end(), byStart);
+                int wi = -1, tcol = -1;
+                if (lhlBarScoreImpl(notes, b, &wi, &tcol) <= maxBand || wi < 0 || tcol < 0) break;
+                bool barFirst = true;                    // never move a bar's opening onset
+                for (auto& n : notes)
+                    if (n.start >= b * COLS && n.start < notes[(size_t) wi].start) { barFirst = false; break; }
+                if (barFirst) break;
+                if (o.rhythm == RhPockets && nearAnyHit(tcol)) break;
+                bool taken = false;
+                for (auto& n : notes) if (n.start == tcol) { taken = true; break; }
+                if (taken) break;
+                notes[(size_t) wi].start = tcol;
+            }
+    }
+
+    // [P1] INTENSITY: level + accent depth around the 200 mean. Constants informed by the Groove
+    // MIDI mining (docs/generate-calibration.md): soft playing sits ~45-60 MIDI vel with shallow
+    // accents, hard ~90-120 with ~2x accent ratios - mapped into our 120..255 space.
+    if (o.intensity != 1)
+    {
+        const float mul = o.intensity == 0 ? 0.55f : 1.5f;
+        const float ofs = o.intensity == 0 ? -26.0f : 10.0f;
+        for (auto& n : notes)
+            n.vel = std::max(120, std::min(255,
+                        (int) std::lround(200.0f + ((float) n.vel - 200.0f) * mul + ofs)));
+    }
+
     // PHRASE DYNAMICS [v2]: a gentle swell toward the two-thirds point of each bar-pair
     for (auto& n : notes)
     {
@@ -666,9 +1016,65 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& c)
         n.vel = std::max(120, std::min(255, (int) std::lround((float) n.vel * sw)));
     }
 
+    // [P1] HUMANIZE: seed-deterministic velocity + micro-start jitter (Groove MIDI micro IQR is
+    // ~30 ms -> Loose ~ +-6 cols ~ 30 ms at 120 BPM, Subtle ~ +-2 cols; vel jitter scaled down
+    // from the mined +-30..45 MIDI sd). Runs BEFORE the disciplines so they still hold after.
+    if (o.humanize > 0)
+    {
+        Rng hr(o.rhythmSeed ^ (o.pitchSeed * 0x9e3779b9u) ^ 0x48554D41u);
+        const int vj = o.humanize == 1 ? 10 : 22;
+        const int sj = o.humanize == 1 ? 2  : 6;
+        for (auto& n : notes)
+        {
+            n.vel   = std::max(120, std::min(255, n.vel + (int) std::lround((hr.uf() - 0.5f) * 2.0f * (float) vj)));
+            n.start = std::max(0, std::min(total - 1, n.start + (int) std::lround((hr.uf() - 0.5f) * 2.0f * (float) sj)));
+        }
+    }
+
+    // [P1 G8] SNARE PUNCTUATION (Melody): the snare's crack owns the 1/16 after it - offending
+    // onsets slide onto the snare col (ending ON the snare is idiomatic; Pockets slides past the
+    // shadow instead, its exclusion window forbids the hit itself), and the take's FINAL note
+    // snaps to the nearest snare col / one cell before it when a snare sits within half a beat.
+    if (o.role == RoleMelody && c.nSnare > 0 && ! notes.empty())
+    {
+        std::sort(notes.begin(), notes.end(), byStart);
+        auto onNote = [&](int col)
+        { for (auto& n : notes) if (n.start == col) return true; return false; };
+        for (auto& n : notes)
+            for (int i = 0; i < c.nSnare; ++i)
+            {
+                const int sc = c.snareCol[i];
+                if (n.start > sc && n.start < sc + CELL16)
+                {
+                    n.start = (o.rhythm != RhPockets && ! onNote(sc)) ? sc : sc + CELL16;
+                    break;
+                }
+            }
+        auto& last = notes.back();
+        int bestC = -1, bd = BEAT / 2 + 1;
+        for (int i = 0; i < c.nSnare; ++i)
+        {
+            const int prefer[2] = { o.rhythm == RhPockets ? c.snareCol[i] - CELL16 : c.snareCol[i],
+                                    o.rhythm == RhPockets ? c.snareCol[i] : c.snareCol[i] - CELL16 };
+            for (int cand : prefer)
+                if (cand >= 0 && cand < total && std::abs(cand - last.start) < bd
+                    && (cand == last.start || ! onNote(cand)))
+                { bd = std::abs(cand - last.start); bestC = cand; }
+        }
+        if (bestC >= 0) last.start = bestC;
+    }
+
     // POCKET DISCIPLINE [P0 r18]: runs before the safety pass (which re-sorts and tidies any
     // dedupe/mono fallout of the shifts); the later len-clips only ever SHORTEN, so (b) survives.
     pocketDiscipline(o, c, notes, total);
+
+    // [P1 G2] FLOWING bass = AVOID: every note ENDS >= 1/32 bar before the next kick, so nothing
+    // rings into the kick's punch (the third stance of the kick relationship).
+    if (o.role == RoleBass && o.rhythm == RhFlowing && c.nKick > 0)
+        for (auto& n : notes)
+            for (int i = 0; i < c.nKick; ++i)
+                if (c.kickCol[i] > n.start && n.start + n.len > c.kickCol[i] - COLS / 32)
+                { n.len = std::max(1, c.kickCol[i] - COLS / 32 - n.start); break; }
 
     // safety: sorted, deduped, clamped, mono
     std::sort(notes.begin(), notes.end(), [](const Note& a, const Note& b) { return a.start < b.start; });
@@ -677,6 +1083,37 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& c)
     for (size_t i = 0; i + 1 < notes.size(); ++i)
         notes[i].len = std::max(1, std::min(notes[i].len, notes[i + 1].start - notes[i].start));
     if (! notes.empty()) notes.back().len = std::max(1, std::min(notes.back().len, total - notes.back().start));
+
+    // [P1 H8/H9] SOUND-AWARE lengths (the target sound's envelope, gathered by GenContext):
+    // a slow-attack pad (atk >= 120 ms) needs room to bloom - min half-note holds, up to the
+    // next note (mono); a pluck (sustain ~0, decay < 300 ms) is a one-cell voice - long gates
+    // only gate its silence. Mono / scaleOn sounds need single-note lines: the whole output is
+    // monophonic by construction (the safety pass above), so H9 holds for every role. The
+    // pocket / kick-avoid clips are re-applied after (they always win over a length extension).
+    if (c.sndValid && ! notes.empty())
+    {
+        const bool pluck = c.sndSus < 0.05f && c.sndDec < 0.3f && c.sndAtk < 0.05f;
+        for (size_t i = 0; i < notes.size(); ++i)
+        {
+            const int nextStart = i + 1 < notes.size() ? notes[i + 1].start : total;
+            if (sndSlowAtk)
+                notes[i].len = std::max(notes[i].len,
+                                        std::min(COLS / 2, nextStart - notes[i].start));
+            else if (pluck)
+                notes[i].len = std::min(notes[i].len, CELL16);
+            notes[i].len = std::max(1, notes[i].len);
+        }
+        if (o.rhythm == RhPockets && c.nHits > 0)         // re-clip: nothing rings into a hit
+            for (auto& n : notes)
+                for (int i = 0; i < c.nHits; ++i)
+                    if (c.hitCol[i] > n.start && n.start + n.len > c.hitCol[i] - COLS / 32)
+                    { n.len = std::max(1, c.hitCol[i] - COLS / 32 - n.start); break; }
+        if (o.role == RoleBass && o.rhythm == RhFlowing && c.nKick > 0)
+            for (auto& n : notes)
+                for (int i = 0; i < c.nKick; ++i)
+                    if (c.kickCol[i] > n.start && n.start + n.len > c.kickCol[i] - COLS / 32)
+                    { n.len = std::max(1, c.kickCol[i] - COLS / 32 - n.start); break; }
+    }
 
     // FINAL CADENCE GUARD [v3]: the vary/singable passes run AFTER the per-phrase cadence snap
     // and can move the last note - re-land it home (the "last phrase resolves" promise must

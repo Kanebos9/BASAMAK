@@ -28,6 +28,7 @@
 
 #include "Sequencer.h"
 #include "PartGen.h"
+#include "../plugin/FactoryContent.h"   // [2026-07-21 P1] bank categories name the drum roles
 
 namespace GenContext
 {
@@ -37,7 +38,28 @@ struct Readout
     int hits        = 0;   // distinct drum-hit columns heard
     int grooveChans = 0;   // step channels that contributed >= 1 hit
     int keyChans    = 0;   // channels (roll or pitched step) that contributed chroma
+    int kick = 0, snare = 0, hat = 0;   // [P1] classified hit columns per drum role
 };
+
+// [P1 item 1a] drum-ROLE classification per step channel: the sound's bank CATEGORY first
+// (Kicks / Snares / Claps [snare-family] / Hi-Hats / Cymbals+Percussion [perc]), then mixName
+// keywords for user sounds, else a generic hit (combined list only).
+enum DrumRole { DrumKick = 0, DrumSnare, DrumHat, DrumPerc, DrumGeneric };
+inline int classifyDrumRole(const juce::String& category, const juce::String& mixName)
+{
+    if (category == "Kicks")                              return DrumKick;
+    if (category == "Snares" || category == "Claps")      return DrumSnare;
+    if (category == "Hi-Hats")                            return DrumHat;
+    if (category == "Cymbals" || category == "Percussion") return DrumPerc;
+    const auto n = mixName.toLowerCase();
+    if (n.contains("kick") || n.contains("808 boom"))     return DrumKick;
+    if (n.contains("snare") || n.contains("clap"))        return DrumSnare;
+    if (n.contains("hat"))                                return DrumHat;
+    if (n.contains("cymbal") || n.contains("ride") || n.contains("crash") || n.contains("tom")
+        || n.contains("shaker") || n.contains("perc") || n.contains("conga") || n.contains("bongo"))
+        return DrumPerc;
+    return DrumGeneric;
+}
 
 // The first PITCHED audible slot's base as a MIDI note, or -1 for an unpitched
 // (Sample/Noise-only) channel. Step mode = the Freq knob is the base (slotBaseHz's
@@ -68,6 +90,38 @@ inline PartGen::Ctx build(const Sequencer& sq, int head, int end, int selCh, Rea
     ctx.bars = bars;
     float grooveMax = 0.0f;
     bool grooveChan[Sequencer::NUM_CHANNELS] = {}, keyChan[Sequencer::NUM_CHANNELS] = {};
+    // [P1 1a] classify each channel's drum role ONCE (bank category by mixName, else keywords)
+    const auto facNames = Factory::mixNames();
+    const auto facCats  = Factory::mixCategories();
+    int chanRole[Sequencer::NUM_CHANNELS];
+    for (int chn = 0; chn < Sequencer::NUM_CHANNELS; ++chn)
+    {
+        const auto& name = sq.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, head)]
+                              .channels[chn].mixName;
+        const int fi = facNames.indexOf(name);
+        chanRole[chn] = classifyDrumRole(fi >= 0 && fi < facCats.size() ? facCats[fi]
+                                                                        : juce::String(), name);
+    }
+    auto pushRole = [&ctx](int role, int col, float str)
+    {
+        int* nP; int* colA; float* strA;
+        switch (role)
+        {
+            case DrumKick:  nP = &ctx.nKick;  colA = ctx.kickCol;  strA = ctx.kickStr;  break;
+            case DrumSnare: nP = &ctx.nSnare; colA = ctx.snareCol; strA = ctx.snareStr; break;
+            case DrumHat:   nP = &ctx.nHat;   colA = ctx.hatCol;   strA = ctx.hatStr;   break;
+            default: return;   // perc/generic hits live only in the combined list
+        }
+        for (int h = 0; h < *nP; ++h)
+            if (colA[h] == col) { strA[h] = juce::jmin(1.0f, strA[h] + str * 0.5f); return; }
+        if (*nP < PartGen::Ctx::MAX_HITS) { colA[*nP] = col; strA[*nP] = juce::jmin(1.0f, str); ++(*nP); }
+    };
+    // [P1 1b] register map scratch: per-channel pitch histogram over the roll notes (min/med/max)
+    int regLo[Sequencer::NUM_CHANNELS], regHi[Sequencer::NUM_CHANNELS], regCnt[Sequencer::NUM_CHANNELS];
+    static_assert(Sequencer::NUM_CHANNELS <= PartGen::Ctx::MAX_REG, "register map sized to channels");
+    int regHist[Sequencer::NUM_CHANNELS][97];
+    for (int i = 0; i < Sequencer::NUM_CHANNELS; ++i)
+    { regLo[i] = 99; regHi[i] = -99; regCnt[i] = 0; for (int k = 0; k < 97; ++k) regHist[i][k] = 0; }
     for (int b = 0; b < bars; ++b)
     {
         const auto& pat = sq.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, head + b)];
@@ -88,6 +142,10 @@ inline PartGen::Ctx build(const Sequencer& sq, int head, int end, int selCh, Rea
                                                  b * 4 + juce::jlimit(0, 3, ((int) n.start + (int) n.len - 1) / 96));
                     for (int bt = bt0; bt <= bt1; ++bt)
                     { ctx.chroma[bt][p] += (float) n.vel / 255.0f; ctx.chromaValid = true; keyChan[chn] = true; }
+                    const int hb = juce::jlimit(0, 96, (int) n.semi + 48);   // [P1 1b] register map
+                    ++regHist[chn][hb]; ++regCnt[chn];
+                    regLo[chn] = juce::jmin(regLo[chn], (int) n.semi);
+                    regHi[chn] = juce::jmax(regHi[chn], (int) n.semi);
                 }
             }
             else
@@ -112,6 +170,7 @@ inline PartGen::Ctx build(const Sequencer& sq, int head, int end, int selCh, Rea
                         else if (ctx.nHits < PartGen::Ctx::MAX_HITS)
                         { ctx.hitCol[ctx.nHits] = col; ctx.hitStr[ctx.nHits] = juce::jmin(1.0f, cc.stepVel[i]);
                           ++ctx.nHits; }
+                        pushRole(chanRole[chn], col, cc.stepVel[i]);   // [P1 1a] kick/snare/hat lists
                         if (baseMidi >= 0)
                         {
                             const int note = baseMidi + juce::roundToInt(cc.stepPitch[i]);
@@ -126,18 +185,138 @@ inline PartGen::Ctx build(const Sequencer& sq, int head, int end, int selCh, Rea
     }
     if (grooveMax > 0.0f)
         for (int i = 0; i < bars * 16; ++i) ctx.grooveHit[i] = juce::jmin(1.0f, ctx.grooveHit[i] / grooveMax);
-    // hit list must be SORTED (Pockets walks the gaps in order); channels interleave, so sort now
-    for (int a = 1; a < ctx.nHits; ++a)
-        for (int b2 = a; b2 > 0 && ctx.hitCol[b2] < ctx.hitCol[b2 - 1]; --b2)
-        { std::swap(ctx.hitCol[b2], ctx.hitCol[b2 - 1]); std::swap(ctx.hitStr[b2], ctx.hitStr[b2 - 1]); }
+    // hit lists must be SORTED (Pockets walks the gaps in order); channels interleave, so sort now
+    auto sortHits = [](int n, int* cols, float* strs)
+    {
+        for (int a = 1; a < n; ++a)
+            for (int b2 = a; b2 > 0 && cols[b2] < cols[b2 - 1]; --b2)
+            { std::swap(cols[b2], cols[b2 - 1]); std::swap(strs[b2], strs[b2 - 1]); }
+    };
+    sortHits(ctx.nHits,  ctx.hitCol,   ctx.hitStr);
+    sortHits(ctx.nKick,  ctx.kickCol,  ctx.kickStr);
+    sortHits(ctx.nSnare, ctx.snareCol, ctx.snareStr);
+    sortHits(ctx.nHat,   ctx.hatCol,   ctx.hatStr);
+    // [P1 1b] register map: each contributing roll channel's min / MEDIAN / max pitch
+    for (int chn = 0; chn < Sequencer::NUM_CHANNELS && ctx.nReg < PartGen::Ctx::MAX_REG; ++chn)
+    {
+        if (regCnt[chn] <= 0) continue;
+        int seen = 0, med = regLo[chn];
+        for (int k = 0; k < 97; ++k)
+        { seen += regHist[chn][k]; if (seen * 2 >= regCnt[chn]) { med = k - 48; break; } }
+        ctx.regMin[ctx.nReg] = regLo[chn];
+        ctx.regMed[ctx.nReg] = med;
+        ctx.regMax[ctx.nReg] = regHi[chn];
+        ++ctx.nReg;
+    }
+    {   // [P1 1d] TARGET-sound introspection (H8/H9): the selected channel's first audible slot
+        const auto& tc = sq.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, head)].channels[selCh];
+        ctx.sndMono = ! tc.keysPolyMode;
+        for (int s = 0; s < DrumChannel::NUM_SLOTS; ++s)
+        {
+            const auto& sl = tc.slots[s];
+            if (sl.weight <= 0.001f || sl.engine < 0) continue;
+            ctx.sndValid = true;
+            ctx.sndAtk = sl.atk; ctx.sndDec = sl.dec; ctx.sndSus = sl.sustain; ctx.sndRel = sl.release;
+            ctx.sndScaleOn = sl.scaleOn;
+            if (tc.msSet[s] != nullptr && ! tc.msSet[s]->zones.empty())
+            {
+                int lo = 999, hi = -999;
+                for (const auto& z : tc.msSet[s]->zones)
+                { lo = juce::jmin(lo, (int) z.root); hi = juce::jmax(hi, (int) z.root); }
+                ctx.sndMsLo = lo; ctx.sndMsHi = hi;
+            }
+            break;
+        }
+    }
     if (ro != nullptr)
     {
         ro->hits = ctx.nHits;
+        ro->kick = ctx.nKick; ro->snare = ctx.nSnare; ro->hat = ctx.nHat;
         ro->grooveChans = ro->keyChans = 0;
         for (int i = 0; i < Sequencer::NUM_CHANNELS; ++i)
         { ro->grooveChans += grooveChan[i] ? 1 : 0; ro->keyChans += keyChan[i] ? 1 : 0; }
     }
     return ctx;
+}
+
+// ============================================================================
+// [2026-07-21 P1 item 3] STEP-COUNT AUTHORITY + STEP OUTPUT (GENERATE-THEORY v4, user:
+// "definitely add"). The generator composes in absolute 384-col time; when the TARGET channel is
+// in STEP mode the writer picks the SMALLEST valid step count whose grid holds every onset
+// DISTINCTLY (an exact-fit pass first, then a quarter-cell tolerance pass), sets numSteps on
+// every group bar (capped so count x bars <= the 64-concat-cell row), and writes steps +
+// per-step velocity + stepPitch (vs the channel's Freq-knob base) + SLIDE on bass approach
+// notes + gate lengths via stepNoteLen. Roll-mode targets keep the roll write (editor side).
+// ============================================================================
+struct StepWrite { int count = 0; int written = 0; };
+
+inline int chooseStepCount(const std::vector<PartGen::Note>& notes, int bars)
+{
+    const int cap = juce::jmax(1, 64 / juce::jmax(1, bars));   // the 64-concat-cell group cap
+    auto fits = [&](int n, int tolCols) -> bool
+    {
+        bool used[PartGen::MAX_BARS * DrumChannel::MAX_STEPS] = {};
+        for (const auto& note : notes)
+        {
+            const int b     = note.start / DrumChannel::DRAW_RES;
+            const int local = note.start - b * DrumChannel::DRAW_RES;
+            const int k     = juce::jlimit(0, n - 1, (int) std::lround((double) local * n / 384.0));
+            const int grid  = (int) std::lround((double) k * 384.0 / n);
+            if (std::abs(local - grid) > tolCols) return false;
+            const int key = juce::jlimit(0, PartGen::MAX_BARS * DrumChannel::MAX_STEPS - 1, b * n + k);
+            if (used[key]) return false;    // two onsets on one step: this grid can't hold them
+            used[key] = true;
+        }
+        return true;
+    };
+    for (int pass = 0; pass < 2; ++pass)
+        for (int ci = 0; ci < DrumChannel::NUM_VALID_STEP_COUNTS; ++ci)
+        {
+            const int n = DrumChannel::VALID_STEP_COUNTS[ci];
+            if (n > cap) break;   // the list is ascending
+            if (fits(n, pass == 0 ? 0 : juce::jmax(2, 384 / n / 4))) return n;
+        }
+    int best = 1;   // nothing holds every onset distinctly: the densest allowed grid (collisions
+    for (int ci = 0; ci < DrumChannel::NUM_VALID_STEP_COUNTS; ++ci)   //  merge on write, loudest wins)
+        if (DrumChannel::VALID_STEP_COUNTS[ci] <= cap) best = DrumChannel::VALID_STEP_COUNTS[ci];
+    return best;
+}
+
+inline StepWrite writeStepOutput(Sequencer& sq, int head, int bars, int ch,
+                                 const std::vector<PartGen::Note>& notes)
+{
+    StepWrite r;
+    r.count = chooseStepCount(notes, bars);
+    auto patOf = [&](int b) -> Sequencer::Pattern&
+    { return sq.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, head + b)]; };
+    const int baseMidi = stepChannelBaseMidi(patOf(0).channels[ch]);   // step pitch 0 = the Freq knob
+    for (int b = 0; b < bars; ++b)
+    {
+        auto& cc = patOf(b).channels[ch];
+        cc.clearStepData();
+        cc.drawMode = false;
+        cc.numSteps = r.count;
+    }
+    const double span = 384.0 / (double) r.count;   // concat cols per step
+    for (const auto& note : notes)
+    {
+        const int b     = juce::jlimit(0, bars - 1, note.start / DrumChannel::DRAW_RES);
+        auto& cc        = patOf(b).channels[ch];
+        const int local = note.start - b * DrumChannel::DRAW_RES;
+        const int k     = juce::jlimit(0, r.count - 1, (int) std::lround((double) local * r.count / 384.0));
+        const float vel = juce::jlimit(0.05f, 1.0f, (float) note.vel / 255.0f);
+        if (cc.steps[k] && cc.stepVel[k] >= vel) continue;   // collision: the louder hit names the step
+        cc.steps[k]    = true;
+        cc.stepVel[k]  = vel;
+        cc.stepPitch[k] = (float) juce::jlimit(-DrumChannel::PITCH_RANGE, DrumChannel::PITCH_RANGE,
+                              baseMidi >= 0 ? (60 + note.semi) - baseMidi : note.semi);
+        cc.stepSlide[k] = note.approach;                     // bass approach -> the SLIDE band
+        const float frac = (float) ((double) note.len / span);
+        cc.stepNoteLen[k] = frac >= 0.98f ? 0.0f : juce::jlimit(0.08f, 1.0f, frac);   // 0 = natural ring
+        ++r.written;
+    }
+    for (int b = 0; b < bars; ++b) patOf(b).channels[ch].markDspDirty();
+    return r;
 }
 
 // Key detection = Krumhansl-lite over the SUMMED per-beat chroma. ONE histogram source means the
