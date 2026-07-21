@@ -1709,6 +1709,11 @@ public:
     int  lines = 0;           // [v3] melodic sentences: 0 = Auto, 1..4 (1 = one arc across the group)
     int  relation = 0;        // [v3] what lines 2+ do: Auto | Repeat | Answer | New
     bool singable = false;
+    // [2026-07-21 P1] the competitive-surface trio + the harmony override (GENERATE-THEORY v2/v4)
+    int  intensity = 1;       // Soft | Medium | Hard (velocity level + accent depth)
+    int  humanize = 0;        // Off | Subtle | Loose (seed-deterministic vel + start jitter)
+    int  fills = 0;           // Off | Last bar | Every phrase (end-of-line density bump)
+    int  progression = 0;     // Chords row: 0 = Auto (detected) | 1..6 stock progressions
     int  bars = 1;            // set by the editor before show() (merged-group size)
     juce::String keyTag;      // "from Scale mode" / "detected" / "default" - honesty about the prefill
     juce::String soundName;   // title context: the channel's loaded sound
@@ -1725,13 +1730,14 @@ public:
     juce::Rectangle<int> actionScreenArea(int idx) { return localAreaToGlobal(actionRect(idx)); }
 private:
     juce::Rectangle<int> panelRect() const;
-    juce::Rectangle<int> rowRect(int row) const;                    // option rows 0..7
+    juce::Rectangle<int> rowRect(int row) const;                    // option rows 0..11 (3 bands)
     juce::Rectangle<int> chipRect(int row, int idx, int count) const;
     juce::Rectangle<int> singableRect() const;
     juce::Rectangle<int> actionRect(int idx) const;                 // 0..3 (2x2)
     juce::Rectangle<int> closeRect() const;
     juce::Rectangle<int> keyRect() const;
     juce::Rectangle<int> scaleRect() const;
+    juce::Rectangle<int> chordsRect() const;                        // [P1] Chords override popup
 };
 
 //==============================================================================
@@ -3674,6 +3680,9 @@ private:
                                                // (proc.followPlayback); MIDI = "ui_sel_follow"
     juce::TextButton btnClearPat { "Clear" };  // wipe the current pattern's steps/values back to default
     LearnableButton  btnInfluenceTop { "Infl" };  // arm step-influence for the SELECTED channel (moved off the strips)
+    juce::TextButton btnGenerateTop { "Generate" };   // [2026-07-21 P1] the universal Generate door
+                                                      // (pattern row, left of Clear - works in STEP
+                                                      // mode too now that step output exists)
     // All 16 channels + 32 patterns are ALWAYS active now (the old 8/16 + 16/32 count toggles are gone).
     // This button (next to HIDE SOUND EDITOR/KEYS) switches the VIEW between 8 rows (default) and all 16.
     LearnableButton btn16View { "16 CHANNELS VIEW" };  // MIDI = "ui_sel_view16" [2026-07-15 22:30]

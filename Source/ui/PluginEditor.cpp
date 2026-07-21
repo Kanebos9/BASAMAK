@@ -3476,39 +3476,49 @@ static const char* const kGenRhythm[]  = { "Flowing", "In the pockets", "Driving
 // the Contour row is GONE (Auto rolls it internally - it was the least predictable control).
 static const char* const kGenLines[]   = { "Auto", "1", "2", "3", "4" };
 static const char* const kGenRel[]     = { "Auto", "Repeat", "Answer", "New" };
+// [2026-07-21 P1] the competitive-surface trio + the Chords override (GENERATE-THEORY v2/v4)
+static const char* const kGenInt[]     = { "Soft", "Medium", "Hard" };
+static const char* const kGenHum[]     = { "Off", "Subtle", "Loose" };
+static const char* const kGenFills[]   = { "Off", "Last bar", "Every phrase" };
+static const char* const kGenProgs[]   = { "Auto (detected)", "I-V-vi-IV", "I-vi-IV-V",
+                                           "i-VI-III-VII", "ii-V-I", "I-IV-V", "12-bar blues" };
 static const char* const kGenActions[] = { "NEW IDEA", "VARY", "Same rhythm, new notes", "Same notes, new rhythm" };
 static const juce::Colour kGenAccent { 0xffa0e8b0 };   // the Generate green (roll-operations family)
+// [P1] rows live in three labeled BANDS: What (0-2) | Feel (3-8) | Form (9-11)
+static inline int genBandOf(int row) { return row < 3 ? 0 : (row < 9 ? 1 : 2); }
 }
 
 juce::Rectangle<int> GeneratePanel::panelRect() const
 {
-    const int w = 470, h = 486;
+    const int w = 470, h = 634;
     return { getWidth() - w - 14, juce::jmax(8, (getHeight() - h) / 2), w, h };
 }
 juce::Rectangle<int> GeneratePanel::rowRect(int row) const
 {
     const auto p = panelRect();
-    return { p.getX() + 12, p.getY() + 42 + row * 36, p.getWidth() - 24, 30 };
+    return { p.getX() + 12, p.getY() + 36 + (genBandOf(row) + 1) * 18 + row * 33, p.getWidth() - 24, 30 };
 }
 juce::Rectangle<int> GeneratePanel::chipRect(int row, int idx, int count) const
 {
     auto r = rowRect(row).withTrimmedLeft(68);
-    if (row == 7) r = r.withTrimmedRight(104);   // Phrase row shares with the Singable toggle
+    if (row == 11) r = r.withTrimmedRight(104);   // Fills row shares with the Singable toggle
     const int w = (r.getWidth() - (count - 1) * 4) / count;
     return { r.getX() + idx * (w + 4), r.getY() + 2, w, 26 };
 }
 juce::Rectangle<int> GeneratePanel::singableRect() const
-{ const auto r = rowRect(7); return { r.getRight() - 98, r.getY() + 2, 98, 26 }; }
+{ const auto r = rowRect(11); return { r.getRight() - 98, r.getY() + 2, 98, 26 }; }
 juce::Rectangle<int> GeneratePanel::keyRect() const
 { const auto r = rowRect(1); return { r.getX() + 68, r.getY() + 2, 64, 26 }; }
 juce::Rectangle<int> GeneratePanel::scaleRect() const
 { const auto r = rowRect(1); return { r.getX() + 138, r.getY() + 2, 96, 26 }; }
+juce::Rectangle<int> GeneratePanel::chordsRect() const
+{ const auto r = rowRect(2); return { r.getX() + 68, r.getY() + 2, 200, 26 }; }
 juce::Rectangle<int> GeneratePanel::actionRect(int idx) const
 {
     const auto p = panelRect();
     const int w = (p.getWidth() - 24 - 8) / 2;
     return { p.getX() + 12 + (idx % 2) * (w + 8),
-             p.getY() + 42 + 8 * 36 + 6 + (idx / 2) * 40, w, 34 };
+             rowRect(11).getBottom() + 8 + (idx / 2) * 40, w, 34 };
 }
 juce::Rectangle<int> GeneratePanel::closeRect() const
 { const auto p = panelRect(); return { p.getRight() - 32, p.getY() + 8, 24, 24 }; }
@@ -3544,29 +3554,48 @@ void GeneratePanel::paint(juce::Graphics& g)
             g.drawFittedText(items[i], cr, juce::Justification::centred, 1, 0.6f);
         }
     };
+    // [P1] band headers: What (the material) | Feel (how it plays) | Form (how it is shaped)
+    auto bandHdr = [&](int firstRow, const char* t)
+    {
+        const auto r = rowRect(firstRow);
+        g.setColour(kGenAccent.withAlpha(0.7f)); g.setFont(juce::Font(11.0f, juce::Font::bold));
+        g.drawText(t, r.getX(), r.getY() - 16, 200, 14, juce::Justification::centredLeft, false);
+    };
+    bandHdr(0, "WHAT");
     chips(0, "Role",     kGenRoles,   4, role, false);
+    auto btn = [&](juce::Rectangle<int> b, const juce::String& t)
+    {
+        g.setColour(juce::Colour(0xff223046)); g.fillRoundedRectangle(b.toFloat(), 4.0f);
+        g.setColour(juce::Colour(0xff9fd1ff)); g.setFont(juce::Font(12.5f, juce::Font::bold));
+        g.drawFittedText(t, b, juce::Justification::centred, 1, 0.7f);
+    };
     { // KEY + SCALE row: two popup buttons + the honesty tag (where the prefill came from)
         const auto r = rowRect(1);
         g.setColour(juce::Colour(0xff8a94b0)); g.setFont(juce::Font(12.0f, juce::Font::bold));
         g.drawText("Key", r.getX(), r.getY(), 64, r.getHeight(), juce::Justification::centredLeft, false);
-        auto btn = [&](juce::Rectangle<int> b, const juce::String& t)
-        {
-            g.setColour(juce::Colour(0xff223046)); g.fillRoundedRectangle(b.toFloat(), 4.0f);
-            g.setColour(juce::Colour(0xff9fd1ff)); g.setFont(juce::Font(12.5f, juce::Font::bold));
-            g.drawFittedText(t, b, juce::Justification::centred, 1, 0.7f);
-        };
         btn(keyRect(),   kUiNoteName[juce::jlimit(0, 11, key)]);
         btn(scaleRect(), kUiScaleName[juce::jlimit(0, 9, scaleType)]);
         g.setColour(juce::Colour(0xff6a7490)); g.setFont(juce::Font(11.0f));
         g.drawText("(" + keyTag + ")", scaleRect().getRight() + 8, r.getY(), r.getRight() - scaleRect().getRight() - 8,
                    r.getHeight(), juce::Justification::centredLeft, false);
     }
-    chips(2, "Density",  kGenDens,    3, density, false);
-    chips(3, "Register", kGenReg,     3, registerBand, false);
-    chips(4, "Color",    kGenColor,   3, color, false);
-    chips(5, "Rhythm",   kGenRhythm,  3, rhythm, false);
-    chips(6, "Lines",    kGenLines,   5, lines, bars < 2);
-    chips(7, "Next lines", kGenRel,   4, relation, bars < 2);
+    { // [P1] CHORDS row: the harmony override popup (Auto = detected/stock, else a progression)
+        const auto r = rowRect(2);
+        g.setColour(juce::Colour(0xff8a94b0)); g.setFont(juce::Font(12.0f, juce::Font::bold));
+        g.drawText("Chords", r.getX(), r.getY(), 64, r.getHeight(), juce::Justification::centredLeft, false);
+        btn(chordsRect(), kGenProgs[juce::jlimit(0, 6, progression)]);
+    }
+    bandHdr(3, "FEEL");
+    chips(3, "Density",  kGenDens,    3, density, false);
+    chips(4, "Register", kGenReg,     3, registerBand, false);
+    chips(5, "Color",    kGenColor,   3, color, false);
+    chips(6, "Rhythm",   kGenRhythm,  3, rhythm, false);
+    chips(7, "Intensity", kGenInt,    3, intensity, false);
+    chips(8, "Humanize", kGenHum,     3, humanize, false);
+    bandHdr(9, "FORM");
+    chips(9,  "Lines",    kGenLines,  5, lines, bars < 2);
+    chips(10, "Next lines", kGenRel,  4, relation, bars < 2);
+    chips(11, "Fills",    kGenFills,  3, fills, false);
     { const auto sr = singableRect();
       g.setColour(singable ? kGenAccent : juce::Colour(0xff33335a)); g.fillRoundedRectangle(sr.toFloat(), 4.0f);
       g.setColour(singable ? juce::Colours::black : juce::Colour(0xffb8b8d0));
@@ -3584,7 +3613,7 @@ void GeneratePanel::paint(juce::Graphics& g)
         g.drawFittedText(kGenActions[i], ar, juce::Justification::centred, 1, 0.7f);
     }
     g.setColour(juce::Colour(0xff6a7490)); g.setFont(juce::Font(11.5f));
-    g.drawFittedText("Notes land in the roll behind - press Play and reroll until it fits. Undo restores.",
+    g.drawFittedText("Lands in the channel behind (roll notes, or STEPS on a step channel) - reroll until it fits. Undo restores.",
                      p.getX() + 12, actionRect(3).getBottom() + 6, p.getWidth() - 24, 24,
                      juce::Justification::centred, 2, 0.8f);
     // [1.5.7 r18] the CONTEXT READOUT: what the last gather actually heard - starvation is never
@@ -3609,13 +3638,25 @@ void GeneratePanel::mouseDown(const juce::MouseEvent& e)
         return false;
     };
     if (hitChips(0, 4, role))          return;
-    if (hitChips(2, 3, density))       return;
-    if (hitChips(3, 3, registerBand))  return;
-    if (hitChips(4, 3, color))         return;
-    if (hitChips(5, 3, rhythm))        return;
-    if (bars >= 2 && hitChips(6, 5, lines))    return;
-    if (bars >= 2 && hitChips(7, 4, relation)) return;
+    if (hitChips(3, 3, density))       return;
+    if (hitChips(4, 3, registerBand))  return;
+    if (hitChips(5, 3, color))         return;
+    if (hitChips(6, 3, rhythm))        return;
+    if (hitChips(7, 3, intensity))     return;
+    if (hitChips(8, 3, humanize))      return;
+    if (bars >= 2 && hitChips(9, 5, lines))     return;
+    if (bars >= 2 && hitChips(10, 4, relation)) return;
+    if (hitChips(11, 3, fills))        return;
     if (singableRect().contains(pos))  { singable = ! singable; repaint(); return; }
+    if (chordsRect().contains(pos))
+    {   // [P1] the Chords override: Auto (detected) or a stock progression steering chordCols
+        juce::PopupMenu m;
+        for (int i = 0; i < 7; ++i) m.addItem(i + 1, kGenProgs[i], true, i == progression);
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(
+                            localAreaToGlobal(chordsRect())),
+                        [this](int r) { if (r > 0) { progression = r - 1; repaint(); } });
+        return;
+    }
     if (keyRect().contains(pos))
     {
         juce::PopupMenu m;
@@ -3653,36 +3694,55 @@ juce::String GeneratePanel::getTooltip()
                          "Defaults from the loaded sound's bank category.";
     if (inRow(1)) return "KEY + SCALE the generator writes in. Prefilled from this channel's Scale mode, or "
                          "DETECTED from your pitched piano-roll channels - correct it here if the guess is wrong.";
-    if (inRow(2)) return "DENSITY: fewer, longer notes vs more movement.";
-    if (inRow(3)) return "REGISTER: where the line sits. Bassline treats High as mid-low (a bass stays a bass).";
-    if (inRow(4)) return "COLOR: how far outside the safe notes it reaches.\n\n"
+    if (inRow(2)) return "CHORDS: the harmony the part follows (the shared chord timeline).\n\n"
+                         "- Auto: detected from your other channels' notes (stock changes when nothing is heard).\n"
+                         "- Or pick a classic progression - it overrides detection for every role.\n"
+                         "- Basslines land the ROOT on every change and walk an approach note into it.";
+    if (inRow(3)) return "DENSITY: fewer, longer notes vs more movement. Busy also doubles the harmonic "
+                         "rhythm (two chords per bar).";
+    if (inRow(4)) return "REGISTER: where the line sits. Bassline treats High as mid-low (a bass stays a bass).";
+    if (inRow(5)) return "COLOR: how far outside the safe notes it reaches.\n\n"
                          "- Safe: chord tones on strong beats, scale steps between.\n"
-                         "- Spicy: occasional passing tones + wider leaps.\n"
+                         "- Spicy: occasional passing tones + chromatic bass approaches.\n"
                          "- Colorful: chromatic neighbours + off-beat landings.";
-    if (inRow(5)) return "RHYTHM stance vs YOUR groove (read from the other channels' steps):\n\n"
+    if (inRow(6)) return "RHYTHM stance vs YOUR groove (read from the other channels' steps):\n\n"
                          "- Flowing: long legato notes floating over the beat.\n"
                          "- In the pockets: fills the gaps BETWEEN your drum hits.\n"
-                         "- Driving: locks onto the drum hits.";
-    if (inRow(6)) return "LINES: how many melodic SENTENCES the melody has across this group - like lines "
+                         "- Driving: locks onto the drum hits.\n"
+                         "- A Bassline reads the stance against the KICK: Driving = with it, "
+                         "In the pockets = between it, Flowing = never rings into it.";
+    if (inRow(7)) return "INTENSITY: how hard the part plays.\n\n"
+                         "- Soft: quieter, shallow accents.\n"
+                         "- Hard: louder, deep accents (about twice the accent spread - the way a hard "
+                         "take measures against a soft one).";
+    if (inRow(8)) return "HUMANIZE: small velocity + timing jitter, like a player.\n\n"
+                         "- Subtle: ~10 ms of drift.  Loose: ~30 ms.\n"
+                         "- Deterministic from the seeds - the same idea always plays back identically.";
+    if (inRow(9)) return "LINES: how many melodic SENTENCES the melody has across this group - like lines "
                          "of lyrics.\n\n"
                          "- 1 = ONE arc spanning ALL the bars (even 3 bars = one long line).\n"
                          "- 2 = a question and its answer.\n"
                          "- 3 / 4 = more sentences (4 on Auto relations = the classic hook/bridge/hook shape).\n"
                          "- Auto picks by group length (long arcs by default).";
-    if (inRow(7) && singableRect().contains(pos))
+    if (inRow(11) && singableRect().contains(pos))
                   return "SINGABLE: about one octave, mostly stepwise, leaps capped at a fifth, a breath at phrase "
                          "ends - a line a human could actually hum. The vocal-guide special.";
-    if (inRow(7)) return "NEXT LINES: what lines 2+ do compared to line 1.\n\n"
+    if (inRow(10)) return "NEXT LINES: what lines 2+ do compared to line 1.\n\n"
                          "- Repeat: same line again, ending varied (hooks live here).\n"
                          "- Answer: shares line 1's opening, then answers and lands HOME (the sung-sentence feel).\n"
                          "- New: every line is fresh material.\n"
                          "- Auto: question/answer for 2 lines, hook + contrast for 4.";
+    if (inRow(11)) return "FILLS: an end-of-line density bump (extra notes in the bar's last quarter).\n\n"
+                         "- Last bar: only the group's final bar fills.\n"
+                         "- Every phrase: each line's final bar fills.";
     if (actionRect(0).contains(pos)) return "NEW IDEA: a full reroll - fresh rhythm AND fresh notes.";
     if (actionRect(1).contains(pos)) return "VARY: keep this melody's skeleton, change ~a third of the notes (same idea, new ornaments).";
     if (actionRect(2).contains(pos)) return "SAME RHYTHM, NEW NOTES: the onsets stay exactly where they are; only the pitches reroll.";
     if (actionRect(3).contains(pos)) return "SAME NOTES, NEW RHYTHM: keep the pitch idea, reroll where the notes land.";
     return "GENERATE: writes a part for THIS channel from your groove + key. One-shot dice - playback stays "
-           "deterministic; the result is ordinary notes you can edit. Undo restores the previous take.";
+           "deterministic; the result is ordinary notes you can edit. Undo restores the previous take.\n\n"
+           "- A PIANO-ROLL channel gets roll notes; a STEP-MODE channel gets STEPS - the step count is "
+           "chosen to fit the part's timing (velocity, pitch, gate and Slide written per step).";
 }
 
 void VoiceModDisplay::setValues(int unison, int scaleUnison, float detune, float vibrato, bool centreOn, int detuneMode, bool scaleOnIn, int scaleTypeIn, int scaleKeyIn, float uniSpreadIn, float driftIn)
@@ -6309,6 +6369,7 @@ DrumSequencerEditor::~DrumSequencerEditor()
                              (juce::Button*)&btnRedo, (juce::Button*)&btnRoute, (juce::Button*)&btnSaveMix,
                              (juce::Button*)&btnToggleDetail, (juce::Button*)&btnKeysView, (juce::Button*)&btnClearPat,
                              (juce::Button*)&btnInfluenceTop,
+                             (juce::Button*)&btnGenerateTop,   // purpleOutlineLNF [P1]
                              (juce::Button*)&btnTooltips,
                              (juce::Button*)&btn16View }) b->setLookAndFeel(nullptr);
     keysPanel.btnSlot2.setLookAndFeel(nullptr);   // dropBtnLNF
@@ -7925,8 +7986,13 @@ static juce::String genReadoutLine(const GeneratePanel& gp, const GenContext::Re
         return gp.keyTag == "from Scale mode"
              ? "No other channels heard - writing " + keyName + " (from Scale mode) on the meter grid."
              : "No context heard - writing from scratch in " + keyName + " on the meter grid.";
+    // [P1] role counts join the line (the theory doc's data-spec readout: "N hits (K kick...)")
+    juce::String roles;
+    if (ro.kick + ro.snare + ro.hat > 0)
+        roles = " (" + juce::String(ro.kick) + " kick / " + juce::String(ro.snare) + " snare / "
+              + juce::String(ro.hat) + " hat)";
     juce::String s = ro.hits > 0
-        ? "Groove: " + juce::String(ro.hits) + " hits from " + juce::String(ro.grooveChans)
+        ? "Groove: " + juce::String(ro.hits) + " hits" + roles + " from " + juce::String(ro.grooveChans)
           + (ro.grooveChans == 1 ? " channel." : " channels.")
         : "No drum hits heard - the meter grid drives the rhythm.";
     s += ro.keyChans > 0
@@ -7941,7 +8007,8 @@ void DrumSequencerEditor::openGeneratePanel()
     auto& sq = proc.sequencer;
     const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
     auto& c = sq.patterns[head].channels[selectedChannel];
-    if (! c.drawMode) return;   // roll-only (the button only exists in the big roll editor)
+    // [P1] no drawMode gate any more: a STEP-MODE channel gets STEP OUTPUT (the pattern-row
+    // Generate button is the universal door - GENERATE-THEORY v3/v4's sequenced decision).
     generatePanel.bars = juce::jlimit(1, StepGridComponent::GRP_MAX, end - head + 1);
     // KEY + SCALE prefill: this channel's Scale mode wins; else detect; else C major.
     int k = -1, st = 0;
@@ -8004,7 +8071,14 @@ void DrumSequencerEditor::openGeneratePanel()
     }
     genHadNotes = false;
     for (int b = head; b <= end; ++b)
-        if (sq.patterns[b].channels[selectedChannel].drawNoteCount > 0) genHadNotes = true;
+    {
+        auto& cb = sq.patterns[b].channels[selectedChannel];
+        if (cb.drawMode ? (cb.drawNoteCount > 0)
+                        : [&cb] { for (int i = 0; i < cb.numSteps; ++i)   // [P1] steps count too
+                                      if (cb.steps[i]) return true;
+                                  return false; }())
+            genHadNotes = true;
+    }
     genWarned = false;
     genVaryCount = 0;
     auto& rnd = juce::Random::getSystemRandom();
@@ -8018,7 +8092,8 @@ void DrumSequencerEditor::genAction(int action)
     auto& sq = proc.sequencer;
     const int ch = selectedChannel;
     const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
-    if (! sq.patterns[head].channels[ch].drawMode) return;
+    // [P1 item 3] a STEP-MODE target gets STEP OUTPUT (count authority + steps); roll keeps roll
+    const bool stepOut = ! sq.patterns[head].channels[ch].drawMode;
     if (genHadNotes && ! genWarned)
     {   // the clear-on-switch convention: warn ONCE per panel-open before replacing hand-made notes
         juce::PopupMenu m;
@@ -8059,22 +8134,36 @@ void DrumSequencerEditor::genAction(int action)
     o.lines        = generatePanel.lines;      // [v3] structure = lines + relation (contour = Auto internal)
     o.relation     = generatePanel.relation;
     o.singable     = generatePanel.singable;
+    o.intensity    = generatePanel.intensity;  // [P1] the competitive-surface trio + Chords override
+    o.humanize     = generatePanel.humanize;
+    o.fills        = generatePanel.fills;
+    o.progression  = generatePanel.progression;
     o.rhythmSeed   = genRhythmSeed;
     o.pitchSeed    = genPitchSeed;
     o.varyCount    = genVaryCount;
     const auto notes = PartGen::generate(o, ctx);
     // ---- write: undoable, cleared + split per group bar (the onDrawNotesChanged discipline) ----
-    commitUndoNow();
-    for (int b = 0; b < bars; ++b) sq.patterns[head + b].channels[ch].clearDrawNotes();
-    for (const auto& n : notes)
+    commitUndoNow();   // ONE undo covers count + content, both output modes
+    if (stepOut)
+    {   // [P1 item 3] STEP OUTPUT: the writer picks the smallest valid step count that holds
+        // every onset, then writes steps + velocity + pitch-vs-Freq-knob + Slide + gate lengths.
+        const auto res = GenContext::writeStepOutput(sq, head, bars, ch, notes);
+        generatePanel.contextLine += "  Wrote " + juce::String(res.written) + " notes as "
+                                   + juce::String(res.count) + " steps to fit the groove.";
+    }
+    else
     {
-        const int b = juce::jlimit(0, bars - 1, n.start / DrumChannel::DRAW_RES);
-        DrumChannel::DrawNote dn;                       // whole-struct push (the field-drop lesson)
-        dn.start = (int16_t) (n.start - b * DrumChannel::DRAW_RES);
-        dn.len   = (int16_t) juce::jmax(1, n.len);
-        dn.semi  = (int8_t)  juce::jlimit(-48, 48, n.semi);
-        dn.vel   = (uint8_t) juce::jlimit(0, 255, n.vel);
-        sq.patterns[head + b].channels[ch].addDrawNote(dn);
+        for (int b = 0; b < bars; ++b) sq.patterns[head + b].channels[ch].clearDrawNotes();
+        for (const auto& n : notes)
+        {
+            const int b = juce::jlimit(0, bars - 1, n.start / DrumChannel::DRAW_RES);
+            DrumChannel::DrawNote dn;                       // whole-struct push (the field-drop lesson)
+            dn.start = (int16_t) (n.start - b * DrumChannel::DRAW_RES);
+            dn.len   = (int16_t) juce::jmax(1, n.len);
+            dn.semi  = (int8_t)  juce::jlimit(-48, 48, n.semi);
+            dn.vel   = (uint8_t) juce::jlimit(0, 255, n.vel);
+            sq.patterns[head + b].channels[ch].addDrawNote(dn);
+        }
     }
     genHadNotes = true; genWarned = true;   // rerolls replace OUR OWN notes without re-asking
     stepGrid.update(proc.sequencer, proc.anySolo);
@@ -8886,6 +8975,18 @@ void DrumSequencerEditor::setupComponents()
     btnInfluenceTop.onClick = [this] {
         stepGrid.influenceArmed[selectedChannel] = btnInfluenceTop.getToggleState();
     };
+    // [2026-07-21 P1] the universal Generate door (pattern row, left of Clear): opens the same
+    // panel as the roll header's button, for the SELECTED channel - works in STEP mode too now
+    // that step output exists (GENERATE-THEORY v3's "ship the door WITH the room" sequencing).
+    content.addAndMakeVisible(btnGenerateTop);
+    btnGenerateTop.setLookAndFeel(&purpleOutlineLNF);
+    btnGenerateTop.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
+    btnGenerateTop.setTooltip("GENERATE a part for the SELECTED channel from your groove + key.\n\n"
+                              "- Piano-roll channel: writes roll notes.\n"
+                              "- Step channel: writes STEPS - the step count is chosen to fit the "
+                              "part's timing (velocity, pitch, gate and Slide per step).\n"
+                              "- Undo restores whatever was there.");
+    btnGenerateTop.onClick = [this] { openGeneratePanel(); };
     content.addAndMakeVisible(btnClearPat);
     btnClearPat.setLookAndFeel(&tinyBtnLNF);
     btnClearPat.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff3a2030));
@@ -14525,22 +14626,25 @@ void DrumSequencerEditor::layoutContent()
     patModeBtn.setBounds(664, PAT_Y + 8, 160, 26);   // shortened to make room for the wider edit-mode buttons (user)
     // Channel-count (8/16) + pattern-count (16/32) toggles, right next to the loop dropdown (Follow moved to the top bar).
 
-    sliderSwing.setBounds(836, PAT_Y + 3, 92, 20);    // shifted left (Loop dropdown shortened) so the edit buttons fit
-    lblSwing.setBounds   (836, PAT_Y + 24, 92, 12);   // ...live caption under it, e.g. Swing 66%
-    // Step edit-mode radio buttons (+ the two STEP MOD lanes), then Influence, then Clear (flush right).
+    // [P1] Generate joined the row's right end: the swing fader + inter-button GAPS shrank (never
+    // the button texts - the text-never-shrinks rule takes space from decorations, not words).
+    sliderSwing.setBounds(830, PAT_Y + 3, 88, 20);    // shifted left (Loop dropdown shortened) so the edit buttons fit
+    lblSwing.setBounds   (830, PAT_Y + 24, 88, 12);   // ...live caption under it, e.g. Swing 66%
+    // Step edit-mode radio buttons (+ the two STEP MOD lanes), then Influence, Generate, Clear.
     // Widths sized so the full word fits (no "G..." / "L..." truncation - user).
-    lblEditMode.setBounds (942,  PAT_Y + 8, 28, 24);   // "Edit:"
-    btnModeVel.setBounds  (974,  PAT_Y + 8, 32, 24);   // (Slide has no button - it lives in Pitch mode's bottom band)
-    btnModeLen.setBounds  (1010, PAT_Y + 8, 40, 24);
-    btnModePitch.setBounds(1054, PAT_Y + 8, 42, 24);
-    btnModeProb.setBounds (1100, PAT_Y + 8, 40, 24);
-    btnModeRoll.setBounds (1144, PAT_Y + 8, 36, 24);
-    btnModePan.setBounds  (1184, PAT_Y + 8, 34, 24);
-    btnModeNudge.setBounds(1222, PAT_Y + 8, 46, 24);
-    btnModeModA.setBounds (1272, PAT_Y + 8, 48, 24);   // STEP MOD lanes (drawable modulation sources)
-    btnModeModB.setBounds (1324, PAT_Y + 8, 48, 24);
-    btnInfluenceTop.setBounds(1384, PAT_Y + 8, 44, 24);// purple-outlined; left of Clear
-    btnClearPat.setBounds (1434, PAT_Y + 8, 70, 24);   // Clear - flush near the right edge
+    lblEditMode.setBounds (926,  PAT_Y + 8, 28, 24);   // "Edit:"
+    btnModeVel.setBounds  (956,  PAT_Y + 8, 32, 24);   // (Slide has no button - it lives in Pitch mode's bottom band)
+    btnModeLen.setBounds  (991,  PAT_Y + 8, 40, 24);
+    btnModePitch.setBounds(1034, PAT_Y + 8, 42, 24);
+    btnModeProb.setBounds (1079, PAT_Y + 8, 40, 24);
+    btnModeRoll.setBounds (1122, PAT_Y + 8, 36, 24);
+    btnModePan.setBounds  (1161, PAT_Y + 8, 34, 24);
+    btnModeNudge.setBounds(1198, PAT_Y + 8, 46, 24);
+    btnModeModA.setBounds (1247, PAT_Y + 8, 48, 24);   // STEP MOD lanes (drawable modulation sources)
+    btnModeModB.setBounds (1298, PAT_Y + 8, 48, 24);
+    btnInfluenceTop.setBounds(1349, PAT_Y + 8, 44, 24);// purple-outlined
+    btnGenerateTop.setBounds (1396, PAT_Y + 8, 60, 24);// [P1] the universal Generate door
+    btnClearPat.setBounds (1459, PAT_Y + 8, 45, 24);   // Clear - flush near the right edge
 
     // Channel strips:  [#] [sound ▸ sub-menu] [M] [S] [Ø] [steps]
     // Only the channels in the scroll window [firstChannelRow, +viewRows) are shown, mapped to on-screen
