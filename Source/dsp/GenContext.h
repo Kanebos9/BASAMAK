@@ -28,6 +28,7 @@
 
 #include "Sequencer.h"
 #include "PartGen.h"
+#include "DrumGen.h"                    // [2026-07-22 r20] the Drum Kit role's style-DNA engine
 #include "../plugin/FactoryContent.h"   // [2026-07-21 P1] bank categories name the drum roles
 
 namespace GenContext
@@ -248,7 +249,7 @@ inline PartGen::Ctx build(const Sequencer& sq, int head, int end, int selCh, Rea
 // per-step velocity + stepPitch (vs the channel's Freq-knob base) + SLIDE on bass approach
 // notes + gate lengths via stepNoteLen. Roll-mode targets keep the roll write (editor side).
 // ============================================================================
-struct StepWrite { int count = 0; int written = 0; };
+struct StepWrite { int count = 0; int written = 0; bool switched = false; };
 
 inline int chooseStepCount(const std::vector<PartGen::Note>& notes, int bars)
 {
@@ -292,10 +293,14 @@ inline StepWrite writeStepOutput(Sequencer& sq, int head, int bars, int ch,
     auto patOf = [&](int b) -> Sequencer::Pattern&
     { return sq.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, head + b)]; };
     const int baseMidi = stepChannelBaseMidi(patOf(0).channels[ch]);   // step pitch 0 = the Freq knob
+    r.switched = patOf(0).channels[ch].drawMode;   // [r20] the writer IS the roll->steps switch
     for (int b = 0; b < bars; ++b)
     {
         auto& cc = patOf(b).channels[ch];
         cc.clearStepData();
+        // [r20] clear-on-switch convention (the comboSteps handler's clearRoll): a channel that
+        // was in Piano Roll loses its roll data when it becomes a step channel - undo restores.
+        cc.clearDrawNotes(); cc.drawVel = 1.0f; cc.drawPan = 0.0f; cc.drawTuneCents = 0.0f;
         cc.drawMode = false;
         cc.numSteps = r.count;
     }
@@ -315,6 +320,87 @@ inline StepWrite writeStepOutput(Sequencer& sq, int head, int bars, int ch,
         cc.stepSlide[k] = note.approach;                     // bass approach -> the SLIDE band
         const float frac = (float) ((double) note.len / span);
         cc.stepNoteLen[k] = frac >= 0.98f ? 0.0f : juce::jlimit(0.08f, 1.0f, frac);   // 0 = natural ring
+        ++r.written;
+    }
+    for (int b = 0; b < bars; ++b) patOf(b).channels[ch].markDspDirty();
+    return r;
+}
+
+// ============================================================================
+// [2026-07-22 r20, item A] UNIVERSAL OUTPUT: the ROLL writer as a sibling of the step writer, so
+// the panel's "Write as" row can send ANY role either way (Auto = the channel's current mode).
+// A step-mode channel switching to the roll follows the clear-on-switch convention (clearStepData
+// + drawTuneCents = 0 - the comboSteps handler's model); the caller's ONE commitUndoNow covers it.
+// ============================================================================
+struct RollWrite { int written = 0; bool switched = false; };
+
+inline RollWrite writeRollOutput(Sequencer& sq, int head, int bars, int ch,
+                                 const std::vector<PartGen::Note>& notes)
+{
+    RollWrite r;
+    auto patOf = [&](int b) -> Sequencer::Pattern&
+    { return sq.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, head + b)]; };
+    r.switched = ! patOf(0).channels[ch].drawMode;
+    for (int b = 0; b < bars; ++b)
+    {
+        auto& cc = patOf(b).channels[ch];
+        if (! cc.drawMode) { cc.clearStepData(); cc.drawTuneCents = 0.0f; cc.drawMode = true; }
+        cc.clearDrawNotes();
+    }
+    for (const auto& n : notes)
+    {
+        const int b = juce::jlimit(0, bars - 1, n.start / DrumChannel::DRAW_RES);
+        DrumChannel::DrawNote dn;                       // whole-struct push (the field-drop lesson)
+        dn.start = (int16_t) (n.start - b * DrumChannel::DRAW_RES);
+        dn.len   = (int16_t) juce::jmax(1, n.len);
+        dn.semi  = (int8_t)  juce::jlimit(-48, 48, n.semi);
+        dn.vel   = (uint8_t) juce::jlimit(0, 255, n.vel);
+        patOf(b).channels[ch].addDrawNote(dn);
+        ++r.written;
+    }
+    for (int b = 0; b < bars; ++b) patOf(b).channels[ch].markDspDirty();
+    return r;
+}
+
+// ============================================================================
+// [2026-07-22 r20, item B] DRUM-LANE writer: one DrumGen lane onto one step channel. Drums are
+// STEP-NATIVE (GENERATE-THEORY "DRUM UI") - the count is 16 (the canon grid) whenever the group
+// cap allows it, else the smallest valid grid that holds the cells (the item-A authority). Trap
+// hat rolls ride out as stepRoll ratchets with a RISING ramp (stepRollDecay > 0 = build up).
+// ============================================================================
+inline StepWrite writeDrumLane(Sequencer& sq, int head, int bars, int ch,
+                               const std::vector<DrumGen::Hit>& hits)
+{
+    StepWrite r;
+    std::vector<PartGen::Note> ns;
+    for (const auto& h : hits) ns.push_back({ h.col, 1, 0, 200, false });
+    r.count = 16 * bars <= 64 ? 16 : chooseStepCount(ns, bars);   // 16 = the style-DNA default
+    auto patOf = [&](int b) -> Sequencer::Pattern&
+    { return sq.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, head + b)]; };
+    r.switched = patOf(0).channels[ch].drawMode;
+    for (int b = 0; b < bars; ++b)
+    {
+        auto& cc = patOf(b).channels[ch];
+        cc.clearStepData();
+        cc.clearDrawNotes(); cc.drawVel = 1.0f; cc.drawPan = 0.0f; cc.drawTuneCents = 0.0f;
+        cc.drawMode = false;
+        cc.numSteps = r.count;
+    }
+    for (const auto& h : hits)
+    {
+        const int b     = juce::jlimit(0, bars - 1, h.col / DrumChannel::DRAW_RES);
+        auto& cc        = patOf(b).channels[ch];
+        const int local = h.col - b * DrumChannel::DRAW_RES;
+        const int k     = juce::jlimit(0, r.count - 1, (int) std::lround((double) local * r.count / 384.0));
+        const float vel = juce::jlimit(0.05f, 1.0f, h.vel);
+        if (cc.steps[k] && cc.stepVel[k] >= vel) continue;   // collision (coarse grid): louder wins
+        cc.steps[k]   = true;
+        cc.stepVel[k] = vel;
+        if (h.roll > 1)
+        {
+            cc.stepRoll[k]      = juce::jlimit(1, 6, h.roll);
+            cc.stepRollDecay[k] = juce::jlimit(-1.0f, 1.0f, h.rollDec);
+        }
         ++r.written;
     }
     for (int b = 0; b < bars; ++b) patOf(b).channels[ch].markDspDirty();

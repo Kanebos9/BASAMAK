@@ -687,6 +687,203 @@ int main()
               "[31c] Fills: the last bar gains notes, nothing lost elsewhere");
     }
 
+    // ---- [r20 item A] UNIVERSAL OUTPUT: the mode matrix (both writers switch + clear) ----
+
+    // [32] roll channel + "Steps" -> count chosen, channel switched, roll data cleared;
+    //      step channel + "Piano Roll" -> switched to roll, steps cleared, notes written
+    {
+        auto sq = std::make_unique<Sequencer>();
+        auto& c0 = sq->patterns[0].channels[0];
+        c0.drawMode = true;
+        { DrumChannel::DrawNote dn; dn.start = 10; dn.len = 40; dn.semi = 3; dn.vel = 200; c0.addDrawNote(dn); }
+        std::vector<PartGen::Note> ns;
+        for (int i = 0; i < 4; ++i) ns.push_back({ i * 96, 48, i, 200, false });
+        auto sw = GenContext::writeStepOutput(*sq, 0, 1, 0, ns);
+        CHECK(sw.switched && ! c0.drawMode && c0.drawNoteCount == 0 && sw.count == 4
+              && c0.numSteps == 4 && c0.steps[0] && c0.steps[3],
+              "[32a] Steps on a roll channel: switched, roll cleared, count authority applied");
+        auto& c1 = sq->patterns[0].channels[1];
+        c1.numSteps = 8; c1.steps[0] = c1.steps[4] = true;
+        auto rw = GenContext::writeRollOutput(*sq, 0, 1, 1, ns);
+        bool stepsGone = true;
+        for (int i = 0; i < DrumChannel::MAX_STEPS; ++i) if (c1.steps[i]) stepsGone = false;
+        CHECK(rw.switched && c1.drawMode && stepsGone && rw.written == 4 && c1.drawNoteCount == 4,
+              "[32b] Piano Roll on a step channel: switched, steps cleared, notes written");
+        auto rw2 = GenContext::writeRollOutput(*sq, 0, 1, 1, ns);   // already-roll = no switch
+        CHECK(! rw2.switched && c1.drawNoteCount == 4, "[32c] roll on a roll channel: no switch, replaced");
+    }
+
+    // ---- [r20 item B] DRUM KIT: style-DNA canon, velocities, ghosts, alternation, fills ----
+
+    // [33] determinism: identical options -> identical lanes + swing
+    {
+        DrumGen::Options d; d.style = DrumGen::StBoomBap; d.bars = 2; d.rhythmSeed = 5; d.auxSeed = 9;
+        auto a = DrumGen::generate(d), b = DrumGen::generate(d);
+        bool same = a.swing == b.swing;
+        for (int ln = 0; ln < DrumGen::NUM_LANES && same; ++ln)
+        {
+            same = a.lane[ln].size() == b.lane[ln].size();
+            for (size_t i = 0; same && i < a.lane[ln].size(); ++i)
+                same = a.lane[ln][i].col == b.lane[ln][i].col
+                    && a.lane[ln][i].vel == b.lane[ln][i].vel
+                    && a.lane[ln][i].roll == b.lane[ln][i].roll;
+        }
+        CHECK(same && ! a.lane[DrumGen::LKick].empty(), "[33] drum kit deterministic (same seeds = identical)");
+    }
+
+    // [34] canon compliance: house kick = the immutable 4-floor; trap snare ONLY on cell 8
+    //      (the 1-based col 9), trap kick NEVER cell 8; over seeds AND vary counts
+    {
+        bool houseOk = true, trapSnOk = true, trapKkOk = true, bbOk = true;
+        for (uint32_t s = 1; s <= 5; ++s)
+            for (int v = 0; v <= 2; ++v)
+            {
+                DrumGen::Options d; d.rhythmSeed = s; d.auxSeed = s + 3; d.varyCount = v; d.bars = 1;
+                d.style = DrumGen::StHouse;
+                { auto o = DrumGen::generate(d);
+                  std::set<int> kc; for (auto& h : o.lane[DrumGen::LKick]) kc.insert(h.col);
+                  if (kc != std::set<int>({ 0, 96, 192, 288 })) houseOk = false; }
+                d.style = DrumGen::StTrap;
+                { auto o = DrumGen::generate(d);
+                  // canon = the BACKBEAT-velocity snare lives on cell 8 ONLY; quiet D6 ghosts on
+                  // the flanking 16ths are legal (they are not the backbeat)
+                  float mx = 0.0f;
+                  for (auto& h : o.lane[DrumGen::LSnare]) mx = std::max(mx, h.vel);
+                  for (auto& h : o.lane[DrumGen::LSnare])
+                      if (h.vel > mx * 0.5f && h.col != 8 * 24) trapSnOk = false;
+                  if (o.lane[DrumGen::LSnare].empty()) trapSnOk = false;
+                  for (auto& h : o.lane[DrumGen::LKick]) if (h.col == 8 * 24) trapKkOk = false;
+                  bool one = false; for (auto& h : o.lane[DrumGen::LKick]) if (h.col == 0) one = true;
+                  if (! one) trapKkOk = false; }
+                d.style = DrumGen::StBoomBap; d.fills = 0;
+                { auto o = DrumGen::generate(d);
+                  bool one = false; std::set<int> sn;
+                  for (auto& h : o.lane[DrumGen::LKick]) if (h.col == 0) one = true;
+                  for (auto& h : o.lane[DrumGen::LSnare]) sn.insert(h.col);
+                  if (! one || ! sn.count(4 * 24) || ! sn.count(12 * 24)) bbOk = false; }
+            }
+        CHECK(houseOk,  "[34a] house kick = the immutable 4-on-the-floor (every seed + vary)");
+        CHECK(trapSnOk, "[34b] trap snare only on the col-9 equivalent (cell 8)");
+        CHECK(trapKkOk, "[34c] trap kick keeps the One, never cell 8");
+        CHECK(bbOk,     "[34d] boom-bap: kick on the One, backbeat snares 5+13 present");
+    }
+
+    // [35] backbeat law: snare backbeat velocity in the D2 window (no ghosts counted)
+    {
+        DrumGen::Options d; d.style = DrumGen::StBoomBap; d.bars = 1; d.rhythmSeed = 2; d.auxSeed = 4;
+        auto o = DrumGen::generate(d);
+        bool ok = false, band = true; float bbVel = 0.0f;
+        for (auto& h : o.lane[DrumGen::LSnare])
+            if (h.col == 4 * 24 || h.col == 12 * 24)
+            { ok = true; bbVel = h.vel; if (h.vel < 0.72f || h.vel > 0.95f) band = false; }
+        (void) bbVel;
+        CHECK(ok && band, "[35] backbeat snares sit in the 100-115-MIDI window (0.72..0.95)");
+    }
+
+    // [36] ghost geography + the mined ~25% ratio band
+    {
+        bool ratioOk = true, cellOk = true, budgetOk = true; int ghosts = 0;
+        float ratioSample = 0.0f;
+        for (uint32_t s = 1; s <= 5; ++s)
+        {
+            DrumGen::Options d; d.style = DrumGen::StBoomBap; d.bars = 1; d.rhythmSeed = s; d.auxSeed = s + 7;
+            auto o = DrumGen::generate(d);
+            float bb = 0.0f; int g = 0;
+            for (auto& h : o.lane[DrumGen::LSnare])
+                if (h.col == 4 * 24 || h.col == 12 * 24) bb = std::max(bb, h.vel);
+            for (auto& h : o.lane[DrumGen::LSnare])
+            {
+                if (h.col == 4 * 24 || h.col == 12 * 24) continue;
+                ++g; ++ghosts;
+                const float ratio = h.vel / bb;
+                if (s == 1 && ratioSample == 0.0f) ratioSample = ratio;
+                if (ratio < 0.12f || ratio > 0.45f) ratioOk = false;   // mined ~0.22 +- jitter
+                const int cell = h.col / 24;
+                if (cell != 3 && cell != 6 && cell != 7 && cell != 11 && cell != 15) cellOk = false;
+            }
+            if (g < 1 || g > 3) budgetOk = false;                       // genre budget 1-3/bar
+        }
+        CHECK(ghosts > 0 && ratioOk, "[36a] ghost snares at the mined ~25% of the backbeat");
+        CHECK(cellOk && budgetOk,    "[36b] ghosts on backbeat-flanking 16ths, 1-3 per bar");
+    }
+
+    // [37] hat alternation: no two consecutive equal velocities, every style (D3's law)
+    {
+        bool ok = true;
+        for (int st = 0; st < DrumGen::NUM_STYLES; ++st)
+            for (uint32_t s = 1; s <= 3; ++s)
+            {
+                DrumGen::Options d; d.style = st; d.bars = 2; d.rhythmSeed = s; d.auxSeed = s * 5 + 1;
+                auto o = DrumGen::generate(d);
+                for (size_t i = 1; i < o.lane[DrumGen::LHat].size(); ++i)
+                    if (std::fabs(o.lane[DrumGen::LHat][i].vel - o.lane[DrumGen::LHat][i - 1].vel) < 0.004f)
+                        ok = false;
+            }
+        CHECK(ok, "[37] hat lane never repeats a velocity back to back (all styles)");
+    }
+
+    // [38] fills: only the phrase-final bar changes; off = every bar identical
+    {
+        auto barCells = [](const std::vector<DrumGen::Hit>& ln, int bar)
+        {
+            std::set<int> s2;
+            for (auto& h : ln) if (h.col >= bar * 384 && h.col < (bar + 1) * 384)
+                s2.insert(h.col - bar * 384);
+            return s2;
+        };
+        DrumGen::Options d; d.style = DrumGen::StFunk; d.bars = 4; d.rhythmSeed = 3; d.auxSeed = 6;
+        d.fills = 0;
+        auto off = DrumGen::generate(d);
+        bool offSame = true;
+        for (int ln : { (int) DrumGen::LKick, (int) DrumGen::LSnare, (int) DrumGen::LHat })
+            for (int b = 1; b < 4; ++b)
+                if (barCells(off.lane[ln], b) != barCells(off.lane[ln], 0)) offSame = false;
+        d.fills = 1;
+        auto on = DrumGen::generate(d);
+        bool earlySame = true, lastDiff = false;
+        for (int ln : { (int) DrumGen::LKick, (int) DrumGen::LSnare, (int) DrumGen::LHat })
+        {
+            for (int b = 1; b < 3; ++b)
+                if (barCells(on.lane[ln], b) != barCells(on.lane[ln], 0)) earlySame = false;
+            if (barCells(on.lane[ln], 3) != barCells(on.lane[ln], 0)) lastDiff = true;
+        }
+        CHECK(offSame, "[38a] fills Off: every bar plays the identical groove");
+        CHECK(earlySame && lastDiff, "[38b] fills Last bar: only the phrase-final bar changes");
+    }
+
+    // [39] the kit WRITER: 16-step canon grid, velocities + trap rolls land as stepRoll
+    {
+        auto sq = std::make_unique<Sequencer>();
+        DrumGen::Options d; d.style = DrumGen::StTrap; d.bars = 1; d.rhythmSeed = 1; d.auxSeed = 2;
+        auto o = DrumGen::generate(d);
+        auto rk = GenContext::writeDrumLane(*sq, 0, 1, 0, o.lane[DrumGen::LKick]);
+        auto rh = GenContext::writeDrumLane(*sq, 0, 1, 2, o.lane[DrumGen::LHat]);
+        auto& kick = sq->patterns[0].channels[0];
+        auto& hat  = sq->patterns[0].channels[2];
+        bool rollOk = false;
+        for (int i = 0; i < hat.numSteps; ++i)
+            if (hat.steps[i] && hat.stepRoll[i] > 1 && hat.stepRollDecay[i] > 0.0f) rollOk = true;
+        CHECK(rk.count == 16 && rh.count == 16 && kick.numSteps == 16 && kick.steps[0]
+              && rk.written == (int) o.lane[DrumGen::LKick].size() && rollOk,
+              "[39] drum writer: 16-step grid, kick on the One, trap hat rolls as stepRoll ramps");
+        // the DRUM SCORECARD line: canon-match %, ghost ratio, swing (boom-bap seed 1)
+        DrumGen::Options ds; ds.style = DrumGen::StBoomBap; ds.bars = 1; ds.rhythmSeed = 1; ds.auxSeed = 2;
+        auto so = DrumGen::generate(ds);
+        int inCanon = 0, kn = (int) so.lane[DrumGen::LKick].size();
+        for (auto& h : so.lane[DrumGen::LKick])
+        {
+            const int cell = h.col / 24;
+            if (cell == 0 || cell == 6 || cell == 7 || cell == 10 || cell == 14) ++inCanon;
+        }
+        float bb = 0.0f, gh = 0.0f;
+        for (auto& h : so.lane[DrumGen::LSnare])
+            if (h.col == 4 * 24 || h.col == 12 * 24) bb = std::max(bb, h.vel); else gh = std::max(gh, h.vel);
+        printf("  SCORE drums/boom-bap (seed 1)     canonMatch=%.0f%% ghostRatio=%.0f%% swing=%.0f%%\n",
+               kn > 0 ? 100.0f * (float) inCanon / (float) kn : 0.0f,
+               bb > 0.0f ? 100.0f * gh / bb : 0.0f, 50.0f + 25.0f * so.swing);
+        CHECK(kn > 0 && inCanon == kn, "[39b] drum scorecard: every kick inside canon + optional cells");
+    }
+
     printf(fails == 0 ? "GenTest: ALL PASS\n" : "GenTest: %d FAILURES\n", fails);
     return fails == 0 ? 0 : 1;
 }

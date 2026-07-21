@@ -49,7 +49,7 @@ static constexpr int CELL16 = COLS / 16;   // one 16th
 static constexpr int BEAT   = COLS / 4;    // one beat
 static constexpr int MAX_BARS = 8;
 
-enum Role     { RoleBass = 0, RoleMelody, RoleHum, RoleRiff };
+enum Role     { RoleBass = 0, RoleMelody, RoleHum, RoleRiff, RoleChords };   // [r20] Chords = comping
 enum Rhythm   { RhFlowing = 0, RhPockets, RhDriving };
 enum Contour  { CtAuto = 0, CtArch, CtRising, CtFalling, CtWave };   // internal (Auto-rolled; no UI row)
 // [2026-07-20 v3, user design] structure = LINES, not form jargon: how many melodic sentences
@@ -75,6 +75,11 @@ struct Options
     int  humanize   = 0;          // 0 off | 1 subtle | 2 loose - seed-deterministic vel + start jitter
     int  fills      = 0;          // 0 off | 1 last bar | 2 every phrase - end-of-line density bump
     int  progression = 0;         // 0 = Auto (detected/stock) | 1..6 = stock progression override
+    // [2026-07-22 r20] style plumbing: the mined per-16th accent means (MIDI 0..127, 16 entries -
+    // DrumGen::accentTable) shape melodic velocities; forceMono degrades Chords voicings to an
+    // arpeggiated single line (step / mono targets - H9).
+    const uint8_t* styleAccent = nullptr;
+    bool forceMono = false;
     uint32_t rhythmSeed = 1;
     uint32_t pitchSeed  = 2;
     int  varyCount  = 0;
@@ -401,6 +406,7 @@ struct PitchState { int prevIdx = -1; };
 static inline int registerCentre(const Options& o)
 {
     if (o.role == RoleBass)  return o.registerBand == 0 ? -19 : -14;
+    if (o.role == RoleChords) { static const int cc2[3] = { -10, -3, +5 }; return cc2[o.registerBand]; }
     static const int ctr[3] = { -15, -4, +8 };
     return ctr[o.registerBand];
 }
@@ -638,7 +644,8 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
     Rng rrng(o.rhythmSeed), prng(o.pitchSeed);
     std::vector<Note> notes;
 
-    static const int base[4][3] = { { 2, 4, 5 }, { 3, 5, 6 }, { 2, 3, 4 }, { 4, 5, 6 } };
+    static const int base[5][3] = { { 2, 4, 5 }, { 3, 5, 6 }, { 2, 3, 4 }, { 4, 5, 6 },
+                                    { 2, 3, 4 } };   // [r20] RoleChords: comp-sparse budgets
     static const float dmul[3] = { 0.6f, 1.0f, 1.5f };
     // [P1 H8] a slow-attack sound (atk >= 120 ms) can't articulate runs - halve the onset budget
     const bool sndSlowAtk = c.sndValid && c.sndAtk >= 0.12f;
@@ -1142,5 +1149,29 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
         }
     }
     return notes;
+}
+
+// ================================================================================================
+// [2026-07-22 r20, item I] KEEP MY NOTES - the augmentation half that keeps the USER'S RHYTHM:
+// the caller passes the channel's existing notes (starts + lens untouched, the user's identity)
+// and this REPITCHES them with the full pitching rules (chord tones on strong beats, ladder
+// proximity, resolved cadence). The other half (keep pitches, new rhythm) needs no engine: the
+// editor generates fresh rhythm and pours the user's pitch SEQUENCE over it.
+// ================================================================================================
+static inline void repitch(const Options& oIn, const Ctx& cIn, std::vector<Note>& notes)
+{
+    using namespace detail;
+    if (notes.empty()) return;
+    Options o = oIn;
+    if (o.scale == nullptr || o.scaleLen < 5)
+    { static const int8_t maj[7] = { 0, 2, 4, 5, 7, 9, 11 }; o.scale = maj; o.scaleLen = 7; }
+    Ctx c = cIn;
+    c.bars = std::max(1, std::min(MAX_BARS, c.bars));
+    prepareChordsImpl(o, c);
+    std::sort(notes.begin(), notes.end(), [](const Note& a, const Note& b) { return a.start < b.start; });
+    Rng prng(o.pitchSeed);
+    PitchState st;
+    pitchPhrase(o, c, prng, notes, st, 0, c.bars * COLS, true, -1, 0);
+    for (auto& n : notes) n.semi = std::max(-48, std::min(48, n.semi));
 }
 } // namespace PartGen
