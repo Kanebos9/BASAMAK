@@ -274,7 +274,9 @@ inline int chooseStepCount(const std::vector<PartGen::Note>& notes, int bars)
         {
             const int n = DrumChannel::VALID_STEP_COUNTS[ci];
             if (n > cap) break;   // the list is ascending
-            if (fits(n, pass == 0 ? 0 : juce::jmax(2, 384 / n / 4))) return n;
+            // tolerance = a quarter of the cell, capped at 12 cols (1/32 bar) so a sparse line
+            // can never get "held" by a coarse grid that would smear its timing audibly
+            if (fits(n, pass == 0 ? 0 : juce::jmax(2, juce::jmin(12, 384 / n / 4)))) return n;
         }
     int best = 1;   // nothing holds every onset distinctly: the densest allowed grid (collisions
     for (int ci = 0; ci < DrumChannel::NUM_VALID_STEP_COUNTS; ++ci)   //  merge on write, loudest wins)

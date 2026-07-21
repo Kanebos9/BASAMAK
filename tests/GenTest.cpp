@@ -6,8 +6,15 @@
 // exact 7-step hit columns, merged-group bar offsets, mute/solo exclusion, self-exclusion,
 // and STEP-PITCH harmony (Freq-knob base + stepPitch -> chroma + key detection).
 // [22] POCKET DISCIPLINE: no onset within a grid cell of a drum hit, no note ringing into one.
+// [23]-[30] [2026-07-21 P1]: drum-role classification + role hit lists, chordCols determinism +
+// the progression override, G2 kick relationships (unison/interlock/avoid), G9 root-on-change +
+// approach notes, G8 snare shadow, M1/M2 proximity + leap recovery (via the scorecard), H8/H9
+// sound-aware lengths, and the STEP-COUNT AUTHORITY writer. Plus the DEV SCORECARD: LHL
+// syncopation (G3 weights), chord-tone-on-strong %, proximity %, leap-recovery violations,
+// motif 3-gram self-similarity - informational prints + the doc's hard bands asserted.
 #include "PartGen.h"
 #include "GenContext.h"
+#include <algorithm>
 #include <cstdio>
 #include <memory>
 #include <set>
@@ -18,6 +25,58 @@ static int fails = 0;
                               else { printf("  FAIL  %s\n", msg); ++fails; } } while (0)
 
 static const int8_t kMajor[7] = { 0, 2, 4, 5, 7, 9, 11 };
+
+// ---- DEV SCORECARD [P1 item 5]: musicality numbers per generation, sharing the generator's OWN
+// helpers (lhlBarScore / prepareChords / chordRootDegAt) so the score can never drift from the
+// rules it measures. Informational prints; hard bands asserted where the theory doc gives them.
+struct GenScore { float lhl = 0, chordStrong = 0, prox = 0, ngram = 0; int leapViol = 0, n = 0; };
+static GenScore scoreGen(const std::vector<PartGen::Note>& ns,
+                         const PartGen::Options& o, const PartGen::Ctx& cIn)
+{
+    GenScore sc; sc.n = (int) ns.size();
+    if (ns.empty()) return sc;
+    for (int b = 0; b < cIn.bars; ++b) sc.lhl += (float) PartGen::lhlBarScore(ns, b);
+    sc.lhl /= (float) cIn.bars;
+    PartGen::Ctx cc = cIn;
+    PartGen::prepareChords(o, cc);          // the SAME chord timeline the generator builds
+    int strong = 0, ct = 0, steps = 0, tot = 0;
+    for (auto& x : ns)
+        if (x.start % 96 == 0)
+        {
+            ++strong;
+            bool cp[12];
+            PartGen::detail::chordPcs(o, PartGen::detail::chordRootDegAt(o, cc, x.start), cp);
+            if (cp[((x.semi % 12) + 12) % 12]) ++ct;
+        }
+    sc.chordStrong = strong > 0 ? (float) ct / (float) strong : 1.0f;
+    for (size_t i = 1; i < ns.size(); ++i)
+    {
+        const int d = ns[i].semi - ns[i - 1].semi;
+        ++tot; if (std::abs(d) <= 2) ++steps;
+        if (std::abs(d) > 5 && i + 1 < ns.size())
+        {
+            const int nd = ns[i + 1].semi - ns[i].semi;
+            if (! (nd != 0 && (d > 0 ? nd < 0 : nd > 0) && std::abs(nd) <= 3)) ++sc.leapViol;
+        }
+    }
+    sc.prox = tot > 0 ? (float) steps / (float) tot : 1.0f;
+    int dup = 0, tg = 0;                    // motif economy: repeated interval 3-grams
+    std::vector<long> seen;
+    for (size_t i = 3; i < ns.size(); ++i)
+    {
+        long key = 0;
+        for (int k = 0; k < 3; ++k) key = key * 200 + (long) (ns[i - 2 + k].semi - ns[i - 3 + k].semi + 90);
+        ++tg;
+        if (std::find(seen.begin(), seen.end(), key) != seen.end()) ++dup; else seen.push_back(key);
+    }
+    sc.ngram = tg > 0 ? (float) dup / (float) tg : 0.0f;
+    return sc;
+}
+static void printScore(const char* tag, const GenScore& s)
+{
+    printf("  SCORE %-28s n=%2d LHL=%.1f chordStrong=%.0f%% proximity=%.0f%% leapViol=%d ngramSim=%.0f%%\n",
+           tag, s.n, s.lhl, s.chordStrong * 100.0f, s.prox * 100.0f, s.leapViol, s.ngram * 100.0f);
+}
 
 static bool inScale(int semi, int key, const int8_t* sc, int len)
 {
@@ -358,6 +417,274 @@ int main()
             }
         }
         CHECK(ok && cnt > 0, "[22] pockets: no onset in an exclusion window, no note rings into a hit");
+    }
+
+    // ---- [P1] the theory-rule + step-output round ----
+
+    // [23] drum-ROLE classification: bank category (factory names) + mixName keywords -> the
+    // per-role hit lists beside the combined list, and the readout's role counts
+    {
+        auto sq = std::make_unique<Sequencer>();
+        kit(sq->patterns[0].channels[0], 4, { 0, 2 }); sq->patterns[0].channels[0].mixName = "808 Kick";
+        kit(sq->patterns[0].channels[1], 4, { 1 });    sq->patterns[0].channels[1].mixName = "Trap Snare";
+        kit(sq->patterns[0].channels[2], 8, { 2, 6 }); sq->patterns[0].channels[2].mixName = "Weird Hat 99";
+        GenContext::Readout ro;
+        auto c = GenContext::build(*sq, 0, 0, 7, &ro);
+        CHECK(c.nKick == 2 && c.kickCol[0] == 0 && c.kickCol[1] == 192
+              && c.nSnare == 1 && c.snareCol[0] == 96
+              && c.nHat == 2 && c.hatCol[0] == 96 && c.hatCol[1] == 288
+              && ro.kick == 2 && ro.snare == 1 && ro.hat == 2 && c.nHits == 4,
+              "[23] drum roles: category + keyword classification fill the kick/snare/hat lists");
+    }
+
+    // [24] chordCols: deterministic, changes on STRONG cols, density-driven, override honored
+    {
+        PartGen::Ctx ch2; ch2.bars = 2; ch2.chromaValid = true;
+        for (int bt = 0; bt < 4; ++bt) { ch2.chroma[bt][2] += 3.0f; ch2.chroma[bt][5] += 1.5f; ch2.chroma[bt][9] += 1.5f; }
+        for (int bt = 4; bt < 8; ++bt) { ch2.chroma[bt][7] += 3.0f; ch2.chroma[bt][11] += 1.5f; ch2.chroma[bt][2] += 1.5f; }
+        Options o; o.scale = kMajor; o.density = 1;
+        PartGen::Ctx a = ch2, b = ch2;
+        PartGen::prepareChords(o, a); PartGen::prepareChords(o, b);
+        bool det = a.nChords == b.nChords;
+        for (int i = 0; det && i < a.nChords; ++i)
+            det = a.chordColAt[i] == b.chordColAt[i] && a.chordDegAt[i] == b.chordDegAt[i];
+        CHECK(det && a.nChords == 2 && a.chordColAt[0] == 0 && a.chordColAt[1] == 384
+              && a.chordDegAt[0] == 1 && a.chordDegAt[1] == 4,
+              "[24a] chordCols: deterministic, hears Dm then G on the bar lines");
+        o.density = 2; PartGen::Ctx d = ch2; PartGen::prepareChords(o, d);
+        CHECK(d.nChords == 4 && d.chordColAt[1] == 192 && d.chordColAt[3] == 384 + 192,
+              "[24b] chordCols: Busy density = two changes per bar, on strong cols");
+        o.density = 1; o.progression = 5;   // I-IV-V override
+        PartGen::Ctx e; e.bars = 3; PartGen::prepareChords(o, e);
+        CHECK(e.nChords == 3 && e.chordDegAt[0] == 0 && e.chordDegAt[1] == 3 && e.chordDegAt[2] == 4,
+              "[24c] chordCols: the Chords override writes the picked progression");
+    }
+
+    // [25] G2 kick relationships: the bass reads the STANCE against the KICK list
+    Ctx ck; ck.bars = 1;
+    {
+        const int kc[4] = { 0, 96, 192, 288 };
+        for (int i = 0; i < 4; ++i) { ck.kickCol[i] = kc[i]; ck.kickStr[i] = 1.0f; }
+        ck.nKick = 4;
+        const int all[8] = { 0, 48, 96, 144, 192, 240, 288, 336 };
+        for (int i = 0; i < 8; ++i) { ck.hitCol[i] = all[i]; ck.hitStr[i] = 1.0f; }
+        ck.nHits = 8;
+        bool uniOk = true, interOk = true, avoidOk = true; int cu = 0, cp2 = 0, ca = 0;
+        for (uint32_t s = 1; s <= 4; ++s)
+        {
+            Options o; o.scale = kMajor; o.role = RoleBass; o.density = 2;
+            o.rhythmSeed = s; o.pitchSeed = s + 3;
+            o.rhythm = RhDriving;                       // unison: every onset ON a kick
+            for (auto& x : generate(o, ck))
+            {
+                ++cu; bool onK = false;
+                for (int i = 0; i < 4; ++i) if (std::abs(x.start - kc[i]) <= 12) onK = true;
+                if (! onK) uniOk = false;
+            }
+            o.rhythm = RhPockets;                       // interlock: never within a cell of a kick
+            for (auto& x : generate(o, ck))
+            {
+                ++cp2;
+                for (int i = 0; i < 4; ++i) if (std::abs(x.start - kc[i]) < 24) interOk = false;
+            }
+            o.rhythm = RhFlowing;                       // avoid: nothing rings into a kick
+            for (auto& x : generate(o, ck))
+            {
+                ++ca;
+                for (int i = 0; i < 4; ++i)
+                    if (kc[i] > x.start && x.start + x.len > kc[i] - 12) avoidOk = false;
+            }
+        }
+        CHECK(uniOk && cu > 0,    "[25a] G2 Driving bass = unison (every onset within 1/32 of a kick)");
+        CHECK(interOk && cp2 > 0, "[25b] G2 Pockets bass = interlock (no onset within 1/16 of a kick)");
+        CHECK(avoidOk && ca > 0,  "[25c] G2 Flowing bass = avoid (no note rings into a kick)");
+    }
+
+    // [26] G9 bass grammar: ROOT on the chord change + an APPROACH note flagged before it
+    {
+        Ctx cg; cg.bars = 2;
+        for (int i = 0; i < 8; ++i) { cg.kickCol[i] = i * 96; cg.kickStr[i] = 1.0f;
+                                      cg.hitCol[i]  = i * 96; cg.hitStr[i]  = 1.0f; }
+        cg.nKick = cg.nHits = 8;
+        bool rootOk = true, apPlaced = true, anyApproach = false; int roots = 0;
+        for (uint32_t s = 1; s <= 4; ++s)
+        {
+            Options o; o.scale = kMajor; o.role = RoleBass; o.rhythm = RhDriving; o.density = 2;
+            o.progression = 5;   // I-IV-V: bar 1 = C, bar 2 = F (degree 3)
+            o.rhythmSeed = s; o.pitchSeed = s + 7;
+            auto n = generate(o, cg);
+            bool found = false;
+            for (auto& x : n)
+            {
+                if (! found && x.start >= 384 && x.start < 480)
+                { found = true; ++roots; if (((x.semi % 12) + 12) % 12 != 5) rootOk = false; }
+                if (x.approach)
+                {
+                    anyApproach = true;
+                    bool nearChange = false;   // approaches live in the beat before SOME change
+                    for (int ccCol : { 192, 384, 384 + 192 })
+                        if (x.start >= ccCol - 96 && x.start < ccCol) nearChange = true;
+                    if (! nearChange) apPlaced = false;
+                }
+            }
+        }
+        CHECK(rootOk && roots > 0, "[26a] G9: the change-downbeat note is the new chord's ROOT");
+        CHECK(anyApproach && apPlaced, "[26b] G9: approach notes flagged, in the beat before a change");
+    }
+
+    // [27] G8 snare punctuation: no melody onset in the post-snare 1/16 shadow
+    {
+        Ctx cs; cs.bars = 1;
+        cs.snareCol[0] = 96; cs.snareCol[1] = 288; cs.snareStr[0] = cs.snareStr[1] = 1.0f; cs.nSnare = 2;
+        cs.hitCol[0] = 96;  cs.hitCol[1] = 288;  cs.hitStr[0] = cs.hitStr[1] = 1.0f;  cs.nHits = 2;
+        bool ok = true; int cnt = 0;
+        for (uint32_t s = 1; s <= 6; ++s)
+        {
+            Options o; o.scale = kMajor; o.role = RoleMelody; o.rhythm = RhFlowing; o.density = 2;
+            o.rhythmSeed = s; o.pitchSeed = s * 3 + 1;
+            for (auto& x : generate(o, cs))
+            {
+                ++cnt;
+                for (int i = 0; i < 2; ++i)
+                    if (x.start > cs.snareCol[i] && x.start < cs.snareCol[i] + 24) ok = false;
+            }
+        }
+        CHECK(ok && cnt > 0, "[27] G8: no melody onset in the post-snare 1/16 shadow (6 seeds)");
+    }
+
+    // [28] SCORECARD bands (the doc's hard bands): melody proximity >= 60%, zero unrecovered
+    // leaps, LHL within the role ceilings (Melody 6 / Bass 4 / Hum 2)
+    {
+        Ctx cm; cm.bars = 2;   // offbeat hats: strong cols FREE, the pocket midpoints = beats
+        for (int i = 0; i < 8; ++i) { cm.hitCol[i] = i * 96 + 48; cm.hitStr[i] = 1.0f; }
+        cm.nHits = 8;
+        bool proxOk = true, leapOk = true, lhlOk = true;
+        GenScore sample;
+        for (uint32_t s = 1; s <= 5; ++s)
+        {
+            Options o; o.scale = kMajor; o.role = RoleMelody; o.rhythm = RhPockets; o.density = 2;
+            o.rhythmSeed = s; o.pitchSeed = s + 11;
+            auto n = generate(o, cm);
+            const auto sc = scoreGen(n, o, cm);
+            if (s == 1) sample = sc;
+            if (sc.prox < 0.6f) proxOk = false;
+            if (sc.leapViol != 0) leapOk = false;
+            if (sc.lhl > 6.0f) lhlOk = false;
+        }
+        printScore("melody/pockets (seed 1)", sample);
+        CHECK(proxOk, "[28a] M1: proximity >= 60% on every seed (target 70%)");
+        CHECK(leapOk, "[28b] M2: zero unrecovered large leaps");
+        CHECK(lhlOk,  "[28c] G3: melody LHL within the role band (<= 6)");
+        {   // bass + hum ceilings on the kick groove from [25]
+            Options o; o.scale = kMajor; o.role = RoleBass; o.rhythm = RhDriving; o.density = 1;
+            o.rhythmSeed = 3; o.pitchSeed = 4;
+            auto n = generate(o, ck);
+            const auto sb = scoreGen(n, o, ck);
+            printScore("bass/driving", sb);
+            Options oh; oh.scale = kMajor; oh.role = RoleHum; oh.rhythm = RhFlowing; oh.density = 0;
+            oh.singable = true; oh.rhythmSeed = 5; oh.pitchSeed = 6;
+            auto nh = generate(oh, ck);
+            const auto sh = scoreGen(nh, oh, ck);
+            printScore("hum/flowing", sh);
+            CHECK(sb.lhl <= 4.0f && sh.lhl <= 2.0f, "[28d] G3: bass <= 4 and hum <= 2 LHL ceilings");
+        }
+    }
+
+    // [29] H8/H9 sound-aware: slow attack = min half-note holds + sparser; pluck = one-cell
+    // notes; both outputs mono (H9's single-line guarantee)
+    {
+        Ctx cslow; cslow.bars = 1;
+        cslow.sndValid = true; cslow.sndAtk = 0.2f; cslow.sndSus = 0.8f; cslow.sndDec = 1.0f;
+        Options o; o.scale = kMajor; o.rhythm = RhFlowing; o.density = 2;
+        o.rhythmSeed = 5; o.pitchSeed = 6;
+        auto slow = generate(o, cslow);
+        Ctx cnone = cslow; cnone.sndValid = false;
+        auto ref = generate(o, cnone);
+        bool lenOk = ! slow.empty();
+        for (size_t i = 0; i < slow.size(); ++i)
+        {
+            const int nx = i + 1 < slow.size() ? slow[i + 1].start : 384;
+            if (slow[i].len < std::min(192, nx - slow[i].start)) lenOk = false;
+        }
+        CHECK(lenOk && slow.size() <= ref.size() && monoOk(slow),
+              "[29a] H8: slow attack = min half-note holds + sparser, still mono");
+        Ctx cpl; cpl.bars = 1;
+        cpl.sndValid = true; cpl.sndAtk = 0.005f; cpl.sndSus = 0.0f; cpl.sndDec = 0.1f;
+        auto pl = generate(o, cpl);
+        bool shortOk = ! pl.empty();
+        for (auto& x : pl) if (x.len > 24) shortOk = false;
+        CHECK(shortOk && monoOk(pl), "[29b] H8: pluck = one-cell notes, mono");
+    }
+
+    // [30] STEP-COUNT AUTHORITY + STEP OUTPUT: a 7-hit line lands as 7 steps with velocity,
+    // pitch-vs-Freq-knob, the approach note's SLIDE flag and gate lengths
+    {
+        std::vector<PartGen::Note> ns;
+        for (int i = 0; i < 7; ++i) ns.push_back({ i * 384 / 7, 40, -14 + i, 200, false });
+        ns[5].approach = true;
+        CHECK(GenContext::chooseStepCount(ns, 1) == 7,
+              "[30a] step-count authority: the smallest count that holds a 7-hit line is 7");
+        auto sq = std::make_unique<Sequencer>();
+        auto& bass = sq->patterns[0].channels[4];
+        bass.slots[0] = DrumChannel::Slot();
+        bass.slots[0].engine = DrumChannel::SrcOsc; bass.slots[0].weight = 1.0f;
+        bass.slots[0].oscFreq = 110.0f;   // A2 = MIDI 45 = the Freq-knob base (step pitch 0)
+        auto res = GenContext::writeStepOutput(*sq, 0, 1, 4, ns);
+        bool ok = res.count == 7 && res.written == 7 && bass.numSteps == 7 && ! bass.drawMode;
+        for (int i = 0; i < 7 && ok; ++i) ok = bass.steps[i];
+        ok = ok && std::abs(bass.stepPitch[0] - 1.0f) < 0.01f          // semi -14 = MIDI 46 = knob +1
+                && bass.stepSlide[5] && ! bass.stepSlide[4]            // approach -> SLIDE
+                && bass.stepVel[0] > 0.7f && bass.stepVel[0] < 0.85f   // vel 200/255
+                && bass.stepNoteLen[0] > 0.6f && bass.stepNoteLen[0] < 0.85f;   // 40 of ~55 cols
+        CHECK(ok, "[30b] step writer: steps + vel + pitch + Slide + gate all written");
+        // full flow: a generated Driving bass over a 7-step kick, written as steps - every onset
+        // must survive the grid within the writer's tolerance
+        Ctx c7b; c7b.bars = 1;
+        for (int k = 0; k < 7; ++k) { c7b.kickCol[k] = k * 384 / 7; c7b.kickStr[k] = 1.0f;
+                                      c7b.hitCol[k]  = k * 384 / 7; c7b.hitStr[k]  = 1.0f; }
+        c7b.nKick = c7b.nHits = 7;
+        Options o; o.scale = kMajor; o.role = RoleBass; o.rhythm = RhDriving; o.density = 2;
+        o.rhythmSeed = 2; o.pitchSeed = 9;
+        auto gen = generate(o, c7b);
+        auto res2 = GenContext::writeStepOutput(*sq, 0, 1, 4, gen);
+        bool fit = res2.written == (int) gen.size() && bass.numSteps == res2.count;
+        for (auto& x : gen)
+        {
+            const int k = (int) std::lround((double) x.start * res2.count / 384.0);
+            const int grid = (int) std::lround((double) k * 384.0 / res2.count);
+            if (std::abs(x.start - grid) > 12) fit = false;
+        }
+        CHECK(fit && res2.count == 7 && ! gen.empty(),
+              "[30c] full flow: generated bass fits a 7-step grid, every onset preserved");
+    }
+
+    // [31] the panel trio: Intensity widens the accent spread, Humanize is seed-deterministic
+    // jitter, Fills add end-of-bar notes - all default-off = bit-identical output
+    {
+        Options o; o.scale = kMajor; o.density = 2; o.rhythmSeed = 8; o.pitchSeed = 15;
+        auto ref = generate(o, ctx4);
+        auto spread = [](const std::vector<PartGen::Note>& n)
+        { int lo = 999, hi = 0; for (auto& x : n) { lo = std::min(lo, x.vel); hi = std::max(hi, x.vel); }
+          return n.empty() ? 0 : hi - lo; };
+        o.intensity = 0; auto soft = generate(o, ctx4);
+        o.intensity = 2; auto hard = generate(o, ctx4);
+        o.intensity = 1;
+        CHECK(spread(hard) > spread(soft) && ! soft.empty(),
+              "[31a] Intensity: Hard's accent spread exceeds Soft's");
+        o.humanize = 2;
+        auto h1 = generate(o, ctx4), h2 = generate(o, ctx4);
+        bool same = h1.size() == h2.size(), moved = false;
+        for (size_t i = 0; same && i < h1.size(); ++i)
+            same = h1[i].start == h2[i].start && h1[i].vel == h2[i].vel;
+        for (size_t i = 0; i < h1.size() && i < ref.size(); ++i)
+            if (h1[i].start != ref[i].start || h1[i].vel != ref[i].vel) moved = true;
+        o.humanize = 0;
+        CHECK(same && moved, "[31b] Humanize: deterministic from the seeds, audibly jitters");
+        o.fills = 1; auto fl = generate(o, ctx4); o.fills = 0;
+        auto lastBarCount = [](const std::vector<PartGen::Note>& n)
+        { int c2 = 0; for (auto& x : n) if (x.start >= 3 * 384) ++c2; return c2; };
+        CHECK(lastBarCount(fl) >= lastBarCount(ref) && fl.size() >= ref.size(),
+              "[31c] Fills: the last bar gains notes, nothing lost elsewhere");
     }
 
     printf(fails == 0 ? "GenTest: ALL PASS\n" : "GenTest: %d FAILURES\n", fails);
