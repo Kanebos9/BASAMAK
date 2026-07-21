@@ -356,6 +356,8 @@
 
 | 235 | r15/v1.5.5 three-agent review round: guide-tone atomics + acquire/release ordering, retrigger declick, wrap-safe toneUntil (processor); msRebuildLoops at HOST rate (was 2x engine = octave-off period search) + locals-then-assign (no zeroed interim on shared sets) + loopsDerived registry gate; msSet swaps under sampleLock, null never clobbers the graveyard, one-snapshot audio reads; wizard rerecord-rename erases the stale take row + always-write tune entries + channel captured at open; ms loads validate before wiping / engine flips only on success; editor dtor closes the wizard | 3-agent code review, fixes applied surgically | fix round |
 
+| 236 | r16/v1.5.6 master "distorts above 10%" diagnosed as INTERFACE-side analog clipping, not a plugin bug: the master fader is clean LINEAR amplitude (10% = -20 dB, 50% = -6 dB, 100% = 0 dB, default 90% = -0.9 dB), applied before Tilt/Sat/Glue/Limiter/soft-clip, and with default settings the digital path at 10% cannot distort (soft-clip knee 0.85 needs a pre-master peak > +18.6 dBFS). Ship = DISPLAY-ONLY dB read-out on the fader ("-inf" at 0) + a gain-staging tooltip (keep the plugin fader high, set listening level on the interface; Limiter = the ceiling); the mapping/DSP untouched so every project loads at identical loudness | diagnosis said the mapping was fine - conservative fix only | display + docs |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

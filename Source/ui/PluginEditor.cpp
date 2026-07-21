@@ -10709,10 +10709,16 @@ void DrumSequencerEditor::setupComponents()
     setupKnob(knobDelayFB,    lblDelFB,   "Feedback", 0.0, 0.95, 0.3, 1.0, fmtPct);
     setupKnob(knobDelayWet,   lblDelWet,  "Wet",  0.0, 1.0, 0.3, 1.0, fmtPct);   // return level (mirrors reverb Wet)
     knobDelayTime.setSkewFactorFromMidPoint(0.3);
-    setupKnob(knobMasterVol,   lblMasterVol,   "Volume", 0.0, 1.0,  0.9, 1.0, fmtPct);
+    // [2026-07-21 v1.5.6] read-out in DECIBELS (display-only - the stored value + gain path are
+    // unchanged: linear amplitude 0..1, so 10% = -20 dB, 50% = -6 dB, 100% = 0 dB). The "distorts
+    // above 10%" report was gain staging: with the INTERFACE output maxed, its analog stage clips
+    // long before our digital path does - the dB read-out makes the real level visible.
+    setupKnob(knobMasterVol,   lblMasterVol,   "Volume", 0.0, 1.0,  0.9, 1.0,
+              [](double v){ return v <= 0.001 ? juce::String("-inf")
+                                              : juce::String(20.0 * std::log10(v), 1) + " dB"; });
     // Master VOLUME is a horizontal FADER now (lives in the SOUND BLEND box; Pattern Output group removed).
     knobMasterVol.setSliderStyle(juce::Slider::LinearHorizontal);
-    knobMasterVol.setTextBoxStyle(juce::Slider::TextBoxRight, true, 38, 16);
+    knobMasterVol.setTextBoxStyle(juce::Slider::TextBoxRight, true, 56, 16);   // wide enough for "-54.0 dB" (text never shrinks)
     knobMasterVol.setColour(juce::Slider::trackColourId,      juce::Colour(0xffe8947a)); // filled = BLEND orange (slot1+slot2 mix = "everything") [2026-07-15]
     knobMasterVol.setColour(juce::Slider::backgroundColourId, juce::Colour(0xff2a2a44)); // empty (right) = dark
     // Limiter read-out = the output CEILING in dB (concrete) instead of a meaningless %. "Off" at 0.
@@ -11815,7 +11821,15 @@ void DrumSequencerEditor::setupComponents()
     knobDelayTime.setTooltip("Time between echoes. With Sync on it snaps to note values; otherwise it's free milliseconds.");
     knobDelayFB.setTooltip("Delay feedback - how many times the echo repeats. Higher = more repeats.");
     knobDelayWet.setTooltip("Overall delay amount (how loud the echoes are in the mix) - like the reverb Wet.");
-    knobMasterVol.setTooltip("MASTER output volume (the final fader, per pattern).");
+    knobMasterVol.setTooltip("MASTER output volume (the final fader, per pattern). The read-out is the digital gain in dB "
+                             "(100% of the fader = 0 dB = full scale).\n\n"
+                             "- Gain staging: keep THIS fader high (near 0 dB) and set your listening level with the "
+                             "audio interface / monitor knob instead. Running the interface maxed and this fader very "
+                             "low wastes resolution - and a maxed interface output clips in its own analog stage as "
+                             "soon as the signal gets hot, which sounds like the plugin distorting.\n"
+                             "- The LIMITER (right) is the digital ceiling - it stops peaks from clipping your DAW.\n"
+                             "- Sustained synth sounds carry much more level than sampled instruments, so they are "
+                             "the first to distort an overdriven analog stage.");
     knobMasterLimit.setTooltip("MASTER output limiter - the read-out is the output CEILING in dB.\n\n"
                                "- Peaks are held just below the ceiling, so boosts can't clip your DAW.\n"
                                "- Light (-0.1 to -1 dB) = transparently catches strays; low (toward -12 dB) = "
