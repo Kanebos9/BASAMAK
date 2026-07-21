@@ -8443,7 +8443,13 @@ void DrumSequencerEditor::genAction(int action)
     {   // [P1 item 3 + r20 item A] STEP OUTPUT for ANY role: the writer picks the smallest valid
         // step count that holds every onset, writes steps + velocity + pitch-vs-Freq-knob +
         // Slide + gate lengths, and SWITCHES a roll channel to steps (clear-on-switch, undoable).
-        const auto res = GenContext::writeStepOutput(sq, head, bars, ch, notes);
+        // [r20 item H, G5] a BASSLINE also pockets: kick-coincident steps get a +~4 ms Nudge
+        // (the mined drag, converted at the current tempo) + a 5% velocity lean, never early.
+        const double barMs = 60000.0 / juce::jmax(1.0, proc.currentBpm)
+                           * (juce::jmax(1, proc.currentTimeSigNum) * 4.0
+                              / juce::jmax(1, proc.currentTimeSigDen));
+        const auto res = GenContext::writeStepOutput(sq, head, bars, ch, notes, &ctx,
+                             o.role == PartGen::RoleBass ? 4.0 : 0.0, barMs);
         generatePanel.contextLine += keptTag + "  Wrote " + juce::String(res.written) + " notes as "
                                    + juce::String(res.count)
                                    + (res.switched ? " steps (channel switched to steps)." : " steps.");

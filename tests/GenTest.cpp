@@ -1062,6 +1062,103 @@ int main()
               "[46] keep-my-rhythm: onsets + lengths exact, pitches rewritten in scale");
     }
 
+    // ---- [r20 item G] the COMPING role: voicings, voice leading, lanes, gap-filling ----
+
+    // [47] Chords voicings: poly stacks, H1 low-interval limits hold, H2 minimal motion with
+    // common tones locked, forceMono degrades to a single arpeggiated line
+    {
+        Ctx cc4; cc4.bars = 4;
+        bool poly = false, lilOk = true, motionOk = true, monoOk2 = true, inScaleOk = true;
+        float motionSum = 0; int motionN = 0;
+        for (uint32_t s = 1; s <= 4; ++s)
+        {
+            Options o; o.scale = kMajor; o.role = RoleChords; o.rhythm = RhFlowing; o.density = 1;
+            o.progression = 5;   // I-IV-V: real changes = real voice leading
+            o.rhythmSeed = s; o.pitchSeed = s + 4;
+            auto n = generate(o, cc4);
+            std::vector<std::vector<int>> voicings;
+            for (auto& x : n)
+                if (! inScale(x.semi, 0, kMajor, 7)) inScaleOk = false;
+            // group by start
+            std::vector<int> starts;
+            for (auto& x : n) if (starts.empty() || starts.back() != x.start) starts.push_back(x.start);
+            for (int st : starts)
+            {
+                std::vector<int> v;
+                for (auto& x : n) if (x.start == st) v.push_back(x.semi);
+                std::sort(v.begin(), v.end());
+                if (v.size() >= 3) poly = true;
+                for (size_t i = 1; i < v.size(); ++i)
+                {
+                    if (v[i - 1] < -12 && v[i] - v[i - 1] <= 4) lilOk = false;   // H1
+                    if (v[i - 1] < -5  && v[i] - v[i - 1] <= 2) lilOk = false;
+                }
+                voicings.push_back(v);
+            }
+            for (size_t i = 1; i < voicings.size(); ++i)
+            {   // H2: mean motion between consecutive voicings (nearest-voice matching)
+                for (int t : voicings[i])
+                {
+                    int bd = 1 << 20;
+                    for (int pv : voicings[i - 1]) bd = std::min(bd, std::abs(t - pv));
+                    if (bd < 1 << 20) { motionSum += (float) bd; ++motionN; }
+                }
+            }
+            o.forceMono = true;
+            auto m = generate(o, cc4);
+            for (size_t i = 0; i + 1 < m.size(); ++i)
+                if (m[i].start + m[i].len > m[i + 1].start || m[i].start == m[i + 1].start) monoOk2 = false;
+            (void) monoOk2;
+        }
+        if (motionN > 0 && motionSum / (float) motionN >= 2.0f) motionOk = false;
+        CHECK(poly && inScaleOk, "[47a] Chords: 3+ note voicings, all in scale");
+        CHECK(lilOk,    "[47b] H1: zero low-interval-limit violations");
+        CHECK(motionOk, "[47c] H2: mean voice motion under 2 st (common tones lock)");
+        CHECK(monoOk2,  "[47d] H9: forceMono = a non-overlapping single arpeggiated line");
+    }
+
+    // [48] H6 comp-in-gaps: with the melody occupying beats 1+2 of every bar, the comp's
+    // non-anchor stabs prefer the free half
+    {
+        Ctx co; co.bars = 2; co.melOccValid = true; co.melMed = 10;
+        for (int b = 0; b < 2; ++b)
+            for (int p = 0; p < 8; ++p) co.melOcc[b * 16 + p] = true;   // first half occupied
+        int occ = 0, freeC = 0;
+        for (uint32_t s = 1; s <= 6; ++s)
+        {
+            Options o; o.scale = kMajor; o.role = RoleChords; o.rhythm = RhPockets; o.density = 2;
+            o.rhythmSeed = s; o.pitchSeed = s + 8;
+            for (auto& x : generate(o, co))
+            {
+                if ((x.start % 384) == 0) continue;                     // bar anchors exempt
+                ((x.start % 384) / 24 < 8 ? occ : freeC) += 1;
+            }
+        }
+        CHECK(freeC + occ > 0 && occ <= freeC,
+              "[48] H6: comp stabs prefer the melody's gaps (occupied half loses)");
+    }
+
+    // [49] [item H, G5] POCKET MICROTIMING: kick-coincident steps carry a positive Nudge in the
+    // +0.02..+0.08-step band (field units 0.04..0.16), never negative, others untouched; the
+    // laid-back notes lean +5% velocity
+    {
+        auto sq = std::make_unique<Sequencer>();
+        std::vector<PartGen::Note> ns;
+        for (int i = 0; i < 4; ++i) ns.push_back({ i * 96, 48, -14, 200, false });
+        PartGen::Ctx cx; cx.bars = 1;
+        cx.nKick = 2; cx.kickCol[0] = 0; cx.kickCol[1] = 192;   // kicks under notes 0 + 2 only
+        auto res = GenContext::writeStepOutput(*sq, 0, 1, 5, ns, &cx, 4.0, 2000.0);
+        auto& cc = sq->patterns[0].channels[5];
+        bool ok = res.count == 4;
+        // 2000 ms bar / 4 steps = 500 ms step; 4 ms drag -> 4 / 250 = 0.016 -> clamped to 0.04
+        ok = ok && cc.stepNudge[0] >= 0.04f - 0.001f && cc.stepNudge[0] <= 0.16f + 0.001f
+                && cc.stepNudge[2] >= 0.04f - 0.001f
+                && cc.stepNudge[1] == 0.0f && cc.stepNudge[3] == 0.0f;
+        for (int i = 0; i < cc.numSteps; ++i) if (cc.stepNudge[i] < 0.0f) ok = false;
+        ok = ok && cc.stepVel[0] > cc.stepVel[1];   // the +5% lean on the pocketed notes
+        CHECK(ok, "[49] G5: kick-coincident steps nudge late within band, never early");
+    }
+
     printf(fails == 0 ? "GenTest: ALL PASS\n" : "GenTest: %d FAILURES\n", fails);
     return fails == 0 ? 0 : 1;
 }

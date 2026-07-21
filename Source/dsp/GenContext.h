@@ -198,16 +198,52 @@ inline PartGen::Ctx build(const Sequencer& sq, int head, int end, int selCh, Rea
     sortHits(ctx.nSnare, ctx.snareCol, ctx.snareStr);
     sortHits(ctx.nHat,   ctx.hatCol,   ctx.hatStr);
     // [P1 1b] register map: each contributing roll channel's min / MEDIAN / max pitch
-    for (int chn = 0; chn < Sequencer::NUM_CHANNELS && ctx.nReg < PartGen::Ctx::MAX_REG; ++chn)
+    int chnMed[Sequencer::NUM_CHANNELS];
+    for (int chn = 0; chn < Sequencer::NUM_CHANNELS; ++chn)
     {
+        chnMed[chn] = -999;
         if (regCnt[chn] <= 0) continue;
         int seen = 0, med = regLo[chn];
         for (int k = 0; k < 97; ++k)
         { seen += regHist[chn][k]; if (seen * 2 >= regCnt[chn]) { med = k - 48; break; } }
-        ctx.regMin[ctx.nReg] = regLo[chn];
-        ctx.regMed[ctx.nReg] = med;
-        ctx.regMax[ctx.nReg] = regHi[chn];
-        ++ctx.nReg;
+        chnMed[chn] = med;
+        if (ctx.nReg < PartGen::Ctx::MAX_REG)
+        {
+            ctx.regMin[ctx.nReg] = regLo[chn];
+            ctx.regMed[ctx.nReg] = med;
+            ctx.regMax[ctx.nReg] = regHi[chn];
+            ++ctx.nReg;
+        }
+    }
+    {   // [r20 G, H5/H6] arrangement lanes + the MELODY-OCCUPANCY mask: the highest-median
+        // contributing roll channel is "the melody"; its note spans mark the 16th grid the
+        // comp/counter roles then avoid. Lowest median = the bass lane's ceiling reference.
+        int melChn = -1;
+        for (int chn = 0; chn < Sequencer::NUM_CHANNELS; ++chn)
+        {
+            if (chnMed[chn] <= -999) continue;
+            if (melChn < 0 || chnMed[chn] > chnMed[melChn]) melChn = chn;
+            if (ctx.bassMed <= -999 || chnMed[chn] < ctx.bassMed) ctx.bassMed = chnMed[chn];
+        }
+        if (melChn >= 0)
+        {
+            ctx.melMed = chnMed[melChn];
+            for (int b = 0; b < bars; ++b)
+            {
+                const auto& pat = sq.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, head + b)];
+                const auto& cc = pat.channels[melChn];
+                if (! cc.drawMode) continue;
+                for (int i = 0; i < cc.drawNoteCount; ++i)
+                {
+                    const auto& n = cc.drawNotes[i];
+                    const int p0 = juce::jlimit(0, bars * 16 - 1, b * 16 + (int) n.start / 24);
+                    const int p1 = juce::jlimit(p0, bars * 16 - 1,
+                                                b * 16 + ((int) n.start + (int) n.len - 1) / 24);
+                    for (int p = p0; p <= p1; ++p) ctx.melOcc[p] = true;
+                    ctx.melOccValid = true;
+                }
+            }
+        }
     }
     {   // [P1 1d] TARGET-sound introspection (H8/H9): the selected channel's first audible slot
         const auto& tc = sq.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, head)].channels[selCh];
@@ -285,8 +321,14 @@ inline int chooseStepCount(const std::vector<PartGen::Note>& notes, int bars)
     return best;
 }
 
+// [r20 item H, G5] optional POCKET MICROTIMING: when the caller passes the gathered ctx + the
+// mined drag (ms) + the bar length, every KICK-COINCIDENT step gets a positive Nudge of
+// +0.02..+0.08 step (never early - the bass may never lead the kick) and a +5% velocity lean.
+// Roll outputs skip this honestly: the roll has no nudge lane.
 inline StepWrite writeStepOutput(Sequencer& sq, int head, int bars, int ch,
-                                 const std::vector<PartGen::Note>& notes)
+                                 const std::vector<PartGen::Note>& notes,
+                                 const PartGen::Ctx* ctx = nullptr,
+                                 double nudgeMs = 0.0, double barMs = 0.0)
 {
     StepWrite r;
     r.count = chooseStepCount(notes, bars);
@@ -320,6 +362,18 @@ inline StepWrite writeStepOutput(Sequencer& sq, int head, int bars, int ch,
         cc.stepSlide[k] = note.approach;                     // bass approach -> the SLIDE band
         const float frac = (float) ((double) note.len / span);
         cc.stepNoteLen[k] = frac >= 0.98f ? 0.0f : juce::jlimit(0.08f, 1.0f, frac);   // 0 = natural ring
+        if (ctx != nullptr && nudgeMs > 0.0 && barMs > 0.0)
+        {   // [G5] laid-back pocket on kick-coincident notes only, always LATE, never early
+            bool onKick = false;
+            for (int i = 0; i < ctx->nKick; ++i)
+                if (std::abs(ctx->kickCol[i] - note.start) <= 6) { onKick = true; break; }
+            if (onKick)
+            {
+                const double stepMs = barMs / (double) r.count;
+                cc.stepNudge[k] = (float) juce::jlimit(0.04, 0.16, nudgeMs / (stepMs * 0.5));
+                cc.stepVel[k]   = juce::jmin(1.0f, cc.stepVel[k] * 1.05f);
+            }
+        }
         ++r.written;
     }
     for (int b = 0; b < bars; ++b) patOf(b).channels[ch].markDspDirty();

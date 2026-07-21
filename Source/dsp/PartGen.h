@@ -118,6 +118,12 @@ struct Ctx
     int   chordColAt[MAX_CHORDS] = {};
     int   chordDegAt[MAX_CHORDS] = {};
     bool  chordColsValid = false;
+    // [r20 G, H6/H7] MELODY OCCUPANCY: the 16th-grid mask of where the highest-register roll
+    // channel sounds (comp fills the gaps, counter-lines freeze during runs) + the arrangement
+    // lane edges H5 reads (melody median / bass median, C4-relative; -999 = unknown).
+    bool  melOcc[MAX_BARS * 16] = {};
+    bool  melOccValid = false;
+    int   melMed = -999, bassMed = -999;
     // [P1 H8/H9] TARGET-sound introspection: the selected channel's first audible slot (env
     // times gate the length/density rules; mono/scaleOn document the single-line guarantee).
     bool  sndValid = false;
@@ -344,6 +350,27 @@ static inline void phraseCandidates(const Options& o, const Ctx& c, int s, int e
     std::vector<int> hIdx;
     for (int i = 0; i < c.nHits; ++i)
         if (c.hitCol[i] >= s && c.hitCol[i] < e) hIdx.push_back(i);
+    // [r20 G, H6/H7] comp + counter roles weigh candidates AGAINST the melody's occupancy:
+    // x0.3 under a melody note, x1.6 in its gaps (freeze-during-runs falls out of the weight)
+    struct OccW
+    {
+        const Ctx& c2; const Options& o2;
+        void apply(std::vector<Cand>& v) const
+        {
+            if (! c2.melOccValid || (o2.role != RoleChords && o2.role != RoleRiff)) return;
+            for (auto& cd : v)
+            {
+                const int p = juceLikeClamp(0, MAX_BARS * 16 - 1, cd.col / CELL16);
+                cd.w *= c2.melOcc[p] ? 0.3f : 1.6f;
+            }
+        }
+    };
+    const OccW occW { c, o };
+    struct OccGuard
+    {
+        const OccW& w; std::vector<Cand>& v;
+        ~OccGuard() { w.apply(v); }
+    } occGuard { occW, out };
 
     if (o.rhythm == RhFlowing || hIdx.empty())
     {
@@ -670,6 +697,8 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
     c.bars = bars;
     const int total = bars * COLS;
     prepareChordsImpl(o, c);   // [P1 H4] the ONE harmonic-rhythm timeline every role reads
+    // [r20 G] poly comping emits SAME-START chord tones: the mono passes below must stand aside
+    const bool polyChords = o.role == RoleChords && ! o.forceMono;
 
     // [P1 G2] BASSLINE listens to the KICK: the stance is the relationship. Driving = unison
     // (lock onto the kick's real columns), Pockets = interlock (live in the kick gaps, stay out
@@ -717,6 +746,132 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
             { n.start += b * COLS; n.semi = std::max(-48, std::min(48, n.semi + shift)); tiled.push_back(n); }
         }
         notes.swap(tiled);
+    }
+    else if (o.role == RoleChords)
+    {
+        // ============================================================================
+        // [r20 G] COMPING (H1-H7, H9): block voicings on the H3 rhythm templates, voice-led
+        // with minimal motion (common tones locked), inside the H5 register lanes, weighted
+        // into the melody's gaps (H6 - via phraseCandidates' occupancy hook where sampled).
+        // forceMono (step / mono targets) = the SAME voicings ARPEGGIATED as a single line.
+        // ============================================================================
+        const int centre = registerCentre(o);
+        int laneLo = centre - 8, laneHi = centre + 9;
+        if (c.melMed > -999) laneHi = std::min(laneHi, c.melMed - 3);    // H5: below the melody
+        if (c.bassMed > -999 && c.bassMed < centre)
+            laneLo = std::max(laneLo, c.bassMed + 7);                    // H5: above the bass
+        if (laneHi - laneLo < 10) { laneLo = centre - 8; laneHi = centre + 9; }
+        const int nv = (c.sndValid && c.sndSus < 0.05f) || o.density == 0 ? 3
+                     : (o.density >= 2 ? 4 : 3);                         // H9: pads 3-4, keys 2-3
+        // ---- H3 rhythm template per stance (Charleston / tresillo / offbeat 8ths) ----
+        std::vector<int> onsCols;
+        Rng cr(o.rhythmSeed ^ 0xC0117D5u ^ (0x9e3779b9u * (uint32_t) o.varyCount));
+        for (int b = 0; b < bars; ++b)
+        {
+            const int base2 = b * COLS;
+            auto add = [&](int cell) { onsCols.push_back(base2 + cell * CELL16); };
+            if (o.rhythm == RhFlowing)
+            {   // one hit per chord change inside this bar
+                for (int ci = 0; ci < c.nChords; ++ci)
+                    if (c.chordColAt[ci] >= base2 && c.chordColAt[ci] < base2 + COLS)
+                        onsCols.push_back(c.chordColAt[ci]);
+            }
+            else if (o.rhythm == RhPockets)
+            {   // Charleston (1 + the and-of-2) or tresillo 3-3-2 when busy
+                if (o.density >= 2 || cr.chance(0.4f)) { add(0); add(6); add(12); }
+                else                                   { add(0); add(6); }
+            }
+            else
+            {   // Driving: offbeat 8ths with an ONBEAT anchor (never > 60% offbeat unanchored)
+                add(0);
+                for (int cell : { 2, 6, 10, 14 })
+                    if (! cr.chance(0.25f)) add(cell);
+            }
+        }
+        std::sort(onsCols.begin(), onsCols.end());
+        onsCols.erase(std::unique(onsCols.begin(), onsCols.end()), onsCols.end());
+        if (c.melOccValid)   // H6: drop stabs sitting under a melody note (keep chord changes)
+            onsCols.erase(std::remove_if(onsCols.begin(), onsCols.end(), [&](int col)
+            {
+                if ((col % COLS) == 0) return false;                     // bar anchors stay
+                const int p = juceLikeClamp(0, MAX_BARS * 16 - 1, col / CELL16);
+                return c.melOcc[p] && cr.chance(0.7f);
+            }), onsCols.end());
+        // ---- voicing per onset: H2 minimal-motion voice leading, H1 low-interval limits ----
+        std::vector<int> prevV;
+        auto chordToneUp = [&](bool cp[12], int from) -> int
+        { for (int p2 = from; p2 <= laneHi; ++p2) if (cp[pc(p2)]) return p2; return -999; };
+        for (size_t oi = 0; oi < onsCols.size(); ++oi)
+        {
+            const int col = onsCols[oi];
+            bool cp[12]; chordPcs(o, chordRootDegAt(o, c, col), cp);
+            std::vector<int> v;
+            if (prevV.empty())
+            {   // first voicing: stack chord tones upward from the lane floor, spaced >= 3 st
+                int p2 = laneLo;
+                while ((int) v.size() < nv)
+                {
+                    const int t = chordToneUp(cp, p2);
+                    if (t <= -999) break;
+                    v.push_back(t); p2 = t + 3;
+                }
+            }
+            else
+            {   // H2: common tones LOCK; every other voice moves to the nearest chord tone
+                for (int pv : prevV)
+                {
+                    if (cp[pc(pv)]) { v.push_back(pv); continue; }        // common tone locked
+                    int best = pv, bd = 1 << 20;
+                    for (int t = std::max(laneLo, pv - 5); t <= std::min(laneHi, pv + 5); ++t)
+                        if (cp[pc(t)] && std::abs(t - pv) < bd) { bd = std::abs(t - pv); best = t; }
+                    v.push_back(best);
+                }
+                std::sort(v.begin(), v.end());
+                v.erase(std::unique(v.begin(), v.end()), v.end());
+                while ((int) v.size() < nv)                              // top up a lost voice
+                {
+                    const int t = chordToneUp(cp, v.empty() ? laneLo : v.back() + 3);
+                    if (t <= -999) break;
+                    v.push_back(t);
+                }
+                while ((int) v.size() > nv) v.pop_back();
+            }
+            std::sort(v.begin(), v.end());
+            for (size_t i = 1; i < v.size(); ++i)
+            {   // H1 low-interval limits: muddy close intervals rise an octave (or vanish)
+                const bool tooLow  = v[i - 1] < -12 && v[i] - v[i - 1] <= 4;
+                const bool tooLow2 = v[i - 1] < -5  && v[i] - v[i - 1] <= 2;
+                if (tooLow || tooLow2)
+                {
+                    if (v[i] + 12 <= laneHi + 3) v[i] += 12;
+                    else { v.erase(v.begin() + (long) i); --i; continue; }
+                    std::sort(v.begin(), v.end());
+                    v.erase(std::unique(v.begin(), v.end()), v.end());
+                }
+            }
+            prevV = v;
+            const int nextCol = oi + 1 < onsCols.size() ? onsCols[oi + 1] : total;
+            int len = o.rhythm == RhFlowing ? std::max(CELL16, nextCol - col - CELL16 / 2)
+                                            : std::min(std::max(CELL16, (nextCol - col) * 9 / 10), BEAT);
+            len = std::min(len, total - col);
+            const int vel = velFor(o, prng, col, (col % BEAT) == 0);
+            if (o.forceMono)
+            {   // H9 degrade: the voicing ARPEGGIATED - successive stabs cycle its tones
+                if (! v.empty())
+                {
+                    Note nn; nn.start = col; nn.len = std::min(len, BEAT / 2);
+                    nn.semi = std::max(-48, std::min(48, v[oi % v.size()])); nn.vel = vel;
+                    notes.push_back(nn);
+                }
+            }
+            else
+                for (int t : v)
+                {
+                    Note nn; nn.start = col; nn.len = len;
+                    nn.semi = std::max(-48, std::min(48, t)); nn.vel = vel;
+                    notes.push_back(nn);
+                }
+        }
     }
     else if (o.role == RoleMelody || o.role == RoleHum)
     {
@@ -1127,7 +1282,7 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
     // [P1] FILLS: an end-of-line density bump (calibration: fill bars run ~1.1-1.5x the groove -
     // docs/generate-calibration.md fill mult). Extra in-scale onsets in the last quarter of the
     // chosen bars, pitched stepwise from the nearest existing note. Seed-deterministic.
-    if (o.fills > 0 && ! notes.empty())
+    if (o.fills > 0 && ! notes.empty() && o.role != RoleChords)
     {
         Rng fr(o.rhythmSeed ^ 0xF111C0DEu);
         bool fillBar[MAX_BARS] = {};
@@ -1164,8 +1319,9 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
         makeLengths(o, notes, total);
     }
 
-    // VARY: same skeleton, new ornaments
-    if (o.varyCount > 0)
+    // VARY: same skeleton, new ornaments (Chords reroll their template dice instead - the
+    // comping Rng folds varyCount in; a per-note pitch mutation would break the voicings)
+    if (o.varyCount > 0 && o.role != RoleChords)
     {
         Rng vr(0xC0FFEEu ^ (o.pitchSeed + 0x9e3779b9u * (uint32_t) o.varyCount));
         for (auto& n : notes)
@@ -1178,7 +1334,7 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
     }
 
     // SINGABLE enforcement (whatever the echoes/vary did): one-octave ladder, leaps <= a fifth
-    if (o.singable && ! notes.empty())
+    if (o.singable && ! notes.empty() && o.role != RoleChords)
     {
         const int centre = registerCentre(o);
         std::vector<int> lad;
@@ -1381,7 +1537,8 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
     // syncopation), rhythm-seed deterministic. Skipped for Driving-with-drums (locked to the
     // groove's own syncopation = intentional) and for Riff (the tiled cell is the identity);
     // bar-opening onsets never move, and Pockets targets respect the exclusion windows.
-    if (o.role != RoleRiff && ! (o.rhythm == RhDriving && c.nHits > 0) && ! notes.empty())
+    if (o.role != RoleRiff && o.role != RoleChords
+        && ! (o.rhythm == RhDriving && c.nHits > 0) && ! notes.empty())
     {
         const int maxBand = o.role == RoleBass ? 4 : (o.role == RoleHum ? 2 : 6);
         const int minBand = o.role == RoleBass ? 1 : (o.role == RoleHum ? 0 : 2);
@@ -1457,8 +1614,9 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
         const int sj = o.humanize == 1 ? 2  : 6;
         for (auto& n : notes)
         {
-            n.vel   = std::max(120, std::min(255, n.vel + (int) std::lround((hr.uf() - 0.5f) * 2.0f * (float) vj)));
-            n.start = std::max(0, std::min(total - 1, n.start + (int) std::lround((hr.uf() - 0.5f) * 2.0f * (float) sj)));
+            n.vel = std::max(120, std::min(255, n.vel + (int) std::lround((hr.uf() - 0.5f) * 2.0f * (float) vj)));
+            if (! polyChords)   // chord tones jitter TOGETHER or not at all (no accidental strum)
+                n.start = std::max(0, std::min(total - 1, n.start + (int) std::lround((hr.uf() - 0.5f) * 2.0f * (float) sj)));
         }
     }
 
@@ -1497,7 +1655,7 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
 
     // POCKET DISCIPLINE [P0 r18]: runs before the safety pass (which re-sorts and tidies any
     // dedupe/mono fallout of the shifts); the later len-clips only ever SHORTEN, so (b) survives.
-    pocketDiscipline(o, c, notes, total);
+    if (! polyChords) pocketDiscipline(o, c, notes, total);   // H3/H6 place the comp already
 
     // [P1 G2] FLOWING bass = AVOID: every note ENDS >= 1/32 bar before the next kick, so nothing
     // rings into the kick's punch (the third stance of the kick relationship).
@@ -1507,12 +1665,16 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
                 if (c.kickCol[i] > n.start && n.start + n.len > c.kickCol[i] - COLS / 32)
                 { n.len = std::max(1, c.kickCol[i] - COLS / 32 - n.start); break; }
 
-    // safety: sorted, deduped, clamped, mono
+    // safety: sorted, clamped; MONO dedupe/trim only for the single-line roles (poly comping
+    // deliberately stacks same-start chord tones - the roll write handles them natively)
     std::sort(notes.begin(), notes.end(), [](const Note& a, const Note& b) { return a.start < b.start; });
-    notes.erase(std::unique(notes.begin(), notes.end(),
-                            [](const Note& a, const Note& b) { return a.start == b.start; }), notes.end());
-    for (size_t i = 0; i + 1 < notes.size(); ++i)
-        notes[i].len = std::max(1, std::min(notes[i].len, notes[i + 1].start - notes[i].start));
+    if (! polyChords)
+    {
+        notes.erase(std::unique(notes.begin(), notes.end(),
+                                [](const Note& a, const Note& b) { return a.start == b.start; }), notes.end());
+        for (size_t i = 0; i + 1 < notes.size(); ++i)
+            notes[i].len = std::max(1, std::min(notes[i].len, notes[i + 1].start - notes[i].start));
+    }
     if (! notes.empty()) notes.back().len = std::max(1, std::min(notes.back().len, total - notes.back().start));
 
     // [P1 H8/H9] SOUND-AWARE lengths (the target sound's envelope, gathered by GenContext):
@@ -1521,7 +1683,7 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
     // only gate its silence. Mono / scaleOn sounds need single-note lines: the whole output is
     // monophonic by construction (the safety pass above), so H9 holds for every role. The
     // pocket / kick-avoid clips are re-applied after (they always win over a length extension).
-    if (c.sndValid && ! notes.empty())
+    if (c.sndValid && ! notes.empty() && ! polyChords)
     {
         const bool pluck = c.sndSus < 0.05f && c.sndDec < 0.3f && c.sndAtk < 0.05f;
         for (size_t i = 0; i < notes.size(); ++i)
@@ -1549,7 +1711,7 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
     // FINAL CADENCE GUARD [v3]: the vary/singable passes run AFTER the per-phrase cadence snap
     // and can move the last note - re-land it home (the "last phrase resolves" promise must
     // survive every later pass). Riff excluded (its cell tiles verbatim, no cadence promise).
-    if (o.role != RoleRiff && ! notes.empty())
+    if (o.role != RoleRiff && ! polyChords && ! notes.empty())
     {
         auto& last = notes.back();
         bool cad[12] = {};
