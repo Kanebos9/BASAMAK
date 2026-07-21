@@ -137,3 +137,28 @@ several drum channels; entry point needed outside the roll header. Channel-merge
   maybe cutoff) - never engine/wave/layers; undoable; default off.
 - "Keep my notes" augmentation mode: build (market gap).
 - BASAMAK idiom: generated parts must use ratchets/nudge/strum/glide/humanize where idiomatic.
+
+# ============ V3 ADDENDUM (open-source architecture survey + user decisions, 2026-07-22) ============
+## ARCHITECTURE (from Impro-Visor, GPL - idea only, no code):
+TWO-STAGE PIPELINE: (1) rhythm skeleton -> ABSTRACT MELODY string of note CATEGORIES + durations
+(C=chord tone, L=color, A=approach, R=rest) + contour SLOPES ("ascend 2-4 st across these cells");
+(2) resolver turns categories into concrete pitches against the chord-of-the-moment (our ladder walk
+IS the resolver half). Styles become KEY-INDEPENDENT DATA, not code. Flat weighted cell lists, no CFG.
+## STYLE-AS-DATA FORMAT (from MMA, GPL - format shape only): text/constexpr tables:
+style "funk" swing/vel-stats/push-per-role; rhythm cells (pos strength); melody cells (category
+strings + slopes); bass tuples (pos dur degree vel); fill specs. Weighted, seeded-RNG picks =
+deterministic. Named grooves with variation tiers (intensity families).
+## CALIBRATION: Groove MIDI Dataset (CC-BY 4.0 = shippable constants + credit): one offline mining
+session -> per-genre/role velocity mean+sd, accent ratios, microtiming push/drag ms, swing ratios,
+ghost floors, fill stats. Ship rules + mined constants; NEVER embed GPL/unclear content (Hydrogen/
+MMA data = read for structure only). Stochas/CP-solvers = skip (playback dice / wrong weight class).
+## USER DECISIONS (2026-07-22 round 2):
+- Panel may be BIG; NO ratchet-probability dial (drum grammar may still write Roll sub-hits where
+  genre-canonical, e.g. trap hat rolls - content, not a knob).
+- ENTRY POINT: a Generate button LEFT OF "Clear" in the pattern row = the universal door (works in
+  step + roll modes); the roll-header button stays, same panel.
+- DRUM KIT ROLE = MULTI-CHANNEL: writes kick+snare+hats+perc as one interlocking groove across
+  several channels (auto-detect drum channels by category + confirm list in panel; ONE undo).
+- SOUND-EDIT TOGGLE: competence-gated authority - v1 minimal (env lengths only) or none; expands
+  only after passing the user's ear. "If it's not competent, it edits nothing."
+- Aug mode "Keep my notes" confirmed.
