@@ -1362,13 +1362,14 @@ void DrumChannel::fillMsScaleVoices(SlotVoice& sv, int s, int playedMidi, float 
     { sv.msBufN[k] = nullptr; sv.smpHeadN[k] = 0.0; sv.msLoopLoN[k] = sv.msLoopHiN[k] = 0.0f;
       sv.msG1N[k] = 1.0f; sv.msPitchN[k] = 1.0f; }
     const Slot& sl = slots[s];
-    if (! sl.scaleOn || sl.engine != SrcSample || msSet[s] == nullptr || msSet[s]->zones.empty()) return;
-    const auto& zs = msSet[s]->zones;
+    const auto msLocal = msSet[s];   // [2026-07-21 r15] ONE snapshot - a message-thread swap mid-call must not mix sets
+    if (! sl.scaleOn || sl.engine != SrcSample || msLocal == nullptr || msLocal->zones.empty()) return;
+    const auto& zs = msLocal->zones;
     const int nv = juce::jlimit(1, SMP_UNI, sl.scaleUnison);
     for (int k = 0; k < nv; ++k)
     {
         const int tgt = juce::jlimit(0, 127, playedMidi + (int) std::lround((double) sv.uniSemis[k]));
-        const int best = msZoneNearest(zs, msSet[s]->nVoices, tgt);   // this tone picks its OWN zone (voice-aware)
+        const int best = msZoneNearest(zs, msLocal->nVoices, tgt);   // this tone picks its OWN zone (voice-aware)
         const juce::AudioBuffer<float>* buf = nullptr; float g1 = 1.0f;
         msPickLayer(zs[(size_t) best], velocity, buf, g1);       // velocity layer (same as the single-note path)
         sv.msBufN[k] = buf; sv.msG1N[k] = g1;
@@ -1440,11 +1441,14 @@ bool DrumChannel::loadMultisample(int slot, const juce::File& folder)
                 applyMsSidecar(slot, folder, shared->nVoices);   // per-SLOT settings still apply
                 slotSample[slot].loadedAtRate = hostRate;
                 updateStretch(slot);
-                msSetOld[slot] = msSet[slot];
-                msSet[slot] = shared;
-                if (slots[slot].msLoopOn && ! shared->zones.empty() && ! shared->zones.front().hasLoop
-                    && shared->zones.front().layers.empty() == false)
-                    msRebuildLoops(slot);   // first sharer with loop on derives regions (idempotent)
+                {   // [2026-07-21 r15] swap under the sample lock (audio reads msSet[]); null never
+                    // clobbers a live retiree in the graveyard
+                    const juce::ScopedLock sl3 (sampleLock);
+                    if (msSet[slot] != nullptr) msSetOld[slot] = msSet[slot];
+                    msSet[slot] = shared;
+                }
+                if (slots[slot].msLoopOn && ! shared->loopsDerived)
+                    msRebuildLoops(slot);   // first sharer with loop on derives regions (once per set)
                 return true;
             }
     }
@@ -1554,8 +1558,12 @@ bool DrumChannel::loadMultisample(int slot, const juce::File& folder)
     }
     slotSample[slot].loadedAtRate = hostRate;
     updateStretch(slot);
-    msSetOld[slot] = msSet[slot];     // graveyard: old pointers stay valid through the fade
-    msSet[slot] = set;
+    {   // [2026-07-21 r15] swap under the sample lock; a null msSet (e.g. the readSlots path) must
+        // not wipe an older retiree still feeding a fading voice
+        const juce::ScopedLock sl3 (sampleLock);
+        if (msSet[slot] != nullptr) msSetOld[slot] = msSet[slot];   // graveyard: old pointers stay valid through the fade
+        msSet[slot] = set;
+    }
     msSetRegistry()[regKey] = set;    // [2026-07-20] future identical loads SHARE this decode
     // [2026-07-20] BUG FIX: this used to run BEFORE the swap above = it derived loops on the OLD
     // set, so a fresh sidecar-enabled load never actually looped until the button was re-toggled.
@@ -1717,13 +1725,21 @@ void DrumChannel::refreshMsRig()
 void DrumChannel::msRebuildLoops(int slot)
 {
     if (slot < 0 || slot >= NUM_SLOTS || msSet[slot] == nullptr) return;
-    const double sr2 = sr > 0 ? sr : 48000.0;
+    // [2026-07-21 r15] RATE BUG: zone buffers are decoded at HOST rate, but `sr` here is the 2x
+    // engine rate - the period search ran an octave off. Divide engineOS out (the render's
+    // sr / engineOS convention everywhere else).
+    const double srSafe = sr > 0 ? sr : 96000.0;
+    const double sr2 = engineOS > 0 ? srSafe / (double) engineOS : srSafe;
     for (auto& z : msSet[slot]->zones)
     {
-        z.hasLoop = false; z.loopLo = z.loopHi = 0.0f;
+        // [2026-07-21 r15] compute into LOCALS, assign LAST - shared sets are read live by other
+        // channels' audio threads; the old pre-zero left a no-loop interim mid-rebuild.
+        float lo = 0.0f, hi = 0.0f; bool has = false;
         if (! z.layers.empty())
-            z.hasLoop = msFindLoop(z.layers.back().buf, sr2, z.loopLo, z.loopHi);   // loudest layer
+            has = msFindLoop(z.layers.back().buf, sr2, lo, hi);   // loudest layer
+        z.loopLo = lo; z.loopHi = hi; z.hasLoop = has;
     }
+    msSet[slot]->loopsDerived = true;   // [2026-07-21 r15] gates the registry-hit re-derive
 }
 
 // [2026-07-19] SIDECAR: the instrument folder's optional, human-readable settings file - gain,
@@ -2068,11 +2084,12 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         for (auto& gr : sv.grains) { gr.age = 0; gr.len = 0; }   // stale grains from the last note die
         sv.keySemis = 0.0f;
         sv.msBuf = nullptr; sv.msG1 = 1.0f; sv.msSemiAdj = 0.0f; sv.msLoopLo = sv.msLoopHi = 0.0f;   // multisample zone re-picked per hit
-        if (sl.engine == SrcSample && msSet[s] != nullptr && ! msSet[s]->zones.empty())
+        const auto msLocal = msSet[s];   // [2026-07-21 r15] ONE snapshot per hit (message thread can swap mid-read)
+        if (sl.engine == SrcSample && msLocal != nullptr && ! msLocal->zones.empty())
         {   // nearest zone to the played note (steps/roll: C4 + step pitch; keyDown re-picks below)
-            const auto& zs = msSet[s]->zones;
+            const auto& zs = msLocal->zones;
             const int want = juce::jlimit(0, 127, 60 + juce::roundToInt(pitchSemis));
-            const int best = msZoneNearest(zs, msSet[s]->nVoices, want);
+            const int best = msZoneNearest(zs, msLocal->nVoices, want);
             msPickLayer(zs[(size_t) best], velocityGain, sv.msBuf, sv.msG1);
             sv.msSemiAdj = (float)(60 - zs[(size_t) best].root) - zs[(size_t) best].cents * 0.01f;
             if (sl.msLoopOn && zs[(size_t) best].hasLoop && sv.msBuf != nullptr)
@@ -2440,11 +2457,11 @@ int DrumChannel::keyDown(int midiNote, float velocity, int slot2Down, bool poly,
                 // [2026-07-18] MULTISAMPLE: re-pick the zone from the REAL pressed note (trigger
                 // guessed from step pitch = 0 for keys). Preserve ON = nearest zone at ITS OWN
                 // pitch (multisampled drums); OFF = nearest zone + tiny varispeed to the note.
-                if (msSet[s] != nullptr && ! msSet[s]->zones.empty())
-                {
-                    const auto& zs = msSet[s]->zones;
+                if (const auto msLocal = msSet[s]; msLocal != nullptr && ! msLocal->zones.empty())
+                {   // [2026-07-21 r15] ONE snapshot per press (message thread can swap mid-read)
+                    const auto& zs = msLocal->zones;
                     const int want = juce::jlimit(0, 127, midiNote - (s == 1 ? slot2Down : 0));
-                    const int best = msZoneNearest(zs, msSet[s]->nVoices, want);
+                    const int best = msZoneNearest(zs, msLocal->nVoices, want);
                     msPickLayer(zs[(size_t) best], velocity, sv.msBuf, sv.msG1);
                     sv.msSemiAdj = sl.smpPreservePitch ? 0.0f
                                  : (float)(60 - zs[(size_t) best].root) - zs[(size_t) best].cents * 0.01f;

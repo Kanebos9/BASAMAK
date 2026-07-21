@@ -354,6 +354,8 @@
 
 | 234 | r13: chronology-vs-measurement compare (user design): 11 Korean instruments re-sliced single-technique, Stone Chimes + Bronze Bells deleted by the >25%-violation rule, Seul healed by the general rule; synth winds -> Winds | user method | repair round |
 
+| 235 | r15/v1.5.5 three-agent review round: guide-tone atomics + acquire/release ordering, retrigger declick, wrap-safe toneUntil (processor); msRebuildLoops at HOST rate (was 2x engine = octave-off period search) + locals-then-assign (no zeroed interim on shared sets) + loopsDerived registry gate; msSet swaps under sampleLock, null never clobbers the graveyard, one-snapshot audio reads; wizard rerecord-rename erases the stale take row + always-write tune entries + channel captured at open; ms loads validate before wiping / engine flips only on success; editor dtor closes the wizard | 3-agent code review, fixes applied surgically | fix round |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

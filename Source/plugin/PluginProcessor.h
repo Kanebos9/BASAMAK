@@ -232,13 +232,19 @@ public:
     // [2026-07-20] wizard GUIDE TONE: the target note, audible (soft ramped sine ~0.8 s)
     std::atomic<double> msToneHz { 0.0 };
     std::atomic<juce::int64> msToneRemain { 0 };
-    juce::int64 msToneTotal = 1; double msTonePh = 0.0;
+    std::atomic<juce::int64> msToneTotal { 1 };            // [2026-07-21 review] atomics + acquire/release:
+    std::atomic<double>      msTonePh    { 0.0 };          // the tone can be re-triggered mid-ring
     void playGuideTone(double hz)
     {
+        const juce::int64 tot = (juce::int64) (juce::jmax(8000.0, getSampleRate()) * 0.8);
         msToneHz.store(hz, std::memory_order_relaxed);
-        msToneTotal = (juce::int64) (juce::jmax(8000.0, getSampleRate()) * 0.8);
-        msTonePh = 0.0;
-        msToneRemain.store(msToneTotal, std::memory_order_release);
+        msToneTotal.store(tot, std::memory_order_relaxed);
+        // retrigger mid-ring: keep the PHASE continuous and skip the attack (env starts at the
+        // sustain level the old tone was already at) - a phase+env reset stepped the output to 0.
+        if (msToneRemain.load(std::memory_order_relaxed) > 0)
+            msToneRemain.store(tot - 400, std::memory_order_release);
+        else { msTonePh.store(0.0, std::memory_order_relaxed);
+               msToneRemain.store(tot, std::memory_order_release); }
     }
     void previewFile(const juce::File& f);            // MESSAGE THREAD
     void previewStop()

@@ -44,7 +44,8 @@ int main(int argc, char** argv)
     }
     std::vector<int> semis;
     for (int i = 2; i < argc; ++i) semis.push_back(atoi(argv[i]));
-    if (semis.empty()) semis = { -14, -12, -10, -8, -5 };   // A#2 C3 D3 E3 G3
+    if (semis.empty()) semis = { -14, -12, -10, -8, -5 };
+    if (semis.size() > 6) semis.resize(6);   // starts are i*64 in a 384-col bar - 7+ would clamp+overlap   // A#2 C3 D3 E3 G3
 
     const double SR = 48000.0; const int bs = 512;
     auto* s = new Sequencer();

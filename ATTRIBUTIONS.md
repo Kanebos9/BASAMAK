@@ -12,7 +12,8 @@ license text ships alongside the samples). Credits are given as a courtesy to th
 - Violin Section / Cello Section / Viola Section / French Horn / Trumpet Real / Trombone Real / Clarinet Real / Bassoon Real — from **VSCO 2 Community Edition** by Versilian Studios LLC and contributors &middot; https://versilian-studios.com/vsco-community/ &middot; License: Creative Commons 0
 - Salamander Grand — **Salamander Grand Piano v3** by Alexander Holm &middot; https://freepats.zenvoid.org/Piano/acoustic-grand-piano.html &middot; License: CC-BY 3.0 (attribution: Alexander Holm)
 
-- Da Loo Ne — recorded and sung by Oguzhan Yazici (the BASAMAK author) &middot; Creative Commons 0
+- Da Loo Ne — recorded and sung by Oğuzhan Yazıcı (the BASAMAK author) &middot; Creative Commons 0
+- BASS-SR500N — bass guitar recorded by Oğuzhan Yazıcı (the BASAMAK author) &middot; Creative Commons 0
 
 - Drawbar Organ Real / Rock Organ — from the FreePats project, recorded from the setBfree organ emulator by Roberto (freepats.zenvoid.org) &middot; Creative Commons 0
 

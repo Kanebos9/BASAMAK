@@ -6280,6 +6280,8 @@ DrumSequencerEditor::~DrumSequencerEditor()
 {
     proc.midiLearn.removeListener(this);
     stopTimer();
+    msWizard.close();   // [2026-07-21 r15] wizard cleanup on teardown: stop the input tap + any
+                        // take preview (its close() recipe) - a dangling msTapOn outlived the editor
     comboSampleSel.setLookAndFeel(nullptr);
     for (auto& c : slotCombo) c.setLookAndFeel(nullptr);
     for (auto& c : comboChFx) c.setLookAndFeel(nullptr);   // TinyComboLNF
@@ -6475,7 +6477,7 @@ void DrumSequencerEditor::handleSampleSelChange()
         { cacheWaveform(selectedChannel); refreshSampleSel(); refreshDetailPanel(); }
         dch.markDspDirty();
     }
-    else if (id == ID_RECORD_MS) msWizard.open(envTargetSlot());
+    else if (id == ID_RECORD_MS) msWizard.open(envTargetSlot(), selectedChannel);
     else if (id == ID_REFRESH_MS) rebuildSampleMenu();
     else if (id == ID_SHOW_MS)
     { auto f = UserPaths::multisamples(); f.createDirectory(); f.revealToUser(); }
@@ -6852,18 +6854,21 @@ void DrumSequencerEditor::applySoundPickId(int ch, int id)
         // dropdown): Init the sound, load the instrument onto SLOT 1 - one browse surface for
         // every sound. mixName = the folder = title/highlight/next-prev all work.
         const juce::File dir = msFolders[id - MS_ID_BASE];
-        const bool keepDraw = c.drawMode;   // a sound pick must never flip the roll/steps world
-        resetChannelToDefault(c, ch);       // fresh sound state (the Init path's own reset)
-        c.drawMode = keepDraw;
-        c.slots[0].engine = DrumChannel::SrcSample; c.slots[0].weight = 1.0f;
-        if (c.loadMultisample(0, dir))
-        {
-            if (c.msSet[0] != nullptr && c.msSet[0]->nVoices > 1)
-                c.drawMode = true;          // a SINGING instrument opens in the roll (the Keys-bank rule)
-            c.mixName = dir.getFileName(); c.mixModified = false;
-            c.markDspDirty(); c.mixHash = channelSoundHash(c);
+        if (dir.isDirectory())   // [2026-07-21 r15] validate BEFORE wiping - a deleted/renamed
+        {                        // folder in a stale menu must not Init the channel to silence
+            const bool keepDraw = c.drawMode;   // a sound pick must never flip the roll/steps world
+            resetChannelToDefault(c, ch);       // fresh sound state (the Init path's own reset)
+            c.drawMode = keepDraw;
+            c.slots[0].engine = DrumChannel::SrcSample; c.slots[0].weight = 1.0f;
+            if (c.loadMultisample(0, dir))
+            {
+                if (c.msSet[0] != nullptr && c.msSet[0]->nVoices > 1)
+                    c.drawMode = true;          // a SINGING instrument opens in the roll (the Keys-bank rule)
+                c.mixName = dir.getFileName(); c.mixModified = false;
+                c.markDspDirty(); c.mixHash = channelSoundHash(c);
+            }
+            updateStripMixLabel(ch);
         }
-        updateStripMixLabel(ch);
     }
     else if (id >= 1 && id <= soundMixFiles.size())
     {
@@ -11200,12 +11205,15 @@ void DrumSequencerEditor::setupComponents()
     content.addChildComponent(msWizard);
     msWizard.proc = &proc;
     msWizard.baseDir = UserPaths::multisamples();
-    msWizard.onDone = [this](int slot, const juce::File& dir)
-    {
-        auto& dch = proc.sequencer.channel(selectedChannel);
-        dch.slots[slot].engine = DrumChannel::SrcSample;
+    msWizard.onDone = [this](int slot, int chan, const juce::File& dir)
+    {   // [2026-07-21 r15] chan = the channel captured when the wizard OPENED (selecting another
+        // channel mid-session must not land the instrument there); engine flips only on SUCCESS.
+        auto& dch = proc.sequencer.channel(chan);
         if (dch.loadMultisample(slot, dir))
-        { cacheWaveform(selectedChannel); rebuildSampleMenu(); refreshDetailPanel(); }
+        {
+            dch.slots[slot].engine = DrumChannel::SrcSample;
+            cacheWaveform(chan); rebuildSampleMenu(); refreshDetailPanel();
+        }
         dch.markDspDirty();
     };
     harmEd.onChange = [this] {
@@ -12829,22 +12837,26 @@ void DrumSequencerEditor::onSlotEngineChange(int box)
         return;
     }
     if (id >= MS_ID_BASE && id < MS_ID_BASE + msFolders.size())   // [2026-07-18] a multisample folder
-    {
+    {   // [2026-07-21 r15] engine flips only on SUCCESS - a failed load must not leave a silent
+        // Sample slot behind (return = no slot mutation, combo display restored)
+        if (! ch.loadMultisample(box, msFolders[id - MS_ID_BASE]))
+        { syncBoxesFromSrcOn(); return; }
         boxEngine[box] = DrumChannel::SrcSample; ch.slots[box].engine = DrumChannel::SrcSample;
-        if (ch.loadMultisample(box, msFolders[id - MS_ID_BASE])) cacheWaveform(selectedChannel);
+        cacheWaveform(selectedChannel);
     }
     else if (id == ID_RECORD_MS)
-    { msWizard.open(box); syncBoxesFromSrcOn(); return; }
+    { msWizard.open(box, selectedChannel); syncBoxesFromSrcOn(); return; }
     else if (id == ID_REFRESH_MS)
     { rebuildSampleMenu(); syncBoxesFromSrcOn(); return; }
     else if (id == ID_SHOW_MS)
     { auto f = UserPaths::multisamples(); f.createDirectory(); f.revealToUser();
       syncBoxesFromSrcOn(); return; }
     else if (id >= SAMPLE_ID_BASE && id < ID_INIT_MIX)   // a specific sample file
-    {
-        boxEngine[box] = DrumChannel::SrcSample; ch.slots[box].engine = DrumChannel::SrcSample;
+    {   // [2026-07-21 r15] bounds check FIRST - engine only flips when a real file is loaded
         const int idx = id - SAMPLE_ID_BASE;
-        if (idx >= 0 && idx < sampleFiles.size()) { ch.loadUserSample(box, sampleFiles[idx]); cacheWaveform(selectedChannel); }
+        if (idx < 0 || idx >= sampleFiles.size()) { syncBoxesFromSrcOn(); return; }
+        boxEngine[box] = DrumChannel::SrcSample; ch.slots[box].engine = DrumChannel::SrcSample;
+        ch.loadUserSample(box, sampleFiles[idx]); cacheWaveform(selectedChannel);
     }
     else
     {

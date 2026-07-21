@@ -1186,11 +1186,19 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
                                            // (sidecar <tune>) - playback compensates = auto-tuned by construction
                    };
     struct MsSet   { std::vector<MsZone> zones; juce::String folder;
-                     int nVoices = 1; };   // [2026-07-20] CYCLIC VOICE MAPPING (user design): semitone ->
+                     int nVoices = 1;      // [2026-07-20] CYCLIC VOICE MAPPING (user design): semitone ->
                                            // voice folder, repeating (C=v1, C#=v2, D=v3, D#=v1...); 1 = off
+                     bool loopsDerived = false; };   // [2026-07-21 r15] msRebuildLoops ran once (a
+                                           // set with an unloopable zone 0 used to re-derive every load)
     std::shared_ptr<MsSet> msSet[NUM_SLOTS], msSetOld[NUM_SLOTS];
     bool loadMultisample(int slot, const juce::File& folder);   // message thread; false = no usable WAVs
-    void clearMultisample(int slot) { msSetOld[slot] = msSet[slot]; msSet[slot] = nullptr; }
+    void clearMultisample(int slot)
+    {   // [2026-07-21 r15] swap under the sample lock (audio thread reads msSet[]) + never clobber
+        // a live retiree with null (fading voices may still hold the older set's pointers)
+        const juce::ScopedLock sl2 (sampleLock);
+        if (msSet[slot] != nullptr) msSetOld[slot] = msSet[slot];
+        msSet[slot] = nullptr;
+    }
     static int noteNameToMidi(const juce::String& name);        // "C#3"/"Db3"/"40" -> MIDI (-1 = no parse)
     // gateSamples > 0 = cut this hit after that many samples (soft 3 ms fade - the per-step Length).
     // glideSamples > 0 = SLIDE: the pitch starts at pitchSemis and glides to glideToSemis over that time.

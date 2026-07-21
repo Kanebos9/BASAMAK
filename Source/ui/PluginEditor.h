@@ -480,7 +480,7 @@ class MsRecordWizard : public juce::Component, public juce::SettableTooltipClien
 public:
     DrumSequencerProcessor* proc = nullptr;
     juce::File baseDir;                                    // ~/Documents/BASAMAK/Multisamples (set by the editor)
-    std::function<void(int slot, const juce::File& folder)> onDone;
+    std::function<void(int slot, int chan, const juce::File& folder)> onDone;   // [2026-07-21 r15] chan = captured at open()
 
     MsRecordWizard()
     {
@@ -533,9 +533,11 @@ public:
     // edge-click incident): the wizard has NO outside-click watcher any more - "mistakes are
     // waiting to happen". Only the X button (and editor teardown) closes it.
 
-    void open(int slot)
+    void open(int slot, int chan)
     {
         slotIdx = slot;
+        chanIdx = chan;   // [2026-07-21 r15] capture the channel NOW - the user can select another
+                          // channel mid-session, and FINISH must land on the one that opened the wizard
         // [2026-07-19] RESUME, don't wipe: an accidental outside-click close (the list sits at
         // the wizard's edge) used to cost the whole session on reopen - "my recorded notes were
         // gone" (they never left the disk, but the wizard forgot them). A session in progress
@@ -946,7 +948,7 @@ public:
 private:
     enum Phase { Setup, Listen, Capture, Review, DoneAll };
     Phase phase = Setup;
-    int slotIdx = 0, loNote = 28, hiNote = 64, spacing = 2;   // default E1..E4 every 2 st (bass/guitar friendly)
+    int slotIdx = 0, chanIdx = 0, loNote = 28, hiNote = 64, spacing = 2;   // default E1..E4 every 2 st (bass/guitar friendly)
     float maxSec = 15.0f;                                     // take cap, 1..20 s (user: default 15)
     int   armDb  = -10, endDb = -30;                          // start / end gates (user defaults 2026-07-19)
     int   preMs  = 10;                                        // pre-roll kept before the Start gate fires
@@ -1241,7 +1243,7 @@ private:
         const int n = (int) juce::jmin(wr - readCur, (juce::int64) 32768);
         std::vector<float> blk((size_t) n);
         proc->readMsTap(readCur, blk.data(), n);
-        if (phase == Listen && juce::Time::getMillisecondCounter() < toneUntil)
+        if (phase == Listen && (juce::int32)(toneUntil - juce::Time::getMillisecondCounter()) > 0)   // wrap-safe
         { readCur = wr; return; }   // tone still sounding: don't let it arm the recorder
         if (phase == Listen)
         {
@@ -1340,7 +1342,16 @@ private:
             // out of tune (the Da Loo Ne 4-semitone incident). Different note = delete the old
             // file and fall through to a fresh save under the MEASURED name.
             const juce::String oldTok = f.getFileNameWithoutExtension().upToFirstOccurrenceOf(" ", false, false);
-            if (! oldTok.equalsIgnoreCase(base)) { f.deleteFile(); f = juce::File(); }
+            if (! oldTok.equalsIgnoreCase(base))
+            {   // [2026-07-21 r15] rename = the old file AND its take row both go, and replaceFile
+                // clears NOW - the later `replaced` search must never resurrect the deleted file's
+                // entry (the new file gets its own row via push_back below).
+                f.deleteFile();
+                const juce::File gone = replaceFile;
+                takes.erase(std::remove_if(takes.begin(), takes.end(),
+                            [&gone](const Take& t){ return t.file == gone; }), takes.end());
+                replaceFile = juce::File(); f = juce::File();
+            }
         }
         if (f.getFullPathName().isEmpty())
         {   // [2026-07-19] NEW-take names are probed against the DISK, never the in-memory count:
@@ -1409,7 +1420,9 @@ private:
             satisfied.addIfNotAlreadyThere(enc(curVoice, target));   // the GRID target is answered
             // [2026-07-20] sidecar TUNE entry: the measured cents (per voice+root) - playback
             // compensates, so rough singing comes back perfectly in tune.
-            if (mapCents != 0) writeTuneEntry(curVoice, mapNote, (float) mapCents);
+            writeTuneEntry(curVoice, mapNote, (float) mapCents);   // [2026-07-21 r15] ALWAYS write -
+                                                     // 0 cents must overwrite a stale non-zero entry
+                                                     // (the removal loop inside handles it)
             expandedNote = mapNote; expandedVoice = curVoice;   // show what just landed
         }
         capBuf.clear();
@@ -1424,7 +1437,7 @@ private:
         const bool any = ! takes.empty();
         const juce::File dir = sessionDir;
         close();
-        if (any && onDone) onDone(slotIdx, dir);   // (edit-in-place reloads the same folder = updated zones)
+        if (any && onDone) onDone(slotIdx, chanIdx, dir);   // (edit-in-place reloads the same folder = updated zones)
     }
     // [2026-07-20] read-modify-write ONE <tune voice root cents> entry in the instrument sidecar
     // (loadMultisample reads these back = the auto-tune). Replaces an existing same-voice+root entry.

@@ -1395,7 +1395,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         // [2026-07-20] WIZARD GUIDE TONE: the target note played audibly so the user can match
         // it by ear ("how do I sing the correct pitch" - you don't; you match what you hear and
         // the measured-pitch mapping does the rest). Soft sine, ramped edges, hard-bounded.
-        if (msToneRemain.load(std::memory_order_relaxed) > 0)
+        if (msToneRemain.load(std::memory_order_acquire) > 0)
         {
             const double hz = msToneHz.load(std::memory_order_relaxed);
             juce::int64 rem = msToneRemain.load(std::memory_order_relaxed);
@@ -1403,15 +1403,17 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             {
                 float* o0 = audio.getWritePointer(0); float* o1 = audio.getWritePointer(1);
                 const double inc = 2.0 * juce::MathConstants<double>::pi * hz / juce::jmax(8000.0, getSampleRate());
-                const juce::int64 tot = juce::jmax((juce::int64) 1, msToneTotal);
+                const juce::int64 tot = juce::jmax((juce::int64) 1, msToneTotal.load(std::memory_order_relaxed));
+                double ph = msTonePh.load(std::memory_order_relaxed);
                 for (int i = 0; i < numSamples && rem > 0; ++i, --rem)
                 {
                     const double done = (double)(tot - rem);
                     const float env = (float) juce::jmin(1.0, juce::jmin(done / 400.0, (double) rem / 4000.0));
-                    const float v = 0.2f * env * (float) std::sin(msTonePh);
-                    msTonePh += inc; if (msTonePh > 6.2831853) msTonePh -= 6.2831853;
+                    const float v = 0.2f * env * (float) std::sin(ph);
+                    ph += inc; if (ph > 6.2831853) ph -= 6.2831853;
                     o0[i] += v; o1[i] += v;
                 }
+                msTonePh.store(ph, std::memory_order_relaxed);
             }
             else rem = 0;
             msToneRemain.store(rem, std::memory_order_relaxed);
