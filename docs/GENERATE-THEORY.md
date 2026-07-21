@@ -162,3 +162,17 @@ MMA data = read for structure only). Stochas/CP-solvers = skip (playback dice / 
 - SOUND-EDIT TOGGLE: competence-gated authority - v1 minimal (env lengths only) or none; expands
   only after passing the user's ear. "If it's not competent, it edits nothing."
 - Aug mode "Keep my notes" confirmed.
+
+# ============ V4 ADDENDUM (2026-07-22 round 3 - the necessity filter) ============
+## STEP-COUNT AUTHORITY (user: "definitely add"): the generator composes in absolute 384-col time,
+THEN picks the target channel's step count = smallest valid count whose grid holds every onset
+(style DNA picks directly when from-scratch; disclosed in readout; one undo covers count+content).
+Later: step-mode output as an option for melodic roles (Slide/nudge idiom).
+## IMPROVEMENT PROPOSALS - SURVIVORS OF THE HOSTILE FILTER (user: "only if really good"):
+KEEP: harmony authority (progression override row - standard everywhere, small, multiplies all
+roles); dev-only musicality scorecard (free, tunes rules against numbers before the user's ear);
+panel 3-band grouping (What/Feel/Form - only WITH the P1 panel growth, not separate).
+DROPPED as unnecessary: audition history/A-B (redundant - every generation is already an undo
+step; undo/redo IS the history); one-pass arrangement stays a ROADMAP phase, not now.
+## STEP-MODE GENERATE BUTTON (left of Clear): deliberately sequenced WITH step-output capability
+(P1) - shipping the door before the room exists = a mode-switch surprise, not a feature.
