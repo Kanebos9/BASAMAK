@@ -1723,6 +1723,8 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
         // NO-HIDDEN-PARAMS RULE: the old routes to UI-less legacy fields (pan, pitch, channel
         // filter/drive/sends, layer atk/hld/dec, eq bells) are REMOVED - a CC must never move
         // something the user can't see. Channel VOLUME kept: its UI = the strip meter's handle.
+        // ADDRESSED ids stay SINGLE-PATTERN by design (the id names pattern p) - the group-wide
+        // merged-group behaviour lives on the UI buttons + the ui_sel_* variants [1.5.6].
         if      (param == "volume")  dch.volume     = LevelMeter::posToGain(norm);   // dB taper, matches the handle [2026-07-14]
         else if (param == "mute")    dch.mute       = on;
         else if (param == "solo")    dch.solo       = on;

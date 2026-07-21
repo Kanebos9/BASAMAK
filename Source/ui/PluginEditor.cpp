@@ -8326,10 +8326,9 @@ void DrumSequencerEditor::applySelCC(int t, float v, bool& slotDirty, bool& keys
             const float g = std::pow(10.0f, (v - 0.5f) * 12.0f / 20.0f);   // +-6 dB
             for (int i = 0; i < Sequencer::NUM_CHANNELS; ++i)
                 if (i != selectedChannel)
-                {
-                    auto& c2 = proc.sequencer.channel(i);
-                    c2.volume = juce::jlimit(0.0f, LevelMeter::VOL_MAX, othersVolBase[i] * g);
-                    c2.markDspDirty();
+                {   // group-wide [1.5.6]: every bar of a merged group gets the same trimmed level
+                    const float nv = juce::jlimit(0.0f, LevelMeter::VOL_MAX, othersVolBase[i] * g);
+                    forGroupChannel(i, [nv](DrumChannel& c2) { c2.volume = nv; c2.markDspDirty(); });
                 }
             othersVolF.setValue01(v);   // the pill mirrors the CC while it moves
             return;
@@ -8337,9 +8336,10 @@ void DrumSequencerEditor::applySelCC(int t, float v, bool& slotDirty, bool& keys
         // [2026-07-14 23:20] M/S/OV SET directly from the pad value (127 = on, 0 = off) - the old
         // triggerClick() only toggled on press (dead every other press on a toggle pad) and its
         // async button flash drew a faint half-state. The tick refresh syncs the button faces.
-        case P::SelMute:    ch.mute = v >= 0.5f;         ch.markDspDirty(); return;
-        case P::SelSolo:    ch.solo = v >= 0.5f;         ch.markDspDirty(); return;
-        case P::SelOverlap: ch.allowOverlap = v >= 0.5f; return;
+        // [1.5.6] group-wide like the strip buttons: a merged group is one edit unit.
+        case P::SelMute:    forGroupChannel(selectedChannel, [v](DrumChannel& c) { c.mute = v >= 0.5f;         c.markDspDirty(); }); return;
+        case P::SelSolo:    forGroupChannel(selectedChannel, [v](DrumChannel& c) { c.solo = v >= 0.5f;         c.markDspDirty(); }); return;
+        case P::SelOverlap: forGroupChannel(selectedChannel, [v](DrumChannel& c) { c.allowOverlap = v >= 0.5f; }); return;
         case P::SelSlotSel: setShapeSlot(envTargetSlot() == 0 ? 1 : 0); return;
         case P::SelChNext:  selectChannel((selectedChannel + 1) % Sequencer::NUM_CHANNELS); return;
         case P::SelChPrev:  selectChannel((selectedChannel + Sequencer::NUM_CHANNELS - 1) % Sequencer::NUM_CHANNELS); return;
@@ -8347,7 +8347,9 @@ void DrumSequencerEditor::applySelCC(int t, float v, bool& slotDirty, bool& keys
         case P::SelPatPrev: selectPattern((currentPattern() + Sequencer::NUM_PATTERNS - 1) % Sequencer::NUM_PATTERNS); return;
         case P::SelFollow:  btnFollow.triggerClick(); return;
         case P::SelTest:    proc.requestTestTrigger(selectedChannel); return;
-        case P::SelChVol:   ch.volume = LevelMeter::posToGain(v); return;   // dB taper; handle follows next tick
+        case P::SelChVol:   // dB taper; handle follows next tick. Group-wide [1.5.6].
+            forGroupChannel(selectedChannel, [v](DrumChannel& c) { c.volume = LevelMeter::posToGain(v); c.markDspDirty(); });
+            return;
         case P::SelSwing:   sliderSwing.setValue(sliderSwing.getMinimum()
                               + v * (sliderSwing.getMaximum() - sliderSwing.getMinimum()),
                               juce::sendNotificationSync); return;
@@ -8959,15 +8961,14 @@ void DrumSequencerEditor::setupComponents()
         const float g = std::pow(10.0f, (v - 0.5f) * 12.0f / 20.0f);   // +-6 dB
         for (int i = 0; i < Sequencer::NUM_CHANNELS; ++i)
             if (i != selectedChannel)
-            {
-                auto& c = proc.sequencer.channel(i);
-                c.volume = juce::jlimit(0.0f, LevelMeter::VOL_MAX, othersVolBase[i] * g);
-                c.markDspDirty();
+            {   // group-wide [1.5.6]: every bar of a merged group gets the same trimmed level
+                const float nv = juce::jlimit(0.0f, LevelMeter::VOL_MAX, othersVolBase[i] * g);
+                forGroupChannel(i, [nv](DrumChannel& c) { c.volume = nv; c.markDspDirty(); });
             }
     };
     othersVolF.onDragEnd = [this] { othersVolActive = false; othersVolF.setValue01(0.5f); };   // spring back
     othersVolF.setTooltip("Others: trim EVERY channel except the SELECTED one by up to +-6 dB "
-        "(this pattern).\n\n"
+        "(this pattern; in a merged group, every bar of the group).\n\n"
         "- It EDITS their volume handles - watch them slide as you drag. Undo restores them.\n"
         "- Each drag is relative to where the volumes were when you grabbed it; the pill "
         "re-centres on release (it's a gesture, not a stored setting).\n"
@@ -8979,11 +8980,11 @@ void DrumSequencerEditor::setupComponents()
     btnVolReset.paramId = "ui_sel_volReset"; btnVolReset.midiLearn = &proc.midiLearn;   // right-click = learn
     btnVolReset.setLookAndFeel(&tinyBtnLNF);
     btnVolReset.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
-    btnVolReset.onClick = [this] {
+    btnVolReset.onClick = [this] {   // group-wide [1.5.6]: resets every bar of a merged group too
         for (int i = 0; i < Sequencer::NUM_CHANNELS; ++i)
-        { auto& c = proc.sequencer.channel(i); c.volume = 1.0f; c.markDspDirty(); }
+            forGroupChannel(i, [](DrumChannel& c) { c.volume = 1.0f; c.markDspDirty(); });
     };
-    btnVolReset.setTooltip("Set every channel's volume handle in this pattern back to 100% (0 dB). Undoable.\n\nRight-click = assign a MIDI pad.");
+    btnVolReset.setTooltip("Set every channel's volume handle in this pattern (in a merged group: every bar) back to 100% (0 dB). Undoable.\n\nRight-click = assign a MIDI pad.");
 
     content.addAndMakeVisible(btn16View);
     btn16View.paramId = "ui_sel_view16"; btn16View.midiLearn = &proc.midiLearn;         // right-click = learn
@@ -9659,7 +9660,8 @@ void DrumSequencerEditor::setupComponents()
         int ci = i;
 
         stripMeter[i].horizontal = true;
-        stripMeter[i].onVolume   = [this, i](float v) { proc.sequencer.channel(i).volume = v; };
+        stripMeter[i].onVolume   = [this, i](float v)   // group-wide [1.5.6]: handles agree across the group's bars
+        { forGroupChannel(i, [v](DrumChannel& c) { c.volume = v; c.markDspDirty(); }); };
         stripMeter[i].onVolLearn = [this, i] {
             showMidiLearnMenu(&stripMeter[i], proc.midiLearn,
                               "p" + juce::String(currentPattern()) + "_ch" + juce::String(i) + "_volume", -1,
@@ -9699,16 +9701,18 @@ void DrumSequencerEditor::setupComponents()
 
         strip.btnMute->setClickingTogglesState(true);
         strip.btnMute->setColour(juce::TextButton::buttonOnColourId, juce::Colours::orange);
-        strip.btnMute->onClick = [this, ci] {
+        strip.btnMute->onClick = [this, ci] {   // group-wide: a merged group is one edit unit [1.5.6]
             selectChannel(ci);
-            proc.sequencer.channel(ci).mute = strips[ci].btnMute->getToggleState();
+            const bool on = strips[ci].btnMute->getToggleState();
+            forGroupChannel(ci, [on](DrumChannel& c) { c.mute = on; c.markDspDirty(); });
         };
 
         strip.btnSolo->setClickingTogglesState(true);
         strip.btnSolo->setColour(juce::TextButton::buttonOnColourId, juce::Colours::yellow);
-        strip.btnSolo->onClick = [this, ci] {
+        strip.btnSolo->onClick = [this, ci] {   // group-wide: a merged group is one edit unit [1.5.6]
             selectChannel(ci);
-            proc.sequencer.channel(ci).solo = strips[ci].btnSolo->getToggleState();
+            const bool on = strips[ci].btnSolo->getToggleState();
+            forGroupChannel(ci, [on](DrumChannel& c) { c.solo = on; c.markDspDirty(); });
         };
 
         content.addAndMakeVisible(strip.comboSound);  // now the "Sound Bank" selector
@@ -9733,9 +9737,10 @@ void DrumSequencerEditor::setupComponents()
         strip.btnPoly.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff35b56a));
         strip.btnPoly.setTooltip("Overlap: lets a sound keep ringing into the next step instead of being cut off - but only if the sound is actually long enough to ring (a short sound still ends on its own). Off = each trigger restarts the sound.\n\nThis is a STEP-mode control - it fades out in Piano Roll, where each note has its own length and Poly is the keyboard's Poly toggle.\n\nNOTE: cutting a sound never cuts its already-sent REVERB/DELAY - those tails live on the master bus and finish on their own (use the reverb Gate / delay Trail for tight wet).\n\nRight-click to assign a MIDI control.");
         strip.btnPoly.midiLearn = &proc.midiLearn;   // paramId set per-pattern in updateStripParamIds()
-        strip.btnPoly.onClick = [this, ci] {
+        strip.btnPoly.onClick = [this, ci] {   // group-wide: a merged group is one edit unit [1.5.6]
             selectChannel(ci);
-            proc.sequencer.channel(ci).allowOverlap = strips[ci].btnPoly.getToggleState();
+            const bool on = strips[ci].btnPoly.getToggleState();
+            forGroupChannel(ci, [on](DrumChannel& c) { c.allowOverlap = on; });
         };
 
         content.addAndMakeVisible(strip.comboSteps);

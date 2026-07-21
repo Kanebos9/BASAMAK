@@ -4219,6 +4219,16 @@ private:
     // (step is rewritten to the bar-local index). Not in a group = the current pattern's channel.
     DrumChannel& groupStepChannel(int ch, int& step);
     int  currentPattern() const { return proc.sequencer.currentPattern; }
+    // [1.5.6 r17] MERGED GROUP = THE EDIT UNIT for channel MIXER state too: Mute/Solo/Overlap and
+    // VOLUME (strip handle, Others trim, Vol reset, the ui_sel_* CC twins) apply f to channel ch in
+    // EVERY bar of the viewed group (head..end); outside a group = just the current pattern.
+    // The ADDRESSED p{P}_ch{i}_* CC ids stay single-pattern by design (the id names a pattern).
+    template <typename Fn> void forGroupChannel(int ch, Fn&& f)
+    {
+        auto& sq = proc.sequencer;
+        const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
+        for (int b = head; b <= end; ++b) f(sq.patterns[b].channels[ch]);
+    }
 
     //-- Presets
     static juce::File getPresetsFolder();

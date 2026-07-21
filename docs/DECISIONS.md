@@ -358,6 +358,8 @@
 
 | 236 | r16/v1.5.6 master "distorts above 10%" diagnosed as INTERFACE-side analog clipping, not a plugin bug: the master fader is clean LINEAR amplitude (10% = -20 dB, 50% = -6 dB, 100% = 0 dB, default 90% = -0.9 dB), applied before Tilt/Sat/Glue/Limiter/soft-clip, and with default settings the digital path at 10% cannot distort (soft-clip knee 0.85 needs a pre-master peak > +18.6 dBFS). Ship = DISPLAY-ONLY dB read-out on the fader ("-inf" at 0) + a gain-staging tooltip (keep the plugin fader high, set listening level on the interface; Limiter = the ceiling); the mapping/DSP untouched so every project loads at identical loudness | diagnosis said the mapping was fine - conservative fix only | display + docs |
 
+| 237 | r17/v1.5.6 merged-group channel edits: Mute/Solo/Overlap AND volume (strip handle, Others trim, Vol reset, the ui_sel_* CC twins) write the channel in EVERY bar of the viewed merged group (`forGroupChannel` head..end - the drawTune propagation model); the group is the edit unit, so a "muted" channel no longer sounds when playback crosses into another bar. ADDRESSED p{P}_ch{i}_* CC ids stay single-pattern by design (the id names a pattern). MergeTest [5] locks group-wide mute silence | user-confirmed bug + scope addition (volume) | group-wide toggles |
+
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.

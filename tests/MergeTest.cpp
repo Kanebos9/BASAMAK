@@ -3,7 +3,8 @@
 // AGAIN (no group-flow invention). Merge defaults: each bar -> next x1, last -> head x1.
 // [1] defaults = the classic group loop: P0, P1, P0. [2] a bar set "next after 2" plays ITSELF
 // twice: P0, P0, P1. [3] a bar chains OUT: P0, P1, P2. [4] end bar "to P2 after 2 loops" =
-// the END BAR plays twice, then leaves: P0, P1, P1, P2.
+// the END BAR plays twice, then leaves: P0, P1, P1, P2. [5] group-wide mute [1.5.6]: mute on
+// all group bars = silent across the whole group (the UI writes every bar now).
 #include "Sequencer.h"
 #include <cstdio>
 #include <cmath>
@@ -78,6 +79,33 @@ int main() {
     printf("[2] bar 'next after 2' plays itself twice:\n");  if (! CHK(run(1, e1, 3))) printf("  FAIL\n");
     printf("[3] bar chains OUT of the group:\n");            if (! CHK(run(2, e2, 3))) printf("  FAIL\n");
     printf("[4] end bar 'P2 after 2': plays twice, out:\n"); if (! CHK(run(3, e3, 4))) printf("  FAIL\n");
+
+    // [5] GROUP-WIDE MUTE [1.5.6]: the editor's M/S/OV toggles write EVERY bar of a merged group
+    // (head..end). This locks the Sequencer-side contract: mute set on ALL group bars = the channel
+    // is silent across the WHOLE group (with mute on only the viewed bar, the other bar still
+    // sounded = the shipped bug).
+    {
+        auto* s = new Sequencer();
+        s->setStandaloneBpm(120.0f);
+        mkTone(s->patterns[0].channels[0], 261.6256f);     // P0 = C3
+        mkTone(s->patterns[1].channels[0], 392.0f);        // P1 = G3
+        s->patterns[1].mergeWithPrev = true;
+        chainTo(s->patterns[0], 1, 1); chainTo(s->patterns[1], 0, 1);
+        // the group-wide write the UI now performs (forGroupChannel over head..end):
+        s->patterns[0].channels[0].mute = true;
+        s->patterns[1].channels[0].mute = true;
+        for (auto& p : s->patterns) for (auto& c2 : p.channels) c2.prepareToPlay(SR, bs);
+        s->startStandalone();
+        std::vector<float> out;
+        juce::AudioBuffer<float> buf(2, bs);
+        for (int b = 0; b < (int) (2.0 * 2 * SR / bs) + 1; ++b)
+        { buf.clear(); s->processBlock(buf, SR, bs, nullptr); for (int i = 0; i < bs; ++i) out.push_back(buf.getSample(0, i)); }
+        delete s;
+        const double m0 = goertzel(out, (size_t)(0.05*SR), (size_t)(0.45*SR), C3, SR);   // bar 1 (P0)
+        const double m1 = goertzel(out, (size_t)(2.05*SR), (size_t)(2.45*SR), G3, SR);   // bar 2 (P1)
+        printf("[5] group-wide mute: bar1 C3=%.5f bar2 G3=%.5f (both must be silent)\n", m0, m1);
+        if (! CHK(m0 < 0.002 && m1 < 0.002)) printf("  FAIL\n");
+    }
     printf(fails ? ">>> MergeTest FAIL (%d)\n" : ">>> MergeTest PASS\n", fails);
     return fails;
 }
