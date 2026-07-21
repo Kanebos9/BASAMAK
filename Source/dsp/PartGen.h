@@ -383,6 +383,44 @@ static inline void pitchPhrase(const Options& o, const Ctx& c, Rng& prng, std::v
     }
 }
 
+// ---- POCKET DISCIPLINE [P0 2026-07-21 r18] ----------------------------------------------------
+// "In the pockets" must actually stay OUT of the drums' way. Two rules, enforced as a final pass
+// (the anchor-at-phrase-start push and the echo nudges could land ON a hit before this existed -
+// the user's "no drum awareness" report):
+//  (a) ONSET EXCLUSION - no onset within one grid cell (CELL16 = 24 concat cols) of any real drum
+//      hit; an offender shifts to the nearest legal column (the candidates already prefer the
+//      larger gaps - only anchors/nudges ever violate), or drops when the drums are wall-to-wall.
+//  (b) LENGTH CLIPPING - a pocket note ENDS at least 1/32 bar (12 cols) before the next drum hit,
+//      so nothing rings through a hit. Driving/Flowing are untouched.
+static inline void pocketDiscipline(const Options& o, const Ctx& c, std::vector<Note>& notes, int total)
+{
+    if (o.rhythm != RhPockets || c.nHits == 0 || notes.empty()) return;
+    auto nearHit = [&](int col)
+    {
+        for (int i = 0; i < c.nHits; ++i)
+            if (std::abs(col - c.hitCol[i]) < CELL16) return true;
+        return false;
+    };
+    for (auto& n : notes)
+    {
+        if (! nearHit(n.start)) continue;
+        int moved = -1;
+        for (int d = 1; d < COLS && moved < 0; ++d)
+        {
+            if (n.start - d >= 0    && ! nearHit(n.start - d)) { moved = n.start - d; break; }
+            if (n.start + d < total && ! nearHit(n.start + d)) { moved = n.start + d; break; }
+        }
+        if (moved >= 0) n.start = moved;
+        else            n.vel = 0;   // wall-to-wall drums: no legal pocket exists - drop the note
+    }
+    notes.erase(std::remove_if(notes.begin(), notes.end(),
+                               [](const Note& n) { return n.vel == 0; }), notes.end());
+    for (auto& n : notes)                            // (b) end >= 12 cols before the NEXT hit
+        for (int i = 0; i < c.nHits; ++i)            // (hitCol is sorted - first hit past the start)
+            if (c.hitCol[i] > n.start)
+            { n.len = std::max(1, std::min(n.len, c.hitCol[i] - COLS / 32 - n.start)); break; }
+}
+
 static inline void makeLengths(const Options& o, std::vector<Note>& notes, int totalCols)
 {
     std::sort(notes.begin(), notes.end(), [](const Note& a, const Note& b) { return a.start < b.start; });
@@ -627,6 +665,10 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& c)
         const float sw = 0.92f + 0.14f * std::sin(std::min(1.0f, t / 0.66f) * 3.14159265f);
         n.vel = std::max(120, std::min(255, (int) std::lround((float) n.vel * sw)));
     }
+
+    // POCKET DISCIPLINE [P0 r18]: runs before the safety pass (which re-sorts and tidies any
+    // dedupe/mono fallout of the shifts); the later len-clips only ever SHORTEN, so (b) survives.
+    pocketDiscipline(o, c, notes, total);
 
     // safety: sorted, deduped, clamped, mono
     std::sort(notes.begin(), notes.end(), [](const Note& a, const Note& b) { return a.start < b.start; });

@@ -3,6 +3,7 @@
 #include "../plugin/FactoryContent.h"
 #include "../plugin/UserPaths.h"
 #include "../dsp/PartGen.h"    // [2026-07-20] the GENERATE feature's melody engine
+#include "../dsp/GenContext.h" // [2026-07-21 r18] its context gathering (extracted, headless-tested)
 #include <cstring>
 
 // ================================================================================================
@@ -3586,6 +3587,14 @@ void GeneratePanel::paint(juce::Graphics& g)
     g.drawFittedText("Notes land in the roll behind - press Play and reroll until it fits. Undo restores.",
                      p.getX() + 12, actionRect(3).getBottom() + 6, p.getWidth() - 24, 24,
                      juce::Justification::centred, 2, 0.8f);
+    // [1.5.7 r18] the CONTEXT READOUT: what the last gather actually heard - starvation is never
+    // silent. Non-interactive drawn text; squeeze (never ellipsis) via drawFittedText's min scale.
+    if (contextLine.isNotEmpty())
+    {
+        g.setColour(juce::Colour(0xff8fb0d8)); g.setFont(juce::Font(11.5f, juce::Font::bold));
+        g.drawFittedText(contextLine, p.getX() + 12, actionRect(3).getBottom() + 32,
+                         p.getWidth() - 24, 26, juce::Justification::centred, 2, 0.55f);
+    }
 }
 
 void GeneratePanel::mouseDown(const juce::MouseEvent& e)
@@ -7897,40 +7906,34 @@ void DrumSequencerEditor::commitUndoNow()
 //==============================================================================
 int DrumSequencerEditor::detectGenKey(int& scaleTypeOut)
 {
-    // pitch-class histogram over every PIANO-ROLL channel in the viewed group (the roll is the
-    // C4-absolute world, so pitch classes are exact; step-mode pitches are knob-relative = unknowable).
+    // [1.5.7 r18] delegated to GenContext (headless-tested): Krumhansl-lite over the gathered
+    // chroma - which now includes PITCHED STEP channels (Freq-knob base + stepPitch offsets)
+    // beside the roll notes, and honors mute/solo like the rest of the gather.
     auto& sq = proc.sequencer;
-    const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
-    float hist[12] = {}; float total = 0.0f;
-    for (int b = head; b <= end; ++b)
-        for (int chn = 0; chn < Sequencer::NUM_CHANNELS; ++chn)
-        {
-            const auto& cc = sq.patterns[b].channels[chn];
-            if (! cc.drawMode || chn == selectedChannel) continue;
-            for (int i = 0; i < cc.drawNoteCount; ++i)
-            {
-                const auto& n = cc.drawNotes[i];
-                const int p = ((n.semi % 12) + 12) % 12;
-                const float w = (float) n.vel / 255.0f * (1.0f + (float) n.len / 384.0f);
-                hist[p] += w; total += w;
-            }
-        }
-    scaleTypeOut = 0;
-    if (total < 0.01f) return 0;   // nothing pitched -> C major default
-    // Krumhansl-lite templates: tonic + fifth dominate, chord tones next, scale members last.
-    static const float majT[12] = { 3.0f, 0.0f, 1.0f, 0.0f, 2.0f, 1.0f, 0.0f, 2.5f, 0.0f, 1.0f, 0.0f, 1.0f };
-    static const float minT[12] = { 3.0f, 0.0f, 1.0f, 2.0f, 0.0f, 1.0f, 0.0f, 2.5f, 1.0f, 0.0f, 1.0f, 0.0f };
-    int bestKey = 0, bestMode = 0; float best = -1.0f;
-    for (int k = 0; k < 12; ++k)
-        for (int m = 0; m < 2; ++m)
-        {
-            const float* T = m == 0 ? majT : minT;
-            float sc = 0.0f;
-            for (int p = 0; p < 12; ++p) sc += hist[p] * T[((p - k) % 12 + 12) % 12];
-            if (sc > best) { best = sc; bestKey = k; bestMode = m; }
-        }
-    scaleTypeOut = bestMode;   // 0 = Major, 1 = Natural Minor (kUiScaleTab order)
-    return bestKey;
+    return GenContext::detectKey(sq, sq.groupHead(currentPattern()), sq.groupEnd(currentPattern()),
+                                 selectedChannel, scaleTypeOut);
+}
+
+// [1.5.7 r18] the panel's honest CONTEXT READOUT ("starvation must never be silent" - the theory
+// doc's data spec): one plain sentence saying what the last gather actually heard. Recomputed on
+// panel open and after every action.
+static juce::String genReadoutLine(const GeneratePanel& gp, const GenContext::Readout& ro)
+{
+    const juce::String keyName = juce::String(kUiNoteName[juce::jlimit(0, 11, gp.key)]) + " "
+                               + kUiScaleName[juce::jlimit(0, 9, gp.scaleType)];
+    if (ro.hits == 0 && ro.keyChans == 0)
+        return gp.keyTag == "from Scale mode"
+             ? "No other channels heard - writing " + keyName + " (from Scale mode) on the meter grid."
+             : "No context heard - writing from scratch in " + keyName + " on the meter grid.";
+    juce::String s = ro.hits > 0
+        ? "Groove: " + juce::String(ro.hits) + " hits from " + juce::String(ro.grooveChans)
+          + (ro.grooveChans == 1 ? " channel." : " channels.")
+        : "No drum hits heard - the meter grid drives the rhythm.";
+    s += ro.keyChans > 0
+        ? "  Key: " + keyName + " (" + gp.keyTag + ", " + juce::String(ro.keyChans)
+          + (ro.keyChans == 1 ? " channel)." : " channels).")
+        : "  Key: " + keyName + " (" + gp.keyTag + ").";
+    return s;
 }
 
 void DrumSequencerEditor::openGeneratePanel()
@@ -7994,6 +7997,11 @@ void DrumSequencerEditor::openGeneratePanel()
         }
         break;
     }
+    { // [1.5.7 r18] context readout: say out loud what the gather sees, before the first action
+        GenContext::Readout ro;
+        GenContext::build(sq, head, end, selectedChannel, &ro);
+        generatePanel.contextLine = genReadoutLine(generatePanel, ro);
+    }
     genHadNotes = false;
     for (int b = head; b <= end; ++b)
         if (sq.patterns[b].channels[selectedChannel].drawNoteCount > 0) genHadNotes = true;
@@ -8031,60 +8039,13 @@ void DrumSequencerEditor::genAction(int action)
         case 2: genPitchSeed  = (uint32_t) rnd.nextInt(); genVaryCount = 0; break;   // Same rhythm, new notes
         case 3: genRhythmSeed = (uint32_t) rnd.nextInt(); genVaryCount = 0; break;   // Same notes, new rhythm
     }
-    // ---- musical context: the OTHER channels' groove (steps) + harmony (roll notes) ----
-    PartGen::Ctx ctx;
-    const int bars = juce::jlimit(1, PartGen::MAX_BARS, end - head + 1);
-    ctx.bars = bars;
-    float grooveMax = 0.0f;
-    for (int b = 0; b < bars; ++b)
-    {
-        const auto& pat = sq.patterns[head + b];
-        const bool solos = Sequencer::anySoloIn(pat);
-        for (int chn = 0; chn < Sequencer::NUM_CHANNELS; ++chn)
-        {
-            if (chn == ch) continue;
-            const auto& cc = pat.channels[chn];
-            if (cc.mute || (solos && ! cc.solo)) continue;   // silent channels don't shape the part
-            if (cc.drawMode)
-            {   // pitched material -> per-beat chroma (the roll is C4-absolute, so pcs are exact)
-                for (int i = 0; i < cc.drawNoteCount; ++i)
-                {
-                    const auto& n = cc.drawNotes[i];
-                    const int p = ((n.semi % 12) + 12) % 12;
-                    const int bt0 = b * 4 + juce::jlimit(0, 3, (int) n.start / 96);
-                    const int bt1 = juce::jlimit(bt0, bars * 4 - 1,
-                                                 b * 4 + juce::jlimit(0, 3, ((int) n.start + (int) n.len - 1) / 96));
-                    for (int bt = bt0; bt <= bt1; ++bt)
-                    { ctx.chroma[bt][p] += (float) n.vel / 255.0f; ctx.chromaValid = true; }
-                }
-            }
-            else
-            {   // drum/step material -> the 16th-grid accent map AND the EXACT hit list [v2]
-                for (int i = 0; i < cc.numSteps; ++i)
-                    if (cc.steps[i])
-                    {
-                        const int pos16 = juce::jlimit(0, 15, i * 16 / juce::jmax(1, cc.numSteps));
-                        auto& gcell = ctx.grooveHit[b * 16 + pos16];
-                        gcell += cc.stepVel[i]; grooveMax = juce::jmax(grooveMax, gcell);
-                        // exact position: 384 divides every step count, so a 7-step channel's hits
-                        // land EXACTLY here - Driving/Pockets read these, never a rounded grid
-                        const int col = b * DrumChannel::DRAW_RES
-                                      + i * DrumChannel::DRAW_RES / juce::jmax(1, cc.numSteps);
-                        int f = -1;
-                        for (int h = 0; h < ctx.nHits; ++h) if (ctx.hitCol[h] == col) { f = h; break; }
-                        if (f >= 0) ctx.hitStr[f] = juce::jmin(1.0f, ctx.hitStr[f] + cc.stepVel[i] * 0.5f);
-                        else if (ctx.nHits < PartGen::Ctx::MAX_HITS)
-                        { ctx.hitCol[ctx.nHits] = col; ctx.hitStr[ctx.nHits] = juce::jmin(1.0f, cc.stepVel[i]); ++ctx.nHits; }
-                    }
-            }
-        }
-    }
-    if (grooveMax > 0.0f)
-        for (int i = 0; i < bars * 16; ++i) ctx.grooveHit[i] = juce::jmin(1.0f, ctx.grooveHit[i] / grooveMax);
-    // hit list must be SORTED (Pockets walks the gaps in order); channels interleave, so sort now
-    for (int a = 1; a < ctx.nHits; ++a)
-        for (int b2 = a; b2 > 0 && ctx.hitCol[b2] < ctx.hitCol[b2 - 1]; --b2)
-        { std::swap(ctx.hitCol[b2], ctx.hitCol[b2 - 1]); std::swap(ctx.hitStr[b2], ctx.hitStr[b2 - 1]); }
+    // ---- musical context: the OTHER channels' groove (steps) + harmony (roll notes + pitched
+    // step channels) - the whole gather lives in GenContext::build [1.5.7 r18], headless-tested
+    // by GenTest, and feeds the panel's honest readout line at the same time.
+    GenContext::Readout ro;
+    PartGen::Ctx ctx = GenContext::build(sq, head, end, ch, &ro);
+    const int bars = ctx.bars;
+    generatePanel.contextLine = genReadoutLine(generatePanel, ro);
     // ---- options straight from the panel + the seeds ----
     PartGen::Options o;
     o.role         = generatePanel.role;
@@ -8118,6 +8079,7 @@ void DrumSequencerEditor::genAction(int action)
     genHadNotes = true; genWarned = true;   // rerolls replace OUR OWN notes without re-asking
     stepGrid.update(proc.sequencer, proc.anySolo);
     stepGrid.repaint();
+    generatePanel.repaint();   // [r18] the context readout line follows each gather
 }
 
 void DrumSequencerEditor::applyUndoState(const UndoEntry& e)
@@ -8350,9 +8312,10 @@ void DrumSequencerEditor::applySelCC(int t, float v, bool& slotDirty, bool& keys
         case P::SelChVol:   // dB taper; handle follows next tick. Group-wide [1.5.6].
             forGroupChannel(selectedChannel, [v](DrumChannel& c) { c.volume = LevelMeter::posToGain(v); c.markDspDirty(); });
             return;
-        case P::SelSwing:   sliderSwing.setValue(sliderSwing.getMinimum()
-                              + v * (sliderSwing.getMaximum() - sliderSwing.getMinimum()),
-                              juce::sendNotificationSync); return;
+        case P::SelSwing:   sliderSwing.setValue(sliderSwing.getMinimum()   // group-wide [1.5.7 r18]:
+                              + v * (sliderSwing.getMaximum() - sliderSwing.getMinimum()),   // the sync
+                              juce::sendNotificationSync); return;   // notification runs the fader's
+                                                                     // head..end handler
         case P::SelBpm:     sliderBpm.setValue(sliderBpm.getMinimum()
                               + v * (sliderBpm.getMaximum() - sliderBpm.getMinimum()),
                               juce::sendNotificationSync); return;
@@ -8559,7 +8522,15 @@ void DrumSequencerEditor::setupComponents()
     sliderSwing.setColour(juce::Slider::backgroundColourId, juce::Colour(0xff26263c));
     sliderSwing.textFromValueFunction = [](double v){ return v < 0.005 ? juce::String("Off")
                                                              : juce::String(juce::roundToInt(50.0 + v * 25.0)) + "%"; };
-    sliderSwing.onValueChange = [this] { proc.sequencer.current().swing = (float)sliderSwing.getValue();
+    // [1.5.7 r18] merged group = the EDIT UNIT (the r17 rule): swing is per-PATTERN, so the fader
+    // writes EVERY bar of the viewed group (head..end) - it used to write only the viewed bar, so a
+    // group's other bars kept playing straight. The ui_sel_swing CC drives this same handler
+    // (setValue sendNotificationSync), so the MIDI twin is group-wide too; addressed/global CC
+    // semantics are unchanged.
+    sliderSwing.onValueChange = [this] { auto& sq = proc.sequencer;
+                                         const float v = (float) sliderSwing.getValue();
+                                         const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
+                                         for (int b = head; b <= end; ++b) sq.patterns[b].swing = v;
                                          refreshSwingLabel(); };
 
     // Step-grid edit-mode radio buttons.

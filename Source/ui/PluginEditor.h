@@ -1712,6 +1712,9 @@ public:
     int  bars = 1;            // set by the editor before show() (merged-group size)
     juce::String keyTag;      // "from Scale mode" / "detected" / "default" - honesty about the prefill
     juce::String soundName;   // title context: the channel's loaded sound
+    juce::String contextLine; // [1.5.7 r18] the CONTEXT READOUT: what the last gather heard (groove
+                              // hits / key source) - set by the editor on open + after each action;
+                              // drawn non-interactive under the hint line (squeeze, never ellipsis)
     std::function<void(int action)> onAction;   // 0 New idea | 1 Vary | 2 Same rhythm | 3 Same notes
     std::function<void()> onClose;
     void show() { setVisible(true); toFront(true); repaint(); }

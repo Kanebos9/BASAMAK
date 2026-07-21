@@ -2,8 +2,14 @@
 // Pure headless checks: determinism, scale safety, register bounds, density ordering,
 // seed-locked iteration (same rhythm / new notes), multi-bar + phrase echo, riff tiling,
 // singable constraints, vary mutation, and the mono no-overlap guarantee.
+// [17]-[21] [2026-07-21 r18] the CONTEXT GATHER (GenContext.h, extracted from the editor):
+// exact 7-step hit columns, merged-group bar offsets, mute/solo exclusion, self-exclusion,
+// and STEP-PITCH harmony (Freq-knob base + stepPitch -> chroma + key detection).
+// [22] POCKET DISCIPLINE: no onset within a grid cell of a drum hit, no note ringing into one.
 #include "PartGen.h"
+#include "GenContext.h"
 #include <cstdio>
+#include <memory>
 #include <set>
 #include <vector>
 
@@ -251,6 +257,107 @@ int main()
         const int lastPc = n.empty() ? -1 : ((n.back().semi % 12) + 12) % 12;
         CHECK(! n.empty() && runsThrough && longNote && bounded && (lastPc == 0 || lastPc == 4),
               "[16] lines=1 on 3 bars: one unbroken arc (no internal breaths), resolves home");
+    }
+
+    // ---- CONTEXT GATHER (GenContext::build, headless Sequencer) [r18] ----
+    auto kit = [](DrumChannel& ch, int nSteps, std::initializer_list<int> on)
+    {   // an unpitched (Noise) step kit - hits only, no chroma
+        ch.numSteps = nSteps; for (int i : on) ch.steps[i] = true;
+        ch.slots[0] = DrumChannel::Slot();
+        ch.slots[0].engine = DrumChannel::SrcNoise; ch.slots[0].weight = 1.0f;
+    };
+
+    // [17] a 7-step kick's hits land at the EXACT concat columns i*384/7
+    {
+        auto sq = std::make_unique<Sequencer>();
+        kit(sq->patterns[0].channels[0], 7, { 0, 1, 2, 3, 4, 5, 6 });
+        GenContext::Readout ro;
+        auto c = GenContext::build(*sq, 0, 0, 7, &ro);
+        bool ok = c.nHits == 7 && ro.hits == 7 && ro.grooveChans == 1;
+        for (int i = 0; i < 7 && ok; ++i) ok = c.hitCol[i] == i * 384 / 7;
+        CHECK(ok, "[17] gather: 7-step kick = exact concat columns (i*384/7)");
+    }
+
+    // [18] merged 2-bar group: hits from BOTH bars, bar 2 at +384 offsets
+    {
+        auto sq = std::make_unique<Sequencer>();
+        sq->patterns[1].mergeWithPrev = true;
+        kit(sq->patterns[0].channels[0], 4, { 0, 2 });
+        kit(sq->patterns[1].channels[0], 4, { 1 });
+        auto c = GenContext::build(*sq, 0, 1, 7);
+        CHECK(c.bars == 2 && c.nHits == 3
+              && c.hitCol[0] == 0 && c.hitCol[1] == 192 && c.hitCol[2] == 384 + 96,
+              "[18] gather: merged group hears BOTH bars at bar-offset columns");
+    }
+
+    // [19] muted channel excluded; a solo elsewhere excludes the un-soloed kit
+    {
+        auto sq = std::make_unique<Sequencer>();
+        kit(sq->patterns[0].channels[0], 4, { 0, 2 });
+        sq->patterns[0].channels[0].mute = true;
+        auto a = GenContext::build(*sq, 0, 0, 7);
+        sq->patterns[0].channels[0].mute = false;
+        sq->patterns[0].channels[1].solo = true;   // solo a silent channel -> the kit is excluded
+        auto b = GenContext::build(*sq, 0, 0, 7);
+        sq->patterns[0].channels[1].solo = false;
+        auto c = GenContext::build(*sq, 0, 0, 7);
+        CHECK(a.nHits == 0 && b.nHits == 0 && c.nHits == 2,
+              "[19] gather: muted excluded, solo exclusion honored, clean = heard");
+    }
+
+    // [20] the selected channel never shapes its own context
+    {
+        auto sq = std::make_unique<Sequencer>();
+        kit(sq->patterns[0].channels[3], 4, { 0, 2 });
+        auto self  = GenContext::build(*sq, 0, 0, 3);
+        auto other = GenContext::build(*sq, 0, 0, 7);
+        CHECK(self.nHits == 0 && other.nHits == 2,
+              "[20] gather: selected channel excluded from its own context");
+    }
+
+    // [21] STEP-PITCH HARMONY: an A-minor step bassline (Freq knob = A2, stepPitch offsets)
+    // contributes chroma and steers key detection to A minor
+    {
+        auto sq = std::make_unique<Sequencer>();
+        auto& bass = sq->patterns[0].channels[2];
+        bass.numSteps = 8;
+        bass.slots[0] = DrumChannel::Slot();
+        bass.slots[0].engine = DrumChannel::SrcOsc; bass.slots[0].weight = 1.0f;
+        bass.slots[0].oscFreq = 110.0f;             // A2 = MIDI 45
+        const int   onStep[4]  = { 0, 2, 4, 6 };
+        const float offs[4]    = { 0.0f, 3.0f, 7.0f, 12.0f };   // A C E A
+        for (int i = 0; i < 4; ++i) { bass.steps[onStep[i]] = true; bass.stepPitch[onStep[i]] = offs[i]; }
+        GenContext::Readout ro;
+        auto c = GenContext::build(*sq, 0, 0, 7, &ro);
+        int st = -1;
+        const int key = GenContext::detectKey(*sq, 0, 0, 7, st);
+        CHECK(c.chromaValid && c.chroma[0][9] > 0.5f && ro.keyChans == 1,
+              "[21a] pitched STEP channel contributes chroma (pc A heard)");
+        CHECK(key == 9 && st == 1, "[21b] step bassline steers detection to A minor");
+    }
+
+    // [22] POCKET DISCIPLINE: hits every 2nd step of 16 -> zero onsets inside the exclusion
+    // window (1 grid cell) and zero notes ringing into a hit (end >= 12 cols before it)
+    {
+        Ctx cp; cp.bars = 1;
+        for (int k2 = 0; k2 < 8; ++k2) { cp.hitCol[k2] = k2 * 48; cp.hitStr[k2] = 1.0f; }
+        cp.nHits = 8;
+        bool ok = true; int cnt = 0;
+        for (uint32_t s = 1; s <= 4; ++s)
+        {
+            Options o; o.scale = kMajor; o.rhythm = RhPockets; o.density = 2;
+            o.rhythmSeed = s; o.pitchSeed = s + 9;
+            for (auto& x : generate(o, cp))
+            {
+                ++cnt;
+                for (int h = 0; h < cp.nHits; ++h)
+                {
+                    if (std::abs(x.start - cp.hitCol[h]) < 24) ok = false;                        // exclusion
+                    if (x.start < cp.hitCol[h] && x.start + x.len > cp.hitCol[h] - 12) ok = false; // ring-through
+                }
+            }
+        }
+        CHECK(ok && cnt > 0, "[22] pockets: no onset in an exclusion window, no note rings into a hit");
     }
 
     printf(fails == 0 ? "GenTest: ALL PASS\n" : "GenTest: %d FAILURES\n", fails);
