@@ -91,3 +91,49 @@ P1: data model (roles, registers, chordCols, sound introspection) + G2/M7/M1/M2/
 P2: motif engine (M10, M11) + LHL scorer (G3) + prosody/breath (M12/M14/G8).
 P3: comp/counter roles (H2-H7) + sound-aware (H8-H10) + microtiming (G5).
 Each phase gated by GenTest additions + the user's ear.
+
+# ============ V2 ADDENDUM (competitive surfaces + drums + from-scratch, 2026-07-22) ============
+
+## COMPETITIVE PARAMETER SURFACE (Logic Session Players, EZbass/EZD3, Scaler, Captain, Orb, Live 12, BiaB)
+Recurring standard: style preset | Complexity(=our Density) | INTENSITY (dynamics - we lack) |
+Humanize (vel+timing - we lack) | Swing/Feel | FILLS (we lack) | register | follow-drums |
+reroll-with-locks | editable output. Praised uniques to steal: Logic FEEL push/pull (-> our Nudge),
+Live 12 SPLIT ratchet-probability (-> our stepRoll), Toontrack TAP2FIND (tap a rhythm as the seed ->
+our keys capture), Captain TENSION (-> our Color), EZD3 POWER HAND. Market's loudest gap: no tool
+AUGMENTS THE USER'S OWN NOTES (Logic overwrites) -> our "Keep my notes" mode (Vary on hand-written
+material, rhythm-only or pitch-only) = a differentiator built on existing Vary machinery.
+PANEL v1-ESSENTIAL ADDS: Intensity (Soft/Med/Hard) | Humanize (Off/Subtle/Loose) | Fills
+(Off/Last bar/Every phrase) | context readout line | "Keep my notes" action.
+LATER: Feel push/pull | Ratchet chance | Strum/Glide amount (Riff) | Tap-a-rhythm seed |
+Accent-every-N | named style presets (bundles - only once dials stabilize).
+
+## DRUM GENERATION (STEP-mode, multi-channel - NOT the roll; NOT via channel-merge)
+D1 Genre kick canon (mutate <=2 steps): House/Techno 1,5,9,13 (immutable) | Boom-bap 1+{7|8|11}(+15)
+   | Trap 1+sparse{4,7,8,11,12,15}, never 9 | DnB 1,11 | Reggaeton 4-floor + tresillo 4,7,12,15.
+D2 Backbeat law: snare 5,13 vel 100-115 (trap: 9 only; dembow: tresillo); one displaced backbeat
+   max per 2 bars (breakbeat).
+D3 Hat language: tier 8ths/16ths; velocity template per beat 105/60/85/60 (16ths), 100/70 (8ths);
+   house = offbeat-only hats. Never two consecutive equal velocities.
+D4 Open hat: 8th offbeats only, choked by next closed (choke group!); never downbeat.
+D5 Trap rolls: 1-2/bar, half-beat before snare/bar-end, ratchet {2,3,4,6}, vel ramp 60->110 (= stepRoll!).
+D6 Ghost notes: 25-40% of backbeat vel, on 16ths flanking backbeats {4,7,8,12,16}, 1-3/bar (genre budget).
+D7 Percussion layers add clap->shaker->rim->tom; clap doubles snare (small negative Nudge); a new
+   layer's onsets must not duplicate an existing channel's accent grid.
+D8 Fill grammar: last bar of each 4/8-bar phrase; start col 13/9/1; subdivision doubling OR tom run
+   (hi->mid->low) OR snare crescendo 50->120; suppress hats during full fills; crash+kick on next downbeat.
+D9 Swing per genre: techno 50 / house 52-56 / boom-bap 58-62 / garage-funk <=66%; quarters unswung;
+   +-3-8 vel jitter.
+D10 FROM-SCRATCH = style-DNA template (never a blank grid): BPM range + swing + kick grid + hat tier +
+   snare scheme per genre (House 120-128/52-56%/4-floor/8th-offbeat/clap 5,13; Techno 125-135/50%;
+   Boom-bap 85-95/58-62%; Trap 130-160 half-time; DnB 170-176; Reggaeton 90-100/dembow). Instantiate
+   verbatim, one mutation per regenerate.
+DRUM UI: generation writes STEPS (velocity, ratchets via stepRoll, Nudge, choke groups) across one or
+several drum channels; entry point needed outside the roll header. Channel-merge is NOT the vehicle.
+
+## AGREED SCOPE DECISIONS (user, 2026-07-22)
+- From-scratch generation: yes (style DNA when context empty; readout says so).
+- Drum roles: yes, step-native (single channel first, kit-level later).
+- Sound-editing toggle: OPT-IN, performance-feel params ONLY (env times, glide, strum, poly/mono,
+  maybe cutoff) - never engine/wave/layers; undoable; default off.
+- "Keep my notes" augmentation mode: build (market gap).
+- BASAMAK idiom: generated parts must use ratchets/nudge/strum/glide/humanize where idiomatic.
