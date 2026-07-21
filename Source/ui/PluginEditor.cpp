@@ -5845,7 +5845,7 @@ static juce::String msCategoryOf(const juce::String& n)
         { "Bassoon Real", "Winds" },
         { "Vibraphone Real", "Bells & Mallets" }, { "Marimba Real", "Bells & Mallets" },
         { "Balafon", "Bells & Mallets" }, { "Kalimba Real", "Bells & Mallets" },
-        { "Mbira", "Bells & Mallets" }, { "Tubular Bells Real", "Bells & Mallets" },
+        { "Mbira", "Bells & Mallets" },
         { "Timpani Real", "Toms" },
         { "Flute Real", "Winds" }, { "Oboe Real", "Winds" }, { "Solo Violin", "Leads" },
         { "Solo Contrabass", "Bass" }, { "Pizzicato Strings", "Plucks & Strings" },
