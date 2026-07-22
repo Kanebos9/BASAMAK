@@ -3499,7 +3499,7 @@ struct GenGeom { int pitch, hdr, chipH, actH, actPitch, panelH; };
 static inline GenGeom genGeom(int totalH)
 {
     if (totalH >= 820) return { 33, 18, 26, 34, 40, 780 };   // [r22] + the GENERATE ALL row
-    return { 20, 10, 17, 24, 26, 476 };
+    return { 19, 10, 16, 22, 25, 462 };   // compact fits the ~480px collapsed view WITH row 6
 }
 }
 
