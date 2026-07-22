@@ -8075,7 +8075,9 @@ static juce::String genReadoutLine(const GeneratePanel& gp, const GenContext::Re
               + juce::String(ro.hat) + " hat)";
     juce::String s = ro.hits > 0
         ? "Groove: " + juce::String(ro.hits) + " hits" + roles + " from " + juce::String(ro.grooveChans)
-          + (ro.grooveChans == 1 ? " channel." : " channels.")
+          + (ro.grooveChans == 1 ? " channel" : " channels")
+          // [r21] a non-16th context says its grid out loud (the lattice the part composes on)
+          + (ro.lattice != 16 ? ", " + juce::String(ro.lattice) + "-cell bar grid." : ".")
         : "No drum hits heard - the meter grid drives the rhythm.";
     s += ro.keyChans > 0
         ? "  Key: " + keyName + " (" + gp.keyTag + ", " + juce::String(ro.keyChans)
@@ -8223,33 +8225,77 @@ void DrumSequencerEditor::genAction(int action)
         }
     }
 
-    // ---- replace warning (once per panel-open) over whatever we are about to write ----
-    auto chanHasNotes = [&](int chn)
+    // ---- [r21 CONSENT] every write the user didn't explicitly aim at is spelled out FIRST,
+    // with names, once per panel-open (rerolls of our own output never re-ask; decline = a
+    // complete no-op). The Drum Kit lists EACH target channel + its existing data + the swing
+    // it overwrites + the choke it may link (the user's "it just wrote over my hand-made
+    // patterns" sting); the melodic warning names a Write-as mode switch out loud.
+    auto chanDataDesc = [&](int chn) -> juce::String
     {
+        int steps = 0, rollN = 0;
         for (int b = head; b <= end; ++b)
         {
             const auto& cb = sq.patterns[b].channels[chn];
-            if (cb.drawNoteCount > 0) return true;
-            for (int i = 0; i < cb.numSteps; ++i) if (cb.steps[i]) return true;
+            rollN += cb.drawNoteCount;
+            for (int i = 0; i < cb.numSteps; ++i) if (cb.steps[i]) ++steps;
         }
-        return false;
+        juce::String nm = sq.patterns[head].channels[chn].mixName;
+        if (nm.isEmpty()) nm = "no sound";
+        juce::String d = "Ch " + juce::String(chn + 1) + " (" + nm + ") - ";
+        if (steps + rollN == 0)  d += "empty";
+        else if (rollN > 0)      d += "HAS " + juce::String(rollN) + (rollN == 1 ? " note" : " notes");
+        else                     d += "HAS " + juce::String(steps) + (steps == 1 ? " step" : " steps");
+        return d;
     };
-    bool willReplace = genHadNotes;
-    if (isDrums)
-    {
-        willReplace = false;
-        for (int t : { kt.kick, kt.snare, kt.hat, kt.open, kt.perc })
-            if (t >= 0 && chanHasNotes(t)) willReplace = true;
+    if (isDrums && keepMode)
+    {   // [r21] Keep-my-notes has no Drum Kit meaning - it used to fall through and write the
+        // whole kit WITHOUT the warning (the consent bypass squared). Honest no-op instead.
+        generatePanel.contextLine = "Keep my notes isn't available for the Drum Kit role - "
+                                    "pick a melodic role, or use New idea / Vary.";
+        generatePanel.repaint();
+        return;
     }
-    if (willReplace && ! genWarned && ! keepMode)   // Keep-my-notes IS the explicit augment consent
-    {   // the clear-on-switch convention: warn ONCE per panel-open before replacing hand-made notes
+    if (isDrums && ! genWarned)
+    {   // the kit touches channels the user never selected (+ the group's swing) - it ALWAYS
+        // asks first, naming everything; empty channels are listed without scary wording
         juce::PopupMenu m;
-        m.addSectionHeader(isDrums ? juce::String("Generate REPLACES your drum channels' current steps")
-                                   : juce::String("Generate REPLACES this channel's current notes"));
-        m.addItem(1, "Replace them (undo restores)");
+        m.addSectionHeader("DRUM KIT will write steps over:");
+        auto lane = [&](int chn, const char* nm)
+        { if (chn >= 0) m.addItem(90 + chn, chanDataDesc(chn) + juce::String(" <- ") + nm, false); };
+        lane(kt.kick, "kick");  lane(kt.snare, "snare"); lane(kt.hat, "hats");
+        lane(kt.open, "open hat"); lane(kt.perc, "perc");
+        const float newSw = (DrumGen::dnaFor(juce::jlimit(0, DrumGen::NUM_STYLES - 1,
+                                                          generatePanel.style)).swingPct - 50.0f) / 25.0f;
+        m.addItem(80, "Swing -> " + juce::String(juce::roundToInt(
+                          50.0f + 25.0f * juce::jmax(0.0f, newSw)))
+                      + "% group-wide (now " + juce::String(juce::roundToInt(
+                          50.0f + 25.0f * sq.patterns[head].swing)) + "%)", false);
+        if (kt.open >= 0 && kt.hat >= 0 && kt.open != kt.hat
+            && sq.patterns[0].channels[kt.open].chokeGroup == 0
+            && sq.patterns[0].channels[kt.hat].chokeGroup == 0)
+            m.addItem(81, "May link open + closed hat in a free choke group (channel-wide)", false);
+        m.addItem(1, "Write the kit (undo restores)");
         m.addItem(2, "Cancel");
         m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(
                             generatePanel.actionScreenArea(action)),   // anchor AT the clicked button
+                        [this, action](int r) { if (r == 1) { genWarned = true; genAction(action); } });
+        return;
+    }
+    if (! isDrums && genHadNotes && ! genWarned && ! keepMode)   // Keep-my-notes IS the augment consent
+    {   // the clear-on-switch convention: warn ONCE per panel-open before replacing hand-made
+        // notes - and when the Write-as row will flip the channel's world, say so by name
+        const bool chanStepW = ! sq.patterns[head].channels[ch].drawMode;
+        const bool stepOutW  = generatePanel.outMode == 1 || (generatePanel.outMode == 0 && chanStepW);
+        juce::PopupMenu m;
+        m.addSectionHeader("Generate REPLACES this channel's current notes");
+        m.addItem(70, chanDataDesc(ch), false);
+        if (stepOutW != chanStepW)
+            m.addItem(71, stepOutW ? "Also switches this channel to STEPS (roll notes cleared)"
+                                   : "Also switches this channel to PIANO ROLL (steps cleared)", false);
+        m.addItem(1, "Replace them (undo restores)");
+        m.addItem(2, "Cancel");
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(
+                            generatePanel.actionScreenArea(action)),
                         [this, action](int r) { if (r == 1) { genWarned = true; genAction(action); } });
         return;
     }
