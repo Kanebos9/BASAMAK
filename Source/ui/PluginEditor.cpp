@@ -3485,9 +3485,11 @@ static const char* const kGenProgs[]   = { "Auto (detected)", "I-V-vi-IV", "I-vi
                                            "i-VI-III-VII", "ii-V-I", "I-IV-V", "12-bar blues" };
 // [r22] the Style row is a PICKER now (GenStyle registry: 8 factory + user .basamakstyle files)
 static const char* const kGenOut[]     = { "Auto", "Steps", "Piano Roll" };
+// [r23] GENERATE ALL + VARY ALL sit side by side (the "(from scratch)" detail lives in the
+// tooltips - a half-width button must carry its text whole, never squeezed to mush)
 static const char* const kGenActions[] = { "NEW IDEA", "VARY", "Same rhythm, new notes", "Same notes, new rhythm",
                                            "KEEP MY NOTES (augment)...",
-                                           "GENERATE ALL (from scratch)" };
+                                           "GENERATE ALL", "VARY ALL" };
 static const juce::Colour kGenAccent { 0xffa0e8b0 };   // the Generate green (roll-operations family)
 // [r20] rows live in three labeled BANDS: What (0-4) | Feel (5-10) | Form (11-13)
 //   0 Role | 1 Key | 2 Chords | 3 Style | 4 Write as || 5 Density | 6 Register | 7 Color |
@@ -3537,9 +3539,12 @@ juce::Rectangle<int> GeneratePanel::actionRect(int idx) const
     const auto p = panelRect();
     const auto gg = genGeom(getHeight());
     const int w = (p.getWidth() - 24 - 8) / 2;
-    if (idx >= 4)   // [r20] KEEP MY NOTES + [r22] GENERATE ALL: full-width rows 3 and 4
-        return { p.getX() + 12, rowRect(13).getBottom() + 6 + (idx - 2) * gg.actPitch,
+    if (idx == 4)   // [r20] KEEP MY NOTES: full-width row 3
+        return { p.getX() + 12, rowRect(13).getBottom() + 6 + 2 * gg.actPitch,
                  p.getWidth() - 24, gg.actH };
+    if (idx >= 5)   // [r22/r23] GENERATE ALL | VARY ALL: side by side on the last row
+        return { p.getX() + 12 + (idx - 5) * (w + 8),
+                 rowRect(13).getBottom() + 6 + 3 * gg.actPitch, w, gg.actH };
     return { p.getX() + 12 + (idx % 2) * (w + 8),
              rowRect(13).getBottom() + 6 + (idx / 2) * gg.actPitch, w, gg.actH };
 }
@@ -3619,7 +3624,9 @@ void GeneratePanel::paint(juce::Graphics& g)
         const auto r = rowRect(3);
         g.setColour(juce::Colour(0xff8a94b0)); g.setFont(juce::Font(12.0f, juce::Font::bold));
         g.drawText("Style", r.getX(), r.getY(), 64, r.getHeight(), juce::Justification::centredLeft, false);
-        const juce::String nm = style >= 0 && style < styleNames.size() ? styleNames[style]
+        // [r23] "Any style" is the default: the face says the reroll behaviour out loud
+        const juce::String nm = styleAny ? juce::String("Any style (new each press)")
+                              : style >= 0 && style < styleNames.size() ? styleNames[style]
                                                                         : juce::String("House");
         btn(styleRect(), nm, false);
     }
@@ -3643,14 +3650,15 @@ void GeneratePanel::paint(juce::Graphics& g)
       g.setFont(juce::Font(12.0f, juce::Font::bold));
       g.drawText("Singable", sr, juce::Justification::centred, false); }
 
-    for (int i = 0; i < 6; ++i)
+    for (int i = 0; i < 7; ++i)   // [r23] + VARY ALL beside GENERATE ALL
     {
         const auto ar = actionRect(i);
-        const bool big = i < 2 || i == 5;        // [r22] GENERATE ALL reads as a primary action
+        const bool big = i < 2 || i >= 5;        // [r22] the arrangement pair reads as primary
         const bool dim = i == 4 && ! hadNotes;   // Keep-my-notes needs notes to keep
         g.setColour((big ? juce::Colour(0xff2a4a3a) : juce::Colour(0xff26263c)).withAlpha(dim ? 0.4f : 1.0f));
         g.fillRoundedRectangle(ar.toFloat(), 5.0f);
-        if (i == 5) { g.setColour(kGenAccent.withAlpha(0.7f)); g.drawRoundedRectangle(ar.toFloat(), 5.0f, 1.2f); }
+        if (i >= 5) { g.setColour(kGenAccent.withAlpha(i == 5 ? 0.7f : 0.45f));
+                      g.drawRoundedRectangle(ar.toFloat(), 5.0f, 1.2f); }
         g.setColour((big ? kGenAccent : juce::Colour(0xffcfd6e6)).withAlpha(dim ? 0.4f : 1.0f));
         g.setFont(juce::Font(big ? 14.5f : 12.5f, juce::Font::bold));
         g.drawFittedText(kGenActions[i], ar, juce::Justification::centred, 1, 0.7f);
@@ -3690,9 +3698,13 @@ void GeneratePanel::mouseDown(const juce::MouseEvent& e)
     if (hitChips(0, 6, role))          return;
     if (styleRect().contains(pos))
     {   // [r22] the STYLE PICKER: registry styles (factory + user, tagged) + Refresh
+        // [r23] "Any style" heads the list (the default): NEW IDEA / GENERATE ALL then pick a
+        // style per press; choosing a named style PINS it.
         juce::PopupMenu m;
+        m.addItem(8999, "Any style (a new style each press)", true, styleAny);
+        m.addSeparator();
         for (int i = 0; i < styleNames.size(); ++i)
-            m.addItem(i + 1, styleNames[i], true, i == style);
+            m.addItem(i + 1, styleNames[i], true, ! styleAny && i == style);
         m.addSeparator();
         m.addItem(9000, "Refresh styles (rescan the Styles folder)");
         m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(
@@ -3700,7 +3712,8 @@ void GeneratePanel::mouseDown(const juce::MouseEvent& e)
                         [this](int r)
                         {
                             if (r == 9000) { if (onRefreshStyles) onRefreshStyles(); repaint(); }
-                            else if (r > 0) { style = r - 1; repaint(); }
+                            else if (r == 8999) { styleAny = true; repaint(); }
+                            else if (r > 0) { style = r - 1; styleAny = false; repaint(); }
                         });
         return;
     }
@@ -3757,6 +3770,7 @@ void GeneratePanel::mouseDown(const juce::MouseEvent& e)
         return;
     }
     if (actionRect(5).contains(pos)) { if (onAction) onAction(6); return; }   // [r22] GENERATE ALL
+    if (actionRect(6).contains(pos)) { if (onAction) onAction(7); return; }   // [r23] VARY ALL
 }
 
 juce::String GeneratePanel::getTooltip()
@@ -3783,6 +3797,9 @@ juce::String GeneratePanel::getTooltip()
                          "- Or pick a classic progression - it overrides detection for every role.\n"
                          "- Basslines land the ROOT on every change and walk an approach note into it.";
     if (inRow(3)) return "STYLE: the genre DNA - it speaks for EVERY role.\n\n"
+                         "- Any style (the default): each NEW IDEA / GENERATE ALL press picks a style from "
+                         "the whole list - the widest way to get genuinely different suggestions. Pick a "
+                         "named style to PIN it.\n"
                          "- Drum Kit: it IS the pattern - kick canon, hat language, backbeat scheme, ghosts, "
                          "microtiming and the genre's swing (written to this pattern's Swing, disclosed below).\n"
                          "- Melodic roles: the style's bass cells / melody cells / chord-stab templates and "
@@ -3847,11 +3864,21 @@ juce::String GeneratePanel::getTooltip()
                          "arrangement - drum kit + bassline + melody + chords - on ONE shared "
                          "foundation (same style, key, chords, seeds), each part written AGAINST "
                          "the ones before it.\n\n"
+                         "- Every press rerolls WIDE: the style itself (on Any style), the progression, "
+                         "the form, the density/register placement, the hat character.\n"
                          "- Targets your EXISTING channels by their loaded sounds (never changes a "
                          "sound); a role with no suitable channel is skipped and named.\n"
                          "- A consent list shows the full plan first; one undo restores everything.";
-    if (actionRect(0).contains(pos)) return "NEW IDEA: a full reroll - fresh rhythm AND fresh notes "
-                         "(Drum Kit: the canon stays, its free cells reroll).";
+    if (actionRect(6).contains(pos)) return "VARY ALL: keep this arrangement's IDEA - same style, same "
+                         "chords, same form, same skeletons - and reroll only the surface: melody/bass "
+                         "ornament pitches, the comp's template dice + inversions, the kit's free cells, "
+                         "rolls and fill flavour.\n\n"
+                         "- The close-sibling take; GENERATE ALL is the fresh one.\n"
+                         "- Before any GENERATE ALL this panel-open it simply runs GENERATE ALL first.";
+    if (actionRect(0).contains(pos)) return "NEW IDEA: a full reroll - fresh rhythm AND fresh notes, and "
+                         "the WIDE dimensions with them: on Any style a fresh style, plus the form split, "
+                         "onset budget, register lean, landmark choices (Drum Kit: the canon stays, its "
+                         "free cells reroll).";
     if (actionRect(1).contains(pos)) return "VARY: keep this melody's skeleton, change ~a third of the notes (same idea, new ornaments). "
                          "Drum Kit: re-pick the pattern's free cells within the genre canon (max 2 kick cells move).";
     if (actionRect(2).contains(pos)) return "SAME RHYTHM, NEW NOTES: the onsets stay exactly where they are; only the pitches reroll.";
@@ -8198,6 +8225,7 @@ void DrumSequencerEditor::openGeneratePanel()
     }
     generatePanel.style = juce::jlimit(0, juce::jmax(0, GenStyle::count() - 1), generatePanel.style);
     genAllWarned = false;
+    genAllVaryCount = 0; genAllStyleIdx = -1;   // [r23] VARY ALL varies THIS open's arrangement
     genHadNotes = false;
     for (int b = head; b <= end; ++b)
     {   // [r20] BOTH sides count - the Write-as row can target either world
@@ -8219,12 +8247,14 @@ void DrumSequencerEditor::genAction(int action)
     auto& sq = proc.sequencer;
     const int ch = selectedChannel;
     const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
-    if (action == 6) { genAllAction(); return; }         // [r22] the one-press full arrangement
+    if (action == 6) { genAllAction(false); return; }    // [r22] the one-press full arrangement
+    if (action == 7) { genAllAction(true);  return; }    // [r23] VARY ALL: same idea, new surface
     const bool isDrums = generatePanel.role == 5;        // [r20] the multi-channel Drum Kit role
     const bool keepMode = action == 4 || action == 5;    // [r20 item I] augment, never replace
-    // [r22] the STYLE is a registry entry now (factory + user files) - resolved once per action
-    const int styleIdx = juce::jlimit(0, GenStyle::count() - 1, generatePanel.style);
-    const GenStyle::Style& styleDna = GenStyle::at(styleIdx);
+    // [r22 -> r23] the STYLE is a registry entry (factory + user files). A PINNED style resolves
+    // here; "Any style" (the default) resolves AFTER the seed roll below - the pick rides the
+    // fresh rhythm seed, so NEW IDEA rerolls the style itself while VARY / Same-rhythm keep it.
+    const int pinnedIdx = juce::jlimit(0, GenStyle::count() - 1, generatePanel.style);
 
     // ---- [r20 item B -> r22 extracted] DRUM KIT channel targets, resolved up front so the
     // replace warning covers THEM (the kit writes wherever the drum channels live).
@@ -8270,11 +8300,18 @@ void DrumSequencerEditor::genAction(int action)
         { if (chn >= 0) m.addItem(90 + chn, chanDataDesc(chn) + juce::String(" <- ") + nm, false); };
         lane(kt.kick, "kick");  lane(kt.snare, "snare"); lane(kt.hat, "hats");
         lane(kt.open, "open hat"); lane(kt.perc, "perc");
-        const float newSw = (styleDna.swingPct - 50.0f) / 25.0f;
-        m.addItem(80, "Swing -> " + juce::String(juce::roundToInt(
-                          50.0f + 25.0f * juce::jmax(0.0f, newSw)))
-                      + "% group-wide (now " + juce::String(juce::roundToInt(
-                          50.0f + 25.0f * sq.patterns[head].swing)) + "%)", false);
+        if (generatePanel.styleAny)   // [r23] the style resolves per press - say so honestly
+            m.addItem(80, "Swing -> the picked style's own swing, group-wide (Any style; now "
+                          + juce::String(juce::roundToInt(
+                              50.0f + 25.0f * sq.patterns[head].swing)) + "%)", false);
+        else
+        {
+            const float newSw = (GenStyle::at(pinnedIdx).swingPct - 50.0f) / 25.0f;
+            m.addItem(80, "Swing -> " + juce::String(juce::roundToInt(
+                              50.0f + 25.0f * juce::jmax(0.0f, newSw)))
+                          + "% group-wide (now " + juce::String(juce::roundToInt(
+                              50.0f + 25.0f * sq.patterns[head].swing)) + "%)", false);
+        }
         if (kt.open >= 0 && kt.hat >= 0 && kt.open != kt.hat
             && sq.patterns[0].channels[kt.open].chokeGroup == 0
             && sq.patterns[0].channels[kt.hat].chokeGroup == 0)
@@ -8315,6 +8352,11 @@ void DrumSequencerEditor::genAction(int action)
         case 4: genPitchSeed  = (uint32_t) rnd.nextInt(); genVaryCount = 0; break;   // Keep my RHYTHM (repitch)
         case 5: genRhythmSeed = (uint32_t) rnd.nextInt(); genVaryCount = 0; break;   // Keep my NOTES (new rhythm)
     }
+    // [r23] Any style resolves off the (possibly fresh) RHYTHM seed: NEW IDEA / Same-notes-new-
+    // rhythm reroll the style, VARY / Same-rhythm keep it - the style IS rhythm-side identity.
+    const int styleIdx = generatePanel.styleAny
+                       ? GenContext::pickAnyStyleIndex(genRhythmSeed) : pinnedIdx;
+    const GenStyle::Style& styleDna = GenStyle::at(styleIdx);
 
     // ---- [r20 item B] the DRUM KIT branch: style DNA -> per-lane steps, one undo ----
     if (isDrums)
@@ -8418,6 +8460,8 @@ void DrumSequencerEditor::genAction(int action)
     o.rhythmSeed   = genRhythmSeed;
     o.pitchSeed    = genPitchSeed;
     o.varyCount    = genVaryCount;
+    o.wideSeed     = genRhythmSeed;        // [r23] the wide-NEW macro fan (locked actions keep
+                                           // their locks - the fan rides the rhythm seed)
     // [r20 item A] WRITE AS: Auto = the channel's mode | Steps | Piano Roll. Chords voicings
     // need the roll's polyphony - an explicit/auto STEP target degrades them to an arpeggiated
     // single line (H9), disclosed in the readout.
@@ -8508,6 +8552,8 @@ void DrumSequencerEditor::genAction(int action)
                                    + (res.switched ? " notes to the piano roll (channel switched to the roll)."
                                                    : " notes to the piano roll.");
     }
+    if (generatePanel.styleAny && ! fromScratch)   // [r23] the rotating pick is never silent
+        generatePanel.contextLine += "  Style: " + juce::String(styleDna.name) + ".";
     genHadNotes = true; genWarned = true;   // rerolls replace OUR OWN notes without re-asking
     generatePanel.hadNotes = true;
     refreshDrawModeButtons();               // a Write-as switch changes the edit-mode button states
@@ -8551,12 +8597,16 @@ void DrumSequencerEditor::refreshGenStyles()
 // Channel targeting = existing sounds only (never loads a sound); a role with no home is
 // skipped AND NAMED; ONE consent popup lists the full plan; decline = a complete no-op
 // (planArrangement takes a const Sequencer - planning cannot mutate); ONE undo.
-void DrumSequencerEditor::genAllAction()
+// [r23] varyAll = VARY ALL: keep the arrangement's IDEA (style, seeds -> same chords, form,
+// skeletons) and reroll only the SURFACE (melody/bass ornament pitches, comp template dice +
+// inversions, the kit's canon-free cells / rolls / fill flavour) via the vary counter. Before
+// any GENERATE ALL this panel-open it degrades to a plain GENERATE ALL (nothing to vary yet).
+void DrumSequencerEditor::genAllAction(bool varyAll)
 {
     auto& sq = proc.sequencer;
     const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
-    const int styleIdx = juce::jlimit(0, GenStyle::count() - 1, generatePanel.style);
-    const GenStyle::Style& styleDna = GenStyle::at(styleIdx);
+    if (varyAll && ! (genAllWarned && genAllStyleIdx >= 0)) varyAll = false;
+    const int pinnedIdx = juce::jlimit(0, GenStyle::count() - 1, generatePanel.style);
     const auto plan = GenContext::planArrangement(sq, head, selectedChannel);
     auto chanDataDesc = [&](int chn) -> juce::String
     {
@@ -8591,21 +8641,38 @@ void DrumSequencerEditor::genAllAction()
         if (plan.chords < 0)    skipped += juce::String(skipped.isEmpty() ? "" : ", ") + "chords";
         m.addItem(80, "Skipped (no suitable channel): " + (skipped.isEmpty() ? "none" : skipped), false);
         if (plan.kit.any())
-            m.addItem(81, "Swing -> " + juce::String(juce::roundToInt(
-                              50.0f + 25.0f * juce::jmax(0.0f, (styleDna.swingPct - 50.0f) / 25.0f)))
-                          + "% group-wide (now " + juce::String(juce::roundToInt(
-                              50.0f + 25.0f * sq.patterns[head].swing)) + "%)", false);
+        {
+            if (generatePanel.styleAny)   // [r23] the style resolves per press - honest wording
+                m.addItem(81, "Swing -> the picked style's own swing, group-wide (Any style; now "
+                              + juce::String(juce::roundToInt(
+                                  50.0f + 25.0f * sq.patterns[head].swing)) + "%)", false);
+            else
+                m.addItem(81, "Swing -> " + juce::String(juce::roundToInt(
+                                  50.0f + 25.0f * juce::jmax(0.0f,
+                                      (GenStyle::at(pinnedIdx).swingPct - 50.0f) / 25.0f)))
+                              + "% group-wide (now " + juce::String(juce::roundToInt(
+                                  50.0f + 25.0f * sq.patterns[head].swing)) + "%)", false);
+        }
         m.addItem(1, "Write the arrangement (undo restores)");
         m.addItem(2, "Cancel");
         m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(
                             generatePanel.actionScreenArea(6)),
-                        [this](int r) { if (r == 1) { genAllWarned = true; genAllAction(); } });
+                        [this, varyAll](int r) { if (r == 1) { genAllWarned = true; genAllAction(varyAll); } });
         return;
     }
-    // fresh seed pair = a fresh arrangement (the New-idea convention; determinism per pair)
-    auto& rnd = juce::Random::getSystemRandom();
-    genRhythmSeed = (uint32_t) rnd.nextInt(); genPitchSeed = (uint32_t) rnd.nextInt();
-    genVaryCount = 0;
+    if (varyAll)
+        ++genAllVaryCount;   // [r23] seeds + style stay = the idea stays; the vary layers reroll
+    else
+    {   // fresh seed pair = a fresh arrangement (the New-idea convention; determinism per pair)
+        auto& rnd = juce::Random::getSystemRandom();
+        genRhythmSeed = (uint32_t) rnd.nextInt(); genPitchSeed = (uint32_t) rnd.nextInt();
+        genVaryCount = 0; genAllVaryCount = 0;
+        // [r23] Any style = a seeded pick over the WHOLE registry per press; pinned = respected.
+        genAllStyleIdx = generatePanel.styleAny ? GenContext::pickAnyStyleIndex(genRhythmSeed)
+                                                : pinnedIdx;
+    }
+    const int styleIdx = juce::jlimit(0, GenStyle::count() - 1, genAllStyleIdx);
+    const GenStyle::Style& styleDna = GenStyle::at(styleIdx);
     GenContext::ArrangeOptions ao;
     ao.dna = &styleDna;
     ao.key = generatePanel.key;
@@ -8618,14 +8685,15 @@ void DrumSequencerEditor::genAllAction()
     ao.humanize = generatePanel.humanize;     ao.fills = generatePanel.fills;
     ao.progression = generatePanel.progression;
     ao.rhythmSeed = genRhythmSeed;            ao.pitchSeed = genPitchSeed;
-    ao.varyCount = 0;
+    ao.varyCount = genAllVaryCount;           // [r23] VARY ALL's surface reroll layer
+    ao.wideSeed = genRhythmSeed;              // [r23] the wide macro fan (stable under VARY ALL)
     ao.barMs = 60000.0 / juce::jmax(1.0, proc.currentBpm)
              * (juce::jmax(1, proc.currentTimeSigNum) * 4.0 / juce::jmax(1, proc.currentTimeSigDen));
     commitUndoNow();   // ONE undo covers the whole arrangement
     const auto res = GenContext::generateArrangement(sq, head, end, plan, ao);
     if (res.swing >= 0.0f)
     { sliderSwing.setValue(res.swing, juce::dontSendNotification); refreshSwingLabel(); }
-    juce::String line = "ARRANGEMENT (" + juce::String(styleDna.name) + "): ";
+    juce::String line = (varyAll ? "VARIATION (" : "ARRANGEMENT (") + juce::String(styleDna.name) + "): ";
     if (res.kitChans > 0) line += "kit " + res.kitDesc + " -> " + juce::String(res.kitChans)
                                 + (res.kitChans == 1 ? " channel" : " channels") + ".  ";
     if (plan.bass >= 0)   line += "Bass " + juce::String(res.bassN)

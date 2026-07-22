@@ -1717,6 +1717,10 @@ public:
     // [2026-07-22 r20] the drum-kit + universal-output round
     int  style = 0;           // index into the GenStyle registry (factory 0..7 + user styles);
                               // drives the Drum Kit fully; ALL melodic roles read its DNA [r22]
+    // [2026-07-22 r23] "ANY STYLE" - the DEFAULT: every NEW IDEA / GENERATE ALL press picks a
+    // style from the whole registry (seed-deterministic). Picking a named style PINS it (the
+    // explicit choice is respected); picking "Any style" in the popup un-pins.
+    bool styleAny = true;
     juce::StringArray styleNames;            // [r22] registry names for the Style picker popup
     std::function<void()> onRefreshStyles;   // [r22] the picker's "Refresh styles" entry
     int  outMode = 0;         // Write as: 0 Auto (channel mode wins) | 1 Steps | 2 Piano Roll
@@ -1729,7 +1733,7 @@ public:
                               // drawn non-interactive under the hint line (squeeze, never ellipsis)
     // 0 New idea | 1 Vary | 2 Same rhythm | 3 Same notes | [r20] 4 keep RHYTHM (repitch) |
     // 5 keep PITCHES (new rhythm) - 4/5 fire from the Keep-my-notes button's popup |
-    // [r22] 6 GENERATE ALL (from scratch) - the one-press full arrangement
+    // [r22] 6 GENERATE ALL (from scratch) | [r23] 7 VARY ALL (same idea, new surface)
     std::function<void(int action)> onAction;
     std::function<void()> onClose;
     void show() { setVisible(true); toFront(true); repaint(); }
@@ -1738,13 +1742,14 @@ public:
     juce::String getTooltip() override;
     // screen area of an action button - the replace-warning menu anchors HERE, not top-left
     juce::Rectangle<int> actionScreenArea(int idx)
-    { return localAreaToGlobal(actionRect(idx < 4 ? idx : (idx >= 6 ? 5 : 4))); }
+    { return localAreaToGlobal(actionRect(idx < 4 ? idx : idx == 7 ? 6 : (idx == 6 ? 5 : 4))); }
 private:
     juce::Rectangle<int> panelRect() const;
     juce::Rectangle<int> rowRect(int row) const;                    // option rows 0..13 (3 bands) [r20]
     juce::Rectangle<int> chipRect(int row, int idx, int count) const;
     juce::Rectangle<int> singableRect() const;
-    juce::Rectangle<int> actionRect(int idx) const;                 // 0..3 (2x2) | 4 Keep my notes | 5 GENERATE ALL
+    juce::Rectangle<int> actionRect(int idx) const;                 // 0..3 (2x2) | 4 Keep my notes |
+                                                                    // 5 GENERATE ALL | 6 VARY ALL [r23]
     juce::Rectangle<int> closeRect() const;
     juce::Rectangle<int> keyRect() const;
     juce::Rectangle<int> scaleRect() const;
@@ -3651,7 +3656,8 @@ private:
     // GENERATE [2026-07-20]: the part-generator feature (PartGen.h is the engine)
     void openGeneratePanel();               // prefill key/scale/role + show the panel
     void genAction(int action);             // an action button fired: roll seeds, generate, write notes
-    void genAllAction();                    // [r22] GENERATE ALL: plan + consent + full arrangement
+    void genAllAction(bool varyAll = false);   // [r22] GENERATE ALL: plan + consent + full arrangement
+                                               // [r23] varyAll = keep style/seeds/skeleton, reroll surface
     void refreshGenStyles();                // [r22] rescan ~/Documents/BASAMAK/Styles into the registry
     int  detectGenKey(int& scaleTypeOut);   // pitch-class histogram over the roll channels -> best key
                                             // (groove/chroma context gathering lives inside genAction)
@@ -3973,6 +3979,9 @@ private:
     int  genVaryCount = 0;                          // Vary presses since the last reroll
     bool genHadNotes = false, genWarned = false;    // replace-existing-notes warning (once per open)
     bool genAllWarned = false;                      // [r22] GENERATE ALL's own consent (once per open)
+    int  genAllVaryCount = 0;                       // [r23] VARY ALL presses since the last full roll
+    int  genAllStyleIdx  = -1;                      // [r23] the resolved style of the last GENERATE ALL
+                                                    //       (Any-style pick kept stable for VARY ALL)
     juce::String genStyleNote;                      // [r22] skipped user-style files (parse errors)
     ModFaderMatrix  modFaders;             // 12 route faders (6x2) inline in the MODULATION box
     RoutePicker     routePicker;           // its right-click source|target chooser (overlay)
