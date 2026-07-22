@@ -12,6 +12,10 @@
 // sound-aware lengths, and the STEP-COUNT AUTHORITY writer. Plus the DEV SCORECARD: LHL
 // syncopation (G3 weights), chord-tone-on-strong %, proximity %, leap-recovery violations,
 // motif 3-gram self-similarity - informational prints + the doc's hard bands asserted.
+// [64]-[68] [2026-07-22 r23]: LANDMARKS vs CLOCK (the deneme scenario: saturated hat walls =
+// accents, never events; per-bar starvation floor; 74/76% saturation boundary) + WIDE NEW /
+// VARY ALL (macro-layer variety: Any-style picks, progression/comp/hat fans, register/density
+// spread) + per-role NEW-IDEA divergence floors (rhythm/pitch seed swaps must move the output).
 #include "PartGen.h"
 #include "GenContext.h"
 #include <algorithm>
@@ -1750,6 +1754,474 @@ int main()
             progSigs.insert(sig2);
         }
         CHECK((int) progSigs.size() >= 2, "[63d] the progression POOL fans out across seed rolls");
+    }
+
+    // ============ [2026-07-22 r23] LANDMARKS-vs-CLOCK + starvation floor + wide NEW ============
+
+    // [64] THE USER'S "deneme" SCENARIO: merged 4 bars; kick 7 steps {0,2,4} + snare 7 steps
+    // {1,3,5,6} on ALL bars; hats 14 steps ALL ON in bars 1+3 only. The hat wall must read as
+    // a CLOCK (accents, not events): Melody Driving reaches EVERY bar (>= 2 onsets, all on the
+    // 14-lattice); Pockets fills every bar too (the wall no longer forbids bars 1/3) while the
+    // kick/snare exclusion window holds; both stances deterministic.
+    {
+        auto sq = std::make_unique<Sequencer>();
+        for (int b = 1; b < 4; ++b) sq->patterns[b].mergeWithPrev = true;
+        for (int b = 0; b < 4; ++b)
+        {
+            auto& kk = sq->patterns[b].channels[0];
+            kit(kk, 7, { 0, 2, 4 });     kk.mixName = "My Kick";
+            auto& sn = sq->patterns[b].channels[1];
+            kit(sn, 7, { 1, 3, 5, 6 });  sn.mixName = "My Snare";
+            auto& hh = sq->patterns[b].channels[2];
+            if (b == 0 || b == 2) kit(hh, 14, { 0,1,2,3,4,5,6,7,8,9,10,11,12,13 });
+            else { hh.numSteps = 14;
+                   hh.slots[0] = DrumChannel::Slot();
+                   hh.slots[0].engine = DrumChannel::SrcNoise; hh.slots[0].weight = 1.0f; }
+            hh.mixName = "My Hat";
+        }
+        GenContext::Readout ro;
+        auto cx = GenContext::build(*sq, 0, 3, 4, &ro);
+        int clocks = 0, evts = 0; bool clockBarsOk = true;
+        for (int i = 0; i < cx.nHits; ++i)
+        {
+            if (cx.hitClk[i]) { ++clocks; const int b = cx.hitCol[i] / 384;
+                                if (b != 0 && b != 2) clockBarsOk = false; }
+            else ++evts;
+        }
+        CHECK(cx.latticeN == 14 && clocks == 14 && evts == 28 && clockBarsOk,
+              "[64a] deneme gather: hat-wall-only cols = CLOCK, kick/snare cols = events");
+        const int cw = 384 / cx.latticeN;
+        auto barCounts = [&](const std::vector<PartGen::Note>& n, int* per)
+        { for (int b = 0; b < 4; ++b) per[b] = 0;
+          for (auto& x : n) ++per[std::min(3, x.start / 384)]; };
+        bool drvBars = true, drvLat = true, drvDet = true;
+        std::vector<PartGen::Note> drvFirst;
+        for (uint32_t s = 1; s <= 3; ++s)
+        {
+            Options o; o.scale = kMajor; o.role = RoleMelody; o.rhythm = RhDriving; o.density = 1;
+            o.rhythmSeed = s; o.pitchSeed = s + 30;
+            auto n = generate(o, cx);
+            if (s == 1)
+            {
+                drvFirst = n;
+                auto n2 = generate(o, cx);
+                drvDet = n.size() == n2.size();
+                for (size_t i = 0; drvDet && i < n.size(); ++i)
+                    drvDet = n[i].start == n2[i].start && n[i].semi == n2[i].semi
+                          && n[i].vel == n2[i].vel && n[i].len == n2[i].len;
+                printScore("deneme melody/driving s1", scoreGen(n, o, cx));
+            }
+            int per[4]; barCounts(n, per);
+            for (int b = 0; b < 4; ++b) if (per[b] < 2) drvBars = false;
+            for (auto& x : n)
+            {
+                const int local = x.start % 384;
+                const int k2 = (int) std::lround((double) local * 14.0 / 384.0);
+                if (local != k2 * 384 / 14) drvLat = false;
+            }
+        }
+        CHECK(drvBars, "[64b] deneme Melody Driving: EVERY bar gets >= 2 onsets (3 seeds)");
+        CHECK(drvLat,  "[64c] deneme Melody Driving: every onset ON the 14-lattice");
+        CHECK(drvDet,  "[64d] deneme deterministic (same seeds = identical notes)");
+        bool pkBars = true, pkExcl = true;
+        for (uint32_t s = 1; s <= 3; ++s)
+        {
+            Options o; o.scale = kMajor; o.role = RoleMelody; o.rhythm = RhPockets; o.density = 1;
+            o.rhythmSeed = s; o.pitchSeed = s + 60;
+            auto n = generate(o, cx);
+            if (s == 1) printScore("deneme melody/pockets s1", scoreGen(n, o, cx));
+            int per[4]; barCounts(n, per);
+            for (int b = 0; b < 4; ++b) if (per[b] < 2) pkBars = false;
+            for (auto& x : n)
+            {   // never inside the exclusion window of a kick/snare EVENT (clock hats exempt)
+                for (int i = 0; i < cx.nKick; ++i)
+                    if (std::abs(x.start - cx.kickCol[i]) < cw) pkExcl = false;
+                for (int i = 0; i < cx.nSnare; ++i)
+                    if (std::abs(x.start - cx.snareCol[i]) < cw) pkExcl = false;
+            }
+        }
+        CHECK(pkBars, "[64e] deneme Melody Pockets: every bar >= 2 onsets (wall bars included)");
+        CHECK(pkExcl, "[64f] deneme Melody Pockets: kick/snare exclusion window still holds");
+    }
+
+    // [65] SATURATION BOUNDARY: a hat lane at 74% of its own grid stays an EVENT lane; 76%
+    // flips it to CLOCK (>= ~75%); a column shared with the kick stays an event either way
+    {
+        auto mk = [&](int onN)
+        {
+            auto sq = std::make_unique<Sequencer>();
+            auto& kk = sq->patterns[0].channels[0];
+            kit(kk, 4, { 0 }); kk.mixName = "My Kick";
+            auto& hh = sq->patterns[0].channels[1];
+            hh.numSteps = 50; hh.mixName = "My Hat";
+            hh.slots[0] = DrumChannel::Slot();
+            hh.slots[0].engine = DrumChannel::SrcNoise; hh.slots[0].weight = 1.0f;
+            for (int i = 0; i < onN; ++i) hh.steps[i] = true;
+            return GenContext::build(*sq, 0, 0, 7);
+        };
+        auto c74 = mk(37), c76 = mk(38);   // 37/50 = 74% | 38/50 = 76%
+        int clk74 = 0, clk76 = 0; bool kickEvt = true;
+        for (int i = 0; i < c74.nHits; ++i) if (c74.hitClk[i]) ++clk74;
+        for (int i = 0; i < c76.nHits; ++i)
+        { if (c76.hitClk[i]) ++clk76;
+          if (c76.hitCol[i] == 0 && c76.hitClk[i]) kickEvt = false; }
+        CHECK(clk74 == 0 && clk76 == 37 && kickEvt,
+              "[65] saturation boundary: 74% = events, 76% = clock, shared col stays an event");
+    }
+
+    // ---- [r23] WIDE NEW / VARY ALL / per-role divergence (the "sounds the same" mandate) ----
+    auto pairSim = [](const std::set<long>& a, const std::set<long>& b) -> float
+    {
+        int shared = 0;
+        for (long k : a) if (b.count(k)) ++shared;
+        const int mn = (int) std::min(a.size(), b.size());
+        return mn > 0 ? (float) shared / (float) mn : 0.0f;
+    };
+    auto onsetDiff = [](const std::set<int>& a, const std::set<int>& b) -> float
+    {
+        int shared = 0;
+        for (int k : a) if (b.count(k)) ++shared;
+        const int mx = (int) std::max(a.size(), b.size());
+        return mx > 0 ? 1.0f - (float) shared / (float) mx : 0.0f;
+    };
+
+    // [66] MACRO VARIETY (the perceptually dominant layers - the r22 test measured leaves, not
+    // the tree): 5 from-scratch GENERATE-ALL-style takes with ANY STYLE + wideSeed -> >= 3
+    // distinct styles picked, progressions fan, comp template families differ, hat ornament
+    // signatures pairwise differ, register/density profiles spread, and the old note-pair
+    // similarity check still holds.
+    {
+        auto names = Factory::mixNames(); auto cats = Factory::mixCategories();
+        auto firstOf = [&](const juce::String& cat) -> juce::String
+        { for (int i = 0; i < names.size(); ++i) if (cats[i] == cat) return names[i]; return {}; };
+        auto setup = [&](Sequencer& sq)
+        {
+            auto arm = [&](int chn, const juce::String& nm, bool roll)
+            {
+                auto& cc2 = sq.patterns[0].channels[chn];
+                cc2.mixName = nm;
+                cc2.slots[0] = DrumChannel::Slot();
+                cc2.slots[0].engine = DrumChannel::SrcOsc; cc2.slots[0].weight = 1.0f;
+                cc2.slots[0].oscFreq = 261.6255653f;
+                cc2.drawMode = roll;
+            };
+            arm(0, firstOf("Kicks"), false); arm(1, firstOf("Snares"), false);
+            arm(2, firstOf("Hi-Hats"), false);
+            arm(4, firstOf("Bass"), false); arm(5, firstOf("Keys"), true);
+            arm(6, firstOf("Leads"), true);
+        };
+        struct Take { juce::String style, progSig; std::set<long> melBass;
+                      std::vector<int> hatSig, compSig; float melMean = 0; int nNotes = 0; };
+        std::vector<Take> takes;
+        GenStyle::resetToFactory();
+        for (int t2 = 0; t2 < 5; ++t2)
+        {
+            const uint32_t rs = 4000u + (uint32_t) t2 * 7919u;
+            const uint32_t ps = 9000u + (uint32_t) t2 * 6007u;
+            const int styleIdx = GenContext::pickAnyStyleIndex(rs);   // the Any-style press
+            auto sq = std::make_unique<Sequencer>(); setup(*sq);
+            const auto plan = GenContext::planArrangement(*sq, 0, 6);
+            GenContext::ArrangeOptions ao;
+            ao.dna = &GenStyle::at(styleIdx);
+            ao.scale = kMajor; ao.scaleLen = 7;
+            ao.rhythmSeed = rs; ao.pitchSeed = ps; ao.wideSeed = rs; ao.barMs = 2000.0;
+            GenContext::generateArrangement(*sq, 0, 1, plan, ao);     // 2 bars
+            Take tk; tk.style = GenStyle::at(styleIdx).name;
+            {   // the shared chord timeline this take composed on
+                Ctx cp2; cp2.bars = 2;
+                Options o; o.scale = kMajor; o.styleDna = ao.dna; o.rhythmSeed = rs;
+                PartGen::prepareChords(o, cp2);
+                for (int i = 0; i < cp2.nChords; ++i) tk.progSig += juce::String(cp2.chordDegAt[i]) + ",";
+            }
+            { const auto& M = sq->patterns[0].channels[6];
+              float sum = 0;
+              for (int i = 0; i < M.drawNoteCount; ++i)
+              { tk.melBass.insert(10000000l + M.drawNotes[i].start * 128l + M.drawNotes[i].semi);
+                sum += (float) M.drawNotes[i].semi; ++tk.nNotes; }
+              tk.melMean = M.drawNoteCount > 0 ? sum / (float) M.drawNoteCount : 0.0f; }
+            for (int b = 0; b < 2; ++b)
+            { const auto& B = sq->patterns[b].channels[4];
+              for (int i = 0; i < B.numSteps; ++i)
+                  if (B.steps[i])
+                  { tk.melBass.insert(30000000l + (long) b * 1000000l
+                                      + (i * 384 / B.numSteps) * 128l
+                                      + juce::roundToInt(B.stepPitch[i])); ++tk.nNotes; } }
+            { const auto& H = sq->patterns[0].channels[2];
+              for (int i = 0; i < H.numSteps; ++i)
+                  if (H.steps[i]) tk.hatSig.push_back(i * 1000 + (int) (H.stepVel[i] * 100.0f)); }
+            { const auto& C5 = sq->patterns[0].channels[5];
+              for (int i = 0; i < C5.drawNoteCount; ++i)
+                  tk.compSig.push_back((int) C5.drawNotes[i].start / 24); }
+            takes.push_back(tk);
+        }
+        std::set<juce::String> styleSet, progSet;
+        std::set<std::vector<int>> hatSet, compSet;
+        float simWorst = 0.0f, melLo = 999, melHi = -999; int nLo = 1 << 20, nHi = 0;
+        bool hatPairwise = true;
+        for (size_t a2 = 0; a2 < takes.size(); ++a2)
+        {
+            styleSet.insert(takes[a2].style); progSet.insert(takes[a2].progSig);
+            hatSet.insert(takes[a2].hatSig);  compSet.insert(takes[a2].compSig);
+            melLo = std::min(melLo, takes[a2].melMean); melHi = std::max(melHi, takes[a2].melMean);
+            nLo = std::min(nLo, takes[a2].nNotes); nHi = std::max(nHi, takes[a2].nNotes);
+            for (size_t b2 = a2 + 1; b2 < takes.size(); ++b2)
+            {
+                simWorst = std::max(simWorst, pairSim(takes[a2].melBass, takes[b2].melBass));
+                if (takes[a2].hatSig == takes[b2].hatSig) hatPairwise = false;
+            }
+        }
+        printf("  SCORE macro variety (Any style)  styles=%d progs=%d comps=%d worstSim=%.0f%% "
+               "melMean %.1f..%.1f notes %d..%d\n",
+               (int) styleSet.size(), (int) progSet.size(), (int) compSet.size(),
+               simWorst * 100.0f, melLo, melHi, nLo, nHi);
+        CHECK((int) styleSet.size() >= 3, "[66a] Any style: >= 3 distinct styles across 5 presses");
+        CHECK((int) progSet.size() >= 2,  "[66b] progressions are not all equal across presses");
+        CHECK((int) compSet.size() >= 3,  "[66c] comp template families differ across >= 3 takes");
+        CHECK(hatPairwise,                "[66d] hat ornament signatures differ pairwise");
+        CHECK(melHi - melLo >= 1.0f || nHi - nLo >= 2,
+              "[66e] register/density placement spreads across presses");
+        CHECK(simWorst <= 0.6f,           "[66f] the old note-pair check: no pair > 60% identical");
+    }
+
+    // [67] VARY ALL: same seeds + style, varyCount+1 -> the IDEA stays (kick canon, melody
+    // onsets, bass onsets, progression roots) while the SURFACE rerolls (pitches / hat layer /
+    // comp dice); and the vary take itself is deterministic.
+    {
+        auto names = Factory::mixNames(); auto cats = Factory::mixCategories();
+        auto firstOf = [&](const juce::String& cat) -> juce::String
+        { for (int i = 0; i < names.size(); ++i) if (cats[i] == cat) return names[i]; return {}; };
+        auto setup = [&](Sequencer& sq)
+        {
+            auto arm = [&](int chn, const juce::String& nm, bool roll)
+            {
+                auto& cc2 = sq.patterns[0].channels[chn];
+                cc2.mixName = nm;
+                cc2.slots[0] = DrumChannel::Slot();
+                cc2.slots[0].engine = DrumChannel::SrcOsc; cc2.slots[0].weight = 1.0f;
+                cc2.slots[0].oscFreq = 261.6255653f;
+                cc2.drawMode = roll;
+            };
+            arm(0, firstOf("Kicks"), false); arm(1, firstOf("Snares"), false);
+            arm(2, firstOf("Hi-Hats"), false);
+            arm(4, firstOf("Bass"), false); arm(5, firstOf("Keys"), true);
+            arm(6, firstOf("Leads"), true);
+        };
+        auto runArr = [&](int varyN, Sequencer& sq)
+        {
+            const auto plan = GenContext::planArrangement(sq, 0, 6);
+            GenContext::ArrangeOptions ao;
+            ao.dna = &GenStyle::factory(DrumGen::StHouse);
+            ao.scale = kMajor; ao.scaleLen = 7;
+            ao.rhythmSeed = 77; ao.pitchSeed = 91; ao.wideSeed = 77; ao.varyCount = varyN;
+            ao.barMs = 2000.0;
+            GenContext::generateArrangement(sq, 0, 1, plan, ao);
+        };
+        auto sqA = std::make_unique<Sequencer>(); setup(*sqA); runArr(0, *sqA);
+        auto sqB = std::make_unique<Sequencer>(); setup(*sqB); runArr(1, *sqB);
+        auto sqC = std::make_unique<Sequencer>(); setup(*sqC); runArr(1, *sqC);
+        auto melOnsets = [](const Sequencer& sq)
+        { std::set<int> o2;
+          for (int b = 0; b < 2; ++b)
+          { const auto& M = sq.patterns[b].channels[6];
+            for (int i = 0; i < M.drawNoteCount; ++i) o2.insert(b * 384 + M.drawNotes[i].start); }
+          return o2; };
+        auto bassOnsets = [](const Sequencer& sq)
+        { std::set<int> o2;
+          for (int b = 0; b < 2; ++b)
+          { const auto& B = sq.patterns[b].channels[4];
+            for (int i = 0; i < B.numSteps; ++i)
+                if (B.steps[i]) o2.insert(b * 384 + i * 384 / B.numSteps); }
+          return o2; };
+        auto surfaceSig = [](const Sequencer& sq)
+        { std::vector<int> v;
+          for (int b = 0; b < 2; ++b)
+          { const auto& M = sq.patterns[b].channels[6];
+            for (int i = 0; i < M.drawNoteCount; ++i) v.push_back(M.drawNotes[i].semi);
+            const auto& H = sq.patterns[b].channels[2];
+            for (int i = 0; i < H.numSteps; ++i)
+                if (H.steps[i]) v.push_back(1000 + i * 200 + (int) (H.stepVel[i] * 100.0f));
+            const auto& C5 = sq.patterns[b].channels[5];
+            for (int i = 0; i < C5.drawNoteCount; ++i)
+                v.push_back(5000 + (int) C5.drawNotes[i].start + C5.drawNotes[i].semi); }
+          return v; };
+        auto kickHasCanon = [](const Sequencer& sq)
+        { const auto& K = sq.patterns[0].channels[0];
+          if (K.numSteps != 16) return false;
+          return K.steps[0] && K.steps[4] && K.steps[8] && K.steps[12]; };   // the house 4-floor
+        auto bassHeadPcs = [](const Sequencer& sq)
+        { std::vector<int> v;
+          for (int b = 0; b < 2; ++b)
+          { const auto& B = sq.patterns[b].channels[4];
+            for (int i = 0; i < B.numSteps; ++i)
+                if (B.steps[i]) { v.push_back(((juce::roundToInt(B.stepPitch[i]) % 12) + 12) % 12); break; } }
+          return v; };
+        const bool detOk = surfaceSig(*sqB) == surfaceSig(*sqC)
+                        && melOnsets(*sqB) == melOnsets(*sqC);
+        CHECK(detOk, "[67a] VARY ALL deterministic (same seeds + vary count = identical)");
+        CHECK(kickHasCanon(*sqA) && kickHasCanon(*sqB)
+              && melOnsets(*sqA) == melOnsets(*sqB) && bassOnsets(*sqA) == bassOnsets(*sqB)
+              && bassHeadPcs(*sqA) == bassHeadPcs(*sqB),
+              "[67b] VARY ALL keeps the idea: canon, melody + bass onsets, progression roots");
+        CHECK(surfaceSig(*sqA) != surfaceSig(*sqB),
+              "[67c] VARY ALL rerolls the surface (pitches / hat layer / comp dice)");
+    }
+
+    // [68] PER-ROLE NEW-IDEA DIVERGENCE on the deneme fixture (the "NEW IDEA gives similar
+    // results" mandate): seeds must demonstrably matter for every role. Rhythm-seed swaps move
+    // >= 40% of the onsets (melody Driving + bass Pockets); pitch-seed swaps keep the onsets
+    // and move >= 40% of the pitches (melody); 5 rerolls per role stay pairwise <= 60%
+    // similar (melody / bass / chords via the Any-style press; kit = pairwise hat ornaments).
+    // DOCUMENTED EXCEPTION: bass DRIVING against 3 kicks/bar is provably pinned (the option
+    // space IS the kick list) - asserted as the lock itself, not divergence.
+    {
+        auto sq = std::make_unique<Sequencer>();
+        for (int b = 1; b < 4; ++b) sq->patterns[b].mergeWithPrev = true;
+        for (int b = 0; b < 4; ++b)
+        {
+            auto& kk = sq->patterns[b].channels[0];
+            kit(kk, 7, { 0, 2, 4 });     kk.mixName = "My Kick";
+            auto& sn = sq->patterns[b].channels[1];
+            kit(sn, 7, { 1, 3, 5, 6 });  sn.mixName = "My Snare";
+            auto& hh = sq->patterns[b].channels[2];
+            if (b == 0 || b == 2) kit(hh, 14, { 0,1,2,3,4,5,6,7,8,9,10,11,12,13 });
+            else { hh.numSteps = 14;
+                   hh.slots[0] = DrumChannel::Slot();
+                   hh.slots[0].engine = DrumChannel::SrcNoise; hh.slots[0].weight = 1.0f; }
+            hh.mixName = "My Hat";
+        }
+        auto cx = GenContext::build(*sq, 0, 3, 4);
+        auto newIdea = [&](int role, int rhythm, uint32_t rs, uint32_t ps)
+        {   // the editor's NEW IDEA: fresh seed pair, wideSeed = the rhythm seed, Any style
+            Options o; o.scale = kMajor; o.role = role; o.rhythm = rhythm; o.density = 1;
+            o.rhythmSeed = rs; o.pitchSeed = ps; o.wideSeed = rs;
+            o.styleDna = &GenStyle::at(GenContext::pickAnyStyleIndex(rs));
+            o.styleAccent = o.styleDna->accent;
+            return generate(o, cx);
+        };
+        auto onsetsOf = [](const std::vector<PartGen::Note>& n)
+        { std::set<int> s2; for (auto& x : n) s2.insert(x.start); return s2; };
+        auto pairsOf = [](const std::vector<PartGen::Note>& n)
+        { std::set<long> s2; for (auto& x : n) s2.insert((long) x.start * 128l + x.semi); return s2; };
+        // (a) rhythm-seed swap: onset sets differ >= 40% (melody Driving; bass Pockets)
+        {
+            auto mA = newIdea(RoleMelody, RhDriving, 101u, 55u);
+            auto mB = newIdea(RoleMelody, RhDriving, 707u, 55u);
+            auto bA = newIdea(RoleBass,   RhPockets, 101u, 55u);
+            auto bB = newIdea(RoleBass,   RhPockets, 707u, 55u);
+            const float dm = onsetDiff(onsetsOf(mA), onsetsOf(mB));
+            const float db = onsetDiff(onsetsOf(bA), onsetsOf(bB));
+            printf("  SCORE divergence rhythm-seed     melody=%.0f%% bass=%.0f%%\n",
+                   dm * 100.0f, db * 100.0f);
+            CHECK(dm >= 0.4f, "[68a] melody Driving: rhythm-seed swap moves >= 40% of onsets");
+            CHECK(db >= 0.4f, "[68b] bass Pockets: rhythm-seed swap moves >= 40% of onsets");
+        }
+        // (b) pitch-seed swap: same onsets, >= 40% of common positions repitched (melody)
+        {
+            auto pA = newIdea(RoleMelody, RhDriving, 303u, 11u);
+            auto pB = newIdea(RoleMelody, RhDriving, 303u, 888u);
+            const bool sameOns = onsetsOf(pA) == onsetsOf(pB);
+            int common = 0, moved = 0;
+            for (auto& a2 : pA)
+                for (auto& b2 : pB)
+                    if (a2.start == b2.start) { ++common; if (a2.semi != b2.semi) ++moved; break; }
+            const float frac = common > 0 ? (float) moved / (float) common : 0.0f;
+            printf("  SCORE divergence pitch-seed      repitched=%.0f%% (onsets same=%d)\n",
+                   frac * 100.0f, sameOns ? 1 : 0);
+            CHECK(sameOns,      "[68c] pitch-seed swap keeps every onset (the rhythm lock)");
+            CHECK(frac >= 0.4f, "[68d] pitch-seed swap repitches >= 40% of the line");
+        }
+        // (c) 5 NEW IDEA rerolls per role: pairwise similarity <= 60%
+        {
+            bool melOk = true, basOk = true, chdOk = true; float worstM = 0, worstB = 0, worstC = 0;
+            std::vector<std::set<long>> mel, bas, chd;
+            // NEW IDEA seeds come from SystemRandom in production (well mixed); the fixture
+            // uses pre-mixed constants, not a linear ramp (xorshift's first draws correlate).
+            // CHORDS pin a rich-template style (Funk): Any-style comp variety is [66c]'s job,
+            // and a trap-style draw is a DOCUMENTED tiny space (its comp canon IS one pad
+            // attack per bar - divergence there lives in voicing dice only).
+            static const uint32_t kRs[5] = { 0x1D872B41u, 0x7C3A9E15u, 0xB44F02D9u, 0x5E91C6A3u, 0xF2680B77u };
+            static const uint32_t kPs[5] = { 0x3A11FD05u, 0x88C24E61u, 0xD15B37A9u, 0x27E0946Du, 0x9BF461C3u };
+            for (int t2 = 0; t2 < 5; ++t2)
+            {
+                mel.push_back(pairsOf(newIdea(RoleMelody, RhDriving, kRs[t2], kPs[t2])));
+                bas.push_back(pairsOf(newIdea(RoleBass,   RhPockets, kRs[t2], kPs[t2])));
+                Options oc; oc.scale = kMajor; oc.role = RoleChords; oc.rhythm = RhPockets;
+                oc.density = 1; oc.rhythmSeed = kRs[t2]; oc.pitchSeed = kPs[t2];
+                oc.wideSeed = kRs[t2];
+                oc.styleDna = &GenStyle::factory(DrumGen::StFunk);
+                oc.styleAccent = oc.styleDna->accent;
+                chd.push_back(pairsOf(generate(oc, cx)));
+            }
+            for (size_t a2 = 0; a2 < 5; ++a2)
+                for (size_t b2 = a2 + 1; b2 < 5; ++b2)
+                {
+                    worstM = std::max(worstM, pairSim(mel[a2], mel[b2]));
+                    worstB = std::max(worstB, pairSim(bas[a2], bas[b2]));
+                    worstC = std::max(worstC, pairSim(chd[a2], chd[b2]));
+                }
+            if (worstM > 0.6f) melOk = false;
+            if (worstB > 0.6f) basOk = false;
+            if (worstC > 0.6f) chdOk = false;
+            printf("  SCORE divergence 5 rerolls       melody=%.0f%% bass=%.0f%% chords=%.0f%% (worst pair)\n",
+                   worstM * 100.0f, worstB * 100.0f, worstC * 100.0f);
+            CHECK(melOk, "[68e] melody: 5 NEW IDEA rerolls pairwise <= 60% similar");
+            CHECK(basOk, "[68f] bass: 5 NEW IDEA rerolls pairwise <= 60% similar");
+            CHECK(chdOk, "[68g] chords: 5 NEW IDEA rerolls pairwise <= 60% similar");
+        }
+        // (d) kit ornament layer: 5 rerolls, hat signatures pairwise distinct, canon frozen
+        {
+            std::vector<std::vector<int>> sigs; bool canonOk = true;
+            static const uint32_t kKr[5] = { 0x61C88647u, 0x2545F491u, 0xC8013EA4u, 0x9E3779B9u, 0x41C64E6Du };
+            static const uint32_t kKa[5] = { 0x94D049BBu, 0x6C078965u, 0xB5297A4Du, 0x68E31DA4u, 0x1B873593u };
+            for (int t2 = 0; t2 < 5; ++t2)
+            {
+                DrumGen::Options d;
+                d.dna = &GenStyle::factory(DrumGen::StHouse);
+                d.bars = 1; d.rhythmSeed = kKr[t2];
+                d.auxSeed = kKa[t2];
+                const auto out = DrumGen::generate(d);
+                std::vector<int> sig;
+                for (auto& h : out.lane[DrumGen::LHat])
+                    sig.push_back(h.col * 100 + (int) (h.vel * 100.0f));
+                sigs.push_back(sig);
+                std::set<int> kc;
+                for (auto& h : out.lane[DrumGen::LKick]) kc.insert(h.col);
+                for (int cell : { 0, 4, 8, 12 }) if (! kc.count(cell * 24)) canonOk = false;
+            }
+            bool pw = true;
+            for (size_t a2 = 0; a2 < sigs.size(); ++a2)
+                for (size_t b2 = a2 + 1; b2 < sigs.size(); ++b2)
+                    if (sigs[a2] == sigs[b2]) pw = false;
+            CHECK(pw && canonOk, "[68h] kit: hat ornaments pairwise distinct, 4-floor canon frozen");
+        }
+        // (e) the documented exception: bass DRIVING is PINNED to the kicks (3/bar) - the
+        // option space is provably tiny, so the assertion IS the lock, not divergence. Two
+        // licensed leaves and nothing else: a G4 anticipation exactly one lattice cell before
+        // a chord-change bar line ([43]'s feature), and a style's faint candidate bias ([62d]'s
+        // 75% bound) - the latter is excluded here by generating style-free, so the LOCK claim
+        // is exact: kicks + G4 cols only, across seeds, wide levers active.
+        {
+            bool onKick = true; int cnt = 0;
+            const int cw2 = 384 / cx.latticeN;
+            for (uint32_t s = 1; s <= 3; ++s)
+            {
+                Options o; o.scale = kMajor; o.role = RoleBass; o.rhythm = RhDriving; o.density = 1;
+                o.rhythmSeed = s * 0x61C88647u; o.pitchSeed = s * 0x2545F491u;
+                o.wideSeed = o.rhythmSeed;
+                auto n = generate(o, cx);
+                for (auto& x : n)
+                {
+                    ++cnt; bool ok2 = false;
+                    for (int i = 0; i < cx.nKick; ++i)
+                        if (std::abs(x.start - cx.kickCol[i]) <= 12) ok2 = true;
+                    for (int b = 1; b < 4 && ! ok2; ++b)         // the G4 push col (licensed)
+                        if (x.start == b * 384 - cw2 - 1 || x.start == b * 384 - cw2) ok2 = true;
+                    if (! ok2) onKick = false;
+                }
+            }
+            CHECK(onKick && cnt > 0,
+                  "[68i] bass Driving stays ON the kicks across seeds (G4 push = the one licensed leave)");
+        }
     }
 
     printf(fails == 0 ? "GenTest: ALL PASS\n" : "GenTest: %d FAILURES\n", fails);
