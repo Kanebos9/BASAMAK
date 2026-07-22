@@ -176,3 +176,97 @@ DROPPED as unnecessary: audition history/A-B (redundant - every generation is al
 step; undo/redo IS the history); one-pass arrangement stays a ROADMAP phase, not now.
 ## STEP-MODE GENERATE BUTTON (left of Clear): deliberately sequenced WITH step-output capability
 (P1) - shipping the door before the room exists = a mode-switch surprise, not a feature.
+
+# ============ V5 ADDENDUM (2026-07-22 r22 - MELODIC/BASS GENRE IDIOM research round) ============
+Two research tracks (bass-line vocabulary; topline phrasing + comp rhythm) for the 8 styles,
+distilled into the SAME style-DNA shape the drums use. Cells are 1-based 16ths of a 4/4 bar
+(1 = downbeat, 5/13 = backbeats, 3/7/11/15 = 8th offbeats). ALL of this ships as DATA in the
+.basamakstyle format (GenStyle.h factory texts; docs/STYLES.md = the user spec).
+
+## BASS VOCABULARY (principles -> bass tuples pos/dur/deg/vel)
+- House: offbeat OCTAVE bass on 3/7/11/15 (kick owns the beats; bass NEVER on them), len 1-2,
+  even velocity (the pump is sidechain, not dynamics); chromatic approach into the next root at
+  15-16. Disco sibling = R-on-beat/O-on-offbeat alternating 8ths.
+- Techno: rolling single-note 16ths on EVERY cell EXCEPT the beat heads (2,3,4,6,7,8,...),
+  ~90% root; offbeats accented + longest gates; movement = filter, never melody.
+- Boom-bap: sparse two-beat feel - root on the One (len 4-6), ONE answer around beat 3 (5th/b7),
+  optional 15-16 pickup; flat 80-90 velocity, no ghosts, dragged a few ms (micro.bass 6).
+- Trap: the 808 IS the bass and COPIES the kick (canonical 1/8/11; variants 1,7,15 / 1,4,11);
+  R + octave-down; sustains until the next onset; GLIDE culture = overlap/slur at phrase ends
+  (-> our approach flag = the step writer's Slide). Sits ON the grid (micro.bass 0).
+- DnB: whole-bar reese SUSTAIN at cell 1 (len 16) or the 1+11 two-hit locking the shifted kick;
+  one-note culture, moves only at section boundaries; jump-up sibling = short 1/6/11 stabs.
+- Reggaeton: tresillo 3-3-2 (1,4,7 mirrored 9,12,15), R at 1+4, 5th at 7; or the modern long
+  sine-sub roots (1 and 9, len 8+). Heavily sidechained to the 4-floor.
+- Funk: THE ONE first (accented root, len 2-3), then syncopated 16ths with GHOSTS (vel 20-40 =
+  "a second drum part") + octave pops on offbeat 16ths + b7/chromatic approaches; three-tier
+  velocity (accent/normal/ghost) - the one genre with a real ghost floor.
+- Pop: root QUARTERS 1/5/9/13 (legato gate ~90%) or driving 8ths on all odd cells; octave on a
+  backbeat as the classic spice; scale/chromatic walk at 14-16 connecting roots.
+
+## TOPLINE PHRASING (principles -> mel cells C/L/A/R + slope + hook/mel.density)
+- House 4-8 n/bar, 2-bar hooks, stepwise + one small leap, 16th pushes before beats.
+- Techno 0-4 n/bar (texture, not melody), 1-2-bar hypnotic loop, offbeat-leaning (hook 1,
+  mel.density 0.7).
+- Boom-bap = sampled-loop phrasing: quarter/8th placement, lazy/dragged, 2-4-bar loop static.
+- Trap SPARSE (2-5 n/bar, gaps > 50% of the bar), minor/pentatonic, wide leaps + octave drops
+  licensed, 2-bar hooks (mel.density 0.55).
+- DnB feels half-time: 3-6 effective n/bar, soulful stepwise + long notes.
+- Reggaeton SYLLABIC-DENSE (6-10 n/bar) tracking the tresillo cells 1,4,7/9,12,15, small range,
+  call-and-response (hook 1, mel.density 1.2).
+- Funk = 1-bar riff cells, 4-10 n/bar, pentatonic/Dorian, anticipation INTO the One (push at 16).
+- Pop 4-8 n/bar, 2-bar phrases in 4-bar sections, hook ~3x then a twist, on-beat 8ths + pushed
+  anticipations, arch contour, hummable (M5's range cap earns its keep here).
+
+## COMP RHYTHM (principles -> comp templates)
+- House: organ/piano stabs on 3/7/11/15 (deep-house variant avoids kick cells: 4,7,11,14).
+- Techno: ONE stab per bar on an offbeat (3/7/11) - delay fills the rest; or syncopated 4,7,10,15.
+- Boom-bap: loop-anchor chop at 1, re-hits lock to 5/13, pickup at 14-15.
+- Trap: ONE sustained dark pad attack at cell 1 (1-2 bars) - the hats carry subdivision.
+- DnB (liquid): pad per bar at 1; stab-led sibling = 4/7/11/15 in the drum gaps.
+- Reggaeton: broken chords OFF-beat aligned to the dembow snare cells 4/7/12/15.
+- Funk: 16th chank accents on 2/4/7/10/12/15 (+ backbeats 5/13 and the 16 push).
+- Pop: sustained pads (1, 9), ballad quarters 1/5/9/13, energetic all-odd 8ths.
+Cross-genre encodables: stabs avoid the cells the kick owns; density inversely tracks drum
+busyness (-> G6); hooks repeat exact ~2 bars then vary the tail (-> the motif engine's echo law).
+
+## SOURCES (research round, 2026-07-22)
+attackmagazine.com (warehouse techno bass / disco house basslines / 808 basslines / reese redux /
+boom-bap beat dissected / chord stabs / house chords / dub techno); blog.native-instruments.com
+(boom-bap, bassline guide); create.routenote.com (hip-hop basslines); productionmusiclive.com +
+beats24-7.com + emastered.com (trap 808s, melodies, chords); edmprod.com (techno, liquid DnB);
+en.wikipedia.org/wiki/Dembow_beat + ujam.com + soundation.com + unison.audio (reggaeton/dembow);
+premierguitar.com + fundamental-changes.com + pickupmusic.com + onlinebasscourses.com +
+sfconservatoryofdance.org (funk 16ths, ghosts, accents); ethanhein.com/wp/2026/low-end-theory +
+pluginboutique.com (pop root anchors); musicradar.com + bmi.com + kits.ai (toplining norms);
+theproducerschool.com (tech-house bass); myloops.net + beatkey.app (melodic/minimal techno).
+
+## WHAT SHIPPED FROM V5 (r22)
+- STYLES AS DATA: GenStyle.h - one text format (.basamakstyle) for drum DNA + calibration
+  constants + bass/mel/comp cells + progression pools; 8 factory styles embedded in the SAME
+  format; user files in Documents/BASAMAK/Styles override by name (tagged); parse errors skip
+  the file with a readout note. Data-breadth minimums per factory style (originality mandate):
+  >= 4 bass cells / 4 comp templates / 6 melody cells / 4 progressions.
+- MELODIC STYLE DNA: from-scratch pulls cells literally (bass tuples resolved against the chord
+  timeline, motif cells born from mel-cell category strings + slope, comp templates); with real
+  context the style only biases candidate weights (context > style, always).
+- ORIGINALITY FAN-OUT: New idea rerolls the progression (from the pool), harmonic rhythm within
+  Density's band, the motif cell, the form/lines split, and the drum ornament layer (seeded hat
+  ornament: sparse tiers gain 0-2 quiet push cells, the 16th tier drops 0-2 weak cells - the
+  canon core never moves). Variety is TEST-LOCKED (GenTest [63]): 5 fresh-seed takes, no pair
+  > 60% identical, progressions fan, kick canon identical while hats differ.
+- KIT MICROTIMING (G5-safe): the mined per-role push/drag ms ride out as stepNudge on the kit
+  lanes, Humanize-gated (Off = grid / Subtle = half / Loose = full); the KICK lane anchors to
+  the grid so the bass's laid-back pocket can never end up ahead of it.
+- EXPRESSIVE FINESSE: M3 double-leap-on-outline, M4 tessitura edge rule, M6 contour scoring
+  (arch peak ~2/3 + final stepwise descent), M8 appoggiatura (Color-gated, <= 1/phrase, core-
+  protected), M9 tendency tones at phrase ends + aug-2nd guard. Shape passes (M3/M4/M6) run
+  BEFORE the M1/M2 floor; licensed passes (M8/M9) after.
+- H7 FULL COUNTER-LINE: Riff vs an existing melody = freeze during runs, no strong-beat
+  unisons, contrary/oblique >= 60% (Ctx gained the melody's per-cell pc/onset/direction line).
+- G6 density budget, G10 sustain-vs-stab, H10 multisample zone-span clamp: wired + test-locked.
+- GENERATE ALL: one press = kit -> bass -> melody -> chords on one shared foundation (same
+  style/key/chords/seeds), each part gathering the earlier ones; targets existing sounds only;
+  one consent popup with the full plan; one undo. NOTE the mandate listed chords before melody -
+  the comp goes LAST because its own interlock goals (H5 lanes, H6 melody gaps) need the melody
+  to exist first.
