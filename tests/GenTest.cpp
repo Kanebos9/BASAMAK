@@ -29,19 +29,21 @@ static const int8_t kMajor[7] = { 0, 2, 4, 5, 7, 9, 11 };
 // ---- DEV SCORECARD [P1 item 5]: musicality numbers per generation, sharing the generator's OWN
 // helpers (lhlBarScore / prepareChords / chordRootDegAt) so the score can never drift from the
 // rules it measures. Informational prints; hard bands asserted where the theory doc gives them.
-struct GenScore { float lhl = 0, chordStrong = 0, prox = 0, ngram = 0; int leapViol = 0, n = 0; };
+struct GenScore { float lhl = 0, chordStrong = 0, prox = 0, ngram = 0; int leapViol = 0, n = 0, lattice = 16; };
 static GenScore scoreGen(const std::vector<PartGen::Note>& ns,
                          const PartGen::Options& o, const PartGen::Ctx& cIn)
 {
     GenScore sc; sc.n = (int) ns.size();
     if (ns.empty()) return sc;
-    for (int b = 0; b < cIn.bars; ++b) sc.lhl += (float) PartGen::lhlBarScore(ns, b);
-    sc.lhl /= (float) cIn.bars;
     PartGen::Ctx cc = cIn;
     PartGen::prepareChords(o, cc);          // the SAME chord timeline the generator builds
+    PartGen::prepareLattice(cc);            // [r21] ... and the SAME lattice strength/weight map
+    sc.lattice = cc.latticeN;
+    for (int b = 0; b < cIn.bars; ++b) sc.lhl += (float) PartGen::lhlBarScore(ns, b, cc);
+    sc.lhl /= (float) cIn.bars;
     int strong = 0, ct = 0, steps = 0, tot = 0;
     for (auto& x : ns)
-        if (x.start % 96 == 0)
+        if (PartGen::strongCol(cc, x.start))   // [r21] the generator's own strong-col rule
         {
             ++strong;
             bool cp[12];
@@ -86,8 +88,8 @@ static GenScore scoreGen(const std::vector<PartGen::Note>& ns,
 }
 static void printScore(const char* tag, const GenScore& s)
 {
-    printf("  SCORE %-28s n=%2d LHL=%.1f chordStrong=%.0f%% proximity=%.0f%% leapViol=%d ngramSim=%.0f%%\n",
-           tag, s.n, s.lhl, s.chordStrong * 100.0f, s.prox * 100.0f, s.leapViol, s.ngram * 100.0f);
+    printf("  SCORE %-28s n=%2d lat=%d LHL=%.1f chordStrong=%.0f%% proximity=%.0f%% leapViol=%d ngramSim=%.0f%%\n",
+           tag, s.n, s.lattice, s.lhl, s.chordStrong * 100.0f, s.prox * 100.0f, s.leapViol, s.ngram * 100.0f);
 }
 
 static bool inScale(int semi, int key, const int8_t* sc, int len)
@@ -1157,6 +1159,113 @@ int main()
         for (int i = 0; i < cc.numSteps; ++i) if (cc.stepNudge[i] < 0.0f) ok = false;
         ok = ok && cc.stepVel[0] > cc.stepVel[1];   // the +5% lean on the pocketed notes
         CHECK(ok, "[49] G5: kick-coincident steps nudge late within band, never early");
+    }
+
+    // ---- [2026-07-22 r21] the CONTEXT LATTICE round: the user's confirmed bug locked ----
+
+    // [50] THE USER'S SCENARIO: 7-step kick + 7-step snare + 14-step hats over a merged 4-bar
+    // group -> the lattice is 14, a generated bass lands on a 7/14 step count (NEVER the old
+    // 16 fallback), and EVERY onset sits exactly on the 14-lattice (both stances)
+    {
+        auto sq = std::make_unique<Sequencer>();
+        for (int b = 1; b < 4; ++b) sq->patterns[b].mergeWithPrev = true;
+        for (int b = 0; b < 4; ++b)
+        {
+            auto& kk = sq->patterns[b].channels[0];
+            kit(kk, 7, { 0, 2, 4 });  kk.mixName = "My Kick";
+            auto& sn = sq->patterns[b].channels[1];
+            kit(sn, 7, { 1, 5 });     sn.mixName = "My Snare";
+            auto& hh = sq->patterns[b].channels[2];
+            kit(hh, 14, { 0, 2, 4, 6, 8, 10, 12 }); hh.mixName = "My Hat";
+        }
+        GenContext::Readout ro;
+        auto cx = GenContext::build(*sq, 0, 3, 4, &ro);
+        CHECK(cx.latticeN == 14 && ro.lattice == 14 && cx.nKick == 12 && cx.nHat == 28,
+              "[50a] lattice: 7 + 7 + 14 step context derives the 14-cell bar grid");
+        bool onLat = true, countOk = true, wroteAll = true;
+        for (int stance : { (int) RhPockets, (int) RhDriving })
+            for (uint32_t s = 1; s <= 3; ++s)
+            {
+                Options o; o.scale = kMajor; o.role = RoleBass; o.rhythm = stance;
+                o.density = 2; o.rhythmSeed = s; o.pitchSeed = s + 5;
+                auto n = generate(o, cx);
+                for (auto& x : n)
+                {   // every onset must sit EXACTLY on a 14-lattice col (k * 384 / 14, truncated)
+                    const int local = x.start % 384;
+                    const int k2 = (int) std::lround((double) local * 14.0 / 384.0);
+                    if (local != k2 * 384 / 14) onLat = false;
+                }
+                auto res = GenContext::writeStepOutput(*sq, 0, 4, 4, n);
+                if (n.empty() || res.written != (int) n.size()) wroteAll = false;
+                if (res.count != 7 && res.count != 14) countOk = false;
+                printScore(stance == RhPockets ? "bass/pockets 7-14 ctx" : "bass/driving 7-14 ctx",
+                           scoreGen(n, o, cx));
+            }
+        CHECK(onLat,   "[50b] lattice: every generated onset sits ON the 14-lattice (6 takes)");
+        CHECK(countOk && wroteAll,
+              "[50c] step-count authority lands on 7 or 14 - NOT the 16 fallback (the user's bug)");
+    }
+
+    // [51] classifyDrumRole CONSENT GUARD: a known NON-drum category is authoritative - the
+    // name keywords may only classify sounds the bank doesn't know
+    {
+        using namespace GenContext;
+        CHECK(classifyDrumRole("Bass",  "Sub Kick")  == DrumGeneric
+              && classifyDrumRole("Leads", "Kick Start") == DrumGeneric
+              && classifyDrumRole("Kicks", "808 Kick")   == DrumKick
+              && classifyDrumRole("Toms",  "Floor Tom")  == DrumPerc
+              && classifyDrumRole("Electro Perc", "Blip") == DrumPerc
+              && classifyDrumRole("", "my kick thing")   == DrumKick
+              && classifyDrumRole("", "Vocal Chop")      == DrumGeneric,
+              "[51] drum-role guard: category beats name; keywords only for unknown sounds");
+    }
+
+    // [52] lattice derivation table: binary grids fold to 16, triplets to 12, LCM under the
+    // 48 cap, and an impossible pair keeps the heavier grid
+    {
+        auto latOf = [&](std::initializer_list<std::pair<int, int>> chans)   // {numSteps, nHits}
+        {
+            auto sq = std::make_unique<Sequencer>();
+            int chn = 0;
+            for (auto& p : chans)
+            {
+                auto& cc2 = sq->patterns[0].channels[chn++];
+                std::vector<int> on;
+                for (int i = 0; i < p.second; ++i) on.push_back(i);
+                cc2.numSteps = p.first;
+                for (int i : on) cc2.steps[i] = true;
+                cc2.slots[0] = DrumChannel::Slot();
+                cc2.slots[0].engine = DrumChannel::SrcNoise; cc2.slots[0].weight = 1.0f;
+            }
+            return GenContext::build(*sq, 0, 0, 15).latticeN;
+        };
+        CHECK(latOf({ { 4, 4 } })            == 16     // binary folds up to the classic 16
+              && latOf({ { 8, 4 } })         == 16
+              && latOf({ { 12, 6 } })        == 12     // triplet grid stays a triplet grid
+              && latOf({ { 7, 7 } })         == 14     // the 7 family doubles for resolution
+              && latOf({ { 16, 8 }, { 12, 4 } }) == 48 // LCM within the cap holds both
+              && latOf({ { 7, 7 }, { 16, 4 } })  == 14 // impossible pair: the heavier grid wins
+              && latOf({})                   == 16,    // no step context = 16
+              "[52] lattice derivation: LCM + cap + doubling land on the musical grid");
+    }
+
+    // [53] determinism on the lattice path + the truncation-consistent exact fit
+    {
+        auto sq = std::make_unique<Sequencer>();
+        kit(sq->patterns[0].channels[0], 7, { 0, 1, 2, 3, 4, 5, 6 });
+        sq->patterns[0].channels[0].mixName = "My Kick";
+        auto cx = GenContext::build(*sq, 0, 0, 4);
+        Options o; o.scale = kMajor; o.role = RoleBass; o.rhythm = RhDriving;
+        o.density = 2; o.rhythmSeed = 9; o.pitchSeed = 4;
+        auto a = generate(o, cx), b = generate(o, cx);
+        bool same = a.size() == b.size() && ! a.empty();
+        for (size_t i = 0; same && i < a.size(); ++i)
+            same = a[i].start == b[i].start && a[i].semi == b[i].semi && a[i].vel == b[i].vel;
+        CHECK(same, "[53a] lattice path deterministic (same seeds = identical notes)");
+        std::vector<PartGen::Note> tr;   // the gather's TRUNCATED cols must fit n=7 exactly
+        for (int i = 0; i < 7; ++i) tr.push_back({ i * 384 / 7, 40, 0, 200, false });
+        CHECK(GenContext::chooseStepCount(tr, 1) == 7,
+              "[53b] chooser: truncated 7-grid cols pass the exact-fit pass (54 vs the old 55)");
     }
 
     printf(fails == 0 ? "GenTest: ALL PASS\n" : "GenTest: %d FAILURES\n", fails);
