@@ -30,6 +30,16 @@
 // across the WHOLE group - any bar count incl. 3), relation = what later lines do (repeat /
 // answer / new / Auto). AABA etc. now EMERGE from Auto instead of being a menu.
 //
+// v4/r21 [2026-07-22]: THE CONTEXT LATTICE. The r20 rhythm-shaping rules (LHL
+// weights, de-syncopation targets, pushes, breaths, prosody strong-cols, motif
+// spans) were hardcoded to a 16-col 4/4 bar - a 7-step-kick context's bass came
+// out smeared across 16th positions and the step-count authority then honestly
+// picked 16. Now Ctx carries latticeN (the gather's LCM of the contributing
+// step grids) and EVERY rule moves in lattice cells; strength(cell) = the
+// divisor-depth metric weight + 0.7 * the loudest hit at the cell (G7), and
+// the LHL weights derive from that map. Onsets never leave the lattice (only
+// Humanize jitters off it, deliberately, within the step writer's tolerance).
+//
 // Standing rules: ONE-SHOT dice on the message thread (playback deterministic);
 // TWO seeds - rhythmSeed places every onset, pitchSeed picks every pitch, so
 // "Same rhythm, new notes" is exact by construction; varyCount mutates on top;
@@ -130,6 +140,19 @@ struct Ctx
     float sndAtk = 0.0f, sndDec = 0.0f, sndSus = 0.0f, sndRel = 0.0f;
     bool  sndMono = false, sndScaleOn = false;
     int   sndMsLo = -1, sndMsHi = -1;        // multisample zone-root span (MIDI), -1 = none
+    // [2026-07-22 r21] THE CONTEXT LATTICE - the bar grid every GENERATED onset lives on.
+    // The gather (GenContext::build) sets latticeN = the LCM of the contributing step
+    // channels' grids (hit-weight priority under the 48-cell cap; binary/coarse grids fold
+    // back to the classic 16; empty or roll-only context = 16). generate() derives the
+    // per-cell STRENGTH map (metric hierarchy by divisor depth + 0.7 * the loudest hit at
+    // the cell - the G7 accent hierarchy) and the LHL weights from it (prepareLatticeImpl).
+    // Every rhythm-shaping rule (candidates, de-syncopation, pushes, breaths, prosody)
+    // moves in LATTICE CELLS - the r20 batch hardcoded these to a 16-col 4/4 bar, which
+    // dragged onsets born on a 7/14-step context onto 16th positions (the user's bug).
+    static constexpr int LAT_MAX = 48;
+    int    latticeN = 16;
+    float  latStr[MAX_BARS * LAT_MAX] = {};
+    int8_t latW[MAX_BARS * LAT_MAX] = {};
 };
 
 struct Note
@@ -276,56 +299,143 @@ static inline int chordRootDegAt(const Options& o, const Ctx& c, int col)
     return stockDeg(o, c.bars, bar);
 }
 
-// [P1 G3] LHL syncopation weights per 16th position (0/-1/-2/-3/-4 - GENERATE-THEORY G3) and a
-// per-bar scorer: a note on a weak position followed by SILENCE on a stronger one is syncopated;
-// its contribution = strongest-silent-weight minus the note's weight. Shared by the generator's
-// de-syncopation ceiling AND the GenTest scorecard (one implementation, never two).
-static const int kLhlW[16] = { 0, -4, -3, -4, -2, -4, -3, -4, -1, -4, -3, -4, -2, -4, -3, -4 };
-static inline int lhlBarScoreImpl(const std::vector<Note>& notes, int bar,
-                                  int* worstIdx = nullptr, int* worstTargetCol = nullptr)
+// ============================================================================
+// [2026-07-22 r21] LATTICE CELL MATH. Columns use the SAME integer division as the gather's
+// hit columns (k * COLS / n, truncated) so a context channel's hits ARE lattice cols by
+// construction (a 7-step kick's col 54 = cell 1 of the 7/14 lattice, never "almost 55").
+// ============================================================================
+static inline int latN(const Ctx& c)
+{ return c.latticeN < 1 ? 16 : (c.latticeN > Ctx::LAT_MAX ? Ctx::LAT_MAX : c.latticeN); }
+static inline int latCw(const Ctx& c) { return COLS / latN(c); }   // ~cell width (distance unit)
+static inline int latColOf(const Ctx& c, int g)                    // global cell -> concat col
 {
-    bool on[17] = {};
-    int  noteAt[16]; for (int i = 0; i < 16; ++i) noteAt[i] = -1;
+    const int n = latN(c);
+    if (g < 0) g = 0;
+    return (g / n) * COLS + (g % n) * COLS / n;
+}
+static inline int latCellNear(const Ctx& c, int col)               // concat col -> NEAREST cell
+{
+    const int n = latN(c);
+    if (col < 0) col = 0;
+    return (col / COLS) * n + ((col % COLS) * n + COLS / 2) / COLS;   // may be the next bar's 0
+}
+static inline int latSnap(const Ctx& c, int col) { return latColOf(c, latCellNear(c, col)); }
+// metric part of the strength: beat hierarchy by DIVISOR DEPTH where the lattice divides in
+// halves (n = 16 reproduces the old metricW's 16th values EXACTLY); non-divisible depths are
+// uniformly weak - on a 7/14 lattice only the downbeat (and the half, when even) is metric.
+static inline float latMetric(int k, int n)
+{
+    if (k == 0)                         return 1.0f;
+    if (n % 2 == 0 && k % (n / 2) == 0) return 0.8f;
+    if (n % 4 == 0 && k % (n / 4) == 0) return 0.6f;
+    if (n % 8 == 0 && k % (n / 8) == 0) return 0.35f;
+    return 0.2f;
+}
+static inline float latStrAt(const Ctx& c, int col)                // combined strength at a col
+{
+    const int n = latN(c), cap = c.bars * n - 1;
+    const int g = juceLikeClamp(0, cap < 0 ? 0 : cap, latCellNear(c, col));
+    return c.latStr[g];
+}
+// [r21 G7] the strength + LHL weight maps: strength(cell) = metric part + 0.7 * the loudest
+// hit AT the cell (hits map by nearest cell, so a grid the 48-cap dropped still accents its
+// neighbourhood); LHL weight = the old 0/-1/-2/-3/-4 ladder read off the strength (n = 16
+// with no hits reproduces the retired kLhlW table bit for bit).
+static inline void prepareLatticeImpl(Ctx& c)
+{
+    const int n = latN(c);
+    c.latticeN = n;
+    const int total = juceLikeClamp(1, MAX_BARS * Ctx::LAT_MAX, c.bars * n);
+    for (int g = 0; g < total; ++g) c.latStr[g] = latMetric(g % n, n);
+    for (int i = 0; i < c.nHits; ++i)
+    {
+        const int g = latCellNear(c, c.hitCol[i]);
+        if (g < 0 || g >= total) continue;               // the LOUDEST hit at a cell wins (G7)
+        c.latStr[g] = std::max(c.latStr[g], latMetric(g % n, n) + 0.7f * c.hitStr[i]);
+    }
+    for (int g = 0; g < total; ++g)
+    {
+        if (c.latStr[g] > 1.0f) c.latStr[g] = 1.0f;
+        const int w = (int) std::lround((c.latStr[g] - 1.0f) * 5.0f);
+        c.latW[g] = (int8_t) juceLikeClamp(-4, 0, w);
+    }
+}
+// [r21] the ONE strong-position rule (G7): metric beat-depth cells are strong; 8th-depth
+// cells become landings once real hits exist (the old "hit-locked lines treat 8ths as
+// landings"); on a lattice WITHOUT binary beat depth (7/14/21...), a cell the groove itself
+// accents (combined strength >= 0.6) is strong - the accent hierarchy IS the meter there.
+static inline bool latStrong(const Ctx& c, int col, bool hitLandings)
+{
+    const int n = latN(c);
+    const float m = latMetric(latCellNear(c, col) % n, n);
+    if (m >= 0.6f) return true;
+    if (hitLandings && c.nHits > 0 && m >= 0.35f) return true;
+    if (n % 4 != 0 && latStrAt(c, col) >= 0.6f) return true;
+    return false;
+}
+
+// [P1 G3 -> r21 LATTICE] LHL syncopation scorer: a note on a weak position followed by
+// SILENCE on a stronger one is syncopated; its contribution = strongest-silent-weight minus
+// the note's weight. Shared by the generator's de-syncopation ceiling AND the GenTest
+// scorecard (one implementation, never two). lat == nullptr = the legacy fixed 16-col 4/4
+// table (position weights 0/-1/-2/-3/-4) for callers with no context; the generator always
+// passes its PREPARED ctx, so the weights follow the context lattice + its hits (G7).
+static const int kLhlW16[16] = { 0, -4, -3, -4, -2, -4, -3, -4, -1, -4, -3, -4, -2, -4, -3, -4 };
+static inline int lhlBarScoreImpl(const std::vector<Note>& notes, int bar,
+                                  int* worstIdx = nullptr, int* worstTargetCol = nullptr,
+                                  const Ctx* lat = nullptr)
+{
+    const int n = lat != nullptr ? latN(*lat) : 16;
+    bool on[Ctx::LAT_MAX + 1] = {}, covered[Ctx::LAT_MAX + 1] = {};
+    int  noteAt[Ctx::LAT_MAX]; for (int i = 0; i < n; ++i) noteAt[i] = -1;
+    auto wAt = [&](int p) -> int
+    {
+        if (p >= n) return 0;                            // position n = the next downbeat
+        if (lat == nullptr) return kLhlW16[p & 15];
+        const int cap = lat->bars * n - 1;
+        return lat->latW[juceLikeClamp(0, cap < 0 ? 0 : cap, bar * n + p)];
+    };
+    if (lat != nullptr)
+        for (int i = 0; i < lat->nHits; ++i)
+        {   // [r21] a cell a REAL DRUM plays is COVERED: the ensemble meets the expectation
+            // there, so it ends a melodic note's "air" like an onset does - without this the
+            // hit-aware weights condemned Pockets (forbidden from the very cells the scorer
+            // pointed at) to unfixable syncopation scores.
+            const int g = latCellNear(*lat, lat->hitCol[i]) - bar * n;
+            if (g >= 0 && g < n) covered[g] = true;
+        }
     for (size_t i = 0; i < notes.size(); ++i)
     {
         const int local = notes[i].start - bar * COLS;
         if (local < 0 || local >= COLS) continue;
-        const int p = juceLikeClamp(0, 15, (local + CELL16 / 2) / CELL16);
+        const int p = juceLikeClamp(0, n - 1, (local * n + COLS / 2) / COLS);
         if (! on[p]) { on[p] = true; noteAt[p] = (int) i; }
     }
     int score = 0, worstGain = 0;
     if (worstIdx != nullptr) *worstIdx = -1;
-    for (int p = 0; p < 16; ++p)
+    for (int p = 0; p < n; ++p)
     {
         if (! on[p]) continue;
         int bestW = -99, bestQ = -1;
-        for (int q = p + 1; q <= 16; ++q)
+        for (int q = p + 1; q <= n; ++q)
         {
-            if (q < 16 && on[q]) break;                  // the next onset ends the note's air
-            const int wq = q == 16 ? 0 : kLhlW[q];       // position 16 = the next downbeat
+            if (q < n && (on[q] || covered[q])) break;   // an onset OR a drum hit ends the air
+            const int wq = wAt(q);
             if (wq > bestW) { bestW = wq; bestQ = q; }
         }
-        if (bestQ >= 0 && bestW > kLhlW[p])
+        if (bestQ >= 0 && bestW > wAt(p))
         {
-            const int gain = bestW - kLhlW[p];
+            const int gain = bestW - wAt(p);
             score += gain;
-            if (gain > worstGain && bestQ < 16)
+            if (gain > worstGain && bestQ < n)
             { worstGain = gain;
               if (worstIdx != nullptr)       *worstIdx = noteAt[p];
-              if (worstTargetCol != nullptr) *worstTargetCol = bar * COLS + bestQ * CELL16; }
+              if (worstTargetCol != nullptr)
+                  *worstTargetCol = lat != nullptr ? latColOf(*lat, bar * n + bestQ)
+                                                   : bar * COLS + bestQ * CELL16; }
         }
     }
     return score;
-}
-
-static inline float metricW(int col)
-{
-    const int inBar = col % COLS;
-    if (inBar == 0)                return 1.0f;
-    if (inBar % (BEAT * 2) == 0)   return 0.8f;
-    if (inBar % BEAT == 0)         return 0.6f;
-    if (inBar % (BEAT / 2) == 0)   return 0.35f;
-    return 0.2f;
 }
 
 // ---- RHYTHM v2: candidates for one PHRASE span, from the groove's REAL positions --------------
@@ -334,13 +444,19 @@ struct Cand { int col; float w; };
 static inline void phraseCandidates(const Options& o, const Ctx& c, int s, int e, std::vector<Cand>& out)
 {
     out.clear();
+    const int n = latN(c);
+    const int gS = latCellNear(c, s), gE = latCellNear(c, e);   // s/e = bar multiples = exact cells
     auto beatCands = [&](float wMul)
-    {   // the METER's positions (beats strong, half-beats faint; [r20] HUM = beats ONLY - its
-        // LHL band [0,2] cannot afford a half-beat note syncopating against the next downbeat)
-        for (int col = s - (s % (BEAT / 2)); col < e; col += BEAT / 2)
+    {   // [r21] the METER's positions ON THE LATTICE (beats strong, half-beats faint; HUM =
+        // beats only - its LHL band [0,2] cannot afford a half-beat note syncopating against
+        // the next downbeat). A lattice without binary beat depth (7/14...) treats the cells
+        // the groove ACCENTS (combined strength >= 0.6) as its beats - the G7 hierarchy.
+        for (int g = gS; g < gE; ++g)
         {
-            if (col < s) continue;
-            const float m = metricW(col);
+            const int col = latColOf(c, g);
+            if (col < s || col >= e) continue;
+            float m = latMetric(g % n, n);
+            if (n % 4 != 0) m = std::max(m, latStrAt(c, col));
             if (m >= 0.6f) out.push_back({ col, m * wMul });          // beats
             else if (m >= 0.35f && o.role != RoleHum)
                 out.push_back({ col, 0.14f * wMul });                 // half-beats, rare
@@ -378,10 +494,12 @@ static inline void phraseCandidates(const Options& o, const Ctx& c, int s, int e
         // and every stance falls back here when the groove offers nothing.
         if (o.rhythm == RhDriving && hIdx.empty())      beatCands(1.0f);
         else if (o.rhythm == RhPockets && hIdx.empty())
-        {   // no drums to dodge: the old offbeat-leaning 16th grid
-            for (int col = s; col < e; col += CELL16)
+        {   // no drums to dodge: the offbeat-leaning LATTICE grid [r21]
+            for (int g = gS; g < gE; ++g)
             {
-                const float m = metricW(col);
+                const int col = latColOf(c, g);
+                if (col < s || col >= e) continue;
+                const float m = latMetric(g % n, n);
                 out.push_back({ col, m < 0.5f ? 0.30f + m : 0.25f });
             }
         }
@@ -394,20 +512,24 @@ static inline void phraseCandidates(const Options& o, const Ctx& c, int s, int e
         for (int i : hIdx) out.push_back({ c.hitCol[i], 0.35f + 0.75f * c.hitStr[i] });
         return;
     }
-    // Pockets: the MIDPOINTS of the real gaps between hits (plus the span edges' gaps)
+    // Pockets: the MIDPOINTS of the real gaps between hits (plus the span edges' gaps),
+    // SNAPPED to the lattice [r21] - a raw midpoint was an off-any-grid col, which is what
+    // made the step-count chooser fall back to its densest grid on odd-step contexts.
     int prev = s;
     for (size_t k = 0; k <= hIdx.size(); ++k)
     {
         const int nxt = k < hIdx.size() ? c.hitCol[hIdx[k]] : e;
         const int gap = nxt - prev;
-        if (gap >= CELL16 * 2)
-            out.push_back({ prev + gap / 2, 0.25f + 0.75f * std::min(1.0f, (float) gap / (float) BEAT) });
+        if (gap >= latCw(c) * 2)
+            out.push_back({ latSnap(c, prev + gap / 2),
+                            0.25f + 0.75f * std::min(1.0f, (float) gap / (float) BEAT) });
         prev = nxt;
     }
 }
 
-// weighted sample `budget` onsets from the candidates (no replacement; singable = min 1/8 apart)
-static inline void sampleOnsets(const Options& o, Rng& rrng, std::vector<Cand>& cands,
+// weighted sample `budget` onsets from the candidates (no replacement; min one lattice cell
+// apart - two cells when singable)
+static inline void sampleOnsets(const Options& o, const Ctx& c, Rng& rrng, std::vector<Cand>& cands,
                                 int budget, int phraseStart, int breathEnd, std::vector<int>& out)
 {
     out.clear();
@@ -419,7 +541,7 @@ static inline void sampleOnsets(const Options& o, Rng& rrng, std::vector<Cand>& 
         for (size_t i = 0; i < cands.size(); ++i) { r -= cands[i].w; if (r <= 0.0f) { sel = i; break; } }
         const int col = cands[sel].col;
         if (col < breathEnd) out.push_back(col);
-        const int minGap = o.singable ? CELL16 * 2 : CELL16;
+        const int minGap = o.singable ? latCw(c) * 2 : latCw(c);
         cands.erase(std::remove_if(cands.begin(), cands.end(),
                     [&](const Cand& cd) { return std::abs(cd.col - col) < minGap; }), cands.end());
     }
@@ -436,13 +558,14 @@ struct PitchState { int prevIdx = -1; };
 
 // [r20 E] ONE velocity law for every melodic note: the mined per-16th accent means (when a style
 // is wired) or the metric fallback, softened for vocal/flowing lines, humanized by the pitch dice.
-static inline int velFor(const Options& o, Rng& prng, int col, bool strong)
+// (The accent table stays a per-16th read - it is a mined SHAPE, sampled at the col's position.)
+static inline int velFor(const Options& o, const Ctx& c, Rng& prng, int col, bool strong)
 {
     float v;
     if (o.styleAccent != nullptr)
         v = 118.0f + (float) o.styleAccent[((col % COLS) / CELL16) & 15] * 1.30f;
     else
-        v = strong ? 232.0f : ((col % (BEAT / 2)) == 0 ? 205.0f : 188.0f);
+        v = strong ? 232.0f : (latStrAt(c, col) >= 0.35f ? 205.0f : 188.0f);
     if (o.role == RoleHum || o.rhythm == RhFlowing) v = 200.0f + (v - 200.0f) * 0.4f;
     v += (prng.uf() - 0.5f) * 24.0f;
     return std::max(120, std::min(255, (int) std::lround(v)));
@@ -511,8 +634,7 @@ static inline void pitchPhrase(const Options& o, const Ctx& c, Rng& prng, std::v
     for (auto& n : notes)
     {
         if (n.start < from || n.start >= to) continue;
-        const bool strong = (n.start % BEAT) == 0
-                         || (c.nHits > 0 && n.start % (BEAT / 2) == 0);   // hit-locked lines treat 8ths as landings
+        const bool strong = latStrong(c, n.start, true);   // [r21] G7: lattice beats + hit landings
         const int rootDeg = chordRootDegAt(o, c, n.start);                 // [v2] per-BEAT harmony
         bool cp[12]; chordPcs(o, rootDeg, cp);
         const float ideal = st.prevIdx < 0 ? target(n.start)
@@ -564,7 +686,7 @@ static inline void pitchPhrase(const Options& o, const Ctx& c, Rng& prng, std::v
         n.semi = std::max(-48, std::min(48, semi));
         st.prevIdx = idx;
 
-        n.vel = velFor(o, prng, n.start, strong);   // [r20 E] mined accent shape when styled
+        n.vel = velFor(o, c, prng, n.start, strong);   // [r20 E] mined accent shape when styled
         lastNote = &n;
     }
     // CADENCE [v2]: the phrase's final note lands OPEN (2nd/5th) or RESOLVED (tonic/3rd) -
@@ -601,20 +723,25 @@ static inline void pitchPhrase(const Options& o, const Ctx& c, Rng& prng, std::v
 static inline void pocketDiscipline(const Options& o, const Ctx& c, std::vector<Note>& notes, int total)
 {
     if (o.rhythm != RhPockets || c.nHits == 0 || notes.empty()) return;
+    const int cw = latCw(c);
     auto nearHit = [&](int col)
     {
         for (int i = 0; i < c.nHits; ++i)
-            if (std::abs(col - c.hitCol[i]) < CELL16) return true;
+            if (std::abs(col - c.hitCol[i]) < cw) return true;
         return false;
     };
     for (auto& n : notes)
     {
         if (! nearHit(n.start)) continue;
+        // [r21] offenders shift by LATTICE CELLS to the nearest legal cell (the old +-1-col
+        // walk parked them at hit+-24 = an off-any-grid col = the count chooser's poison)
+        const int g0 = latCellNear(c, n.start), gMax = c.bars * latN(c);
         int moved = -1;
-        for (int d = 1; d < COLS && moved < 0; ++d)
+        for (int d = 1; d < gMax && moved < 0; ++d)
         {
-            if (n.start - d >= 0    && ! nearHit(n.start - d)) { moved = n.start - d; break; }
-            if (n.start + d < total && ! nearHit(n.start + d)) { moved = n.start + d; break; }
+            const int lo = latColOf(c, g0 - d), hi = latColOf(c, g0 + d);
+            if (g0 - d >= 0 && ! nearHit(lo))              { moved = lo; break; }
+            if (g0 + d < gMax && hi < total && ! nearHit(hi)) { moved = hi; break; }
         }
         if (moved >= 0) n.start = moved;
         else            n.vel = 0;   // wall-to-wall drums: no legal pocket exists - drop the note
@@ -627,20 +754,21 @@ static inline void pocketDiscipline(const Options& o, const Ctx& c, std::vector<
             { n.len = std::max(1, std::min(n.len, c.hitCol[i] - COLS / 32 - n.start)); break; }
 }
 
-static inline void makeLengths(const Options& o, std::vector<Note>& notes, int totalCols)
+static inline void makeLengths(const Options& o, const Ctx& c, std::vector<Note>& notes, int totalCols)
 {
     std::sort(notes.begin(), notes.end(), [](const Note& a, const Note& b) { return a.start < b.start; });
-    for (size_t i = 0; i < notes.size(); ++i)
+    const int cw = latCw(c);   // [r21] length floors follow the lattice cell (durations only -
+    for (size_t i = 0; i < notes.size(); ++i)   //  lengths never touch the onset grid)
     {
         const int nextStart = i + 1 < notes.size() ? notes[i + 1].start : totalCols;
-        int gap = std::max(CELL16, nextStart - notes[i].start);
+        int gap = std::max(cw, nextStart - notes[i].start);
         int len;
         if (o.rhythm == RhFlowing || o.role == RoleHum) len = gap;   // legato arcs (may cross bar lines)
         else if (o.rhythm == RhPockets)                 len = std::min(gap, BEAT) * 9 / 10;
         else                                            len = std::min(gap, BEAT / 2) * 9 / 10;
         if (o.role == RoleHum) len = std::max(len, BEAT / 2);
         len = std::min(len, totalCols - notes[i].start);
-        notes[i].len = std::max(CELL16 / 2, std::min(len, gap));
+        notes[i].len = std::max(cw / 2, std::min(len, gap));
     }
 }
 
@@ -680,10 +808,16 @@ static inline void planForm(int bars, int lines, int relation, std::vector<Phras
 } // namespace detail
 
 // [P1] public faces of the shared helpers (the GenTest scorecard uses the SAME implementations
-// the generator runs - one chord timeline, one LHL scorer, never two).
+// the generator runs - one chord timeline, one LHL scorer, one lattice, never two).
 static inline void prepareChords(const Options& o, Ctx& c) { detail::prepareChordsImpl(o, c); }
+static inline void prepareLattice(Ctx& c)                  { detail::prepareLatticeImpl(c); }
 static inline int  lhlBarScore(const std::vector<Note>& notes, int bar)
-{ return detail::lhlBarScoreImpl(notes, bar); }
+{ return detail::lhlBarScoreImpl(notes, bar); }            // legacy fixed-16 weights (no ctx)
+// [r21] lattice-aware scorer + strong-col test: pass a ctx that went through prepareLattice
+static inline int  lhlBarScore(const std::vector<Note>& notes, int bar, const Ctx& preparedCtx)
+{ return detail::lhlBarScoreImpl(notes, bar, nullptr, nullptr, &preparedCtx); }
+static inline bool strongCol(const Ctx& preparedCtx, int col)
+{ return detail::latStrong(preparedCtx, col, true); }
 
 // ================================================================================================
 static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
@@ -709,6 +843,8 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
         c.nHits = c.nKick;
         for (int i = 0; i < c.nKick; ++i) { c.hitCol[i] = c.kickCol[i]; c.hitStr[i] = c.kickStr[i]; }
     }
+    prepareLatticeImpl(c);   // [r21] strength + LHL weights on the CONTEXT lattice (after the
+                             // bass kick-swap - the maps must see the hit list the rules see)
 
     Rng rrng(o.rhythmSeed), prng(o.pitchSeed);
     std::vector<Note> notes;
@@ -727,12 +863,13 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
     std::vector<Phrase> plan;   // [P1] hoisted: the FILLS pass reads line ends (empty for Riff)
     if (o.role == RoleRiff)
     {
-        // RIFF: one bar's cell tiled every bar, transposed with the harmony (unchanged from v1).
+        // RIFF: one bar's cell tiled every bar, transposed with the harmony (unchanged from v1;
+        // tiling shifts by whole bars, so lattice cols stay lattice cols).
         std::vector<Cand> cands; std::vector<int> ons;
         phraseCandidates(o, c, 0, COLS, cands);
-        sampleOnsets(o, rrng, cands, budgetFor(1), 0, COLS, ons);
+        sampleOnsets(o, c, rrng, cands, budgetFor(1), 0, COLS, ons);
         for (int col : ons) notes.push_back({ col, 1, 0, 235 });
-        makeLengths(o, notes, COLS);
+        makeLengths(o, c, notes, COLS);
         PitchState st;
         pitchPhrase(o, c, prng, notes, st, 0, COLS, true, -1, 0);
         const int root0 = o.key + o.scale[chordRootDegAt(o, c, 0)];
@@ -769,12 +906,14 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
         for (int b = 0; b < bars; ++b)
         {
             const int base2 = b * COLS;
-            auto add = [&](int cell) { onsCols.push_back(base2 + cell * CELL16); };
+            // [r21] the H3 templates are written in 16th cells (Charleston / tresillo are 4/4
+            // vocabulary) - each template col SNAPS to the context lattice on the way out
+            auto add = [&](int cell) { onsCols.push_back(latSnap(c, base2 + cell * CELL16)); };
             if (o.rhythm == RhFlowing)
             {   // one hit per chord change inside this bar
                 for (int ci = 0; ci < c.nChords; ++ci)
                     if (c.chordColAt[ci] >= base2 && c.chordColAt[ci] < base2 + COLS)
-                        onsCols.push_back(c.chordColAt[ci]);
+                        onsCols.push_back(latSnap(c, c.chordColAt[ci]));
             }
             else if (o.rhythm == RhPockets)
             {   // Charleston (1 + the and-of-2) or tresillo 3-3-2 when busy
@@ -854,7 +993,7 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
             int len = o.rhythm == RhFlowing ? std::max(CELL16, nextCol - col - CELL16 / 2)
                                             : std::min(std::max(CELL16, (nextCol - col) * 9 / 10), BEAT);
             len = std::min(len, total - col);
-            const int vel = velFor(o, prng, col, (col % BEAT) == 0);
+            const int vel = velFor(o, c, prng, col, latStrong(c, col, false));
             if (o.forceMono)
             {   // H9 degrade: the voicing ARPEGGIATED - successive stabs cycle its tones
                 if (! v.empty())
@@ -884,24 +1023,37 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
         // M12 (per-generation front/back-heavy start, phrase peak on the strongest onset).
         // ============================================================================
         planForm(bars, o.lines, o.relation, plan);
-        struct MotifCell { std::vector<int> ons; std::vector<int> semis, vels; int span = COLS / 2; };
+        // [r21] the motif's onsets + spans live in LATTICE CELLS (indices, not columns): a
+        // placement = anchor cell + relative cell, converted to a col only at the very end -
+        // so every copy of the cell is on-lattice by construction (half-bar spans on an odd
+        // lattice have no half cell: the span becomes the whole bar there).
+        struct MotifCell { std::vector<int> ons; std::vector<int> semis, vels; int spanCells = 8; };
         MotifCell motif;                 // 'A's cell = the identity every echo keeps
         int motifCt = -1;
         PitchState st;
+        const int nLat = latN(c);
         // M12 section choice: back-heavy starts are a MELODY device (hum stays front-anchored -
         // its LHL band [0,2] cannot afford an off-beat opening the ceiling pass may never move)
         const bool backHeavy = o.role == RoleMelody && rrng.chance(0.35f);
-        const int  startOfs  = backHeavy ? CELL16 * (1 + rrng.ri(3)) : 0;
+        const int  startOfs  = backHeavy ? 1 + rrng.ri(3) : 0;   // [r21] lattice CELLS now
 
         auto buildCell = [&](int s, int budget) -> MotifCell
         {
             MotifCell mc;
+            mc.spanCells = (nLat % 2 == 0) ? nLat / 2 : nLat;
+            const int sCell   = latCellNear(c, s);
+            const int spanEnd = latColOf(c, sCell + mc.spanCells);
             std::vector<Cand> cands; std::vector<int> ons;
-            phraseCandidates(o, c, s, s + mc.span, cands);
+            phraseCandidates(o, c, s, spanEnd, cands);
             const int cellN = budget >= 3 ? std::min(5, 3 + (budget - 3) / 2) : 2;
-            sampleOnsets(o, rrng, cands, cellN, s, s + mc.span, ons);
-            for (int col : ons) if (col < s + mc.span) mc.ons.push_back(col - s);
+            sampleOnsets(o, c, rrng, cands, cellN, s, spanEnd, ons);
+            for (int col : ons)
+            {
+                const int rc = latCellNear(c, col) - sCell;
+                if (rc >= 0 && rc < mc.spanCells) mc.ons.push_back(rc);
+            }
             std::sort(mc.ons.begin(), mc.ons.end());
+            mc.ons.erase(std::unique(mc.ons.begin(), mc.ons.end()), mc.ons.end());
             if (mc.ons.empty()) mc.ons.push_back(0);
             if (startOfs > 0 && mc.ons[0] == 0
                 && (mc.ons.size() < 2 || startOfs < mc.ons[1])) mc.ons[0] = startOfs;   // back-heavy
@@ -942,33 +1094,37 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
             else                                      local = motif;                  // echoes reuse the identity
             const int cellN = (int) local.ons.size();
             if (cellN == 0) continue;
-            const int phraseCells = std::max(1, (e - s) / local.span);
+            const int sCell = latCellNear(c, s);
+            const int phraseCells = std::max(1, (latCellNear(c, e) - sCell) / local.spanCells);
             const int nPlace = std::max(1, std::min(phraseCells, (budget + cellN - 1) / cellN));
             std::vector<int> anchors;
             for (int k = 0; k < phraseCells && (int) anchors.size() < nPlace; ++k) anchors.push_back(k);
             if ((int) anchors.size() >= 3 && rrng.chance(0.30f))            // a mid-phrase breath (M14)
                 anchors.erase(anchors.begin() + 1 + rrng.ri((int) anchors.size() - 2));
             const bool varyLast = anchors.size() >= 2 && rrng.chance(0.4f); // M10: vary LATE, never the opening
-            const int  varyDir  = rrng.chance(0.5f) ? CELL16 : -CELL16;
+            const int  varyDir  = rrng.chance(0.5f) ? 1 : -1;               // [r21] one lattice CELL
+            const int  breathEnd = breathe ? latColOf(c, latCellNear(c, e) - 2) : e;
             const bool extend   = o.role == RoleMelody && rrng.chance(0.35f);   // hum stays spare
-            const int  breathEnd = breathe ? e - CELL16 * 2 : e;
 
             struct PN { int col, k, ci; };            // placement k, cell-onset ci (-1 = extension)
             std::vector<PN> pns;
             for (int a2 = 0; a2 < (int) anchors.size(); ++a2)
             {
-                const int base2 = s + anchors[(size_t) a2] * local.span;
+                const int baseCell = sCell + anchors[(size_t) a2] * local.spanCells;
                 for (int ci = 0; ci < cellN; ++ci)
                 {
-                    int col = base2 + local.ons[(size_t) ci];
+                    int g = baseCell + local.ons[(size_t) ci];
                     if (varyLast && a2 == (int) anchors.size() - 1 && ci == cellN - 1 && ci >= 2)
-                    { const int nc = col + varyDir; if (nc > base2 && nc < breathEnd) col = nc; }
+                    { const int ng = g + varyDir;
+                      const int nc = latColOf(c, ng);
+                      if (nc > latColOf(c, baseCell) && nc < breathEnd) g = ng; }
+                    const int col = latColOf(c, g);
                     if (col >= breathEnd || col >= e) continue;
                     pns.push_back({ col, a2, ci });
                 }
                 if (extend && a2 == (int) anchors.size() - 1 && cellN > 0)
-                {   // EXTENSION transform: one extra tail onset past the cell
-                    const int col = base2 + local.ons.back() + CELL16 * 2;
+                {   // EXTENSION transform: one extra tail onset two cells past the cell
+                    const int col = latColOf(c, baseCell + local.ons.back() + 2);
                     if (col < breathEnd) pns.push_back({ col, a2, -1 });
                 }
             }
@@ -1012,7 +1168,7 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
                     if (std::abs(d) <= 2) continue;
                     if (! skipUsed && std::abs(d) <= 4) { skipUsed = true; continue; }
                     const int dir2 = d > 0 ? 1 : -1;
-                    const bool strong2 = (notes[i].start % BEAT) == 0;
+                    const bool strong2 = latStrong(c, notes[i].start, false);   // [r21] lattice beats
                     bool cp2[12] = {};
                     if (strong2) chordPcs(o, chordRootDegAt(o, c, notes[i].start), cp2);
                     int best2 = notes[i].semi, bd2 = 1 << 20; bool bc2 = false;
@@ -1081,8 +1237,7 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
                             else if (mode == 2) semi = snapLad(lad, 2 * ref[0] - semi);      // inversion
                             if (pn.ci >= 2)
                             {   // M7 correction is licensed only PAST the first two notes (M10)
-                                const bool strong = (notes[i].start % BEAT) == 0
-                                                 || (c.nHits > 0 && notes[i].start % (BEAT / 2) == 0);
+                                const bool strong = latStrong(c, notes[i].start, true);
                                 if (strong)
                                 {
                                     bool cp[12]; chordPcs(o, chordRootDegAt(o, c, notes[i].start), cp);
@@ -1124,14 +1279,10 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
                 snapCadenceNote(o, lad, notes.back(), ph.resolved);
                 notes.back().core = true;
             }
-            {   // M12 prosody: the phrase PEAK moves onto the strongest onset (pitch swap only)
+            {   // M12 prosody: the phrase PEAK moves onto the strongest onset (pitch swap only;
+                // [r21] strength = the lattice's combined metric + hit map - the G7 hierarchy)
                 size_t peak = noteBase, strongI = noteBase; float bestW = -1.0f;
-                auto strengthAt = [&](int col)
-                {
-                    float w = metricW(col);
-                    for (int h = 0; h < c.nHits; ++h) if (c.hitCol[h] == col) w = std::max(w, 0.8f);
-                    return w;
-                };
+                auto strengthAt = [&](int col) { return latStrAt(c, col); };
                 for (size_t i = noteBase; i < notes.size(); ++i)
                 {
                     if (notes[i].semi > notes[peak].semi) peak = i;
@@ -1144,7 +1295,7 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
                     std::swap(notes[peak].semi, notes[strongI].semi);
             }
         }
-        makeLengths(o, notes, total);
+        makeLengths(o, c, notes, total);
         {   // M14: <= ~12 onsets per bar-pair - the quietest non-opening notes yield
             for (int w = 0; w * 2 * COLS < total; ++w)
                 for (;;)
@@ -1160,16 +1311,17 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
                     if (cnt <= 12 || weakest == (size_t) -1) break;
                     notes.erase(notes.begin() + (long) weakest);
                 }
-            makeLengths(o, notes, total);
+            makeLengths(o, c, notes, total);
         }
-        // breath caps: a vocal/melody phrase ends a 16th before the next one begins (M14)
+        // breath caps: a vocal/melody phrase ends a LATTICE CELL before the next one begins (M14)
         if (breathe)
             for (auto& ph : plan)
             {
                 const int e = (ph.startBar + ph.lenBars) * COLS;
+                const int air = latColOf(c, latCellNear(c, e) - 1);
                 for (auto& n : notes)
-                    if (n.start < e && n.start + n.len > e - CELL16)
-                        n.len = std::max(CELL16 / 2, e - CELL16 - n.start);
+                    if (n.start < e && n.start + n.len > air)
+                        n.len = std::max(latCw(c) / 2, air - n.start);
             }
     }
     else
@@ -1184,12 +1336,14 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
         for (auto& ph : plan)
         {
             const int s = ph.startBar * COLS, e = (ph.startBar + ph.lenBars) * COLS;
-            const int breathEnd = breathe ? e - CELL16 * 2 : e;
+            const int breathEnd = breathe ? latColOf(c, latCellNear(c, e) - 2) : e;
             std::vector<int> ons;
 
             if ((ph.tag == 'a' || ph.tag == 'n') && ! motifOns.empty())
             {
                 // keep the OPENING (the recognizable part): echoes keep ~70%, answers ~40%
+                // (motifOns are BAR-RELATIVE col offsets; phrases start on bar lines, so a
+                // re-anchored offset stays on the lattice - each bar's cells repeat exactly)
                 const float keep = ph.tag == 'a' ? 0.7f : 0.4f;
                 const int span = ph.lenBars * COLS;
                 for (int col : motifOns)
@@ -1199,15 +1353,15 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
                 phraseCandidates(o, c, s + (int) ((float) span * keep), e, cands);
                 std::vector<int> tail;
                 const int want = std::max(1, budgetFor(ph.lenBars) - (int) ons.size());
-                sampleOnsets(o, rrng, cands, want, s + (int) ((float) span * keep), breathEnd, tail);
+                sampleOnsets(o, c, rrng, cands, want, s + (int) ((float) span * keep), breathEnd, tail);
                 for (int col : tail) ons.push_back(col);
                 // ECHO RHYTHM VARIATION [v2]: nudge the last kept onset sometimes - a bit-identical
                 // rhythm reads as copy-paste (the user's complaint); the opening itself never moves
                 if (ph.tag == 'a' && ons.size() >= 3 && rrng.chance(0.4f))
                 {
                     std::sort(ons.begin(), ons.end());
-                    int& mv = ons[ons.size() - 2];
-                    const int shifted = mv + (rrng.chance(0.5f) ? CELL16 : -CELL16);
+                    int& mv = ons[ons.size() - 2];   // [r21] one lattice CELL either way
+                    const int shifted = latColOf(c, latCellNear(c, mv) + (rrng.chance(0.5f) ? 1 : -1));
                     if (shifted > s && shifted < breathEnd) mv = shifted;
                 }
             }
@@ -1215,7 +1369,7 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
             {
                 std::vector<Cand> cands;
                 phraseCandidates(o, c, s, e, cands);
-                sampleOnsets(o, rrng, cands, budgetFor(ph.lenBars), s, breathEnd, ons);
+                sampleOnsets(o, c, rrng, cands, budgetFor(ph.lenBars), s, breathEnd, ons);
             }
             std::sort(ons.begin(), ons.end());
             ons.erase(std::unique(ons.begin(), ons.end()), ons.end());
@@ -1267,15 +1421,16 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
                 { Note m = notes[i]; m.start -= s; motifNotes.push_back(m); }
             }
         }
-        makeLengths(o, notes, total);
-        // breath caps: a vocal phrase ends a 16th before the next one begins
+        makeLengths(o, c, notes, total);
+        // breath caps: a vocal phrase ends a LATTICE CELL before the next one begins
         if (breathe)
             for (auto& ph : plan)
             {
                 const int e = (ph.startBar + ph.lenBars) * COLS;
+                const int air = latColOf(c, latCellNear(c, e) - 1);
                 for (auto& n : notes)
-                    if (n.start < e && n.start + n.len > e - CELL16)
-                        n.len = std::max(CELL16 / 2, e - CELL16 - n.start);
+                    if (n.start < e && n.start + n.len > air)
+                        n.len = std::max(latCw(c) / 2, air - n.start);
             }
     }
 
@@ -1295,7 +1450,7 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
             const int fs = b * COLS + 3 * BEAT, fe = (b + 1) * COLS;
             std::vector<Cand> cands; std::vector<int> ons;
             phraseCandidates(o, c, fs, fe, cands);
-            sampleOnsets(o, fr, cands, std::max(1, budgetFor(1) / 2), fs, fe, ons);
+            sampleOnsets(o, c, fr, cands, std::max(1, budgetFor(1) / 2), fs, fe, ons);
             for (int col : ons)
             {
                 bool dup = false;
@@ -1316,7 +1471,7 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
                 notes.push_back({ col, 1, semi, 225 });
             }
         }
-        makeLengths(o, notes, total);
+        makeLengths(o, c, notes, total);
     }
 
     // VARY: same skeleton, new ornaments (Chords reroll their template dice instead - the
@@ -1420,6 +1575,7 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
     {
         std::sort(notes.begin(), notes.end(), [](const Note& a, const Note& b) { return a.start < b.start; });
         const float pushP = o.rhythm == RhDriving ? 0.35f : (o.rhythm == RhPockets ? 0.20f : 0.12f);
+        const int cw = latCw(c);
         Rng gr(o.rhythmSeed ^ 0xA17C1BA7u);
         bool prevPushed = false;
         for (int ci = 1; ci < c.nChords; ++ci)
@@ -1427,14 +1583,14 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
             const int cc2 = c.chordColAt[ci];
             const bool roll2 = gr.chance(pushP);        // consume EVERY change (deterministic)
             Note* at = nullptr;
-            for (auto& n : notes) if (n.start >= cc2 && n.start < cc2 + CELL16) { at = &n; break; }
+            for (auto& n : notes) if (n.start >= cc2 && n.start < cc2 + cw) { at = &n; break; }
             if (at == nullptr || prevPushed || ! roll2) { prevPushed = false; continue; }
-            const int tgt = cc2 - CELL16;
-            bool free2 = tgt > 0;
-            for (auto& n : notes) if (&n != at && std::abs(n.start - tgt) < CELL16) free2 = false;
+            const int tgt = latColOf(c, latCellNear(c, cc2) - 1);   // [r21] one lattice CELL early
+            bool free2 = tgt > 0 && tgt < cc2;
+            for (auto& n : notes) if (&n != at && std::abs(n.start - tgt) < cw) free2 = false;
             if (o.rhythm == RhPockets)                  // the push respects the pocket exclusions
                 for (int h = 0; h < c.nHits; ++h)
-                    if (std::abs(tgt - c.hitCol[h]) < CELL16) free2 = false;
+                    if (std::abs(tgt - c.hitCol[h]) < cw) free2 = false;
             if (! free2) { prevPushed = false; continue; }
             at->start = tgt;
             prevPushed = true;
@@ -1452,7 +1608,7 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
         buildLadder(o, centreG - (o.singable ? 6 : 8) - 2, centreG + (o.singable ? 6 : 8) + 2, ladG);
         for (auto& n : notes)
         {
-            if (n.core || (n.start % BEAT) != 0) continue;
+            if (n.core || ! latStrong(c, n.start, false)) continue;   // [r21] lattice beats
             bool cp[12]; chordPcs(o, chordRootDegAt(o, c, n.start), cp);
             if (cp[pc(n.semi)]) continue;
             int best = n.semi, bd = 4;                     // within a 3rd, else leave it (an NCT)
@@ -1511,7 +1667,7 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
             const int cur = notes[tgtI].semi;
             const int dir = cur > anchor ? 1 : -1;
             // [r20] a STRONG-col note prefers a CHORD-TONE step (M7 survives the floor)
-            const bool strongW = (notes[tgtI].start % BEAT) == 0;
+            const bool strongW = latStrong(c, notes[tgtI].start, false);
             bool cpW[12] = {};
             if (strongW) chordPcs(o, chordRootDegAt(o, c, notes[tgtI].start), cpW);
             int best = anchor, bd = 1 << 20; bool bestCt = false;
@@ -1530,38 +1686,61 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
         recoverLeaps();   // the floor pass may have re-shaped a recovery - re-guarantee M2
     }
 
-    // [P1 G3-lite -> r20 E FULL BAND] LHL SYNCOPATION BAND per role (the doc's targets: Melody/
-    // Riff [2,6], Bass [1,4], Hum [0,2]). CEILING: de-syncopate offenders by shifting the worst
-    // off-onset to the stronger silent col the scorer points at. FLOOR [r20]: a bar UNDER the
-    // band pushes its LAST movable onset one 16th LATER (off-position followed by air = honest
-    // syncopation), rhythm-seed deterministic. Skipped for Driving-with-drums (locked to the
-    // groove's own syncopation = intentional) and for Riff (the tiled cell is the identity);
-    // bar-opening onsets never move, and Pockets targets respect the exclusion windows.
+    // [P1 G3-lite -> r20 E FULL BAND -> r21 LATTICE] LHL SYNCOPATION BAND per role (the doc's
+    // targets: Melody/Riff [2,6], Bass [1,4], Hum [0,2]) on the CONTEXT lattice's weight map.
+    // CEILING: de-syncopate offenders by shifting the worst off-onset to a stronger silent
+    // LATTICE CELL - when the scorer's own target is illegal (a pocket exclusion / taken) the
+    // pass walks DOWN the silent cells' strength order instead of giving up. FLOOR [r20]: a
+    // bar UNDER the band pushes its LAST movable onset 1-2 lattice cells LATER (off-position
+    // followed by air = honest syncopation), rhythm-seed deterministic. Skipped for
+    // Driving-with-drums (locked to the groove's own syncopation = intentional) and for Riff
+    // (the tiled cell is the identity); bar-opening onsets never move.
     if (o.role != RoleRiff && o.role != RoleChords
         && ! (o.rhythm == RhDriving && c.nHits > 0) && ! notes.empty())
     {
         const int maxBand = o.role == RoleBass ? 4 : (o.role == RoleHum ? 2 : 6);
         const int minBand = o.role == RoleBass ? 1 : (o.role == RoleHum ? 0 : 2);
+        const int cw = latCw(c), nL = latN(c);
         auto nearAnyHit = [&](int col)
         {
             for (int i = 0; i < c.nHits; ++i)
-                if (std::abs(col - c.hitCol[i]) < CELL16) return true;
+                if (std::abs(col - c.hitCol[i]) < cw) return true;
             return false;
+        };
+        auto legalTarget = [&](int col)
+        {
+            if (o.rhythm == RhPockets && nearAnyHit(col)) return false;
+            for (auto& n : notes) if (std::abs(n.start - col) < cw) return false;
+            return true;
         };
         for (int b = 0; b < bars; ++b)
             for (int iter = 0; iter < 6; ++iter)
             {
                 std::sort(notes.begin(), notes.end(), byStart);
                 int wi = -1, tcol = -1;
-                if (lhlBarScoreImpl(notes, b, &wi, &tcol) <= maxBand || wi < 0 || tcol < 0) break;
+                if (lhlBarScoreImpl(notes, b, &wi, &tcol, &c) <= maxBand || wi < 0 || tcol < 0) break;
                 bool barFirst = true;                    // never move a bar's opening onset
                 for (auto& n : notes)
                     if (n.start >= b * COLS && n.start < notes[(size_t) wi].start) { barFirst = false; break; }
                 if (barFirst) break;
-                if (o.rhythm == RhPockets && nearAnyHit(tcol)) break;
-                bool taken = false;
-                for (auto& n : notes) if (n.start == tcol) { taken = true; break; }
-                if (taken) break;
+                if (! legalTarget(tcol))
+                {   // [r21] the named cell is blocked: the strongest LEGAL silent cell between
+                    // the offender and the next onset takes its place (the ceiling must HOLD)
+                    const int gW = latCellNear(c, notes[(size_t) wi].start);
+                    int gNext = (b + 1) * nL;
+                    for (auto& n : notes)
+                        if (n.start > notes[(size_t) wi].start)
+                        { gNext = std::min(gNext, latCellNear(c, n.start)); break; }
+                    tcol = -1; int bestW = -99;
+                    for (int g = gW + 1; g < gNext; ++g)
+                    {
+                        const int col2 = latColOf(c, g);
+                        if (nearAnyHit(col2)) break;   // a drum hit ends the air (scorer's rule)
+                        const int wq = c.latW[juceLikeClamp(0, c.bars * nL - 1, g)];
+                        if (wq > bestW && legalTarget(col2)) { bestW = wq; tcol = col2; }
+                    }
+                    if (tcol < 0) break;
+                }
                 notes[(size_t) wi].start = tcol;
             }
         Rng ir(o.rhythmSeed ^ 0x5C0FFEE5u);
@@ -1569,15 +1748,15 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
             for (int iter = 0; iter < 3; ++iter)
             {
                 std::sort(notes.begin(), notes.end(), byStart);
-                if (lhlBarScoreImpl(notes, b, nullptr, nullptr) >= minBand) break;
+                if (lhlBarScoreImpl(notes, b, nullptr, nullptr, &c) >= minBand) break;
                 Note* last = nullptr; int cnt = 0;       // the bar's LAST onset, never its first
                 for (auto& n : notes)
                     if (n.start >= b * COLS && n.start < (b + 1) * COLS) { last = &n; ++cnt; }
                 if (last == nullptr || cnt < 2) break;
-                const int tgt = last->start + CELL16 * (1 + ir.ri(2));
+                const int tgt = latColOf(c, latCellNear(c, last->start) + 1 + ir.ri(2));
                 if (tgt >= (b + 1) * COLS) break;
                 bool free2 = true;
-                for (auto& n : notes) if (&n != last && std::abs(n.start - tgt) < CELL16) free2 = false;
+                for (auto& n : notes) if (&n != last && std::abs(n.start - tgt) < cw) free2 = false;
                 if (o.rhythm == RhPockets && nearAnyHit(tgt)) break;
                 if (! free2) break;
                 last->start = tgt;
@@ -1620,22 +1799,26 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
         }
     }
 
-    // [P1 G8] SNARE PUNCTUATION (Melody): the snare's crack owns the 1/16 after it - offending
-    // onsets slide onto the snare col (ending ON the snare is idiomatic; Pockets slides past the
-    // shadow instead, its exclusion window forbids the hit itself), and the take's FINAL note
-    // snaps to the nearest snare col / one cell before it when a snare sits within half a beat.
+    // [P1 G8] SNARE PUNCTUATION (Melody): the snare's crack owns the LATTICE CELL after it -
+    // offending onsets slide onto the snare col (ending ON the snare is idiomatic; Pockets
+    // slides past the shadow instead, its exclusion window forbids the hit itself), and the
+    // take's FINAL note snaps to the nearest snare col / one cell before it when a snare sits
+    // within half a beat. [r21] all targets are lattice cells (the snare col itself is one).
     if (o.role == RoleMelody && c.nSnare > 0 && ! notes.empty())
     {
         std::sort(notes.begin(), notes.end(), byStart);
+        const int cw = latCw(c);
         auto onNote = [&](int col)
         { for (auto& n : notes) if (n.start == col) return true; return false; };
+        auto cellAfter  = [&](int col) { return latColOf(c, latCellNear(c, col) + 1); };
+        auto cellBefore = [&](int col) { return latColOf(c, latCellNear(c, col) - 1); };
         for (auto& n : notes)
             for (int i = 0; i < c.nSnare; ++i)
             {
                 const int sc = c.snareCol[i];
-                if (n.start > sc && n.start < sc + CELL16)
+                if (n.start > sc && n.start < sc + cw)
                 {
-                    n.start = (o.rhythm != RhPockets && ! onNote(sc)) ? sc : sc + CELL16;
+                    n.start = (o.rhythm != RhPockets && ! onNote(sc)) ? sc : cellAfter(sc);
                     break;
                 }
             }
@@ -1643,8 +1826,8 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
         int bestC = -1, bd = BEAT / 2 + 1;
         for (int i = 0; i < c.nSnare; ++i)
         {
-            const int prefer[2] = { o.rhythm == RhPockets ? c.snareCol[i] - CELL16 : c.snareCol[i],
-                                    o.rhythm == RhPockets ? c.snareCol[i] : c.snareCol[i] - CELL16 };
+            const int prefer[2] = { o.rhythm == RhPockets ? cellBefore(c.snareCol[i]) : c.snareCol[i],
+                                    o.rhythm == RhPockets ? c.snareCol[i] : cellBefore(c.snareCol[i]) };
             for (int cand : prefer)
                 if (cand >= 0 && cand < total && std::abs(cand - last.start) < bd
                     && (cand == last.start || ! onNote(cand)))
@@ -1754,6 +1937,7 @@ static inline void repitch(const Options& oIn, const Ctx& cIn, std::vector<Note>
     Ctx c = cIn;
     c.bars = std::max(1, std::min(MAX_BARS, c.bars));
     prepareChordsImpl(o, c);
+    prepareLatticeImpl(c);   // [r21] the strong-col rule reads the lattice strength map
     std::sort(notes.begin(), notes.end(), [](const Note& a, const Note& b) { return a.start < b.start; });
     Rng prng(o.pitchSeed);
     PitchState st;

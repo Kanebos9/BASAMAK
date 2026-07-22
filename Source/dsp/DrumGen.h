@@ -304,6 +304,7 @@ static inline void applyStyleSkeleton(int style, PartGen::Ctx& c)
     const DNA& d = dnaFor(style);
     std::vector<int> hats; detail::tierCells(d.hatTier, hats);
     c.nHits = c.nKick = c.nSnare = c.nHat = 0;
+    c.latticeN = 16;   // [r21] the style canon IS a 16th grid - the virtual groove's lattice
     auto pushHit = [&](int col, float str, int* n, int* colA, float* strA)
     {
         if (*n < PartGen::Ctx::MAX_HITS) { colA[*n] = col; strA[*n] = str; ++(*n); }

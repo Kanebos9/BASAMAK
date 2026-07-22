@@ -40,18 +40,25 @@ struct Readout
     int grooveChans = 0;   // step channels that contributed >= 1 hit
     int keyChans    = 0;   // channels (roll or pitched step) that contributed chroma
     int kick = 0, snare = 0, hat = 0;   // [P1] classified hit columns per drum role
+    int lattice     = 16;  // [r21] the derived context lattice (cells/bar) - the panel says it
 };
 
 // [P1 item 1a] drum-ROLE classification per step channel: the sound's bank CATEGORY first
-// (Kicks / Snares / Claps [snare-family] / Hi-Hats / Cymbals+Percussion [perc]), then mixName
-// keywords for user sounds, else a generic hit (combined list only).
+// (Kicks / Snares / Claps [snare-family] / Hi-Hats / Cymbals+Toms+Percussion+Electro Perc
+// [perc]), then mixName keywords for user sounds, else a generic hit (combined list only).
+// [r21 CONSENT GUARD] a KNOWN NON-DRUM category is AUTHORITATIVE: a bass filed under Bass
+// stays a bass even when its NAME says "Sub Kick" - the keyword fallback may only speak for
+// sounds the bank doesn't know (user sounds, empty category). Without this the Drum Kit role
+// could auto-target - and OVERWRITE - a melodic channel on a name coincidence.
 enum DrumRole { DrumKick = 0, DrumSnare, DrumHat, DrumPerc, DrumGeneric };
 inline int classifyDrumRole(const juce::String& category, const juce::String& mixName)
 {
     if (category == "Kicks")                              return DrumKick;
     if (category == "Snares" || category == "Claps")      return DrumSnare;
     if (category == "Hi-Hats")                            return DrumHat;
-    if (category == "Cymbals" || category == "Percussion") return DrumPerc;
+    if (category == "Cymbals" || category == "Toms"
+        || category == "Percussion" || category == "Electro Perc") return DrumPerc;
+    if (category.isNotEmpty())                            return DrumGeneric;
     const auto n = mixName.toLowerCase();
     if (n.contains("kick") || n.contains("808 boom"))     return DrumKick;
     if (n.contains("snare") || n.contains("clap"))        return DrumSnare;
@@ -117,6 +124,8 @@ inline PartGen::Ctx build(const Sequencer& sq, int head, int end, int selCh, Rea
             if (colA[h] == col) { strA[h] = juce::jmin(1.0f, strA[h] + str * 0.5f); return; }
         if (*nP < PartGen::Ctx::MAX_HITS) { colA[*nP] = col; strA[*nP] = juce::jmin(1.0f, str); ++(*nP); }
     };
+    // [r21] context-lattice scratch: hit weight per contributing step GRID (index = numSteps)
+    float latWeight[DrumChannel::MAX_STEPS + 1] = {};
     // [P1 1b] register map scratch: per-channel pitch histogram over the roll notes (min/med/max)
     int regLo[Sequencer::NUM_CHANNELS], regHi[Sequencer::NUM_CHANNELS], regCnt[Sequencer::NUM_CHANNELS];
     static_assert(Sequencer::NUM_CHANNELS <= PartGen::Ctx::MAX_REG, "register map sized to channels");
@@ -165,6 +174,8 @@ inline PartGen::Ctx build(const Sequencer& sq, int head, int end, int selCh, Rea
                         const int col = b * DrumChannel::DRAW_RES
                                       + i * DrumChannel::DRAW_RES / juce::jmax(1, cc.numSteps);
                         grooveChan[chn] = true;   // counted even when every hit doubles another channel's column
+                        if (cc.numSteps >= 1 && cc.numSteps <= DrumChannel::MAX_STEPS)
+                            latWeight[cc.numSteps] += cc.stepVel[i];   // [r21] this grid speaks
                         int f = -1;
                         for (int h = 0; h < ctx.nHits; ++h) if (ctx.hitCol[h] == col) { f = h; break; }
                         if (f >= 0) ctx.hitStr[f] = juce::jmin(1.0f, ctx.hitStr[f] + cc.stepVel[i] * 0.5f);
@@ -186,6 +197,31 @@ inline PartGen::Ctx build(const Sequencer& sq, int head, int end, int selCh, Rea
     }
     if (grooveMax > 0.0f)
         for (int i = 0; i < bars * 16; ++i) ctx.grooveHit[i] = juce::jmin(1.0f, ctx.grooveHit[i] / grooveMax);
+    {   // [2026-07-22 r21] THE CONTEXT LATTICE: the LCM of the contributing step grids (7+14
+        // -> 14), folded in HIT-WEIGHT order so the 48-cell cap drops the least-heard grid
+        // when it must (7+16 -> 112 = impossible: the heavier grid wins). A too-coarse result
+        // doubles until it can carry a melody (>= 12 cells/bar) - binary grids land back on
+        // the classic 16 exactly (4 -> 8 -> 16), triplet grids on 12, the 7 family on 14.
+        // Empty or roll-only context = 16. This is what lets the composed line - and then the
+        // step-count authority - live on the CONTEXT's grid instead of a hardcoded 4/4 16th
+        // bar (the "7-step drums came out as a 16-step bass" root cause).
+        struct CW { int n; float w; };
+        std::vector<CW> cws;
+        for (int n = 1; n <= DrumChannel::MAX_STEPS; ++n)
+            if (latWeight[n] > 0.0f) cws.push_back({ n, latWeight[n] });
+        std::sort(cws.begin(), cws.end(), [](const CW& a, const CW& b)
+                  { return a.w > b.w || (a.w == b.w && a.n < b.n); });
+        auto gcd = [](int a, int b) { while (b != 0) { const int t = a % b; a = b; b = t; } return a; };
+        int lat = 0;
+        for (const auto& cw : cws)
+        {
+            const int l2 = lat == 0 ? cw.n : lat / gcd(lat, cw.n) * cw.n;
+            if (l2 <= PartGen::Ctx::LAT_MAX) lat = l2;
+        }
+        if (lat <= 0) lat = 16;
+        while (lat < 12 && lat * 2 <= PartGen::Ctx::LAT_MAX) lat *= 2;
+        ctx.latticeN = lat;
+    }
     // hit lists must be SORTED (Pockets walks the gaps in order); channels interleave, so sort now
     auto sortHits = [](int n, int* cols, float* strs)
     {
@@ -269,6 +305,7 @@ inline PartGen::Ctx build(const Sequencer& sq, int head, int end, int selCh, Rea
     {
         ro->hits = ctx.nHits;
         ro->kick = ctx.nKick; ro->snare = ctx.nSnare; ro->hat = ctx.nHat;
+        ro->lattice = ctx.latticeN;
         ro->grooveChans = ro->keyChans = 0;
         for (int i = 0; i < Sequencer::NUM_CHANNELS; ++i)
         { ro->grooveChans += grooveChan[i] ? 1 : 0; ro->keyChans += keyChan[i] ? 1 : 0; }
@@ -298,7 +335,10 @@ inline int chooseStepCount(const std::vector<PartGen::Note>& notes, int bars)
             const int b     = note.start / DrumChannel::DRAW_RES;
             const int local = note.start - b * DrumChannel::DRAW_RES;
             const int k     = juce::jlimit(0, n - 1, (int) std::lround((double) local * n / 384.0));
-            const int grid  = (int) std::lround((double) k * 384.0 / n);
+            // [r21] grid col = k*384/n TRUNCATED, matching the gather's hit columns and the
+            // lattice's cells (lround here put every odd count's exact fit off by one col:
+            // a 7-step kick's real col 54 vs a rounded 55 failed the tol-0 pass forever)
+            const int grid  = k * 384 / n;
             if (std::abs(local - grid) > tolCols) return false;
             const int key = juce::jlimit(0, PartGen::MAX_BARS * DrumChannel::MAX_STEPS - 1, b * n + k);
             if (used[key]) return false;    // two onsets on one step: this grid can't hold them
