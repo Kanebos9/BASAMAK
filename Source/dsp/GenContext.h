@@ -264,6 +264,7 @@ inline PartGen::Ctx build(const Sequencer& sq, int head, int end, int selCh, Rea
         if (melChn >= 0)
         {
             ctx.melMed = chnMed[melChn];
+            std::vector<std::pair<int, int>> melNotes;   // [r22 H7] (concat col, semi), for the line
             for (int b = 0; b < bars; ++b)
             {
                 const auto& pat = sq.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, head + b)];
@@ -275,9 +276,26 @@ inline PartGen::Ctx build(const Sequencer& sq, int head, int end, int selCh, Rea
                     const int p0 = juce::jlimit(0, bars * 16 - 1, b * 16 + (int) n.start / 24);
                     const int p1 = juce::jlimit(p0, bars * 16 - 1,
                                                 b * 16 + ((int) n.start + (int) n.len - 1) / 24);
-                    for (int p = p0; p <= p1; ++p) ctx.melOcc[p] = true;
+                    for (int p = p0; p <= p1; ++p)
+                    {
+                        ctx.melOcc[p] = true;
+                        ctx.melPcP1[p] = (uint8_t) ((((int) n.semi % 12) + 12) % 12 + 1);
+                    }
                     ctx.melOccValid = true;
+                    melNotes.push_back({ b * DrumChannel::DRAW_RES + (int) n.start, (int) n.semi });
                 }
+            }
+            // [r22 H7] the melody LINE: onset cells + each onset's motion vs the previous onset
+            // (-1 down / 0 first-or-repeat / +1 up) - the Riff counter-line's contrary reference.
+            std::sort(melNotes.begin(), melNotes.end());
+            int prevSemi = 999;
+            for (const auto& mn : melNotes)
+            {
+                const int p = juce::jlimit(0, bars * 16 - 1, mn.first / 24);
+                ctx.melOnset[p] = true;
+                ctx.melDir[p] = (int8_t) (prevSemi == 999 || mn.second == prevSemi ? 0
+                                          : (mn.second > prevSemi ? 1 : -1));
+                prevSemi = mn.second;
             }
         }
     }
@@ -461,9 +479,14 @@ inline RollWrite writeRollOutput(Sequencer& sq, int head, int bars, int ch,
 // STEP-NATIVE (GENERATE-THEORY "DRUM UI") - the count is 16 (the canon grid) whenever the group
 // cap allows it, else the smallest valid grid that holds the cells (the item-A authority). Trap
 // hat rolls ride out as stepRoll ratchets with a RISING ramp (stepRollDecay > 0 = build up).
+// [r22 STAGE 3] KIT MICROTIMING: microMs (the style's mined per-role push/drag, already
+// Humanize-gated by DrumGen) lands as a constant stepNudge on the lane - hats early, snare
+// late, clamped +-0.25 step. THE KICK IS THE GRID ANCHOR: its lane's nudge clamps to 0 via
+// isKickLane (G5 - the bass's laid-back pocket nudge must never end up AHEAD of the kick).
 // ============================================================================
 inline StepWrite writeDrumLane(Sequencer& sq, int head, int bars, int ch,
-                               const std::vector<DrumGen::Hit>& hits)
+                               const std::vector<DrumGen::Hit>& hits,
+                               double microMs = 0.0, double barMs = 0.0, bool isKickLane = false)
 {
     StepWrite r;
     std::vector<PartGen::Note> ns;
@@ -472,6 +495,13 @@ inline StepWrite writeDrumLane(Sequencer& sq, int head, int bars, int ch,
     auto patOf = [&](int b) -> Sequencer::Pattern&
     { return sq.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, head + b)]; };
     r.switched = patOf(0).channels[ch].drawMode;
+    float nudge = 0.0f;
+    if (barMs > 0.0 && microMs != 0.0)
+    {
+        const double stepMs = barMs / (double) r.count;
+        nudge = (float) juce::jlimit(-0.25, 0.25, microMs / (stepMs * 0.5));
+        if (isKickLane) nudge = 0.0f;   // the kick anchors the grid (G5)
+    }
     for (int b = 0; b < bars; ++b)
     {
         auto& cc = patOf(b).channels[ch];
@@ -490,6 +520,7 @@ inline StepWrite writeDrumLane(Sequencer& sq, int head, int bars, int ch,
         if (cc.steps[k] && cc.stepVel[k] >= vel) continue;   // collision (coarse grid): louder wins
         cc.steps[k]   = true;
         cc.stepVel[k] = vel;
+        cc.stepNudge[k] = nudge;
         if (h.roll > 1)
         {
             cc.stepRoll[k]      = juce::jlimit(1, 6, h.roll);
@@ -530,5 +561,249 @@ inline int detectKeyFromCtx(const PartGen::Ctx& ctx, int& scaleTypeOut)
 inline int detectKey(const Sequencer& sq, int head, int end, int selCh, int& scaleTypeOut)
 {
     return detectKeyFromCtx(build(sq, head, end, selCh), scaleTypeOut);
+}
+
+// ============================================================================
+// [2026-07-22 r22] GENERATE ALL - the one-press FULL ARRANGEMENT (the capstone integration).
+// ONE shared foundation: the same style, key, seeds and (by construction) chord timeline for
+// every part; generation ORDER = kit -> bass -> melody -> chords, each later part GATHERING the
+// earlier parts as real context - the bass locks the just-written kick, the melody phrases
+// around the just-written snare, and the comp (last) reads the melody's occupancy mask + both
+// register medians (H5/H6 need the lanes to EXIST, which is why the comp closes the order).
+// Channel targeting = EXISTING SOUNDS ONLY (the competence rule - never loads or changes a
+// sound): kit onto drum-classified channels, bass onto the first Bass-category channel, chords
+// onto the first POLY Keys/Pads/Chords&Arps channel, melody onto the first Leads/Plucks/other
+// melodic channel (the SELECTED channel wins when it qualifies). A role with no suitable
+// channel is SKIPPED and NAMED. planArrangement takes a CONST Sequencer - planning (and the
+// consent popup built from it) can never mutate; decline = a provable no-op.
+// ============================================================================
+struct KitTargets { int kick = -1, snare = -1, hat = -1, open = -1, perc = -1;
+                    bool any() const { return kick >= 0 || snare >= 0 || hat >= 0 || open >= 0 || perc >= 0; } };
+
+inline KitTargets resolveKitTargets(const Sequencer& sq, int head, int selCh, bool fallbackToSelected)
+{
+    KitTargets kt;
+    const auto facNames = Factory::mixNames();
+    const auto facCats  = Factory::mixCategories();
+    auto roleOf = [&](int chn)
+    {
+        const auto& name = sq.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, head)]
+                              .channels[chn].mixName;
+        const int fi = facNames.indexOf(name);
+        return classifyDrumRole(fi >= 0 && fi < facCats.size() ? facCats[fi] : juce::String(), name);
+    };
+    auto isOpenName = [&](int chn)
+    {
+        const auto n = sq.patterns[head].channels[chn].mixName.toLowerCase();
+        return n.contains("open") || n.contains(" oh") || n.endsWith(" oh") || n == "oh";
+    };
+    for (int pass = 0; pass < 2; ++pass)   // pass 0 = first-found; pass 1 = the SELECTED channel wins its role
+        for (int chn = 0; chn < Sequencer::NUM_CHANNELS; ++chn)
+        {
+            if (pass == 1 && chn != selCh) continue;
+            const int r = roleOf(chn);
+            auto claim = [&](int& slot) { if (pass == 1 || slot < 0) slot = chn; };
+            if      (r == DrumKick)  claim(kt.kick);
+            else if (r == DrumSnare) claim(kt.snare);
+            else if (r == DrumHat)   { if (isOpenName(chn)) claim(kt.open); else claim(kt.hat); }
+            else if (r == DrumPerc)  claim(kt.perc);
+        }
+    if (kt.hat < 0 && kt.open >= 0) { kt.hat = kt.open; kt.open = -1; }   // only an "open"-named hat = THE hat
+    if (fallbackToSelected && kt.kick < 0 && kt.snare < 0 && kt.hat < 0)
+    {   // no drum channels anywhere (Drum Kit ROLE only): the SELECTED channel gets the single
+        // lane matching ITS classification (generic/perc = the kick groove)
+        const int r = roleOf(selCh);
+        if      (r == DrumSnare) kt.snare = selCh;
+        else if (r == DrumHat)   kt.hat   = selCh;
+        else                     kt.kick  = selCh;
+    }
+    return kt;
+}
+
+// D4's choke, extracted: open hat choked by the closed hat - ONLY when trivially safe (both
+// channels un-choked + a completely free group exists; channel-wide write). Returns the group
+// linked, or 0 (skipped silently). Never overwrites an existing choke assignment.
+inline int linkHatChoke(Sequencer& sq, int openCh, int hatCh)
+{
+    if (openCh < 0 || hatCh < 0 || openCh == hatCh) return 0;
+    if (sq.patterns[0].channels[openCh].chokeGroup != 0
+        || sq.patterns[0].channels[hatCh].chokeGroup != 0) return 0;
+    bool used[9] = {};
+    for (int c2 = 0; c2 < Sequencer::NUM_CHANNELS; ++c2)
+    {
+        const int gG = sq.patterns[0].channels[c2].chokeGroup;
+        if (gG >= 1 && gG <= 8) used[gG] = true;
+    }
+    for (int gG = 1; gG <= 8; ++gG)
+        if (! used[gG])
+        {
+            for (int p = 0; p < Sequencer::NUM_PATTERNS; ++p)   // choke groups are channel-wide
+            {
+                sq.patterns[p].channels[openCh].chokeGroup = gG;
+                sq.patterns[p].channels[hatCh].chokeGroup  = gG;
+            }
+            return gG;
+        }
+    return 0;
+}
+
+struct ArrangePlan
+{
+    KitTargets kit;
+    int bass = -1, chords = -1, melody = -1;
+};
+
+inline ArrangePlan planArrangement(const Sequencer& sq, int head, int selCh)
+{
+    ArrangePlan plan;
+    plan.kit = resolveKitTargets(sq, head, selCh, false);   // no drums = the kit is SKIPPED
+    const auto facNames = Factory::mixNames();
+    const auto facCats  = Factory::mixCategories();
+    bool claimed[Sequencer::NUM_CHANNELS] = {};
+    for (int chn : { plan.kit.kick, plan.kit.snare, plan.kit.hat, plan.kit.open, plan.kit.perc })
+        if (chn >= 0) claimed[chn] = true;
+    auto catOf = [&](int chn) -> juce::String
+    {
+        const auto& name = sq.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, head)]
+                              .channels[chn].mixName;
+        const int fi = facNames.indexOf(name);
+        return fi >= 0 && fi < facCats.size() ? facCats[fi] : juce::String();
+    };
+    auto isDrumChan = [&](int chn)
+    { return classifyDrumRole(catOf(chn), sq.patterns[head].channels[chn].mixName) != DrumGeneric; };
+    auto hasSound = [&](int chn)
+    { return sq.patterns[head].channels[chn].mixName.isNotEmpty(); };
+    for (int chn = 0; chn < Sequencer::NUM_CHANNELS && plan.bass < 0; ++chn)
+        if (! claimed[chn] && catOf(chn) == "Bass") { plan.bass = chn; claimed[chn] = true; }
+    for (int chn = 0; chn < Sequencer::NUM_CHANNELS && plan.chords < 0; ++chn)
+    {
+        const auto cat = catOf(chn);
+        const bool comping = cat == "Keys" || cat == "Pads & Choirs" || cat == "Chords & Arps";
+        if (! claimed[chn] && comping && sq.patterns[head].channels[chn].keysPolyMode)
+        { plan.chords = chn; claimed[chn] = true; }
+    }
+    // melody: the SELECTED channel wins when it qualifies as melodic; else Leads -> Plucks ->
+    // Bells -> any un-claimed non-drum, non-Bass channel with a sound loaded
+    auto melodicOk = [&](int chn)
+    { return ! claimed[chn] && hasSound(chn) && ! isDrumChan(chn) && catOf(chn) != "Bass"; };
+    if (melodicOk(selCh)) { plan.melody = selCh; claimed[selCh] = true; }
+    if (plan.melody < 0)
+        for (const char* want : { "Leads", "Plucks & Strings", "Bells & Mallets", "" })
+        {
+            for (int chn = 0; chn < Sequencer::NUM_CHANNELS && plan.melody < 0; ++chn)
+                if (melodicOk(chn) && (juce::String(want).isEmpty() || catOf(chn) == want))
+                { plan.melody = chn; claimed[chn] = true; }
+            if (plan.melody >= 0) break;
+        }
+    return plan;
+}
+
+struct ArrangeOptions
+{
+    const GenStyle::Style* dna = nullptr;
+    int  key = 0;
+    const int8_t* scale = nullptr; int scaleLen = 7;
+    int  density = 1, registerBand = 1, color = 0, rhythm = 1;
+    int  lines = 0, relation = 0;
+    bool singable = false;
+    int  intensity = 1, humanize = 0, fills = 0, progression = 0;
+    uint32_t rhythmSeed = 1, pitchSeed = 2;
+    int  varyCount = 0;
+    double barMs = 2000.0;
+};
+
+struct ArrangeResult
+{
+    juce::String kitDesc, skipped;      // per-lane counts / the roles that found no channel
+    int   kitChans = 0;
+    float swing = -1.0f;                // written group-wide when >= 0
+    int   chokeGroup = 0;
+    int   bassN = 0, melN = 0, chordN = 0;          // notes written per part
+    int   bassSteps = 0, melSteps = 0, chordSteps = 0;   // step count (0 = roll write)
+    int   lattice = 16;
+};
+
+inline ArrangeResult generateArrangement(Sequencer& sq, int head, int end,
+                                         const ArrangePlan& plan, const ArrangeOptions& ao)
+{
+    ArrangeResult res;
+    const int bars = juce::jlimit(1, PartGen::MAX_BARS, end - head + 1);
+    auto skip = [&](const char* nm)
+    { res.skipped += juce::String(res.skipped.isEmpty() ? "" : ", ") + nm; };
+    // ---- 1) KIT (the groove foundation everything else gathers) ----
+    if (plan.kit.any() && ao.dna != nullptr)
+    {
+        DrumGen::Options d;
+        d.style = 0; d.dna = ao.dna;
+        d.bars = bars;
+        d.density = ao.density; d.intensity = ao.intensity;
+        d.humanize = ao.humanize; d.fills = ao.fills;
+        d.wantOpenHat = plan.kit.open >= 0;
+        d.wantPerc    = plan.kit.perc >= 0;
+        d.rhythmSeed = ao.rhythmSeed; d.auxSeed = ao.pitchSeed; d.varyCount = ao.varyCount;
+        const auto out = DrumGen::generate(d);
+        auto put = [&](int chn, int lane, const char* nm, bool kickLane)
+        {
+            if (chn < 0 || out.lane[lane].empty()) return;
+            const auto r = writeDrumLane(sq, head, bars, chn, out.lane[lane],
+                                         (double) out.laneMicroMs[lane], ao.barMs, kickLane);
+            res.kitDesc += juce::String(res.kitDesc.isEmpty() ? "" : " / ") + nm + " "
+                         + juce::String(r.written);
+            ++res.kitChans;
+        };
+        put(plan.kit.kick,  DrumGen::LKick,    "kick",  true);
+        put(plan.kit.snare, DrumGen::LSnare,   "snare", false);
+        put(plan.kit.hat,   DrumGen::LHat,     "hat",   false);
+        put(plan.kit.open,  DrumGen::LOpenHat, "open hat", false);
+        put(plan.kit.perc,  DrumGen::LPerc,    "perc",  false);
+        for (int b = head; b <= end; ++b)
+            sq.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, b)].swing = out.swing;
+        res.swing = out.swing;
+        res.chokeGroup = linkHatChoke(sq, plan.kit.open, plan.kit.hat);
+    }
+    else skip("kit");
+    // ---- 2..4) the melodic parts, EACH GATHERING what was written before it ----
+    auto genPart = [&](int role, int ch, int& outN, int& outSteps)
+    {
+        Readout ro;
+        PartGen::Ctx ctx = build(sq, head, end, ch, &ro);
+        res.lattice = ro.lattice;
+        const bool scratch = ctx.nHits == 0;
+        if (scratch && ao.dna != nullptr) DrumGen::applyStyleSkeleton(*ao.dna, ctx);
+        PartGen::Options o;
+        o.role = role;
+        o.key = ao.key; o.scale = ao.scale; o.scaleLen = ao.scaleLen;
+        o.density = ao.density; o.registerBand = ao.registerBand; o.color = ao.color;
+        o.rhythm = ao.rhythm; o.lines = ao.lines; o.relation = ao.relation;
+        o.singable = role == PartGen::RoleHum || (role == PartGen::RoleMelody && ao.singable);
+        o.intensity = ao.intensity; o.humanize = ao.humanize; o.fills = ao.fills;
+        o.progression = ao.progression;
+        o.styleDna = ao.dna; o.styleVirtual = scratch;
+        o.styleAccent = ao.dna != nullptr ? ao.dna->accent : nullptr;
+        o.rhythmSeed = ao.rhythmSeed; o.pitchSeed = ao.pitchSeed; o.varyCount = ao.varyCount;
+        const bool chanStep = ! sq.patterns[head].channels[ch].drawMode;
+        if (role == PartGen::RoleChords && chanStep) o.forceMono = true;   // H9 degrade
+        auto notes = PartGen::generate(o, ctx);
+        if (chanStep)
+        {
+            const auto r = writeStepOutput(sq, head, bars, ch, notes, &ctx,
+                                           role == PartGen::RoleBass && ao.dna != nullptr
+                                               ? (double) ao.dna->microBass : 0.0,
+                                           ao.barMs);
+            outN = r.written; outSteps = r.count;
+        }
+        else
+        {
+            const auto r = writeRollOutput(sq, head, bars, ch, notes);
+            outN = r.written; outSteps = 0;
+        }
+    };
+    if (plan.bass   >= 0) genPart(PartGen::RoleBass,   plan.bass,   res.bassN,  res.bassSteps);
+    else skip("bass");
+    if (plan.melody >= 0) genPart(PartGen::RoleMelody, plan.melody, res.melN,   res.melSteps);
+    else skip("melody");
+    if (plan.chords >= 0) genPart(PartGen::RoleChords, plan.chords, res.chordN, res.chordSteps);
+    else skip("chords");
+    return res;
 }
 } // namespace GenContext

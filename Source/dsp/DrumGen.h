@@ -1,14 +1,23 @@
 #pragma once
 // ============================================================================
-// DrumGen [2026-07-22 r20] - the GENERATE feature's DRUM KIT engine (v1.5.6 dev).
+// DrumGen [2026-07-22 r20, r22] - the GENERATE feature's DRUM KIT engine (v1.5.6 dev).
 //
 // FOR NEW READERS: a pure, DETERMINISTIC, style-DNA drum generator. Given a
 // STYLE (genre canon), bar count and the panel dials, it emits per-LANE hit
 // lists (kick / snare / hat / open hat / perc) in CONCAT columns (384/bar,
-// cells = 16ths = 24 cols), plus the style's suggested pattern SWING.
+// cells = 16ths = 24 cols), plus the style's suggested pattern SWING and
+// [r22] per-lane MICROTIMING (mined push/drag ms, Humanize-gated).
 // The editor writes each lane to a real drum CHANNEL as STEPS (drums are
 // step-native - GENERATE-THEORY "DRUM UI"); trap hat rolls ride out as
 // stepRoll ratchets (Hit::roll / rollDec).
+//
+// [r22] STYLES ARE DATA now (GenStyle.h - the MMA lesson): every genre-specific
+// branch this file used to hard-code (trap's roll cells, house/techno's
+// all-offbeat open hats, the fill preference, the mined velocity means/sds and
+// the swing) reads from the parsed GenStyle::Style instead. Options.dna points
+// at the style (the panel's picker, incl. USER .basamakstyle files); the
+// legacy Options.style index falls back to the embedded factory table, so the
+// engine stays headless-testable with zero registry setup.
 //
 // THE RULES (docs/GENERATE-THEORY.md D1-D10) + THE CONSTANTS
 // (docs/generate-calibration.md, mined from the Groove MIDI Dataset, CC-BY):
@@ -32,7 +41,7 @@
 // (max 2 kick cells - D1); no JUCE, no editor deps (headless GenTest).
 // ============================================================================
 
-#include "PartGen.h"   // Rng + COLS/CELL16 constants
+#include "PartGen.h"   // Rng + COLS/CELL16 constants (PartGen pulls GenStyle.h in)
 
 namespace DrumGen
 {
@@ -49,52 +58,27 @@ struct Options
     int style = StHouse, bars = 1;
     int density = 1;          // ghost/perc budget shift (canon grids never densify)
     int intensity = 1;        // 0 soft | 1 medium | 2 hard velocity level
-    int humanize = 0;         // 0 off | 1 subtle | 2 loose - mined-sd velocity jitter
+    int humanize = 0;         // 0 off | 1 subtle | 2 loose - mined-sd velocity jitter + [r22] micro
     int fills = 0;            // 0 off | 1 last bar | 2 every 4-bar phrase end
     bool wantOpenHat = false; // a dedicated open-hat channel exists
     bool wantPerc = false;    // a perc channel exists
     uint32_t rhythmSeed = 1;  // pattern dice (canon mutations, ghost cells)
     uint32_t auxSeed = 2;     // flavour dice (velocity jitter, fill variant)
     int varyCount = 0;        // VARY = reroll mutations within the canon
+    // [r22] the style DATA (GenStyle registry entry, incl. user styles); nullptr = the
+    // embedded factory style at Options.style (headless callers need no registry).
+    const GenStyle::Style* dna = nullptr;
 };
 
 struct Out
 {
     std::vector<Hit> lane[NUM_LANES];
     float swing = 0.0f;       // pattern swing field value (0 = straight; % = 50 + 25 * swing)
+    // [r22 STAGE 3] per-lane mined push/drag in ms (negative = early), already Humanize-gated
+    // (Off = 0, Subtle = half the mined value, Loose = full). The step writer converts to
+    // stepNudge and ANCHORS THE KICK to the grid (G5: the bass may never lead the kick).
+    float laneMicroMs[NUM_LANES] = {};
 };
-
-// ---- STYLE DNA (D1/D2/D3/D9/D10 + the calibration tables; cells are 0-based 16ths) ----------
-struct DNA
-{
-    uint16_t kickCanon;   // immutable kick cells (bitmask)
-    uint16_t kickOpt;     // optional cells the seed picks from (max 2 - D1)
-    int      kickOptN;    // how many optional cells to place (cap 2)
-    uint16_t snareCells;  // the backbeat scheme (trap = 8 only; dembow = tresillo)
-    int      hatTier;     // 0 = offbeat 8ths | 1 = 8ths | 2 = 16ths
-    float    swingPct;    // D9/D10 + mined swing medians
-    int      ghostBudget; // ghosts per bar at Medium density (D6)
-    float    kickVel, snareVel, hatVel;   // mined per-genre means, backbeat law on the snare
-    float    ghostRatio;  // mined ghost-vs-p90 ratio (~0.22..0.30)
-};
-static inline uint16_t bm(std::initializer_list<int> cells)
-{ uint16_t m = 0; for (int c : cells) m = (uint16_t) (m | (1u << c)); return m; }
-
-static inline const DNA& dnaFor(int style)
-{
-    static const DNA d[NUM_STYLES] = {
-        //          kickCanon              kickOpt                     oN  snareCells            tier swing gh  kick  snare hat   gRatio
-        /*House*/     { bm({0,4,8,12}), 0,                          0, bm({4,12}),          0, 54.0f, 0, 0.88f, 0.84f, 0.50f, 0.25f },
-        /*Techno*/    { bm({0,4,8,12}), 0,                          0, bm({4,12}),          0, 50.0f, 0, 0.90f, 0.80f, 0.52f, 0.25f },
-        /*BoomBap*/   { bm({0}),        bm({6,7,10,14}),            2, bm({4,12}),          1, 60.0f, 2, 0.76f, 0.86f, 0.40f, 0.22f },
-        /*Trap*/      { bm({0}),        bm({3,6,7,10,11,14}),       2, bm({8}),             2, 50.0f, 1, 0.85f, 0.90f, 0.42f, 0.22f },
-        /*DnB*/       { bm({0,10}),     bm({6}),                    1, bm({4,12}),          1, 50.0f, 1, 0.85f, 0.86f, 0.50f, 0.25f },
-        /*Reggaeton*/ { bm({0,4,8,12}), 0,                          0, bm({3,6,11,14}),     1, 50.0f, 0, 0.80f, 0.78f, 0.45f, 0.25f },
-        /*Funk*/      { bm({0}),        bm({2,7,9,10,13}),          2, bm({4,12}),          2, 54.0f, 3, 0.72f, 0.87f, 0.38f, 0.27f },
-        /*Pop*/       { bm({0,8}),      bm({14}),                   1, bm({4,12}),          1, 50.0f, 1, 0.74f, 0.84f, 0.43f, 0.25f },
-    };
-    return d[style < 0 || style >= NUM_STYLES ? 0 : style];
-}
 
 namespace detail
 {
@@ -122,10 +106,19 @@ static inline Out generate(const Options& oIn)
     Options o = oIn;
     if (o.style < 0 || o.style >= NUM_STYLES) o.style = StHouse;
     o.bars = o.bars < 1 ? 1 : (o.bars > PartGen::MAX_BARS ? PartGen::MAX_BARS : o.bars);
-    const DNA& d = dnaFor(o.style);
+    // [r22] the style is DATA: the caller's registry entry, or the embedded factory fallback
+    const GenStyle::Style& d = o.dna != nullptr ? *o.dna : GenStyle::factory(o.style);
     Out out;
     out.swing = (d.swingPct - 50.0f) / 25.0f;
     if (out.swing < 0.0f) out.swing = 0.0f;
+    {   // [r22 STAGE 3] mined per-role microtiming, Humanize-gated (Off/half/full)
+        const float mg = o.humanize == 0 ? 0.0f : (o.humanize == 1 ? 0.5f : 1.0f);
+        out.laneMicroMs[LKick]    = d.microKick  * mg;
+        out.laneMicroMs[LSnare]   = d.microSnare * mg;
+        out.laneMicroMs[LHat]     = d.microHat   * mg;
+        out.laneMicroMs[LOpenHat] = d.microOHat  * mg;
+        out.laneMicroMs[LPerc]    = d.microPerc  * mg;
+    }
 
     // pattern dice: rhythm seed + varyCount = "reroll the mutations, keep the canon" (D1)
     Rng mr(o.rhythmSeed ^ (0x9e3779b9u * (uint32_t) (o.varyCount + 1)));
@@ -165,19 +158,57 @@ static inline Out generate(const Options& oIn)
             snareV[cell] = d.snareVel * (d.ghostRatio + (ar.uf() - 0.5f) * 0.06f);   // mined ~25%
         }
     }
-    // HAT tier cells + template velocities (D3); trap adds canonical ROLLS (D5)
+    // HAT tier cells + template velocities (D3); ratchet ROLLS come from the style data (D5)
     std::vector<int> hatCells; detail::tierCells(d.hatTier, hatCells);
-    // OPEN HAT cells (D4): house/techno = every 8th offbeat; others = 1-2 seed-picked offbeats
+    // OPEN HAT cells (D4): openhat all = every 8th offbeat; sparse = 1-2 seed-picked offbeats
     std::vector<int> openCells;
     if (o.wantOpenHat)
     {
-        if (o.style == StHouse || o.style == StTechno) openCells = { 2, 6, 10, 14 };
+        if (d.openHatAll) openCells = { 2, 6, 10, 14 };
         else { openCells.push_back(6); if (mr.chance(0.5f)) openCells.push_back(14); }
         // the open hat REPLACES the closed hit at its cell (a real hand only plays one)
         for (int oc : openCells)
             hatCells.erase(std::remove(hatCells.begin(), hatCells.end(), oc), hatCells.end());
-        // house/techno offbeat-only closed lane would now be EMPTY - play quiet on-beats under the opens
+        // an all-offbeat closed lane would now be EMPTY - play quiet on-beats under the opens
         if (hatCells.empty()) hatCells = { 0, 4, 8, 12 };
+    }
+    // [r22 originality] the seeded HAT ORNAMENT layer: New idea varies the hat LANGUAGE while
+    // the canon core stays identical (the mandate: a house 4-floor never moves - the hats do).
+    // Sparse tiers gain 0-2 QUIET push cells (16th 'a' ghosts), the 16th tier DROPS 0-2 weak
+    // cells (hat gaps; never the beat anchors, never the style's roll cells). Deterministic
+    // from the rhythm seed; the D3 velocity law still runs last.
+    std::vector<int> hatQuiet;
+    {
+        const int nOrn = mr.ri(3);
+        if (d.hatTier == 2)
+        {
+            std::vector<int> weak = { 1, 3, 5, 9, 13 };
+            weak.erase(std::remove_if(weak.begin(), weak.end(), [&](int w)
+                       { return ((d.hatRollAlways | d.hatRollMaybe) >> w) & 1; }), weak.end());
+            for (int k = 0; k < nOrn && ! weak.empty(); ++k)
+            {
+                const int pick = mr.ri((int) weak.size());
+                hatCells.erase(std::remove(hatCells.begin(), hatCells.end(), weak[(size_t) pick]),
+                               hatCells.end());
+                weak.erase(weak.begin() + pick);
+            }
+        }
+        else
+        {
+            std::vector<int> extra = { 3, 7, 11, 15 };
+            auto drop = [&](int cell)
+            { extra.erase(std::remove(extra.begin(), extra.end(), cell), extra.end()); };
+            for (int oc : openCells) drop(oc);
+            for (int hc : hatCells)  drop(hc);
+            for (int k = 0; k < nOrn && ! extra.empty(); ++k)
+            {
+                const int pick = mr.ri((int) extra.size());
+                hatQuiet.push_back(extra[(size_t) pick]);
+                hatCells.push_back(extra[(size_t) pick]);
+                extra.erase(extra.begin() + pick);
+            }
+            std::sort(hatCells.begin(), hatCells.end());
+        }
     }
     // PERC layer (D7): sparse, never duplicating the kick/snare accent cells
     std::vector<int> percCells;
@@ -194,6 +225,11 @@ static inline Out generate(const Options& oIn)
         }
         std::sort(percCells.begin(), percCells.end());
     }
+    // D5: the roll dice are consumed ONCE per maybe-cell (not per bar) so the bar loop stays
+    // a loop; a '?' cell rolls with p = 0.5 for the whole take (the old trap behaviour).
+    uint16_t rollMask = d.hatRollAlways;
+    for (int c = 0; c < 16; ++c)
+        if ((d.hatRollMaybe >> c) & 1 && mr.chance(0.5f)) rollMask = (uint16_t) (rollMask | (1u << c));
 
     // ---- emit per bar (fill bars get the D8 grammar) ------------------------------------------
     const float iMul = o.intensity == 0 ? 0.78f : (o.intensity == 2 ? 1.18f : 1.0f);
@@ -212,7 +248,8 @@ static inline Out generate(const Options& oIn)
         if (b == o.bars - 1) return true;
         return o.fills >= 2 && (b % 4) == 3;
     };
-    const int fillVariant = o.style == StTrap ? 2 : (ar.chance(0.6f) ? 0 : 1);   // 0 crescendo | 1 doubling | 2 hat rolls
+    const int fillVariant = d.fillVariant >= 0 ? d.fillVariant
+                                               : (ar.chance(0.6f) ? 0 : 1);   // 0 crescendo | 1 doubling | 2 hat rolls
 
     for (int b = 0; b < o.bars; ++b)
     {
@@ -221,22 +258,24 @@ static inline Out generate(const Options& oIn)
         const bool suppressTail = fill && fillVariant == 0;   // crescendo owns the last beat (D8)
         for (int c = 0; c < 16; ++c)
             if (kick[c]) out.lane[LKick].push_back({ base + c * PartGen::CELL16,
-                                                     vel(d.kickVel + (c == 0 ? 0.06f : 0.0f), 30.0f), 1, 0.0f });
+                                                     vel(d.kickVel + (c == 0 ? 0.06f : 0.0f), d.sdKick), 1, 0.0f });
         for (int c = 0; c < 16; ++c)
         {
             if (! snare[c]) continue;
             if (suppressTail && c >= 12) continue;             // the crescendo replaces the tail
-            out.lane[LSnare].push_back({ base + c * PartGen::CELL16, vel(snareV[c], 8.0f), 1, 0.0f });
+            out.lane[LSnare].push_back({ base + c * PartGen::CELL16, vel(snareV[c], d.sdSnare), 1, 0.0f });
         }
         int hi = 0;
         for (int c : hatCells)
         {
             if (suppressTail && c >= 12) { ++hi; continue; }   // hats duck under the crescendo
-            Hit h { base + c * PartGen::CELL16, vel(d.hatVel * detail::hatShape(d.hatTier, c, hi), 25.0f), 1, 0.0f };
-            // D5: trap's canonical rolls - half-beat before the snare + (sometimes) the bar end
-            if (o.style == StTrap && (c == 7 || (c == 15 && mr.chance(0.5f))))
+            const bool quiet = std::find(hatQuiet.begin(), hatQuiet.end(), c) != hatQuiet.end();
+            Hit h { base + c * PartGen::CELL16,
+                    vel(d.hatVel * detail::hatShape(d.hatTier, c, hi) * (quiet ? 0.55f : 1.0f), d.sdHat), 1, 0.0f };
+            // D5: the style's canonical roll cells (trap: half-beat before the snare + bar end)
+            if ((rollMask >> c) & 1)
             { h.roll = mr.chance(0.4f) ? 4 : 3; h.rollDec = 0.6f; }
-            if (fill && fillVariant == 2 && c >= 12)           // trap fill: bar-end roll ramp
+            if (fill && fillVariant == 2 && c >= 12)           // hat-roll fill: bar-end roll ramp
             { h.roll = c >= 14 ? 6 : 4; h.rollDec = 0.7f; }
             out.lane[LHat].push_back(h);
             ++hi;
@@ -244,7 +283,7 @@ static inline Out generate(const Options& oIn)
         if (fill && fillVariant == 0)
             for (int c = 12; c < 16; ++c)                      // snare crescendo 50 -> 120 (D8)
                 out.lane[LSnare].push_back({ base + c * PartGen::CELL16,
-                                             vel(0.42f + 0.17f * (float) (c - 12), 8.0f), 1, 0.0f });
+                                             vel(0.42f + 0.17f * (float) (c - 12), d.sdSnare), 1, 0.0f });
         if (fill && fillVariant == 1)
         {   // subdivision doubling: the last half-bar's hats become 16ths (D8)
             std::vector<int> have;
@@ -254,7 +293,7 @@ static inline Out generate(const Options& oIn)
             for (int c = 8; c < 16; ++c)
                 if (std::find(have.begin(), have.end(), c) == have.end())
                     out.lane[LHat].push_back({ base + c * PartGen::CELL16,
-                                               vel(d.hatVel * detail::hatShape(2, c, c), 25.0f), 1, 0.0f });
+                                               vel(d.hatVel * detail::hatShape(2, c, c), d.sdHat), 1, 0.0f });
         }
         int oi = 0;
         for (int c : openCells)
@@ -276,32 +315,19 @@ static inline Out generate(const Options& oIn)
     return out;
 }
 
-// [r20, E] the mined ACCENT tables (docs/generate-calibration.md "Accent structure" rows) for
-// melodic velocities: per-16th mean MIDI velocity of the style's nearest dataset genre. House/
-// Techno lean on the pop row (electronic genres are not in the dataset - the pop accent shape
-// is the closest even-backbeat profile), Boom-bap/Trap = hiphop, DnB = funk (breakbeat family),
-// Reggaeton = latin, Funk = funk, Pop = pop.
+// [r20, E -> r22 data] the mined ACCENT table for melodic velocities lives in the STYLE now
+// (docs/generate-calibration.md "Accent structure" rows, mapped per genre in the factory
+// texts). These shims keep the factory-index callers (tests) on one line.
 static inline const uint8_t* accentTable(int style)
-{
-    static const uint8_t hiphop[16] = { 76,44,61,47,104,48,53,44,72,47,66,52,97,58,70,49 };
-    static const uint8_t funk[16]   = { 62,41,56,46, 93,51,48,51,58,50,62,54,87,54,66,46 };
-    static const uint8_t latin[16]  = { 57,45,62,55, 58,48,59,54,53,59,62,55,65,55,61,57 };
-    static const uint8_t pop[16]    = { 63,40,41,64, 89,49,40,50,82,40,41,57,90,68,53,56 };
-    switch (style)
-    {
-        case StBoomBap: case StTrap: return hiphop;
-        case StFunk:    case StDnB:  return funk;
-        case StReggaeton:            return latin;
-        default:                     return pop;
-    }
-}
+{ return GenStyle::factory(style).accent; }
+static inline const GenStyle::Style& dnaFor(int style)
+{ return GenStyle::factory(style); }
 
 // [r20, F] STYLE SKELETON for the melodic roles: an empty context pulls the style's CANON kit
 // (no mutations, no ghosts - the deterministic identity grid) as the VIRTUAL groove, so
 // from-scratch melodies/basslines phrase against the style instead of the bare meter.
-static inline void applyStyleSkeleton(int style, PartGen::Ctx& c)
+static inline void applyStyleSkeleton(const GenStyle::Style& d, PartGen::Ctx& c)
 {
-    const DNA& d = dnaFor(style);
     std::vector<int> hats; detail::tierCells(d.hatTier, hats);
     c.nHits = c.nKick = c.nSnare = c.nHat = 0;
     c.latticeN = 16;   // [r21] the style canon IS a 16th grid - the virtual groove's lattice
@@ -348,4 +374,6 @@ static inline void applyStyleSkeleton(int style, PartGen::Ctx& c)
     sortHits(c.nSnare, c.snareCol, c.snareStr);
     sortHits(c.nHat, c.hatCol, c.hatStr);
 }
+static inline void applyStyleSkeleton(int style, PartGen::Ctx& c)   // factory-index shim (tests)
+{ applyStyleSkeleton(GenStyle::factory(style), c); }
 } // namespace DrumGen
