@@ -1715,8 +1715,10 @@ public:
     int  fills = 0;           // Off | Last bar | Every phrase (end-of-line density bump)
     int  progression = 0;     // Chords row: 0 = Auto (detected) | 1..6 stock progressions
     // [2026-07-22 r20] the drum-kit + universal-output round
-    int  style = 0;           // DrumGen::Style - drives the Drum Kit fully; melodic roles use it
-                              // as the virtual groove when no drums are heard (from-scratch DNA)
+    int  style = 0;           // index into the GenStyle registry (factory 0..7 + user styles);
+                              // drives the Drum Kit fully; ALL melodic roles read its DNA [r22]
+    juce::StringArray styleNames;            // [r22] registry names for the Style picker popup
+    std::function<void()> onRefreshStyles;   // [r22] the picker's "Refresh styles" entry
     int  outMode = 0;         // Write as: 0 Auto (channel mode wins) | 1 Steps | 2 Piano Roll
     bool hadNotes = false;    // channel had notes at open (dims the Keep-my-notes action)
     int  bars = 1;            // set by the editor before show() (merged-group size)
@@ -1726,7 +1728,8 @@ public:
                               // hits / key source) - set by the editor on open + after each action;
                               // drawn non-interactive under the hint line (squeeze, never ellipsis)
     // 0 New idea | 1 Vary | 2 Same rhythm | 3 Same notes | [r20] 4 keep RHYTHM (repitch) |
-    // 5 keep PITCHES (new rhythm) - 4/5 fire from the Keep-my-notes button's popup
+    // 5 keep PITCHES (new rhythm) - 4/5 fire from the Keep-my-notes button's popup |
+    // [r22] 6 GENERATE ALL (from scratch) - the one-press full arrangement
     std::function<void(int action)> onAction;
     std::function<void()> onClose;
     void show() { setVisible(true); toFront(true); repaint(); }
@@ -1734,17 +1737,19 @@ public:
     void mouseDown(const juce::MouseEvent&) override;
     juce::String getTooltip() override;
     // screen area of an action button - the replace-warning menu anchors HERE, not top-left
-    juce::Rectangle<int> actionScreenArea(int idx) { return localAreaToGlobal(actionRect(idx < 4 ? idx : 4)); }
+    juce::Rectangle<int> actionScreenArea(int idx)
+    { return localAreaToGlobal(actionRect(idx < 4 ? idx : (idx >= 6 ? 5 : 4))); }
 private:
     juce::Rectangle<int> panelRect() const;
     juce::Rectangle<int> rowRect(int row) const;                    // option rows 0..13 (3 bands) [r20]
     juce::Rectangle<int> chipRect(int row, int idx, int count) const;
     juce::Rectangle<int> singableRect() const;
-    juce::Rectangle<int> actionRect(int idx) const;                 // 0..3 (2x2) + 4 = Keep my notes (full row)
+    juce::Rectangle<int> actionRect(int idx) const;                 // 0..3 (2x2) | 4 Keep my notes | 5 GENERATE ALL
     juce::Rectangle<int> closeRect() const;
     juce::Rectangle<int> keyRect() const;
     juce::Rectangle<int> scaleRect() const;
     juce::Rectangle<int> chordsRect() const;                        // [P1] Chords override popup
+    juce::Rectangle<int> styleRect() const;                         // [r22] the Style picker button
 };
 
 //==============================================================================
@@ -3646,6 +3651,8 @@ private:
     // GENERATE [2026-07-20]: the part-generator feature (PartGen.h is the engine)
     void openGeneratePanel();               // prefill key/scale/role + show the panel
     void genAction(int action);             // an action button fired: roll seeds, generate, write notes
+    void genAllAction();                    // [r22] GENERATE ALL: plan + consent + full arrangement
+    void refreshGenStyles();                // [r22] rescan ~/Documents/BASAMAK/Styles into the registry
     int  detectGenKey(int& scaleTypeOut);   // pitch-class histogram over the roll channels -> best key
                                             // (groove/chroma context gathering lives inside genAction)
     void applyUndoState(const UndoEntry& e);
@@ -3965,6 +3972,8 @@ private:
     uint32_t genRhythmSeed = 1, genPitchSeed = 2;   // the two iteration seeds (rhythm | pitch)
     int  genVaryCount = 0;                          // Vary presses since the last reroll
     bool genHadNotes = false, genWarned = false;    // replace-existing-notes warning (once per open)
+    bool genAllWarned = false;                      // [r22] GENERATE ALL's own consent (once per open)
+    juce::String genStyleNote;                      // [r22] skipped user-style files (parse errors)
     ModFaderMatrix  modFaders;             // 12 route faders (6x2) inline in the MODULATION box
     RoutePicker     routePicker;           // its right-click source|target chooser (overlay)
     RemapEditor     remapEd;               // [2026-07-14] the per-route REMAP curve overlay (opened from the picker)

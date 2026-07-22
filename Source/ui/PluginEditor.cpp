@@ -3483,12 +3483,11 @@ static const char* const kGenHum[]     = { "Off", "Subtle", "Loose" };
 static const char* const kGenFills[]   = { "Off", "Last bar", "Every phrase" };
 static const char* const kGenProgs[]   = { "Auto (detected)", "I-V-vi-IV", "I-vi-IV-V",
                                            "i-VI-III-VII", "ii-V-I", "I-IV-V", "12-bar blues" };
-// [r20] Style (DrumGen::kStyleName order) + the Write-as output row
-static const char* const kGenStyles[]  = { "House", "Techno", "Boom-bap", "Trap", "DnB",
-                                           "Reggaeton", "Funk", "Pop" };
+// [r22] the Style row is a PICKER now (GenStyle registry: 8 factory + user .basamakstyle files)
 static const char* const kGenOut[]     = { "Auto", "Steps", "Piano Roll" };
 static const char* const kGenActions[] = { "NEW IDEA", "VARY", "Same rhythm, new notes", "Same notes, new rhythm",
-                                           "KEEP MY NOTES (augment)..." };
+                                           "KEEP MY NOTES (augment)...",
+                                           "GENERATE ALL (from scratch)" };
 static const juce::Colour kGenAccent { 0xffa0e8b0 };   // the Generate green (roll-operations family)
 // [r20] rows live in three labeled BANDS: What (0-4) | Feel (5-10) | Form (11-13)
 //   0 Role | 1 Key | 2 Chords | 3 Style | 4 Write as || 5 Density | 6 Register | 7 Color |
@@ -3499,8 +3498,8 @@ static inline int genBandOf(int row) { return row < 5 ? 0 : (row < 11 ? 1 : 2); 
 struct GenGeom { int pitch, hdr, chipH, actH, actPitch, panelH; };
 static inline GenGeom genGeom(int totalH)
 {
-    if (totalH >= 780) return { 33, 18, 26, 34, 40, 740 };
-    return { 20, 10, 17, 24, 28, 460 };
+    if (totalH >= 820) return { 33, 18, 26, 34, 40, 780 };   // [r22] + the GENERATE ALL row
+    return { 20, 10, 17, 24, 26, 476 };
 }
 }
 
@@ -3531,13 +3530,15 @@ juce::Rectangle<int> GeneratePanel::scaleRect() const
 { const auto r = rowRect(1); return { r.getX() + 138, r.getY() + 1, 96, genGeom(getHeight()).chipH }; }
 juce::Rectangle<int> GeneratePanel::chordsRect() const
 { const auto r = rowRect(2); return { r.getX() + 68, r.getY() + 1, 200, genGeom(getHeight()).chipH }; }
+juce::Rectangle<int> GeneratePanel::styleRect() const   // [r22] the Style picker button
+{ const auto r = rowRect(3); return { r.getX() + 68, r.getY() + 1, 200, genGeom(getHeight()).chipH }; }
 juce::Rectangle<int> GeneratePanel::actionRect(int idx) const
 {
     const auto p = panelRect();
     const auto gg = genGeom(getHeight());
     const int w = (p.getWidth() - 24 - 8) / 2;
-    if (idx >= 4)   // [r20] KEEP MY NOTES: a full-width third action row
-        return { p.getX() + 12, rowRect(13).getBottom() + 6 + 2 * gg.actPitch,
+    if (idx >= 4)   // [r20] KEEP MY NOTES + [r22] GENERATE ALL: full-width rows 3 and 4
+        return { p.getX() + 12, rowRect(13).getBottom() + 6 + (idx - 2) * gg.actPitch,
                  p.getWidth() - 24, gg.actH };
     return { p.getX() + 12 + (idx % 2) * (w + 8),
              rowRect(13).getBottom() + 6 + (idx / 2) * gg.actPitch, w, gg.actH };
@@ -3612,9 +3613,16 @@ void GeneratePanel::paint(juce::Graphics& g)
         g.drawText("Chords", r.getX(), r.getY(), 64, r.getHeight(), juce::Justification::centredLeft, false);
         btn(chordsRect(), kGenProgs[juce::jlimit(0, 6, progression)], drums);
     }
-    // [r20] STYLE (genre DNA): the Drum Kit's canon; melodic roles borrow it as the virtual
-    // groove when nothing is heard. WRITE AS = the universal output row (drums are step-native).
-    chips(3, "Style",    kGenStyles,  8, style, false);
+    // [r20 -> r22] STYLE (genre DNA) is a PICKER now - factory + user .basamakstyle files; it
+    // speaks for EVERY role. WRITE AS = the universal output row (drums are step-native).
+    {
+        const auto r = rowRect(3);
+        g.setColour(juce::Colour(0xff8a94b0)); g.setFont(juce::Font(12.0f, juce::Font::bold));
+        g.drawText("Style", r.getX(), r.getY(), 64, r.getHeight(), juce::Justification::centredLeft, false);
+        const juce::String nm = style >= 0 && style < styleNames.size() ? styleNames[style]
+                                                                        : juce::String("House");
+        btn(styleRect(), nm, false);
+    }
     chips(4, "Write as", kGenOut,     3, outMode, drums);
     bandHdr(5, "FEEL");
     chips(5, "Density",  kGenDens,    3, density, false);
@@ -3635,18 +3643,19 @@ void GeneratePanel::paint(juce::Graphics& g)
       g.setFont(juce::Font(12.0f, juce::Font::bold));
       g.drawText("Singable", sr, juce::Justification::centred, false); }
 
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < 6; ++i)
     {
         const auto ar = actionRect(i);
-        const bool big = i < 2;
+        const bool big = i < 2 || i == 5;        // [r22] GENERATE ALL reads as a primary action
         const bool dim = i == 4 && ! hadNotes;   // Keep-my-notes needs notes to keep
         g.setColour((big ? juce::Colour(0xff2a4a3a) : juce::Colour(0xff26263c)).withAlpha(dim ? 0.4f : 1.0f));
         g.fillRoundedRectangle(ar.toFloat(), 5.0f);
+        if (i == 5) { g.setColour(kGenAccent.withAlpha(0.7f)); g.drawRoundedRectangle(ar.toFloat(), 5.0f, 1.2f); }
         g.setColour((big ? kGenAccent : juce::Colour(0xffcfd6e6)).withAlpha(dim ? 0.4f : 1.0f));
         g.setFont(juce::Font(big ? 14.5f : 12.5f, juce::Font::bold));
         g.drawFittedText(kGenActions[i], ar, juce::Justification::centred, 1, 0.7f);
     }
-    const int hintY = actionRect(4).getBottom() + 4;
+    const int hintY = actionRect(5).getBottom() + 4;
     if (gg.panelH > 500)
     {
         g.setColour(juce::Colour(0xff6a7490)); g.setFont(juce::Font(11.5f));
@@ -3679,7 +3688,22 @@ void GeneratePanel::mouseDown(const juce::MouseEvent& e)
     };
     const bool drums = role == 5;   // [r20] dimmed rows ignore clicks while Drum Kit is the role
     if (hitChips(0, 6, role))          return;
-    if (hitChips(3, 8, style))         return;
+    if (styleRect().contains(pos))
+    {   // [r22] the STYLE PICKER: registry styles (factory + user, tagged) + Refresh
+        juce::PopupMenu m;
+        for (int i = 0; i < styleNames.size(); ++i)
+            m.addItem(i + 1, styleNames[i], true, i == style);
+        m.addSeparator();
+        m.addItem(9000, "Refresh styles (rescan the Styles folder)");
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(
+                            localAreaToGlobal(styleRect())),
+                        [this](int r)
+                        {
+                            if (r == 9000) { if (onRefreshStyles) onRefreshStyles(); repaint(); }
+                            else if (r > 0) { style = r - 1; repaint(); }
+                        });
+        return;
+    }
     if (! drums && hitChips(4, 3, outMode))       return;
     if (hitChips(5, 3, density))       return;
     if (! drums && hitChips(6, 3, registerBand))  return;
@@ -3732,6 +3756,7 @@ void GeneratePanel::mouseDown(const juce::MouseEvent& e)
                         [this](int r) { if (r >= 1 && onAction) onAction(r == 1 ? 4 : 5); });
         return;
     }
+    if (actionRect(5).contains(pos)) { if (onAction) onAction(6); return; }   // [r22] GENERATE ALL
 }
 
 juce::String GeneratePanel::getTooltip()
@@ -3757,11 +3782,14 @@ juce::String GeneratePanel::getTooltip()
                          "- Auto: detected from your other channels' notes (stock changes when nothing is heard).\n"
                          "- Or pick a classic progression - it overrides detection for every role.\n"
                          "- Basslines land the ROOT on every change and walk an approach note into it.";
-    if (inRow(3)) return "STYLE: the genre DNA.\n\n"
-                         "- Drum Kit: it IS the pattern - kick canon, hat language, backbeat scheme, ghosts "
-                         "and the genre's swing (written to this pattern's Swing, disclosed below).\n"
-                         "- Melodic roles: when NO drums are heard, the style's canon kit becomes the "
-                         "virtual groove the part phrases against (instead of the bare meter).";
+    if (inRow(3)) return "STYLE: the genre DNA - it speaks for EVERY role.\n\n"
+                         "- Drum Kit: it IS the pattern - kick canon, hat language, backbeat scheme, ghosts, "
+                         "microtiming and the genre's swing (written to this pattern's Swing, disclosed below).\n"
+                         "- Melodic roles: the style's bass cells / melody cells / chord-stab templates and "
+                         "progression pool drive from-scratch writing, and bias the rhythm when a real groove "
+                         "is heard (your groove always outranks the style).\n"
+                         "- Your own styles: put .basamakstyle files in Documents/BASAMAK/Styles (see "
+                         "docs/STYLES.md in the repo) - they appear here, tagged; Refresh rescans.";
     if (inRow(4)) return "WRITE AS: where the part lands.\n\n"
                          "- Auto: the channel's current mode wins (step channel = steps, roll = roll notes).\n"
                          "- Steps: ANY role writes step data - the count is chosen to hold the part's "
@@ -3815,6 +3843,13 @@ juce::String GeneratePanel::getTooltip()
                          "- Keep my NOTES: your pitch sequence stays (in order); a fresh rhythm is written "
                          "under it.\n"
                          "- Undo restores; dimmed when the channel is empty.";
+    if (actionRect(5).contains(pos)) return "GENERATE ALL: one press composes a complete from-scratch "
+                         "arrangement - drum kit + bassline + melody + chords - on ONE shared "
+                         "foundation (same style, key, chords, seeds), each part written AGAINST "
+                         "the ones before it.\n\n"
+                         "- Targets your EXISTING channels by their loaded sounds (never changes a "
+                         "sound); a role with no suitable channel is skipped and named.\n"
+                         "- A consent list shows the full plan first; one undo restores everything.";
     if (actionRect(0).contains(pos)) return "NEW IDEA: a full reroll - fresh rhythm AND fresh notes "
                          "(Drum Kit: the canon stays, its free cells reroll).";
     if (actionRect(1).contains(pos)) return "VARY: keep this melody's skeleton, change ~a third of the notes (same idea, new ornaments). "
@@ -8158,7 +8193,11 @@ void DrumSequencerEditor::openGeneratePanel()
         GenContext::Readout ro;
         GenContext::build(sq, head, end, selectedChannel, &ro);
         generatePanel.contextLine = genReadoutLine(generatePanel, ro);
+        // [r22] a skipped user-style file is NEVER silent (the parse-error note rides the line)
+        if (genStyleNote.isNotEmpty()) generatePanel.contextLine += genStyleNote;
     }
+    generatePanel.style = juce::jlimit(0, juce::jmax(0, GenStyle::count() - 1), generatePanel.style);
+    genAllWarned = false;
     genHadNotes = false;
     for (int b = head; b <= end; ++b)
     {   // [r20] BOTH sides count - the Write-as row can target either world
@@ -8180,50 +8219,17 @@ void DrumSequencerEditor::genAction(int action)
     auto& sq = proc.sequencer;
     const int ch = selectedChannel;
     const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
+    if (action == 6) { genAllAction(); return; }         // [r22] the one-press full arrangement
     const bool isDrums = generatePanel.role == 5;        // [r20] the multi-channel Drum Kit role
     const bool keepMode = action == 4 || action == 5;    // [r20 item I] augment, never replace
+    // [r22] the STYLE is a registry entry now (factory + user files) - resolved once per action
+    const int styleIdx = juce::jlimit(0, GenStyle::count() - 1, generatePanel.style);
+    const GenStyle::Style& styleDna = GenStyle::at(styleIdx);
 
-    // ---- [r20 item B] DRUM KIT channel targets, resolved up front so the replace warning
-    // covers THEM (the kit writes wherever the drum channels live, not the selected channel).
-    struct KitTgt { int kick = -1, snare = -1, hat = -1, open = -1, perc = -1; };
-    KitTgt kt;
-    if (isDrums)
-    {
-        const auto facNames = Factory::mixNames();
-        const auto facCats  = Factory::mixCategories();
-        auto roleOf = [&](int chn)
-        {
-            const auto& name = sq.patterns[head].channels[chn].mixName;
-            const int fi = facNames.indexOf(name);
-            return GenContext::classifyDrumRole(fi >= 0 && fi < facCats.size() ? facCats[fi]
-                                                                               : juce::String(), name);
-        };
-        auto isOpenName = [&](int chn)
-        {
-            const auto n = sq.patterns[head].channels[chn].mixName.toLowerCase();
-            return n.contains("open") || n.contains(" oh") || n.endsWith(" oh") || n == "oh";
-        };
-        for (int pass = 0; pass < 2; ++pass)   // pass 0 = first-found; pass 1 = the SELECTED channel wins its role
-            for (int chn = 0; chn < Sequencer::NUM_CHANNELS; ++chn)
-            {
-                if (pass == 1 && chn != ch) continue;
-                const int r = roleOf(chn);
-                auto claim = [&](int& slot) { if (pass == 1 || slot < 0) slot = chn; };
-                if      (r == GenContext::DrumKick)  claim(kt.kick);
-                else if (r == GenContext::DrumSnare) claim(kt.snare);
-                else if (r == GenContext::DrumHat)   { if (isOpenName(chn)) claim(kt.open); else claim(kt.hat); }
-                else if (r == GenContext::DrumPerc)  claim(kt.perc);
-            }
-        if (kt.hat < 0 && kt.open >= 0) { kt.hat = kt.open; kt.open = -1; }   // only an "open"-named hat = THE hat
-        if (kt.kick < 0 && kt.snare < 0 && kt.hat < 0)
-        {   // no drum channels anywhere: the SELECTED channel gets the single lane matching ITS
-            // classification (a kick channel gets the kick part; generic/perc = the kick groove)
-            const int r = roleOf(ch);
-            if      (r == GenContext::DrumSnare) kt.snare = ch;
-            else if (r == GenContext::DrumHat)   kt.hat   = ch;
-            else                                 kt.kick  = ch;
-        }
-    }
+    // ---- [r20 item B -> r22 extracted] DRUM KIT channel targets, resolved up front so the
+    // replace warning covers THEM (the kit writes wherever the drum channels live).
+    GenContext::KitTargets kt;
+    if (isDrums) kt = GenContext::resolveKitTargets(sq, head, ch, true);
 
     // ---- [r21 CONSENT] every write the user didn't explicitly aim at is spelled out FIRST,
     // with names, once per panel-open (rerolls of our own output never re-ask; decline = a
@@ -8264,8 +8270,7 @@ void DrumSequencerEditor::genAction(int action)
         { if (chn >= 0) m.addItem(90 + chn, chanDataDesc(chn) + juce::String(" <- ") + nm, false); };
         lane(kt.kick, "kick");  lane(kt.snare, "snare"); lane(kt.hat, "hats");
         lane(kt.open, "open hat"); lane(kt.perc, "perc");
-        const float newSw = (DrumGen::dnaFor(juce::jlimit(0, DrumGen::NUM_STYLES - 1,
-                                                          generatePanel.style)).swingPct - 50.0f) / 25.0f;
+        const float newSw = (styleDna.swingPct - 50.0f) / 25.0f;
         m.addItem(80, "Swing -> " + juce::String(juce::roundToInt(
                           50.0f + 25.0f * juce::jmax(0.0f, newSw)))
                       + "% group-wide (now " + juce::String(juce::roundToInt(
@@ -8315,7 +8320,8 @@ void DrumSequencerEditor::genAction(int action)
     if (isDrums)
     {
         DrumGen::Options d;
-        d.style      = juce::jlimit(0, DrumGen::NUM_STYLES - 1, generatePanel.style);
+        d.style      = styleIdx;
+        d.dna        = &styleDna;   // [r22] the parsed style (factory or user file)
         d.bars       = juce::jlimit(1, PartGen::MAX_BARS, end - head + 1);
         d.density    = generatePanel.density;
         d.intensity  = generatePanel.intensity;
@@ -8327,12 +8333,19 @@ void DrumSequencerEditor::genAction(int action)
         d.auxSeed    = genPitchSeed;
         d.varyCount  = genVaryCount;
         const auto out = DrumGen::generate(d);
+        // [r22 STAGE 3] the mined per-role microtiming lands as stepNudge (Humanize-gated in
+        // DrumGen; the kick lane anchors to the grid - G5)
+        const double barMs = 60000.0 / juce::jmax(1.0, proc.currentBpm)
+                           * (juce::jmax(1, proc.currentTimeSigNum) * 4.0
+                              / juce::jmax(1, proc.currentTimeSigDen));
         commitUndoNow();   // ONE undo covers every lane + the swing write
         juce::String desc; int chans = 0;
         auto put = [&](int chn, int lane, const char* nm)
         {
             if (chn < 0 || out.lane[lane].empty()) return;
-            const auto r = GenContext::writeDrumLane(sq, head, d.bars, chn, out.lane[lane]);
+            const auto r = GenContext::writeDrumLane(sq, head, d.bars, chn, out.lane[lane],
+                                                     (double) out.laneMicroMs[lane], barMs,
+                                                     lane == (int) DrumGen::LKick);
             desc += juce::String(desc.isEmpty() ? "" : " / ") + nm + " " + juce::String(r.written);
             ++chans;
         };
@@ -8346,32 +8359,12 @@ void DrumSequencerEditor::genAction(int action)
         for (int b = head; b <= end; ++b) sq.patterns[b].swing = out.swing;
         sliderSwing.setValue(out.swing, juce::dontSendNotification);
         refreshSwingLabel();
-        // D4's choke: open hat choked by the closed hat - ONLY when trivially safe (both
-        // channels un-choked + a completely free group exists); else skipped silently.
+        // D4's choke: open hat choked by the closed hat - ONLY when trivially safe ([r22]
+        // extracted to GenContext::linkHatChoke; never overwrites an assignment).
         juce::String choked;
-        if (kt.open >= 0 && kt.hat >= 0 && kt.open != kt.hat
-            && sq.patterns[0].channels[kt.open].chokeGroup == 0
-            && sq.patterns[0].channels[kt.hat].chokeGroup == 0)
-        {
-            bool used[9] = {};
-            for (int c2 = 0; c2 < Sequencer::NUM_CHANNELS; ++c2)
-            {
-                const int gG = sq.patterns[0].channels[c2].chokeGroup;
-                if (gG >= 1 && gG <= 8) used[gG] = true;
-            }
-            for (int gG = 1; gG <= 8; ++gG)
-                if (! used[gG])
-                {
-                    for (int p = 0; p < Sequencer::NUM_PATTERNS; ++p)   // choke groups are channel-wide
-                    {
-                        sq.patterns[p].channels[kt.open].chokeGroup = gG;
-                        sq.patterns[p].channels[kt.hat].chokeGroup  = gG;
-                    }
-                    choked = "  Open hat choked by the closed hat (group " + juce::String(gG) + ").";
-                    break;
-                }
-        }
-        generatePanel.contextLine = "Kit (" + juce::String(DrumGen::kStyleName[d.style]) + "): wrote "
+        if (const int gG = GenContext::linkHatChoke(sq, kt.open, kt.hat); gG > 0)
+            choked = "  Open hat choked by the closed hat (group " + juce::String(gG) + ").";
+        generatePanel.contextLine = "Kit (" + juce::String(styleDna.name) + "): wrote "
             + desc + " steps to " + juce::String(chans) + (chans == 1 ? " channel." : " channels.")
             + "  Swing -> " + juce::String(juce::roundToInt(50.0f + 25.0f * out.swing))
             + "% (group-wide)." + choked;
@@ -8391,12 +8384,14 @@ void DrumSequencerEditor::genAction(int action)
     const int bars = ctx.bars;
     generatePanel.contextLine = genReadoutLine(generatePanel, ro);
     // [r20 item F] FROM-SCRATCH STYLE DNA: no drums heard = the picked style's CANON kit becomes
-    // the virtual groove the part phrases against (instead of the bare meter grid).
-    if (ctx.nHits == 0)
+    // the virtual groove the part phrases against (instead of the bare meter grid). [r22] the
+    // style then also PULLS (bass cells / melody cells / comp templates placed literally).
+    const bool fromScratch = ctx.nHits == 0;
+    if (fromScratch)
     {
-        DrumGen::applyStyleSkeleton(juce::jlimit(0, DrumGen::NUM_STYLES - 1, generatePanel.style), ctx);
+        DrumGen::applyStyleSkeleton(styleDna, ctx);
         generatePanel.contextLine = "No drums heard - phrasing against the "
-            + juce::String(DrumGen::kStyleName[juce::jlimit(0, DrumGen::NUM_STYLES - 1, generatePanel.style)])
+            + juce::String(styleDna.name)
             + " style's groove skeleton.  Key: " + juce::String(kUiNoteName[juce::jlimit(0, 11, generatePanel.key)])
             + " " + kUiScaleName[juce::jlimit(0, 9, generatePanel.scaleType)] + " (" + generatePanel.keyTag + ").";
     }
@@ -8417,7 +8412,9 @@ void DrumSequencerEditor::genAction(int action)
     o.humanize     = generatePanel.humanize;
     o.fills        = generatePanel.fills;
     o.progression  = generatePanel.progression;
-    o.styleAccent  = DrumGen::accentTable(juce::jlimit(0, DrumGen::NUM_STYLES - 1, generatePanel.style));
+    o.styleAccent  = styleDna.accent;      // [r22] the style's own mined accent table
+    o.styleDna     = &styleDna;            // [r22 STAGE 2] melodic DNA for every role
+    o.styleVirtual = fromScratch;          // from scratch = the style PULLS, else it biases
     o.rhythmSeed   = genRhythmSeed;
     o.pitchSeed    = genPitchSeed;
     o.varyCount    = genVaryCount;
@@ -8494,8 +8491,10 @@ void DrumSequencerEditor::genAction(int action)
         const double barMs = 60000.0 / juce::jmax(1.0, proc.currentBpm)
                            * (juce::jmax(1, proc.currentTimeSigNum) * 4.0
                               / juce::jmax(1, proc.currentTimeSigDen));
+        // [r22] the bass's G5 pocket drag is the STYLE'S mined value now (house ~4 ms laid
+        // back, trap/DnB 0 = the 808 sits ON the grid) - data, not a hardcoded 4.
         const auto res = GenContext::writeStepOutput(sq, head, bars, ch, notes, &ctx,
-                             o.role == PartGen::RoleBass ? 4.0 : 0.0, barMs);
+                             o.role == PartGen::RoleBass ? (double) styleDna.microBass : 0.0, barMs);
         generatePanel.contextLine += keptTag + "  Wrote " + juce::String(res.written) + " notes as "
                                    + juce::String(res.count)
                                    + (res.switched ? " steps (channel switched to steps)." : " steps.");
@@ -8515,6 +8514,142 @@ void DrumSequencerEditor::genAction(int action)
     stepGrid.update(proc.sequencer, proc.anySolo);
     stepGrid.repaint();
     generatePanel.repaint();   // [r18] the context readout line follows each gather
+}
+
+// [2026-07-22 r22] rescan ~/Documents/BASAMAK/Styles into the GenStyle registry (message thread
+// only): factory first, then every *.basamakstyle - a name collision = the USER'S version wins
+// (tagged "(yours)" in the picker); a file that fails to parse is SKIPPED with a readout note,
+// never a crash. Called at editor init + from the Style picker's Refresh entry.
+void DrumSequencerEditor::refreshGenStyles()
+{
+    GenStyle::resetToFactory();
+    juce::String note;
+    auto files = UserPaths::styles().findChildFiles(juce::File::findFiles, false, "*.basamakstyle");
+    files.sort();   // stable registry order across scans
+    for (auto& f : files)
+    {
+        const auto err = GenStyle::addUser(f.loadFileAsString().toStdString());
+        if (! err.empty())
+            note += juce::String(note.isEmpty() ? "  Style file skipped: " : "; ")
+                  + f.getFileName() + " (" + juce::String(err) + ")";
+    }
+    genStyleNote = note;
+    generatePanel.styleNames.clear();
+    for (int i = 0; i < GenStyle::count(); ++i)
+        generatePanel.styleNames.add(juce::String(GenStyle::at(i).name)
+                                     + (GenStyle::at(i).user ? " (yours)" : ""));
+    generatePanel.style = juce::jlimit(0, juce::jmax(0, GenStyle::count() - 1), generatePanel.style);
+    if (generatePanel.isVisible() && genStyleNote.isNotEmpty())
+    { generatePanel.contextLine = genStyleNote.trimStart(); generatePanel.repaint(); }
+}
+
+// [2026-07-22 r22] GENERATE ALL - the one-press full arrangement (the capstone integration
+// test of the whole system): ONE shared foundation (style / key / chord timeline / seed pair),
+// generation order kit -> bass -> melody -> chords with each later part GATHERING the earlier
+// ones (the mandate listed chords before melody, but its own interlock goals - the comp filling
+// the melody's gaps + the H5 lanes - require the melody to exist first, so the comp closes).
+// Channel targeting = existing sounds only (never loads a sound); a role with no home is
+// skipped AND NAMED; ONE consent popup lists the full plan; decline = a complete no-op
+// (planArrangement takes a const Sequencer - planning cannot mutate); ONE undo.
+void DrumSequencerEditor::genAllAction()
+{
+    auto& sq = proc.sequencer;
+    const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
+    const int styleIdx = juce::jlimit(0, GenStyle::count() - 1, generatePanel.style);
+    const GenStyle::Style& styleDna = GenStyle::at(styleIdx);
+    const auto plan = GenContext::planArrangement(sq, head, selectedChannel);
+    auto chanDataDesc = [&](int chn) -> juce::String
+    {
+        int steps = 0, rollN = 0;
+        for (int b = head; b <= end; ++b)
+        {
+            const auto& cb = sq.patterns[b].channels[chn];
+            rollN += cb.drawNoteCount;
+            for (int i = 0; i < cb.numSteps; ++i) if (cb.steps[i]) ++steps;
+        }
+        juce::String nm = sq.patterns[head].channels[chn].mixName;
+        if (nm.isEmpty()) nm = "no sound";
+        juce::String d = "Ch " + juce::String(chn + 1) + " (" + nm + ") - ";
+        if (steps + rollN == 0)  d += "empty";
+        else if (rollN > 0)      d += "HAS " + juce::String(rollN) + (rollN == 1 ? " note" : " notes");
+        else                     d += "HAS " + juce::String(steps) + (steps == 1 ? " step" : " steps");
+        return d;
+    };
+    if (! genAllWarned)
+    {   // ONE consent popup, the FULL plan by name - decline = nothing happens at all
+        juce::PopupMenu m;
+        m.addSectionHeader("GENERATE ALL will write over:");
+        auto lane = [&](int chn, const char* nm)
+        { if (chn >= 0) m.addItem(90 + chn, chanDataDesc(chn) + juce::String(" <- ") + nm, false); };
+        lane(plan.kit.kick, "kick"); lane(plan.kit.snare, "snare"); lane(plan.kit.hat, "hats");
+        lane(plan.kit.open, "open hat"); lane(plan.kit.perc, "perc");
+        lane(plan.bass, "bassline"); lane(plan.melody, "melody"); lane(plan.chords, "chords");
+        juce::String skipped;
+        if (! plan.kit.any())   skipped += "kit";
+        if (plan.bass < 0)      skipped += juce::String(skipped.isEmpty() ? "" : ", ") + "bass";
+        if (plan.melody < 0)    skipped += juce::String(skipped.isEmpty() ? "" : ", ") + "melody";
+        if (plan.chords < 0)    skipped += juce::String(skipped.isEmpty() ? "" : ", ") + "chords";
+        m.addItem(80, "Skipped (no suitable channel): " + (skipped.isEmpty() ? "none" : skipped), false);
+        if (plan.kit.any())
+            m.addItem(81, "Swing -> " + juce::String(juce::roundToInt(
+                              50.0f + 25.0f * juce::jmax(0.0f, (styleDna.swingPct - 50.0f) / 25.0f)))
+                          + "% group-wide (now " + juce::String(juce::roundToInt(
+                              50.0f + 25.0f * sq.patterns[head].swing)) + "%)", false);
+        m.addItem(1, "Write the arrangement (undo restores)");
+        m.addItem(2, "Cancel");
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(
+                            generatePanel.actionScreenArea(6)),
+                        [this](int r) { if (r == 1) { genAllWarned = true; genAllAction(); } });
+        return;
+    }
+    // fresh seed pair = a fresh arrangement (the New-idea convention; determinism per pair)
+    auto& rnd = juce::Random::getSystemRandom();
+    genRhythmSeed = (uint32_t) rnd.nextInt(); genPitchSeed = (uint32_t) rnd.nextInt();
+    genVaryCount = 0;
+    GenContext::ArrangeOptions ao;
+    ao.dna = &styleDna;
+    ao.key = generatePanel.key;
+    ao.scale = kUiScaleTab[juce::jlimit(0, 9, generatePanel.scaleType)];
+    ao.scaleLen = kUiScaleLen[juce::jlimit(0, 9, generatePanel.scaleType)];
+    ao.density = generatePanel.density;       ao.registerBand = generatePanel.registerBand;
+    ao.color = generatePanel.color;           ao.rhythm = generatePanel.rhythm;
+    ao.lines = generatePanel.lines;           ao.relation = generatePanel.relation;
+    ao.singable = generatePanel.singable;     ao.intensity = generatePanel.intensity;
+    ao.humanize = generatePanel.humanize;     ao.fills = generatePanel.fills;
+    ao.progression = generatePanel.progression;
+    ao.rhythmSeed = genRhythmSeed;            ao.pitchSeed = genPitchSeed;
+    ao.varyCount = 0;
+    ao.barMs = 60000.0 / juce::jmax(1.0, proc.currentBpm)
+             * (juce::jmax(1, proc.currentTimeSigNum) * 4.0 / juce::jmax(1, proc.currentTimeSigDen));
+    commitUndoNow();   // ONE undo covers the whole arrangement
+    const auto res = GenContext::generateArrangement(sq, head, end, plan, ao);
+    if (res.swing >= 0.0f)
+    { sliderSwing.setValue(res.swing, juce::dontSendNotification); refreshSwingLabel(); }
+    juce::String line = "ARRANGEMENT (" + juce::String(styleDna.name) + "): ";
+    if (res.kitChans > 0) line += "kit " + res.kitDesc + " -> " + juce::String(res.kitChans)
+                                + (res.kitChans == 1 ? " channel" : " channels") + ".  ";
+    if (plan.bass >= 0)   line += "Bass " + juce::String(res.bassN)
+                                + (res.bassSteps > 0 ? " as " + juce::String(res.bassSteps) + " steps" : " notes")
+                                + " -> Ch " + juce::String(plan.bass + 1) + ".  ";
+    if (plan.melody >= 0) line += "Melody " + juce::String(res.melN)
+                                + (res.melSteps > 0 ? " as " + juce::String(res.melSteps) + " steps" : " notes")
+                                + " -> Ch " + juce::String(plan.melody + 1) + ".  ";
+    if (plan.chords >= 0) line += "Chords " + juce::String(res.chordN)
+                                + (res.chordSteps > 0 ? " as " + juce::String(res.chordSteps) + " steps" : " notes")
+                                + " -> Ch " + juce::String(plan.chords + 1) + ".  ";
+    if (res.skipped.isNotEmpty()) line += "Skipped: " + res.skipped + ".  ";
+    if (res.swing >= 0.0f)
+        line += "Swing -> " + juce::String(juce::roundToInt(50.0f + 25.0f * res.swing)) + "%.";
+    if (res.chokeGroup > 0)
+        line += "  Hats choked (group " + juce::String(res.chokeGroup) + ").";
+    if (res.lattice != 16) line += "  " + juce::String(res.lattice) + "-cell bar grid.";
+    generatePanel.contextLine = line;
+    genHadNotes = true; genWarned = true;   // rerolls replace OUR OWN output without re-asking
+    generatePanel.hadNotes = true;
+    refreshDrawModeButtons();
+    stepGrid.update(proc.sequencer, proc.anySolo);
+    stepGrid.repaint();
+    generatePanel.repaint();
 }
 
 void DrumSequencerEditor::applyUndoState(const UndoEntry& e)
@@ -10960,6 +11095,10 @@ void DrumSequencerEditor::setupComponents()
     content.addChildComponent(letRingPrompt);   // [2026-07-19] in-plugin Let Ring ms prompt
     content.addChildComponent(generatePanel);   // [2026-07-20] GENERATE options panel (roll header)
     generatePanel.onAction = [this](int a) { genAction(a); };
+    // [r22] styles-as-data: seed the registry (factory + the user's Styles folder) at init;
+    // the Style picker's Refresh entry rescans on demand (message thread only).
+    generatePanel.onRefreshStyles = [this] { refreshGenStyles(); };
+    refreshGenStyles();
     generatePanel.onClose  = [] {};
     letRingPrompt.onDone = [this](int ms) {
         auto& cc = proc.sequencer.channel(selectedChannel);

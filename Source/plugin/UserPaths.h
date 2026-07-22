@@ -61,6 +61,7 @@ namespace UserPaths
     inline juce::File namModels()  { return sub("NAM Models", "", ""); }   // [2026-07-18] .nam captures (incl. A2)
     inline juce::File cabIrs()     { return sub("Cab IRs", "", ""); }      // [2026-07-18] speaker-cabinet impulse WAVs
     inline juce::File multisamples() { return sub("Multisamples", "", ""); }
+    inline juce::File styles()     { return sub("Styles", "", ""); }       // [2026-07-22 r22] *.basamakstyle GENERATE styles
     inline juce::File midiPatterns() { return sub("MIDI Patterns", "", ""); }   // saved *.basamakpattern note grids
 
     inline juce::File soundMixes()
