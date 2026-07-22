@@ -3703,7 +3703,7 @@ private:
     juce::TextButton btnGenerateTop { "Generate" };   // [2026-07-21 P1] the universal Generate door
                                                       // (pattern row, left of Clear - works in STEP
                                                       // mode too now that step output exists)
-    // All 16 channels + 32 patterns are ALWAYS active now (the old 8/16 + 16/32 count toggles are gone).
+    // All 16 channels + 64 patterns are ALWAYS active now (the old 8/16 + 16/32 count toggles are gone).
     // This button (next to HIDE SOUND EDITOR/KEYS) switches the VIEW between 8 rows (default) and all 16.
     LearnableButton btn16View { "16 CHANNELS VIEW" };  // MIDI = "ui_sel_view16" [2026-07-15 22:30]
     // [2026-07-15 19:45] OTHERS trim (user design): a spring-back +-6 dB fader that scales EVERY
@@ -3720,7 +3720,7 @@ private:
     bool             tooltipsOn = true;
     void refreshCountButtons();
     void applyTooltipsSetting();   // turn the TooltipWindow on/off + colour the button
-    int   visiblePatterns = 16;                // patterns shown/used; >16 scrolls horizontally
+    int   visiblePatterns = Sequencer::NUM_PATTERNS;   // patterns shown/used (always the full 64 since r24); >16 scrolls horizontally
     int   firstPatternCol = 0;                 // scroll offset for the pattern buttons
     juce::ScrollBar  patternBar { false };     // horizontal scrollbar under the pattern row (when >16 patterns)
     static constexpr int PAT_VIEW_CAP = 16;    // pattern buttons visible at once before scrolling

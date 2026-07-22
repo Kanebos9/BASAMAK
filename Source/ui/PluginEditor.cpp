@@ -6468,7 +6468,7 @@ DrumSequencerEditor::DrumSequencerEditor(DrumSequencerProcessor& p)
     firstChannelRow = 0;
     stepGrid.visibleRows = viewRows();
     stepGrid.firstRow    = 0;
-    visiblePatterns = Sequencer::NUM_PATTERNS;   // always 32
+    visiblePatterns = Sequencer::NUM_PATTERNS;   // always the full count (64 since r24)
     firstPatternCol = 0;
     refreshCountButtons();
 
@@ -8072,7 +8072,7 @@ void DrumSequencerEditor::fullRefresh()
         }
     }
     refreshRouting();   // routing/choke are preset-level now -> recolour the strips after a preset/state change
-    visiblePatterns = Sequencer::NUM_PATTERNS;   // always 32 (the 16/32 toggle is gone)
+    visiblePatterns = Sequencer::NUM_PATTERNS;   // always the full count (64 since r24; the 16/32 toggle is gone)
     firstPatternCol = juce::jlimit(0, juce::jmax(0, visiblePatterns - patShown()), firstPatternCol);
     refreshCountButtons();
 }
@@ -9562,7 +9562,7 @@ void DrumSequencerEditor::setupComponents()
         content.repaint();
     };
 
-    // All 16 channels + 32 patterns are ALWAYS active (the old count toggles are gone). This button
+    // All 16 channels + 64 patterns are ALWAYS active (the old count toggles are gone). This button
     // (placed next to HIDE SOUND EDITOR/KEYS) switches the VIEW between 8 rows (default) and all 16.
     // [2026-07-15 19:45] OTHERS trim + VOL RESET (user design), left of the view toggle.
     content.addAndMakeVisible(othersVolF);
@@ -15047,7 +15047,7 @@ void DrumSequencerEditor::setNumPatterns(int n)
 
 void DrumSequencerEditor::refreshCountButtons()
 {
-    // Just the 16-CHANNELS-VIEW toggle's face now (counts are fixed at 16 ch / 32 patterns).
+    // Just the 16-CHANNELS-VIEW toggle's face now (counts are fixed at 16 ch / 64 patterns).
     const bool on = visibleChannels == 16;
     btn16View.setButtonText(on ? "8 CHANNELS VIEW" : "16 CHANNELS VIEW");
     btn16View.setColour(juce::TextButton::buttonColourId, on ? juce::Colour(0xffe8bf4d) : juce::Colour(0xff20203a));
@@ -15156,7 +15156,7 @@ void DrumSequencerEditor::layoutContent()
     lblCpu.setVisible(true); lblCpu.setBounds(W - 68, 4, 62, 15);
     lblRam.setVisible(true); lblRam.setBounds(W - 68, 20, 62, 15);
 
-    // Pattern row: a window of the pattern buttons (16 visible; 24/32 scroll via patternBar).
+    // Pattern row: a window of the pattern buttons (16 visible; the rest of the 64 scroll via patternBar).
     lblPatterns.setBounds(6, PAT_Y + 2, 60, 15);
     lblPatternsBars.setBounds(6, PAT_Y + 17, 60, 15);   // "(Bars)" under "Patterns", same size/colour
     {

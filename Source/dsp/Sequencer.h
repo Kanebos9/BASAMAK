@@ -12,7 +12,7 @@ class Sequencer
 {
 public:
     static constexpr int NUM_CHANNELS = 16;   // max channels; the UI shows a user-chosen subset (4/8/12/16)
-    static constexpr int NUM_PATTERNS = 32;   // max patterns; the UI shows a user-chosen subset (16/24/32) + scrolls
+    static constexpr int NUM_PATTERNS = 64;   // max patterns (r24: 32 -> 64); the UI shows 16 buttons at a time + scrolls
 
     enum PlayMode { LoopForever = 0, StopAfterN = 1, NextAfterN = 2, Chain = 3 };
     static constexpr int CHAIN_MAX = 8;   // up to 8 patterns in a per-pattern chain sequence

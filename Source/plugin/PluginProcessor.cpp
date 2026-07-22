@@ -2872,7 +2872,7 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
     kbGuideMode  = juce::jlimit(0, 2,  (int) state.getProperty("kbGuideMode", 0));
     kbGuideKey   = juce::jlimit(0, 11, (int) state.getProperty("kbGuideKey", 0));
     kbGuideScale = juce::jlimit(0, 9,  (int) state.getProperty("kbGuideScale", 0));
-    visiblePatterns = Sequencer::NUM_PATTERNS;   // always 32 (old files' 16 is ignored)
+    visiblePatterns = Sequencer::NUM_PATTERNS;   // always the full count (64 since r24; old files' 16/32 ignored)
     auditionOnEdit.store((bool) state.getProperty("audEdit", false));   // [2026-07-19] default OFF (user order; saved sessions keep their setting)
     keysSlot2Down.store(juce::jlimit(-24, 24, (int) state.getProperty("keys2Down", 0)));
     keysTakes.clear();
@@ -2930,6 +2930,11 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
             if (! t.evts.empty() && keysTakes.size() < KEYS_TAKES_MAX) keysTakes.push_back(std::move(t));
         }
 
+    // [r24] 64 patterns (was 32): remember which patterns the blob actually carries - an OLD
+    // file (32 Pattern children) must leave 33..64 at DEFAULTS even when this instance is
+    // dirty (the in-app preset-load path calls applyStateTree on a live session).
+    bool seenPat[Sequencer::NUM_PATTERNS] = {};
+
     for (int i = 0; i < state.getNumChildren(); ++i)
     {
         auto child = state.getChild(i);
@@ -2937,6 +2942,7 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
         if (child.getType() == juce::Identifier("Pattern"))
         {
             int p = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, (int)child.getProperty("index", 0));
+            seenPat[p] = true;
             sequencer.patterns[p].swing        = (float)child.getProperty("swing", 0.0f);
             sequencer.patterns[p].mergeWithPrev = (bool)child.getProperty("mergePrev", false);
             sequencer.patterns[p].playMode     = (int)child.getProperty("playMode", 0);
@@ -3021,6 +3027,46 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
         else if (child.getType() == juce::Identifier("MidiLearn"))
         {
             midiLearn.loadState(child);
+        }
+    }
+
+    // [r24] Patterns the blob did NOT mention reset to defaults (old 32-pattern projects ->
+    // 33..64 clean). readChannel on an EMPTY tree = the reader defaults (== field defaults by
+    // convention); the step/note strings are keep-on-absent, so those are cleared explicitly.
+    // Channel-wide fields (identity + routing/choke/duck/bus) mirror pattern 0's restored
+    // channel - the same consistency fullRefresh enforces across patterns.
+    {
+        const juce::ValueTree emptyCh("Ch");
+        for (int p = 0; p < Sequencer::NUM_PATTERNS; ++p)
+        {
+            if (seenPat[p]) continue;
+            auto& P = sequencer.patterns[p];
+            P.playMode = Sequencer::LoopForever; P.repeatTarget = 2;
+            P.gotoPattern = (p + 1) % Sequencer::NUM_PATTERNS;
+            P.chainLen = 0; P.chainStep = 0; P.visitCount = 0;
+            P.swing = 0.0f; P.mergeWithPrev = false;
+            P.master = Sequencer::MasterFX();
+            for (int c = 0; c < Sequencer::NUM_CHANNELS; ++c)
+            {
+                auto& ch = P.channels[c];
+                readChannel(emptyCh, ch);                     // all reader defaults
+                ch.clearStepData(); ch.clearDrawNotes();      // absent strings keep old data - wipe
+                // Default SOUND = the fresh-instance ctor recipe (authored SrcOsc slot 1); the
+                // authored flag keeps the legacy rebuild pass off these channels.
+                for (int s2 = 0; s2 < DrumChannel::NUM_SLOTS; ++s2)
+                { ch.clearMultisample(s2); ch.slots[s2] = DrumChannel::Slot(); }
+                ch.slots[0].engine = DrumChannel::SrcOsc; ch.slots[0].weight = 1.0f;
+                ch.padX = 0.0f; ch.padY = 0.5f;
+                ch.restoredSlots = true;
+                ch.drawMode = (c == 6 || c == 7);             // fresh channels 7+8 = Piano Roll
+                const auto& ref = sequencer.patterns[0].channels[c];
+                ch.channelName = ref.channelName;  ch.channelColour  = ref.channelColour;
+                ch.midiNote    = ref.midiNote;     ch.midiOut        = ref.midiOut;
+                ch.midiOutChannel = ref.midiOutChannel;
+                ch.outputBus   = ref.outputBus;    ch.chokeGroup     = ref.chokeGroup;
+                ch.duckBy      = ref.duckBy;       ch.duckAmt        = ref.duckAmt;
+                ch.revBus      = ref.revBus;       ch.delBus         = ref.delBus;
+            }
         }
     }
 
