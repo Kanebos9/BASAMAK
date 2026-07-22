@@ -65,6 +65,11 @@ struct Options
     uint32_t rhythmSeed = 1;  // pattern dice (canon mutations, ghost cells)
     uint32_t auxSeed = 2;     // flavour dice (velocity jitter, fill variant)
     int varyCount = 0;        // VARY = reroll mutations within the canon
+    // [r23] VARY ALL (arrangement level): vary the SURFACE only - velocities, ghost levels,
+    // fill flavour - while the STRUCTURAL dice (kick optional cells, ghost cells, open/ornament
+    // cells, roll cells) stay pinned to the seeds, so the melodic parts gathered that kit keep
+    // their skeletons. false = the classic per-role Drum Kit VARY (free cells re-pick).
+    bool varySurfaceOnly = false;
     // [r22] the style DATA (GenStyle registry entry, incl. user styles); nullptr = the
     // embedded factory style at Options.style (headless callers need no registry).
     const GenStyle::Style* dna = nullptr;
@@ -120,9 +125,12 @@ static inline Out generate(const Options& oIn)
         out.laneMicroMs[LPerc]    = d.microPerc  * mg;
     }
 
-    // pattern dice: rhythm seed + varyCount = "reroll the mutations, keep the canon" (D1)
-    Rng mr(o.rhythmSeed ^ (0x9e3779b9u * (uint32_t) (o.varyCount + 1)));
-    Rng ar(o.auxSeed ^ 0xD00DFEEDu);   // flavour dice: jitter + fill variant + ghost velocity
+    // pattern dice: rhythm seed + varyCount = "reroll the mutations, keep the canon" (D1).
+    // [r23] varySurfaceOnly re-homes the vary layer onto the FLAVOUR dice instead: structure
+    // pinned, velocities/ghost levels/fill variant reroll (VARY ALL's skeleton-kept contract).
+    Rng mr(o.rhythmSeed ^ (0x9e3779b9u * (uint32_t) ((o.varySurfaceOnly ? 0 : o.varyCount) + 1)));
+    Rng ar(o.auxSeed ^ 0xD00DFEEDu
+           ^ (o.varySurfaceOnly ? 0x9e3779b9u * (uint32_t) o.varyCount : 0u));
 
     // ---- the ONE-BAR grids (a groove is a loop; fills replace phrase-final bars) -------------
     // KICK = canon + up to 2 optional cells (never more - D1's mutation cap)
@@ -230,6 +238,10 @@ static inline Out generate(const Options& oIn)
     uint16_t rollMask = d.hatRollAlways;
     for (int c = 0; c < 16; ++c)
         if ((d.hatRollMaybe >> c) & 1 && mr.chance(0.5f)) rollMask = (uint16_t) (rollMask | (1u << c));
+    // [r23] the hat ALTERNATION PHASE is part of the ornament layer: a seeded 0/1 start index
+    // flips which offbeats carry the louder shape - one more audible way two presses differ
+    // even when the ornament cells collide (the small-space pairwise-distinct mandate).
+    const int hatPhase = mr.ri(2);
 
     // ---- emit per bar (fill bars get the D8 grammar) ------------------------------------------
     const float iMul = o.intensity == 0 ? 0.78f : (o.intensity == 2 ? 1.18f : 1.0f);
@@ -265,7 +277,7 @@ static inline Out generate(const Options& oIn)
             if (suppressTail && c >= 12) continue;             // the crescendo replaces the tail
             out.lane[LSnare].push_back({ base + c * PartGen::CELL16, vel(snareV[c], d.sdSnare), 1, 0.0f });
         }
-        int hi = 0;
+        int hi = hatPhase;   // [r23] seeded alternation phase (ornament layer)
         for (int c : hatCells)
         {
             if (suppressTail && c >= 12) { ++hi; continue; }   // hats duck under the crescendo
@@ -338,7 +350,8 @@ static inline void applyStyleSkeleton(const GenStyle::Style& d, PartGen::Ctx& c)
         for (int h = 0; h < c.nHits; ++h) if (c.hitCol[h] == col) { f = h; break; }
         if (f >= 0) { if (str > c.hitStr[f]) c.hitStr[f] = str; }
         else if (c.nHits < PartGen::Ctx::MAX_HITS)
-        { c.hitCol[c.nHits] = col; c.hitStr[c.nHits] = str; ++c.nHits; }
+        { c.hitCol[c.nHits] = col; c.hitStr[c.nHits] = str;
+          c.hitClk[c.nHits] = 0; ++c.nHits; }   // [r23] the canon skeleton = all EVENTS
     };
     for (int b = 0; b < c.bars; ++b)
     {

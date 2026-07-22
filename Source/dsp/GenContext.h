@@ -163,6 +163,15 @@ inline PartGen::Ctx build(const Sequencer& sq, int head, int end, int selCh, Rea
                 // [P0 item 4] a PITCHED step channel (bassline on steps) also speaks harmony:
                 // base = the Freq knob's nearest MIDI note, + the step's own pitch offset.
                 const int baseMidi = stepChannelBaseMidi(cc);
+                // [2026-07-22 r23] LANDMARKS vs CLOCK: a hat/perc lane covering >= ~75% of ITS
+                // OWN grid in THIS bar is a texture WALL, not an event list - its ticks still
+                // reach the strength map + the groove accents, but they carry hitClk = 1 (no
+                // Driving-lock dots, no Pockets exclusion). Kick + snare lanes are ALWAYS
+                // events; sparse hat/perc lanes keep contributing events as before.
+                int onCnt = 0;
+                for (int i = 0; i < cc.numSteps; ++i) if (cc.steps[i]) ++onCnt;
+                const bool clockLane = (chanRole[chn] == DrumHat || chanRole[chn] == DrumPerc)
+                                    && cc.numSteps > 0 && onCnt * 100 >= cc.numSteps * 75;
                 for (int i = 0; i < cc.numSteps; ++i)
                     if (cc.steps[i])
                     {
@@ -178,9 +187,14 @@ inline PartGen::Ctx build(const Sequencer& sq, int head, int end, int selCh, Rea
                             latWeight[cc.numSteps] += cc.stepVel[i];   // [r21] this grid speaks
                         int f = -1;
                         for (int h = 0; h < ctx.nHits; ++h) if (ctx.hitCol[h] == col) { f = h; break; }
-                        if (f >= 0) ctx.hitStr[f] = juce::jmin(1.0f, ctx.hitStr[f] + cc.stepVel[i] * 0.5f);
+                        if (f >= 0)
+                        {
+                            ctx.hitStr[f] = juce::jmin(1.0f, ctx.hitStr[f] + cc.stepVel[i] * 0.5f);
+                            if (! clockLane) ctx.hitClk[f] = 0;   // any EVENT contributor wins the col
+                        }
                         else if (ctx.nHits < PartGen::Ctx::MAX_HITS)
                         { ctx.hitCol[ctx.nHits] = col; ctx.hitStr[ctx.nHits] = juce::jmin(1.0f, cc.stepVel[i]);
+                          ctx.hitClk[ctx.nHits] = clockLane ? 1 : 0;
                           ++ctx.nHits; }
                         pushRole(chanRole[chn], col, cc.stepVel[i]);   // [P1 1a] kick/snare/hat lists
                         if (baseMidi >= 0)
@@ -229,7 +243,11 @@ inline PartGen::Ctx build(const Sequencer& sq, int head, int end, int selCh, Rea
             for (int b2 = a; b2 > 0 && cols[b2] < cols[b2 - 1]; --b2)
             { std::swap(cols[b2], cols[b2 - 1]); std::swap(strs[b2], strs[b2 - 1]); }
     };
-    sortHits(ctx.nHits,  ctx.hitCol,   ctx.hitStr);
+    // the COMBINED list carries the r23 event/clock flag - all three arrays move in step
+    for (int a = 1; a < ctx.nHits; ++a)
+        for (int b2 = a; b2 > 0 && ctx.hitCol[b2] < ctx.hitCol[b2 - 1]; --b2)
+        { std::swap(ctx.hitCol[b2], ctx.hitCol[b2 - 1]); std::swap(ctx.hitStr[b2], ctx.hitStr[b2 - 1]);
+          std::swap(ctx.hitClk[b2], ctx.hitClk[b2 - 1]); }
     sortHits(ctx.nKick,  ctx.kickCol,  ctx.kickStr);
     sortHits(ctx.nSnare, ctx.snareCol, ctx.snareStr);
     sortHits(ctx.nHat,   ctx.hatCol,   ctx.hatStr);
@@ -563,6 +581,21 @@ inline int detectKey(const Sequencer& sq, int head, int end, int selCh, int& sca
     return detectKeyFromCtx(build(sq, head, end, selCh), scaleTypeOut);
 }
 
+// [2026-07-22 r23] "ANY STYLE": the seeded pick over the WHOLE registry (factory + user files).
+// The panel's Style row defaults to Any - every NEW IDEA / GENERATE ALL press then rerolls the
+// style itself (the widest macro dimension); a user-pinned style stays pinned. Deterministic
+// from the seed (same seeds = the same pick = reproducible takes).
+inline int pickAnyStyleIndex(uint32_t seed)
+{
+    const int n = GenStyle::count();
+    if (n <= 0) return 0;
+    // Knuth-multiply + a discarded warm-up draw: xorshift's FIRST output has weak low bits for
+    // correlated seeds - without this, linearly spaced seeds all landed on one style.
+    PartGen::Rng r((seed * 2654435761u) ^ 0xA57E1E5Du);
+    r.next();
+    return r.ri(n);
+}
+
 // ============================================================================
 // [2026-07-22 r22] GENERATE ALL - the one-press FULL ARRANGEMENT (the capstone integration).
 // ONE shared foundation: the same style, key, seeds and (by construction) chord timeline for
@@ -709,6 +742,11 @@ struct ArrangeOptions
     int  intensity = 1, humanize = 0, fills = 0, progression = 0;
     uint32_t rhythmSeed = 1, pitchSeed = 2;
     int  varyCount = 0;
+    // [r23] WIDE NEW: 0 = classic (old callers bit-identical); the editor passes the rhythm
+    // seed so every GENERATE ALL press fans the macro dimensions (see PartGen::Options).
+    // VARY ALL keeps the SAME seeds + bumps varyCount - the wide leans then repeat exactly
+    // (skeleton kept) while the vary layers reroll the surface.
+    uint32_t wideSeed = 0;
     double barMs = 2000.0;
 };
 
@@ -741,6 +779,8 @@ inline ArrangeResult generateArrangement(Sequencer& sq, int head, int end,
         d.wantOpenHat = plan.kit.open >= 0;
         d.wantPerc    = plan.kit.perc >= 0;
         d.rhythmSeed = ao.rhythmSeed; d.auxSeed = ao.pitchSeed; d.varyCount = ao.varyCount;
+        d.varySurfaceOnly = true;   // [r23] VARY ALL: kit structure pinned, surface rerolls -
+                                    // the melodic parts gather an unchanged skeleton
         const auto out = DrumGen::generate(d);
         auto put = [&](int chn, int lane, const char* nm, bool kickLane)
         {
@@ -781,6 +821,7 @@ inline ArrangeResult generateArrangement(Sequencer& sq, int head, int end,
         o.styleDna = ao.dna; o.styleVirtual = scratch;
         o.styleAccent = ao.dna != nullptr ? ao.dna->accent : nullptr;
         o.rhythmSeed = ao.rhythmSeed; o.pitchSeed = ao.pitchSeed; o.varyCount = ao.varyCount;
+        o.wideSeed = ao.wideSeed;   // [r23] the wide-NEW macro fan rides into every part
         const bool chanStep = ! sq.patterns[head].channels[ch].drawMode;
         if (role == PartGen::RoleChords && chanStep) o.forceMono = true;   // H9 degrade
         auto notes = PartGen::generate(o, ctx);

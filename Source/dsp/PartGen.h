@@ -40,6 +40,18 @@
 // the LHL weights derive from that map. Onsets never leave the lattice (only
 // Humanize jitters off it, deliberately, within the step writer's tolerance).
 //
+// v5/r23 [2026-07-22]: LANDMARKS vs CLOCK + the starvation floor + WIDE NEW.
+//  - Ctx::hitClk marks a saturated hat/perc wall's ticks as CLOCK (accents +
+//    LHL coverage only); stance geometry (Driving locks, Pockets gaps +
+//    exclusions, pushes, de-sync legality, ring-clips) reads EVENTS only.
+//  - A per-bar STARVATION FLOOR (Melody 3 / Bass 2, Driving+Pockets) tops up
+//    empty bars from the lattice, strength-weighted, seeded.
+//  - Options.wideSeed (the editor passes the rhythm seed) fans the MACRO
+//    dimensions per press - form split, budget, register lean, anchor choice,
+//    frozen-candidate drops, pocket-midpoint lean, Driving landmark choice,
+//    comp inversion, intensity lean - all via FORKED rngs that never advance
+//    the main streams. 0 = every lever off = the old path bit for bit.
+//
 // Standing rules: ONE-SHOT dice on the message thread (playback deterministic);
 // TWO seeds - rhythmSeed places every onset, pitchSeed picks every pitch, so
 // "Same rhythm, new notes" is exact by construction; varyCount mutates on top;
@@ -100,6 +112,14 @@ struct Options
     // (context > style on conflicts, the established hierarchy).
     const GenStyle::Style* styleDna = nullptr;
     bool styleVirtual = false;
+    // [2026-07-22 r23] WIDE NEW: 0 = off (old callers bit-identical). The editor passes the
+    // rhythm seed here on EVERY panel action, so NEW IDEA fans out across the MACRO dimensions
+    // too (form split, onset budget, register placement, anchor choice, frozen-candidate drops,
+    // pocket-midpoint lean, Driving landmark choice, comp inversion) - all from seed-derived
+    // FORKED rngs that never advance the main streams, so "Same rhythm" / VARY (unchanged
+    // seeds) keep their locks by construction.
+    uint32_t wideSeed = 0;
+    int  regShift = 0;            // internal: seeded register lean (set inside generate())
     uint32_t rhythmSeed = 1;
     uint32_t pitchSeed  = 2;
     int  varyCount  = 0;
@@ -117,6 +137,15 @@ struct Ctx
     int   nHits = 0;
     int   hitCol[MAX_HITS] = {};
     float hitStr[MAX_HITS] = {};             // strength 0..1
+    // [2026-07-22 r23] LANDMARKS vs CLOCK (the user's "deneme" bug: a wall-to-wall hat lane
+    // starved every stance): hitClk[i] = 1 marks a CLOCK tick - a hit whose only source is a
+    // SATURATED hat/perc lane (>= ~75% of its own grid on in that bar; GenContext classifies).
+    // Clock ticks still accent the strength map (G7) and still COVER cells for the LHL scorer,
+    // but they contribute NO event dot to the stance geometry: Driving locks / Pockets gaps +
+    // exclusion windows / anticipation + de-sync legality read EVENTS only (kick/snare + sparse
+    // lanes). Default 0 = every hit is an event = hand-built contexts and the style skeleton
+    // keep the classic geometry.
+    uint8_t hitClk[MAX_HITS] = {};
     // [P1] per-ROLE drum-hit lists beside the combined list (GenContext classifies by bank
     // category + name keywords; perc/generic hits live only in the combined list). The bass
     // listens to the KICK (G2), melody phrases around the SNARE (G8).
@@ -258,14 +287,21 @@ static inline int ladStepOf(const std::vector<int>& lad, int semi, int step)
     idx = juceLikeClamp(0, (int) lad.size() - 1, idx + step);
     return lad[(size_t) idx];
 }
-// [r22 STAGE 2] weighted pick over a style-cell list (deterministic - the caller's Rng)
+// [r22 STAGE 2] weighted pick over a style-cell list (deterministic - the caller's Rng).
+// [r23] temper < 1 FLATTENS the weights (w^temper) for the wide-NEW presses: the style's
+// weights stay a prior, but a dominant cell (funk comp 3:1:1:1) no longer wins ~half of every
+// take = the pick genuinely rerolls between seeds. Every candidate is a shipped LEGAL cell -
+// seeds only choose WITHIN the vocabulary. temper 1 (all non-wide callers) = byte-identical
+// (one uf() consumed either way = stream-stable).
 template <typename CellT>
-static inline const CellT* pickWeighted(const std::vector<CellT>& cells, Rng& r)
+static inline const CellT* pickWeighted(const std::vector<CellT>& cells, Rng& r, float temper = 1.0f)
 {
     if (cells.empty()) return nullptr;
-    float tot = 0.0f; for (const auto& c : cells) tot += c.w;
+    auto tw = [&](float w)
+    { return temper >= 0.999f ? w : std::pow(std::max(0.01f, w), temper); };
+    float tot = 0.0f; for (const auto& c : cells) tot += tw(c.w);
     float x = r.uf() * (tot > 0.0f ? tot : 1.0f);
-    for (const auto& c : cells) { x -= c.w; if (x <= 0.0f) return &c; }
+    for (const auto& c : cells) { x -= tw(c.w); if (x <= 0.0f) return &c; }
     return &cells.back();
 }
 
@@ -504,6 +540,24 @@ static inline int lhlBarScoreImpl(const std::vector<Note>& notes, int bar,
     return score;
 }
 
+// [2026-07-22 r23] FORK helper for the wide-NEW levers: Knuth-multiply + one discarded draw.
+// xorshift32's FIRST output has weak low bits for structured seeds - a bare Rng(seed).ri(5)
+// collapsed to the same pick across takes, which is exactly the convergence this batch kills.
+static inline Rng forkRng(uint32_t seed)
+{ Rng r((seed * 2654435761u) ^ 0x7FEB352Du); r.next(); return r; }
+
+// [2026-07-22 r23] the EVENT view of the hit list: stance geometry reads LANDMARKS (kick/snare
+// + sparse lanes), never a saturated wall's clock ticks. Strength/coverage keep ALL hits.
+static inline bool evtHit(const Ctx& c, int i)  { return c.hitClk[i] == 0; }
+static inline int  evtHitCount(const Ctx& c)
+{ int n = 0; for (int i = 0; i < c.nHits; ++i) if (c.hitClk[i] == 0) ++n; return n; }
+static inline bool nearEvtHit(const Ctx& c, int col, int win)
+{
+    for (int i = 0; i < c.nHits; ++i)
+        if (c.hitClk[i] == 0 && std::abs(col - c.hitCol[i]) < win) return true;
+    return false;
+}
+
 // ---- RHYTHM v2: candidates for one PHRASE span, from the groove's REAL positions --------------
 struct Cand { int col; float w; };
 
@@ -563,10 +617,11 @@ static inline void phraseCandidates(const Options& o, const Ctx& c, int s, int e
                 out.push_back({ col, 0.14f * wMul });                 // half-beats, rare
         }
     };
-    // collect the real hits inside the span
+    // collect the real hits inside the span - EVENTS only [r23]: a saturated hat/perc wall is
+    // a clock, not a landmark list (its accents still steer via the strength map above)
     std::vector<int> hIdx;
     for (int i = 0; i < c.nHits; ++i)
-        if (c.hitCol[i] >= s && c.hitCol[i] < e) hIdx.push_back(i);
+        if (c.hitClk[i] == 0 && c.hitCol[i] >= s && c.hitCol[i] < e) hIdx.push_back(i);
     // [r20 G, H6/H7] comp + counter roles weigh candidates AGAINST the melody's occupancy:
     // x0.3 under a melody note, x1.6 in its gaps (freeze-during-runs falls out of the weight)
     struct OccW
@@ -623,14 +678,25 @@ static inline void phraseCandidates(const Options& o, const Ctx& c, int s, int e
     // Pockets: the MIDPOINTS of the real gaps between hits (plus the span edges' gaps),
     // SNAPPED to the lattice [r21] - a raw midpoint was an off-any-grid col, which is what
     // made the step-count chooser fall back to its densest grid on odd-step contexts.
+    // [r23 wide NEW] a wide gap (>= 4 cells) may LEAN one cell off dead centre, seeded from a
+    // FORKED rng - the pocket stays legal (>= 1 cell from both edges) but the placement
+    // itself rerolls between takes ("in the gap" never meant "always the exact middle").
     int prev = s;
     for (size_t k = 0; k <= hIdx.size(); ++k)
     {
         const int nxt = k < hIdx.size() ? c.hitCol[hIdx[k]] : e;
         const int gap = nxt - prev;
         if (gap >= latCw(c) * 2)
-            out.push_back({ latSnap(c, prev + gap / 2),
-                            0.25f + 0.75f * std::min(1.0f, (float) gap / (float) BEAT) });
+        {
+            int col = latSnap(c, prev + gap / 2);
+            if (o.wideSeed != 0 && gap >= latCw(c) * 4)
+            {
+                Rng lean = forkRng(o.wideSeed ^ (uint32_t) prev ^ 0x9C0CE715u);
+                if (lean.chance(0.5f))
+                    col = latColOf(c, latCellNear(c, col) + (lean.chance(0.5f) ? 1 : -1));
+            }
+            out.push_back({ col, 0.25f + 0.75f * std::min(1.0f, (float) gap / (float) BEAT) });
+        }
         prev = nxt;
     }
 }
@@ -641,6 +707,13 @@ static inline void sampleOnsets(const Options& o, const Ctx& c, Rng& rrng, std::
                                 int budget, int phraseStart, int breathEnd, std::vector<int>& out)
 {
     out.clear();
+    // [r23 wide NEW] WHEN THE DICE HAVE NO SAY (every candidate fits the budget) the pick
+    // degenerates to "take them all" and the take freezes across rerolls - the collapse behind
+    // "NEW IDEA sounds the same". A FORKED rng (reads rrng.s, never advances the main stream)
+    // then drops ~a quarter of the non-opening picks so the onset SET itself rerolls; the
+    // per-bar starvation floor in generate() catches any over-thinning.
+    const bool frozenDrop = o.wideSeed != 0 && (int) cands.size() <= budget;
+    Rng fork = forkRng(o.wideSeed ^ rrng.s ^ 0x5EEDD10Fu);
     for (int k = 0; k < budget && ! cands.empty(); ++k)
     {
         float tot = 0.0f; for (auto& cd : cands) tot += cd.w;
@@ -648,15 +721,39 @@ static inline void sampleOnsets(const Options& o, const Ctx& c, Rng& rrng, std::
         float r = rrng.uf() * tot; size_t sel = 0;
         for (size_t i = 0; i < cands.size(); ++i) { r -= cands[i].w; if (r <= 0.0f) { sel = i; break; } }
         const int col = cands[sel].col;
-        if (col < breathEnd) out.push_back(col);
+        bool keep = col < breathEnd;
+        if (keep && frozenDrop && (int) out.size() >= 2 && fork.chance(0.25f)) keep = false;
+        if (keep) out.push_back(col);
         const int minGap = o.singable ? latCw(c) * 2 : latCw(c);
         cands.erase(std::remove_if(cands.begin(), cands.end(),
                     [&](const Cand& cd) { return std::abs(cd.col - col) < minGap; }), cands.end());
     }
-    // a phrase must start SOMEWHERE near its head - anchor if the dice left the opening empty
+    // a phrase must start SOMEWHERE near its head - anchor if the dice left the opening empty.
+    // [r23] the anchor is a LEGAL column, never the raw phrase-start integer: an echo/answer
+    // tail's head is s + span*keep = an arbitrary col (1075 on the deneme fixture - GenTest
+    // [68i] caught it riding into a bass Driving line). Driving anchors on the nearest EVENT
+    // landmark (the candidate set IS the hit set - the G2/unison law); everything else snaps
+    // to the lattice ([50b]'s promise). Pockets legality stays pocketDiscipline's job (it has
+    // always shifted bar-line anchors off the kicks).
     bool early = false;
     for (int col : out) if (col < phraseStart + BEAT + CELL16) early = true;
-    if (! early) out.push_back(phraseStart);
+    if (! early)
+    {
+        int anchor = latSnap(c, phraseStart);
+        if (anchor >= breathEnd && latCellNear(c, phraseStart) > 0)          // never spill past the span
+            anchor = latColOf(c, latCellNear(c, phraseStart) - 1);
+        if (o.rhythm == RhDriving)
+        {
+            int bd = 1 << 20;
+            for (int i = 0; i < c.nHits; ++i)
+            {
+                if (c.hitClk[i] != 0 || c.hitCol[i] >= breathEnd) continue;
+                const int d = std::abs(c.hitCol[i] - phraseStart);
+                if (d < bd) { bd = d; anchor = c.hitCol[i]; }
+            }
+        }
+        out.push_back(anchor);
+    }
     std::sort(out.begin(), out.end());
     out.erase(std::unique(out.begin(), out.end()), out.end());
 }
@@ -705,11 +802,11 @@ static inline void snapCadenceNote(const Options& o, const std::vector<int>& lad
 }
 
 static inline int registerCentre(const Options& o)
-{
-    if (o.role == RoleBass)  return o.registerBand == 0 ? -19 : -14;
-    if (o.role == RoleChords) { static const int cc2[3] = { -10, -3, +5 }; return cc2[o.registerBand]; }
+{   // [r23 wide NEW] o.regShift = the seeded register LEAN inside the dial's band (0 = classic)
+    if (o.role == RoleBass)  return (o.registerBand == 0 ? -19 : -14) + o.regShift;
+    if (o.role == RoleChords) { static const int cc2[3] = { -10, -3, +5 }; return cc2[o.registerBand] + o.regShift; }
     static const int ctr[3] = { -15, -4, +8 };
-    return ctr[o.registerBand];
+    return ctr[o.registerBand] + o.regShift;
 }
 
 // pitch one phrase's notes [from..to): contour-biased ladder walk, chord tones on beats,
@@ -761,15 +858,28 @@ static inline void pitchPhrase(const Options& o, const Ctx& c, Rng& prng, std::v
         }
         else if (strong || st.prevIdx < 0)
         {
-            int c1 = -1, c2 = -1; float d1 = 1e9f, d2 = 1e9f;
+            // [r23] top-3 SEEDED chord-tone pick (was a 2-way): the nearest tone still leads
+            // (p .70), but the 2nd (.20) and 3rd (.10) stay in play - ONE uf() draw, so the
+            // pitch stream advances exactly as before (old takes shift only where the third
+            // option fires). Argmax-with-no-say was a convergence point (the r23 audit).
+            int c1 = -1, c2 = -1, c3 = -1; float d1 = 1e9f, d2 = 1e9f, d3 = 1e9f;
             for (int i = 0; i < (int) ladder.size(); ++i)
             {
                 if (! cp[pc(ladder[i])]) continue;
                 const float d = std::fabs((float) ladder[i] - ideal);
-                if (d < d1)      { d2 = d1; c2 = c1; d1 = d; c1 = i; }
-                else if (d < d2) { d2 = d; c2 = i; }
+                if (d < d1)      { d3 = d2; c3 = c2; d2 = d1; c2 = c1; d1 = d; c1 = i; }
+                else if (d < d2) { d3 = d2; c3 = c2; d2 = d; c2 = i; }
+                else if (d < d3) { d3 = d; c3 = i; }
             }
-            if (c1 >= 0) idx = (c2 >= 0 && prng.chance(0.3f)) ? c2 : c1;
+            if (c1 >= 0)
+            {
+                idx = c1;
+                if (c2 >= 0)   // dice consumed exactly as the old 2-way (one draw, c2 present)
+                {
+                    const float r = prng.uf();
+                    idx = (c3 >= 0 && r < 0.10f) ? c3 : (r < 0.30f) ? c2 : c1;
+                }
+            }
         }
         else
         {
@@ -832,12 +942,10 @@ static inline void pocketDiscipline(const Options& o, const Ctx& c, std::vector<
 {
     if (o.rhythm != RhPockets || c.nHits == 0 || notes.empty()) return;
     const int cw = latCw(c);
-    auto nearHit = [&](int col)
-    {
-        for (int i = 0; i < c.nHits; ++i)
-            if (std::abs(col - c.hitCol[i]) < cw) return true;
-        return false;
-    };
+    // [r23] EVENTS only: the exclusion window + the ring-clip dodge kick/snare (+ sparse-lane)
+    // LANDMARKS - a saturated hat wall's ticks never forbid placement (melodies live ON TOP of
+    // a ticking wall; before this, a wall-to-wall hat bar had "no legal pocket" = emptied bars)
+    auto nearHit = [&](int col) { return nearEvtHit(c, col, cw); };
     for (auto& n : notes)
     {
         if (! nearHit(n.start)) continue;
@@ -856,10 +964,13 @@ static inline void pocketDiscipline(const Options& o, const Ctx& c, std::vector<
     }
     notes.erase(std::remove_if(notes.begin(), notes.end(),
                                [](const Note& n) { return n.vel == 0; }), notes.end());
-    for (auto& n : notes)                            // (b) end >= 12 cols before the NEXT hit
-        for (int i = 0; i < c.nHits; ++i)            // (hitCol is sorted - first hit past the start)
+    for (auto& n : notes)                            // (b) end >= 12 cols before the NEXT EVENT
+        for (int i = 0; i < c.nHits; ++i)            // (hitCol is sorted - first event past the start)
+        {
+            if (c.hitClk[i] != 0) continue;          // [r23] clock ticks don't clip
             if (c.hitCol[i] > n.start)
             { n.len = std::max(1, std::min(n.len, c.hitCol[i] - COLS / 32 - n.start)); break; }
+        }
 }
 
 static inline void makeLengths(const Options& o, const Ctx& c, std::vector<Note>& notes, int totalCols)
@@ -961,7 +1072,19 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
     if (o.role == RoleBass && c.nKick > 0 && o.rhythm != RhFlowing)
     {
         c.nHits = c.nKick;
-        for (int i = 0; i < c.nKick; ++i) { c.hitCol[i] = c.kickCol[i]; c.hitStr[i] = c.kickStr[i]; }
+        for (int i = 0; i < c.nKick; ++i)
+        { c.hitCol[i] = c.kickCol[i]; c.hitStr[i] = c.kickStr[i]; c.hitClk[i] = 0; }   // kicks = events
+    }
+    // [2026-07-22 r23] WIDE NEW: the macro leans, all from wideSeed-forked rngs (0 = off =
+    // bit-identical old path). Register leans WITHIN the dial's band (melody/hum +-2, bass +-1);
+    // the onset budget breathes +-1. Same seeds = same leans (VARY / locked actions hold).
+    int wideBudget = 0;
+    if (o.wideSeed != 0)
+    {
+        Rng wr = forkRng(o.wideSeed ^ (o.pitchSeed * 0x9e3779b9u) ^ 0x51DEBA22u);
+        o.regShift = (o.role == RoleBass ? 1 : 2) - wr.ri(o.role == RoleBass ? 3 : 5);
+        Rng wb = forkRng(o.wideSeed ^ 0xB0D6E77Bu);
+        wideBudget = 1 - wb.ri(3);
     }
     prepareLatticeImpl(c);   // [r21] strength + LHL weights on the CONTEXT lattice (after the
                              // bass kick-swap - the maps must see the hit list the rules see)
@@ -986,7 +1109,8 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
     auto budgetFor = [&](int lenBars)
     { const float sm = sndSlowAtk ? 0.5f : 1.0f;
       const int b2 = (int) std::lround((float) base[o.role][o.rhythm] * dmul[o.density] * sm
-                                       * styleMul * (float) lenBars) - g6sub * lenBars;
+                                       * styleMul * (float) lenBars) - g6sub * lenBars
+                   + wideBudget;   // [r23] the wide-NEW density lean inside the dial's band
       return std::max(1, std::min(14, b2)); };
     // [r20 E, M14] MELODIES breathe too now, not just vocal lines - phrase ends leave air
     const bool breathe = o.singable || o.role == RoleHum || o.role == RoleMelody;
@@ -1051,7 +1175,8 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
                 // New idea rerolls it; H6's occupancy drop still runs after = context authority);
                 // no style = the classic Charleston / tresillo pair.
                 const GenStyle::CompCell* tc = o.styleDna != nullptr && ! o.styleDna->comp.empty()
-                                             ? pickWeighted(o.styleDna->comp, cr) : nullptr;
+                                             ? pickWeighted(o.styleDna->comp, cr,
+                                                            o.wideSeed != 0 ? 0.3f : 1.0f) : nullptr;
                 if (tc != nullptr)                     for (int p : tc->pos16) add(p);
                 else if (o.density >= 2 || cr.chance(0.4f)) { add(0); add(6); add(12); }
                 else                                        { add(0); add(6); }
@@ -1093,6 +1218,22 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
             std::sort(onsCols.begin(), onsCols.end());
             onsCols.erase(std::unique(onsCols.begin(), onsCols.end()), onsCols.end());
         }
+        if (o.wideSeed != 0 && (int) onsCols.size() >= 3)
+        {   // [r23 wide NEW] COMP SURFACE REROLL: a non-anchor stab may sit out per press
+            // (p .3) - legal comping by the same license H6 uses to thin stabs under a melody;
+            // bar-opening anchors stay. Style comp cells overlap heavily (funk shares 4 of 5
+            // positions across cells), so the template pick alone left rerolls ~alike ([68g]);
+            // the skip decorrelates even same-cell bars. varyCount folds in = VARY ALL rerolls
+            // this layer too (its surface contract).
+            Rng ks2 = forkRng(o.wideSeed ^ (o.rhythmSeed * 0xC0FFEE21u)
+                              ^ (uint32_t) o.varyCount * 0x9E3779B9u ^ 0x5AB5CADEu);
+            for (size_t oi = 0; oi < onsCols.size(); )
+            {
+                if ((onsCols[oi] % COLS) != 0 && (int) onsCols.size() > 2 && ks2.chance(0.30f))
+                    onsCols.erase(onsCols.begin() + (long) oi);
+                else ++oi;
+            }
+        }
         // ---- voicing per onset: H2 minimal-motion voice leading, H1 low-interval limits ----
         std::vector<int> prevV;
         auto chordToneUp = [&](bool cp[12], int from) -> int
@@ -1103,13 +1244,31 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
             bool cp[12]; chordPcs(o, chordRootDegAt(o, c, col), cp);
             std::vector<int> v;
             if (prevV.empty())
-            {   // first voicing: stack chord tones upward from the lane floor, spaced >= 3 st
+            {   // first voicing: stack chord tones upward from the lane floor, spaced >= 3 st.
+                // [r23] wide NEW / VARY ALL reroll the INVERSION - a true rotation: the lowest
+                // tone lifts an octave 0..nv-1 times (every rotation is a legal voicing of the
+                // same chord, bounded by the lane's H1 headroom), so a different chord tone
+                // LEADS the take and H2's minimal-motion voice leading carries that identity
+                // through every later change. (The first cut leaned the stack floor 0..4 st -
+                // it mostly landed the same lead tone = the [68g] convergence.)
                 int p2 = laneLo;
                 while ((int) v.size() < nv)
                 {
                     const int t = chordToneUp(cp, p2);
                     if (t <= -999) break;
                     v.push_back(t); p2 = t + 3;
+                }
+                if ((o.wideSeed != 0 || o.varyCount > 0) && (int) v.size() >= 2)
+                {
+                    Rng iv2 = forkRng(o.wideSeed ^ (o.rhythmSeed * 0x85EBCA6Bu)
+                                      ^ (o.pitchSeed * 0xC2B2AE35u)
+                                      ^ (uint32_t) o.varyCount * 0x27D4EB2Fu ^ 0x1F123BB5u);
+                    for (int rot = iv2.ri((int) v.size()); rot > 0; --rot)
+                    {
+                        if (v.front() + 12 > laneHi + 3) break;   // the H1 lift bound
+                        v.front() += 12;
+                        std::sort(v.begin(), v.end());
+                    }
                 }
             }
             else
@@ -1180,7 +1339,8 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
         // runs over it - the context keeps authority, the style supplies the vocabulary.
         // ============================================================================
         const auto& st2 = *o.styleDna;
-        const GenStyle::BassCell* cell = pickWeighted(st2.bass, rrng);
+        const GenStyle::BassCell* cell = pickWeighted(st2.bass, rrng,
+                                                      o.wideSeed != 0 ? 0.3f : 1.0f);   // [r23] wide fan
         const int centre = registerCentre(o);
         std::vector<int> lad;
         buildLadder(o, centre - 10, centre + 10, lad);
@@ -1251,7 +1411,8 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
         // M12 (per-generation front/back-heavy start, phrase peak on the strongest onset).
         // ============================================================================
         planForm(bars, o.lines, o.relation, plan,
-                 o.styleDna != nullptr ? (o.rhythmSeed ^ 0xF04D5EEDu) : 0u);   // [r22] form fan-out
+                 o.styleDna != nullptr ? (o.rhythmSeed ^ 0xF04D5EEDu)
+               : o.wideSeed  != 0      ? (o.wideSeed   ^ 0xF04D5EEDu) : 0u);   // [r22/r23] form fan-out
         // [r21] the motif's onsets + spans live in LATTICE CELLS (indices, not columns): a
         // placement = anchor cell + relative cell, converted to a col only at the very end -
         // so every copy of the cell is on-lattice by construction (half-bar spans on an odd
@@ -1280,7 +1441,8 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
             // sampled path (the style only biases its candidate weights).
             if (o.styleDna != nullptr && o.styleVirtual && ! o.styleDna->mel.empty())
             {
-                const GenStyle::MelCell* sc2 = pickWeighted(o.styleDna->mel, rrng);
+                const GenStyle::MelCell* sc2 = pickWeighted(o.styleDna->mel, rrng,
+                                                            o.wideSeed != 0 ? 0.3f : 1.0f);   // [r23] wide fan
                 if (sc2 != nullptr && ! sc2->ev.empty())
                 {
                     mc.styled = true;
@@ -1359,7 +1521,25 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
             const int phraseCells = std::max(1, (latCellNear(c, e) - sCell) / local.spanCells);
             const int nPlace = std::max(1, std::min(phraseCells, (budget + cellN - 1) / cellN));
             std::vector<int> anchors;
-            for (int k = 0; k < phraseCells && (int) anchors.size() < nPlace; ++k) anchors.push_back(k);
+            if (o.wideSeed != 0 && phraseCells > nPlace)
+            {   // [r23 wide NEW] the anchors themselves reroll: anchor 0 stays (the phrase must
+                // open), the rest are a seeded pick among ALL the phrase's anchor cells - where
+                // the motif repeats land fans out instead of always hugging the phrase head
+                // (the deneme bug's "bars 2/4 starved" placement half).
+                Rng af = forkRng(o.wideSeed ^ rrng.s ^ (uint32_t) s ^ 0xA2C40485u);
+                std::vector<int> pool;
+                for (int k = 1; k < phraseCells; ++k) pool.push_back(k);
+                anchors.push_back(0);
+                while ((int) anchors.size() < nPlace && ! pool.empty())
+                {
+                    const int pick = af.ri((int) pool.size());
+                    anchors.push_back(pool[(size_t) pick]);
+                    pool.erase(pool.begin() + pick);
+                }
+                std::sort(anchors.begin(), anchors.end());
+            }
+            else
+                for (int k = 0; k < phraseCells && (int) anchors.size() < nPlace; ++k) anchors.push_back(k);
             if ((int) anchors.size() >= 3 && rrng.chance(0.30f))            // a mid-phrase breath (M14)
                 anchors.erase(anchors.begin() + 1 + rrng.ri((int) anchors.size() - 2));
             const bool varyLast = anchors.size() >= 2 && rrng.chance(0.4f); // M10: vary LATE, never the opening
@@ -1390,19 +1570,54 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
                 }
             }
             if (o.rhythm == RhDriving && c.nHits > 0)
+            {
+                Rng sf = forkRng(o.wideSeed ^ rrng.s ^ 0xD21A7E5Du);   // fork - inert when wideSeed == 0
                 for (auto& pn : pns)
                 {   // DRIVING's hit-exact promise outranks the anchor grid: every placement
-                    // column SNAPS to the nearest real hit inside the phrase (GenTest [14])
-                    int best = -1, bd = 1 << 20;
+                    // column SNAPS onto a real EVENT hit inside the phrase (GenTest [14];
+                    // [r23] never a clock tick - the kick/snare landmarks are the lock, and
+                    // wide NEW may take the SECOND-nearest landmark (p .3, still hit-exact)
+                    // instead of freezing on the argmax.
+                    int best = -1, b2nd = -1, bd = 1 << 20, bd2 = 1 << 20;
                     for (int h = 0; h < c.nHits; ++h)
-                        if (c.hitCol[h] >= s && c.hitCol[h] < e
-                            && std::abs(c.hitCol[h] - pn.col) < bd)
-                        { bd = std::abs(c.hitCol[h] - pn.col); best = c.hitCol[h]; }
-                    if (best >= 0) pn.col = best;
+                    {
+                        if (c.hitClk[h] != 0) continue;
+                        if (c.hitCol[h] < s || c.hitCol[h] >= e) continue;
+                        const int d = std::abs(c.hitCol[h] - pn.col);
+                        if (d < bd)       { bd2 = bd; b2nd = best; bd = d; best = c.hitCol[h]; }
+                        else if (d < bd2) { bd2 = d; b2nd = c.hitCol[h]; }
+                    }
+                    if (best >= 0)
+                        pn.col = (o.wideSeed != 0 && b2nd >= 0 && bd2 <= BEAT / 2
+                                  && sf.chance(0.30f)) ? b2nd : best;
                 }
+            }
             std::sort(pns.begin(), pns.end(), [](const PN& a2, const PN& b2) { return a2.col < b2.col; });
             pns.erase(std::unique(pns.begin(), pns.end(),
                                   [](const PN& a2, const PN& b2) { return a2.col == b2.col; }), pns.end());
+            if (o.wideSeed != 0 && o.rhythm == RhDriving && (int) pns.size() >= 4)
+            {   // [r23 wide NEW] DRIVING SATURATION REROLL, judged PER BAR: when a bar's
+                // placements blanket its event landmarks (dense contexts: deneme's 7 events/bar
+                // vs a ~6 budget), every seed covers the SAME hits and rerolls converge
+                // (GenTest [68a]). A forked rng drops non-opening placements in SATURATED bars
+                // only (p .22, >= 75% of the bar's events taken) so the landmark SUBSET itself
+                // rerolls; sparse bars keep every placement; legality is untouched - survivors
+                // still sit ON the events - and the starvation floor re-tops over-thinned bars.
+                int evBar[MAX_BARS] = {}, pnBar[MAX_BARS] = {};
+                for (int h = 0; h < c.nHits; ++h)
+                    if (c.hitClk[h] == 0 && c.hitCol[h] >= s && c.hitCol[h] < e)
+                        ++evBar[juceLikeClamp(0, MAX_BARS - 1, c.hitCol[h] / COLS)];
+                for (auto& pn : pns) ++pnBar[juceLikeClamp(0, MAX_BARS - 1, pn.col / COLS)];
+                Rng dr = forkRng(o.wideSeed ^ (uint32_t) s ^ 0xD70C0DE5u);
+                for (size_t i = 1; i < pns.size(); )
+                {
+                    const int b2 = juceLikeClamp(0, MAX_BARS - 1, pns[(size_t) i].col / COLS);
+                    if ((int) pns.size() > 2 && evBar[b2] > 0 && pnBar[b2] * 4 >= evBar[b2] * 3
+                        && dr.chance(0.22f))
+                    { --pnBar[b2]; pns.erase(pns.begin() + (long) i); }
+                    else ++i;
+                }
+            }
             if (pns.empty()) continue;
             const size_t noteBase = notes.size();
             for (auto& pn : pns) { Note nn; nn.start = pn.col; notes.push_back(nn); }
@@ -1623,7 +1838,8 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
     }
     else
     {
-        planForm(bars, o.lines, o.relation, plan);
+        planForm(bars, o.lines, o.relation, plan,
+                 o.wideSeed != 0 ? (o.wideSeed ^ 0xF04D5EEDu) : 0u);   // [r23] wide-NEW form fan
         // the MOTIF = phrase A's material (onsets + pitches), the identity every echo/answer keeps
         std::vector<int>  motifOns;    // bar-local (relative to its phrase start)
         std::vector<Note> motifNotes;  // pitched A notes (phrase-relative starts)
@@ -1653,12 +1869,27 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
                 sampleOnsets(o, c, rrng, cands, want, s + (int) ((float) span * keep), breathEnd, tail);
                 for (int col : tail) ons.push_back(col);
                 // ECHO RHYTHM VARIATION [v2]: nudge the last kept onset sometimes - a bit-identical
-                // rhythm reads as copy-paste (the user's complaint); the opening itself never moves
+                // rhythm reads as copy-paste (the user's complaint); the opening itself never moves.
+                // [r23] Driving nudges LANDMARK to LANDMARK (the neighbouring EVENT hit - usually
+                // already taken, so the nudge reads as a dropped repeat): the G2/hit-exact law
+                // holds through the echo variation; a bare lattice cell is never a Driving target.
                 if (ph.tag == 'a' && ons.size() >= 3 && rrng.chance(0.4f))
                 {
                     std::sort(ons.begin(), ons.end());
                     int& mv = ons[ons.size() - 2];   // [r21] one lattice CELL either way
-                    const int shifted = latColOf(c, latCellNear(c, mv) + (rrng.chance(0.5f) ? 1 : -1));
+                    const bool up = rrng.chance(0.5f);
+                    int shifted = latColOf(c, latCellNear(c, mv) + (up ? 1 : -1));
+                    if (o.rhythm == RhDriving && evtHitCount(c) > 0)
+                    {
+                        shifted = -1; int bd = 1 << 20;
+                        for (int i = 0; i < c.nHits; ++i)
+                        {
+                            if (c.hitClk[i] != 0 || c.hitCol[i] == mv) continue;
+                            const int d = c.hitCol[i] - mv;
+                            if ((up ? d > 0 : d < 0) && std::abs(d) < bd)
+                            { bd = std::abs(d); shifted = c.hitCol[i]; }
+                        }
+                    }
                     if (shifted > s && shifted < breathEnd) mv = shifted;
                 }
             }
@@ -1769,6 +2000,102 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
             }
         }
         makeLengths(o, c, notes, total);
+    }
+
+    // ============================================================================
+    // [2026-07-22 r23] PER-BAR STARVATION FLOOR (the deneme bug's second half): placement
+    // budgets (nPlace anchors hugging the phrase head) and whole-span sampling can leave a bar
+    // EMPTY even when its drums are all there. No bar may starve: any bar under the floor
+    // (Melody 3 / Bass 2; Driving + Pockets - Flowing floats on the meter and legitimately
+    // arcs OVER bars) tops up from the bar's LATTICE cells, strength-weighted (G7), Driving
+    // preferring the EVENT-hit cells (the kick/snare landmarks) then strong lattice cells,
+    // Pockets only pocket-legal cells. Deterministic from its own seeded Rng - a take that
+    // never starves is bit-identical to the pre-r23 output. Respects the phrase breaths, the
+    // M14 bar-pair cap and the one-cell mono spacing; pitches step off the nearest existing
+    // note (the FILLS recipe) so the later M7/M1/M2/LHL passes polish them like any others.
+    // ============================================================================
+    if ((o.role == RoleMelody || o.role == RoleBass) && o.rhythm != RhFlowing && ! polyChords)
+    {
+        const int floorN = o.role == RoleMelody ? 3 : 2;
+        const int nL = latN(c), cw = latCw(c);
+        Rng sr = forkRng(o.rhythmSeed ^ 0x57A2BA85u);    // placements ride the RHYTHM stream ([6a] lock)
+        Rng pr2 = forkRng(o.pitchSeed ^ 0x57A2BA85u);    // pitches/velocities ride the PITCH stream
+        auto pairCount = [&](int b)
+        {
+            const int w = b / 2;
+            int n2 = 0;
+            for (auto& x : notes) if (x.start >= w * 2 * COLS && x.start < (w + 1) * 2 * COLS) ++n2;
+            return n2;
+        };
+        auto blockedByBreath = [&](int col)
+        {
+            if (! breathe) return false;
+            for (const auto& ph : plan)
+            {
+                const int e2 = (ph.startBar + ph.lenBars) * COLS;
+                if (col < e2 && col >= latColOf(c, latCellNear(c, e2) - 2)) return true;
+            }
+            return false;
+        };
+        for (int b = 0; b < bars; ++b)
+        {
+            int cnt = 0;
+            for (auto& x : notes) if (x.start >= b * COLS && x.start < (b + 1) * COLS) ++cnt;
+            for (int guard = 0; cnt < floorN && pairCount(b) < 12 && guard < 8; ++guard)
+            {
+                std::vector<Cand> cands;
+                for (int g = b * nL; g < (b + 1) * nL; ++g)
+                {
+                    const int col = latColOf(c, g);
+                    if (col >= total || blockedByBreath(col)) continue;
+                    bool taken = false;
+                    for (auto& x : notes) if (std::abs(x.start - col) < cw) { taken = true; break; }
+                    if (taken) continue;
+                    bool evtAt = false;
+                    for (int i = 0; i < c.nHits && ! evtAt; ++i)
+                        if (c.hitClk[i] == 0 && latCellNear(c, c.hitCol[i]) == g) evtAt = true;
+                    if (o.rhythm == RhPockets && nearEvtHit(c, col, cw)) continue;   // exclusion holds
+                    if (o.rhythm == RhDriving && o.role == RoleBass && ! evtAt)
+                        continue;   // a Driving BASS floor never leaves the kick landmarks
+                    float w2 = 0.05f + c.latStr[juceLikeClamp(0, c.bars * nL - 1, g)];
+                    if (o.rhythm == RhDriving)
+                        w2 *= evtAt ? 3.0f : (latMetric(g % nL, nL) >= 0.6f ? 1.0f : 0.25f);
+                    cands.push_back({ col, w2 });
+                }
+                if (cands.empty()) break;
+                float tot2 = 0.0f; for (auto& cd : cands) tot2 += cd.w;
+                float r2 = sr.uf() * tot2; size_t sel = 0;
+                for (size_t i = 0; i < cands.size(); ++i)
+                { r2 -= cands[i].w; if (r2 <= 0.0f) { sel = i; break; } }
+                const int col = cands[sel].col;
+                int ref = registerCentre(o), bd = 1 << 20;   // pitch: step off the nearest note
+                for (auto& x : notes)
+                    if (std::abs(x.start - col) < bd) { bd = std::abs(x.start - col); ref = x.semi; }
+                int semi = ref;
+                { std::vector<int> lad; buildLadder(o, ref - 4, ref + 4, lad);
+                  if (! lad.empty()) semi = ladStepOf(lad, ref, pr2.chance(0.5f) ? 1 : -1); }
+                int nxt = (b + 1) * COLS;
+                for (auto& x : notes) if (x.start > col && x.start < nxt) nxt = x.start;
+                int len = o.rhythm == RhPockets ? std::min(nxt - col, BEAT) * 9 / 10
+                                                : std::min(nxt - col, BEAT / 2) * 9 / 10;
+                if (breathe)                                  // never ring past a phrase's air line
+                    for (const auto& ph : plan)
+                    {
+                        const int e2 = (ph.startBar + ph.lenBars) * COLS;
+                        const int air = latColOf(c, latCellNear(c, e2) - 1);
+                        if (col < e2 && col + len > air) len = air - col;
+                    }
+                Note nn;
+                nn.start = col;
+                nn.len   = std::max(cw / 2, len);
+                nn.semi  = std::max(-48, std::min(48, semi));
+                nn.vel   = velFor(o, c, pr2, col, latStrong(c, col, true));
+                notes.push_back(nn);
+                ++cnt;
+            }
+        }
+        std::sort(notes.begin(), notes.end(),
+                  [](const Note& a, const Note& b2) { return a.start < b2.start; });
     }
 
     // VARY: same skeleton, new ornaments (Chords reroll their template dice instead - the
@@ -1886,8 +2213,7 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
             bool free2 = tgt > 0 && tgt < cc2;
             for (auto& n : notes) if (&n != at && std::abs(n.start - tgt) < cw) free2 = false;
             if (o.rhythm == RhPockets)                  // the push respects the pocket exclusions
-                for (int h = 0; h < c.nHits; ++h)
-                    if (std::abs(tgt - c.hitCol[h]) < cw) free2 = false;
+                if (nearEvtHit(c, tgt, cw)) free2 = false;   // [r23] events only, never clock ticks
             if (! free2) { prevPushed = false; continue; }
             at->start = tgt;
             prevPushed = true;
@@ -2162,6 +2488,9 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
         const int maxBand = o.role == RoleBass ? 4 : (o.role == RoleHum ? 2 : 6);
         const int minBand = o.role == RoleBass ? 1 : (o.role == RoleHum ? 0 : 2);
         const int cw = latCw(c), nL = latN(c);
+        // [r23] TWO hit views here: POCKET LEGALITY reads EVENTS only (a clock wall never
+        // forbids a target), but the ceiling walk's "a drum ends the air" break keeps ALL
+        // hits - that mirrors the scorer's covered[] cells (coverage, not exclusion).
         auto nearAnyHit = [&](int col)
         {
             for (int i = 0; i < c.nHits; ++i)
@@ -2170,7 +2499,7 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
         };
         auto legalTarget = [&](int col)
         {
-            if (o.rhythm == RhPockets && nearAnyHit(col)) return false;
+            if (o.rhythm == RhPockets && nearEvtHit(c, col, cw)) return false;
             for (auto& n : notes) if (std::abs(n.start - col) < cw) return false;
             return true;
         };
@@ -2218,7 +2547,7 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
                 if (tgt >= (b + 1) * COLS) break;
                 bool free2 = true;
                 for (auto& n : notes) if (&n != last && std::abs(n.start - tgt) < cw) free2 = false;
-                if (o.rhythm == RhPockets && nearAnyHit(tgt)) break;
+                if (o.rhythm == RhPockets && nearEvtHit(c, tgt, cw)) break;   // [r23] events only
                 if (! free2) break;
                 last->start = tgt;
             }
@@ -2234,6 +2563,15 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
         for (auto& n : notes)
             n.vel = std::max(120, std::min(255,
                         (int) std::lround(200.0f + ((float) n.vel - 200.0f) * mul + ofs)));
+    }
+    // [r23 wide NEW] intensity PLACEMENT within the dial's band: a small whole-take level lean
+    // (+-4 of the 120..255 space), seeded - the dial names the band, the press places the take.
+    if (o.wideSeed != 0)
+    {
+        Rng iw = forkRng(o.wideSeed ^ 0x1A7E4517u);
+        const int lean = iw.ri(9) - 4;
+        if (lean != 0)
+            for (auto& n : notes) n.vel = std::max(120, std::min(255, n.vel + lean));
     }
 
     // PHRASE DYNAMICS [v2]: a gentle swell toward the two-thirds point of each bar-pair
@@ -2402,11 +2740,14 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
                 notes[i].len = std::min(notes[i].len, CELL16);
             notes[i].len = std::max(1, notes[i].len);
         }
-        if (o.rhythm == RhPockets && c.nHits > 0)         // re-clip: nothing rings into a hit
+        if (o.rhythm == RhPockets && c.nHits > 0)         // re-clip: nothing rings into an EVENT
             for (auto& n : notes)
                 for (int i = 0; i < c.nHits; ++i)
+                {
+                    if (c.hitClk[i] != 0) continue;       // [r23] clock ticks don't clip
                     if (c.hitCol[i] > n.start && n.start + n.len > c.hitCol[i] - COLS / 32)
                     { n.len = std::max(1, c.hitCol[i] - COLS / 32 - n.start); break; }
+                }
         if (o.role == RoleBass && o.rhythm == RhFlowing && c.nKick > 0)
             for (auto& n : notes)
                 for (int i = 0; i < c.nKick; ++i)
@@ -2443,11 +2784,14 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
                         if (c.chordColAt[ci] > notes[i].start) { lim = std::min(lim, c.chordColAt[ci]); break; }
                 notes[i].len = std::max(notes[i].len, std::max(latCw(c) / 2, lim - notes[i].start));
             }
-        if (o.rhythm == RhPockets && c.nHits > 0)          // re-clip: nothing rings into a hit
+        if (o.rhythm == RhPockets && c.nHits > 0)          // re-clip: nothing rings into an EVENT
             for (auto& n : notes)
                 for (int i = 0; i < c.nHits; ++i)
+                {
+                    if (c.hitClk[i] != 0) continue;        // [r23] clock ticks don't clip
                     if (c.hitCol[i] > n.start && n.start + n.len > c.hitCol[i] - COLS / 32)
                     { n.len = std::max(1, c.hitCol[i] - COLS / 32 - n.start); break; }
+                }
         if (o.rhythm == RhFlowing && c.nKick > 0)
             for (auto& n : notes)
                 for (int i = 0; i < c.nKick; ++i)
