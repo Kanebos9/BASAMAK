@@ -186,6 +186,8 @@ public:
                        SelScaleTypeNext, SelScaleTypePrev, SelScaleKeyNext, SelScaleKeyPrev,   // ScaleBox NEXT/PREV
                        SelScaleNotesNext, SelScaleNotesPrev,                                    //  buttons (step + wrap) [2026-07-16 round-5]
                        SelSlotPBase = 1000,    // 1000 + N = the N-th knob of the selected slot's engine grid
+                                               //   [2026-08-01 r26 B5a] RETIRED: no routeCC producer any more
+                                               //   (ui_sel_p{N} deleted per user ruling) - value reserved
                        SelStepBase  = 2000,    // 2000 + N = step N on the selected channel
                        SelModAmtBase = 3000 }; // [2026-07-14 11:10] 3000 + R = mod route R's AMOUNT (selected slot)
     struct SelCCEvt { int t; float v; };

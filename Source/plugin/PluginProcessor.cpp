@@ -444,7 +444,10 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                                        std::memory_order_relaxed);
         auto logEvt = [this](int pat, int st, int semis, int flags) {
             const int cnt = keysEvtCount.load(std::memory_order_relaxed);
-            if (cnt < KEYS_EVT_CAP)
+            // [2026-08-01 r26 B2] the LAST slot is RESERVED for the 0xFF boundary marker: ordinary
+            // events stop one earlier, so a log that fills mid-take can still CLOSE the take - two
+            // takes can no longer merge silently when the cap landed exactly on a boundary.
+            if (cnt < KEYS_EVT_CAP - 1 || (pat == 0xFF && cnt < KEYS_EVT_CAP))
             {
                 keysEvts[cnt] = { (uint8_t) pat, (uint8_t) st, (int8_t) semis, (uint8_t) flags };
                 keysEvtCount.store(cnt + 1, std::memory_order_release);
@@ -599,6 +602,15 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                                            : juce::jmax(1, c.arpSync);
             return (double) sync * DrumChannel::arpRateMul(c.arpRate);
         };
+        // [2026-08-01 r26 B1b] arp releases SWEEP every pattern's channel (the handleKeyUp
+        // precedent, cheap 16-voice scans): the sounding note's voice lives in the bar that was
+        // playing when it FIRED - keyPat can advance mid-ring (chain record / bar switch), so a
+        // keyUp on the current bar's channel alone left the old bar's voice keyed-on forever.
+        auto arpRelease = [&](int note)
+        {
+            const int c = arpChan >= 0 ? arpChan : chIdx;
+            for (auto& patA : sequencer.patterns) patA.channels[c].keyUp(note);
+        };
         auto fireArp = [&](int step)
         {
             const int note = DrumChannel::arpNoteAt(arpKc.arpOffset, arpKc.arpLen, arpRoot, step);
@@ -607,13 +619,13 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                             // not a chop). Note->NOTE ringing-into-next comes from poly keyDown;
                             // rests must stay AUDIBLE as silence (they are the riff's rhythm tool -
                             // letting them ring made every Last-note count sound identical).
-              if (arpSounding >= 0) { arpKc.keyUp(arpSounding); arpSounding = -1; }
+              if (arpSounding >= 0) { arpRelease(arpSounding); arpSounding = -1; }   // [2026-08-01 r26 B1b] sweep
               arpSoundingUi.store(-1, std::memory_order_relaxed); return; }
             // GATE 100% = held for exactly ONE CELL, released when the next note fires (user rule -
             // merge/longer notes are the tool for longer holds). So: at EVERY fire the previous
             // note is keyUp'd first; on a POLY channel its RELEASE tail rings over the new note
             // (legato), on mono it cuts - identical to what the recording plays back.
-            if (arpSounding >= 0) { arpKc.keyUp(arpSounding); arpSounding = -1; }
+            if (arpSounding >= 0) { arpRelease(arpSounding); arpSounding = -1; }   // [2026-08-01 r26 B1b] sweep
             // Alternate strokes (user: up, down, up... like real strumming) - flip before the trigger.
             const bool upStroke = arpKc.arpAltStrum && ((arpFireCount++ & 1) != 0);
             arpKc.strumFlip = upStroke;
@@ -674,7 +686,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         };
         auto stopArp = [&]()
         {
-            if (arpSounding >= 0 && arpChan >= 0) sequencer.patterns[keyPat].channels[arpChan].keyUp(arpSounding);
+            if (arpSounding >= 0 && arpChan >= 0) arpRelease(arpSounding);   // [2026-08-01 r26 B1b] sweep (keyPat may have moved since the note fired)
             arpRoot = -1; arpSounding = -1; arpChan = -1;
             arpSoundingUi.store(-1, std::memory_order_relaxed);
             keysHeldNote.store(-1, std::memory_order_relaxed);
@@ -790,12 +802,16 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             int tgtCh = chIdx;
             const int playNote = splitMap(note, tgtCh);
             auto& tc = sequencer.patterns[keyPat].channels[tgtCh];   // the pressed HALF's channel (full sound)
-            tc.keyDown(playNote, kvel, tc.keysSlot2Down, letRing ? true : tc.keysPolyMode, 0, keyChanNow);   // Let Ring = poly (group-mates don't cut); MPE: tag the voice with its channel
             // Held stack: a re-press moves the note to the top (most recent). openIdx/Pat ride along.
             for (int i = 0; i < keysHeldCount; ++i)
                 if (keysHeldStack[i] == note)
                 { for (int j = i; j < keysHeldCount - 1; ++j) { keysHeldStack[j] = keysHeldStack[j + 1]; keysHeldStackVel[j] = keysHeldStackVel[j + 1]; keysHeldOpenIdx[j] = keysHeldOpenIdx[j + 1]; keysHeldOpenPat[j] = keysHeldOpenPat[j + 1]; keysHeldOpenChan[j] = keysHeldOpenChan[j + 1]; }
                   --keysHeldCount; break; }
+            // [2026-08-01 r26 B1d] capacity check BEFORE the trigger: the stack IS the release
+            // bookkeeping, so an untrackable note (full stack) must never sound at all - the old
+            // order keyDown'd first, and the 33rd note rang with nothing to ever key it up.
+            if (keysHeldCount >= (int) (sizeof(keysHeldStack) / sizeof(keysHeldStack[0]))) return;
+            tc.keyDown(playNote, kvel, tc.keysSlot2Down, letRing ? true : tc.keysPolyMode, 0, keyChanNow);   // Let Ring = poly (group-mates don't cut); MPE: tag the voice with its channel
             if (keysHeldCount < (int) (sizeof(keysHeldStack) / sizeof(keysHeldStack[0])))
             {
                 keysHeldStack[keysHeldCount] = note; keysHeldStackVel[keysHeldCount] = kvel;
@@ -829,7 +845,23 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         {
             if (arpKc.arpOn)
             {   // release the root: stop - unless HOLD latches the arp (it keeps looping; re-press stops it)
-                if (note == arpRoot) { arpRootHeld = false; if (! arpKc.arpHold) stopArp(); }
+                if (note == arpRoot) { arpRootHeld = false; if (! arpKc.arpHold) stopArp(); return; }
+                // [2026-08-01 r26 B1a] NOT the root = a note pressed BEFORE the arp was toggled on:
+                // release it normally (held-stack removal + the all-patterns sweep) - the blanket
+                // early-return used to swallow it = a keyed-on voice ringing forever. The lit mask
+                // stays with the arp (it owns the highlight while running).
+                for (int i = 0; i < keysHeldCount; ++i)
+                    if (keysHeldStack[i] == note)
+                    { for (int j = i; j < keysHeldCount - 1; ++j) { keysHeldStack[j] = keysHeldStack[j + 1]; keysHeldStackVel[j] = keysHeldStackVel[j + 1]; keysHeldOpenIdx[j] = keysHeldOpenIdx[j + 1]; keysHeldOpenPat[j] = keysHeldOpenPat[j + 1]; keysHeldOpenChan[j] = keysHeldOpenChan[j + 1]; }
+                      --keysHeldCount; break; }
+                { int uTgt = chIdx; const int mapped = splitMap(note, uTgt);
+                  for (auto& patU : sequencer.patterns)
+                  {
+                      patU.channels[uTgt].keyUp(mapped);
+                      if (paired && mapped != note) patU.channels[mergedP].keyUp(note);
+                  } }
+                for (auto& pat2 : sequencer.patterns)
+                    pat2.channels[chIdx].keyUp(note);
                 return;
             }
             auto& kc = sequencer.patterns[keyPat].channels[chIdx];
@@ -973,7 +1005,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                 // GATE: cut the ringing note after that fraction of the step (1.0 = never = old behaviour)
                 if (arpSounding >= 0 && arpKc.arpGate < 0.999f
                     && (double) (arpNoteAge + numSamples) >= noteSamp * (double) juce::jlimit(0.1f, 1.0f, arpKc.arpGate))
-                { arpKc.keyUp(arpSounding); arpSounding = -1; arpSoundingUi.store(-1, std::memory_order_relaxed); }
+                { arpRelease(arpSounding); arpSounding = -1; arpSoundingUi.store(-1, std::memory_order_relaxed); }   // [2026-08-01 r26 B1b] sweep
                 arpNoteAge += numSamples;
                 arpAcc += (double) numSamples;
                 int guard = 0;
@@ -985,7 +1017,11 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                 }
             }
         }
-        else if (arpRoot >= 0 && ! arpKc.arpOn) stopArp();   // arp switched off while a key was held
+        // [2026-08-01 r26 B1c] arp switched off while a key was held, OR the SELECTION moved to a
+        // DIFFERENT channel (arpChan != chIdx - the clock above never runs again, so the runtime
+        // was orphaned and the sounding note rang on): stop cleanly regardless of the new
+        // channel's arpOn - stopArp releases arpSounding on its ORIGIN channel (the B1b sweep).
+        else if (arpRoot >= 0) stopArp();
 
         // AUTO-MERGE: the key is still held when the playhead enters the NEXT step -> that step
         // becomes a merge-continuation of the stamped note (recorded exactly like you played it).
@@ -1399,6 +1435,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         {
             const double hz = msToneHz.load(std::memory_order_relaxed);
             juce::int64 rem = msToneRemain.load(std::memory_order_relaxed);
+            const juce::int64 rem0 = rem;   // [2026-08-01 r26 B6] baseline for the CAS write-back below
             if (hz > 20.0 && audio.getNumChannels() >= 2)
             {
                 float* o0 = audio.getWritePointer(0); float* o1 = audio.getWritePointer(1);
@@ -1416,7 +1453,12 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                 msTonePh.store(ph, std::memory_order_relaxed);
             }
             else rem = 0;
-            msToneRemain.store(rem, std::memory_order_relaxed);
+            // [2026-08-01 r26 B6] compare-exchange against the value we LOADED: a message-thread
+            // replay (playGuideTone mid-block) that lands between our load and this write-back
+            // must win - a plain store overwrote it and the replay was silently lost.
+            juce::int64 expect = rem0;
+            msToneRemain.compare_exchange_strong(expect, rem, std::memory_order_release,
+                                                 std::memory_order_relaxed);
         }
         // [2026-07-19] WIZARD TAKE PREVIEW mix-in (before the soft-clip so it's bounded too).
         // First the DYING slot: an interrupted preview ramps to zero over ~4 ms instead of
@@ -1579,7 +1621,8 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
     if (pid == "ui_mode_pan")   { if (on) uiMidiEditMode.store(5); return; }
     if (pid == "ui_mode_len")   { if (on) uiMidiEditMode.store(6); return; }
     if (pid == "ui_mode_nudge") { if (on) uiMidiEditMode.store(7); return; }
-    if (pid.startsWith("ui_influence_ch")) { if (on) uiMidiInfluence.store(pid.substring(15).getIntValue()); return; }
+    // [2026-08-01 r26 B5b] "ui_influence_ch*" RETIRED (user ruling: Influence has no MIDI target;
+    // the editor no longer offers the learn) - an old map's assignment goes inert, the precedent.
     // Sound browsing on the SELECTED channel: NEXT/PREV buttons only. One step per press +
     // HOLD-TO-REPEAT (the editor repeats while held; release = the pad's value-0 message).
     // Set pads to MOMENTARY in the controller's editor.
@@ -1593,6 +1636,22 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
                 uiSoundHoldMs.store(juce::Time::getMillisecondCounter()); }
       else if (uiSoundHold.load() < 0) uiSoundHold.store(0);
       return; }
+    // [2026-08-01 r26 B5c] "ui_blend" = the slot BLEND fader's learn pid - it routed NOWHERE (the
+    // dead-assignment family). Write the SELECTED channel's blend exactly like the on-screen
+    // fader's onValueChange (weights + padX; CC 127 = fader top = Slot 1 only). Works with the
+    // editor closed; the fader face resyncs on the next refresh (refresh is read-only).
+    if (pid == "ui_blend")
+    {
+        auto& bch = sequencer.current().channels[juce::jlimit(0, Sequencer::NUM_CHANNELS - 1,
+                                                              lastSelectedChannel)];
+        const float x = 1.0f - norm;   // fader top = Slot 1 (padX 0) - the UI mapping, mirrored
+        const bool o0 = bch.slots[0].engine >= 0, o1 = bch.slots[1].engine >= 0;
+        if (o0 && o1) { bch.slots[0].weight = 1.0f - x; bch.slots[1].weight = x; }
+        else          { bch.slots[0].weight = o0 ? 1.0f : 0.0f; bch.slots[1].weight = o1 ? 1.0f : 0.0f; }
+        bch.padX = x;   // persist the blend
+        bch.markDspDirty();
+        return;
+    }
     // SELECTED-SCOPE controls (ui_sel_*): knobs carry the CC value; buttons fire on press.
     if (pid.startsWith("ui_sel_"))
     {
@@ -1651,14 +1710,9 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
         for (auto& k : kSelBtns) if (pid == k.first) { if (on) pushSelCC(k.second, 1.0f); return; }
         return;
     }
-    // "ui_sel_p{N}" = the N-th knob of the SELECTED slot's engine grid (generic: what the knob
-    // does follows the engine, exactly like the on-screen knob it mirrors).
-    if (pid.startsWith("ui_sel_p"))
-    {
-        const int n = pid.substring(8).getIntValue();
-        if (n >= 1 && n <= 8) pushSelCC(SelSlotPBase + n - 1, norm);
-        return;
-    }
+    // [2026-08-01 r26 B5a] the "ui_sel_p{N}" engine-grid-knob branch is DELETED: it was
+    // unreachable (the ui_sel_ block above consumes EVERY "ui_sel_*" pid first) and the user
+    // ruled the feature out - the grid knobs mean different things per channel.
     // SELECTED-channel steps: "ui_selstep_{N}" sets step N on the SELECTED channel (value >= 64
     // = on, below = off - same convention as the addressed p{P}_step ids / TouchOSC pads).
     if (pid.startsWith("ui_selstep_"))
@@ -2117,6 +2171,13 @@ juce::File DrumSequencerProcessor::exportMidiFile(int channel)
                 else continue;   // Sample / Noise: unpitched -> contributes no notes
                 PSlot p; p.slotIdx = si;
                 p.base = juce::jlimit(0, 127, (int) std::lround(69.0 + 12.0 * std::log2(juce::jmax(20.0, hz) / 440.0)));
+                // [2026-08-01 r26 B4] PIANO ROLL is knob-INDEPENDENT (the slotBaseHz contract):
+                // roll playback pins every pitched slot to C4 + the Tune fader's cents (slot 2
+                // minus its transpose), so the export must use that base too - the Freq knob only
+                // names STEP mode's 0-point. (Step channels below keep the knob base unchanged.)
+                if (chn.drawMode)
+                    p.base = juce::jlimit(0, 127, 60 + juce::roundToInt(chn.drawTuneCents / 100.0f)
+                                                     - (si == 1 ? chn.keysSlot2Down : 0));
                 p.scaleOn = sl.scaleOn; p.scaleType = sl.scaleType; p.scaleKey = sl.scaleKey;
                 p.scaleUni = sl.scaleUnison;
                 pslots.add(p);
@@ -2502,11 +2563,13 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
     }
     for (int f = 0; f < 2; ++f)   // [2026-07-16] CHANNEL FILTER/EQ pair
     { const juce::String k(f); const float cDef = (f == 0) ? 1000.0f : 2500.0f;   // struct defaults (a full DrumChannel per read = heavy)
-      ch.chFiltType[f]   = (int)  child.getProperty("cfT" + k, 0);
-      ch.chFiltCutoff[f] = (float)child.getProperty("cfC" + k, cDef);
-      ch.chFiltReso[f]   = (float)child.getProperty("cfR" + k, 0.707f);
-      ch.chFiltGain[f]   = (float)child.getProperty("cfG" + k, 0.0f); }
-    ch.chFiltDrive = (float)child.getProperty("cfDrv", 0.0f);
+      // [2026-08-01 r26 B3] clamp like readChannelMix - a stale/hand-edited file must not
+      // smuggle an out-of-range type/cutoff/reso/gain into the DSP.
+      ch.chFiltType[f]   = juce::jlimit(0, (int) DrumChannel::Bell, (int) child.getProperty("cfT" + k, 0));
+      ch.chFiltCutoff[f] = juce::jlimit(20.0f, 20000.0f, (float) child.getProperty("cfC" + k, cDef));
+      ch.chFiltReso[f]   = juce::jlimit(0.1f, 12.0f, (float) child.getProperty("cfR" + k, 0.707f));
+      ch.chFiltGain[f]   = juce::jlimit(-15.0f, 15.0f, (float) child.getProperty("cfG" + k, 0.0f)); }
+    ch.chFiltDrive = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("cfDrv", 0.0f));
     ch.reverbSend = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("chRev", (float) ch.reverbSend));   // channel sends
     ch.delaySend  = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("chDel", (float) ch.delaySend));    // (legacy field default kept)
     ch.revBus = (int8_t) juce::jlimit(0, 1, (int) child.getProperty("revBus", 0));
