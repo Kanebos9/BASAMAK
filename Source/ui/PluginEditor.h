@@ -2612,6 +2612,16 @@ public:
 
     void init(int idx, MidiLearnManager& mlm, juce::LookAndFeel* knobLNF,
               std::function<DrumChannel::Slot*()> slotFn, std::function<void()> editFn);
+    // [2026-08-01 r26] LNF TEARDOWN: init() hands every param knob + fader the editor's knobLNF and
+    // nothing ever cleared it (the editor dtor only clears its OWN allKnobs list). Drop it here so a
+    // component can never outlive-reference the LookAndFeel (the set-without-clear rule).
+    ~SlotEditor() override
+    {
+        for (auto& k : knobs) if (k) k->setLookAndFeel(nullptr);
+        for (auto* f : { freqFader.get(), depthFader.get(), fromFader.get(), toFader.get(),
+                         warpFader.get(), syncFader.get(), bendFader.get() })
+            if (f != nullptr) f->setLookAndFeel(nullptr);
+    }
     // Per-slot accent colour (Slot 1 = yellow, Slot 2 = pink) - tints this slot's knobs + faders so the
     // group reads as that slot's colour (good contrast on the dark tinted box).
     juce::Colour accent { 0xff35c0ff };
@@ -3977,10 +3987,15 @@ private:
     GeneratePanel  generatePanel;          // [2026-07-20] GENERATE options panel (roll-header button)
     uint32_t genRhythmSeed = 1, genPitchSeed = 2;   // the two iteration seeds (rhythm | pitch)
     int  genVaryCount = 0;                          // Vary presses since the last reroll
-    bool genHadNotes = false, genWarned = false;    // replace-existing-notes warning (once per open)
+    bool genHadNotes = false;
+    // [2026-08-01 r26] consent is PER KIND now: the kit consent and the melodic replace-warning each
+    // ask once per panel-open for THEIR kind - a kit write never grants melodic consent (or vice
+    // versa). Rerolls of our own output within a kind still never re-ask; decline = a no-op.
+    bool genWarnedKit = false, genWarnedMel = false;
     bool genAllWarned = false;                      // [r22] GENERATE ALL's own consent (once per open)
     int  genAllVaryCount = 0;                       // [r23] VARY ALL presses since the last full roll
-    int  genAllStyleIdx  = -1;                      // [r23] the resolved style of the last GENERATE ALL
+    juce::String genAllStyleName;                   // [r23 -> r26] the last GENERATE ALL's style BY NAME
+                                                    // (registry indices shift on a styles Refresh; empty = none yet)
                                                     //       (Any-style pick kept stable for VARY ALL)
     juce::String genStyleNote;                      // [r22] skipped user-style files (parse errors)
     ModFaderMatrix  modFaders;             // 12 route faders (6x2) inline in the MODULATION box

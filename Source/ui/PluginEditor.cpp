@@ -101,7 +101,8 @@ static float processRamMB()
 // ================================================================================================
 
 // Design height grows with the visible channel-row count. Keep these magic numbers in sync with the
-// layout constants GRID_TOP(84)/ROW_H(38) + the 24px gap + the 366px detail-panel block (see below).
+// layout constants GRID_TOP(84)/ROW_H(44) + the 24px gap + the 366px detail-panel block (see below).
+// [2026-08-01 r26] (the comment said ROW_H(38) - the code below always used the real 44)
 // At 8 channels this returns 778 == DESIGN_H.
 // The channel area shows at most 8 rows; more channels scroll (see channelBar). 44 = ROW_H (keep in sync).
 static int contentHeightFor(int visCh, bool detail = true)
@@ -1727,6 +1728,19 @@ void ModFaderMatrix::mouseDoubleClick(const juce::MouseEvent& e)
 
 juce::String WaveMorphDisplay::getTooltip()
 {
+    // [2026-08-01 r26] FACE-AWARE: the same preview wears three faces (oscillator / Custom wavetable /
+    // granular source) - the tooltip says what THIS slot's drawing actually is.
+    auto* s = getSlot ? getSlot() : nullptr;
+    if (s != nullptr && s->engine == DrumChannel::SrcGrain)
+        return "The granular SOURCE this slot's grains read from - the cyan dots are the REAL positions the "
+               "engine's grains play right now. Drop an audio file on the slot to granulate it, or click the "
+               "drawing to draw a Custom source wave.";
+    if (s != nullptr && s->oscShape >= DrumChannel::WvCustom)
+        return "Your Custom wavetable (frames A-D). Click the drawing to open DRAW HARMONICS and edit it; the "
+               "amber marker along the bottom is the LIVE playing position (Position handle + glide + WAVE LFO).";
+    if (s != nullptr && s->fmDepth > 0.001f)
+        return "The oscillator's waveform WITH its FM applied - the picture is the real tone. FM Amount/Ratio/"
+               "Feedback and the Sync/Bend/Fold trio reshape it live here.";
     return "The oscillator's waveform (the picture is the real tone). Pick the wave with the WAVE fader above; "
            "the FM Depth/Ratio/Feedback + Warp reshape it live here.";
 }
@@ -1999,9 +2013,10 @@ void SlotEditor::init(int idx, MidiLearnManager& mlm, juce::LookAndFeel* knobLNF
     addMouseListener(&boxDragger, true);
     for (int i = 0; i < MAXK; ++i)
     {
-        // "ui_sel_p{N}" = the N-th knob of the SELECTED slot's engine grid (selected-scope MIDI;
-        // the old "slot{idx}_k{i}" pids were learnable but routed NOWHERE = dead assignments)
-        auto k = std::make_unique<LearnableKnob>("ui_sel_p" + juce::String(i + 1), mlm);
+        // [2026-08-01 r26] NO MIDI-learn offer on the engine-grid knobs (user ruling): the empty pid
+        // suppresses the right-click learn menu (the established pattern). The knobs stay; only the
+        // "ui_sel_p{N}" learn affordance is gone.
+        auto k = std::make_unique<LearnableKnob>(juce::String(), mlm);
         k->setSliderStyle(juce::Slider::RotaryVerticalDrag);
         k->setLookAndFeel(knobLNF);
         k->setTextBoxStyle(juce::Slider::TextBoxBelow, true, 46, 13);
@@ -3654,7 +3669,8 @@ void GeneratePanel::paint(juce::Graphics& g)
     {
         const auto ar = actionRect(i);
         const bool big = i < 2 || i >= 5;        // [r22] the arrangement pair reads as primary
-        const bool dim = i == 4 && ! hadNotes;   // Keep-my-notes needs notes to keep
+        const bool dim = i == 4 && (! hadNotes || role == 5);   // Keep-my-notes needs notes to keep;
+                                                                // [r26] no Drum Kit meaning either
         g.setColour((big ? juce::Colour(0xff2a4a3a) : juce::Colour(0xff26263c)).withAlpha(dim ? 0.4f : 1.0f));
         g.fillRoundedRectangle(ar.toFloat(), 5.0f);
         if (i >= 5) { g.setColour(kGenAccent.withAlpha(i == 5 ? 0.7f : 0.45f));
@@ -3707,11 +3723,13 @@ void GeneratePanel::mouseDown(const juce::MouseEvent& e)
             m.addItem(i + 1, styleNames[i], true, ! styleAny && i == style);
         m.addSeparator();
         m.addItem(9000, "Refresh styles (rescan the Styles folder)");
+        m.addItem(9001, "Show Folder");   // [2026-08-01 r26] the established folder-menu pattern
         m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(
                             localAreaToGlobal(styleRect())),
                         [this](int r)
                         {
                             if (r == 9000) { if (onRefreshStyles) onRefreshStyles(); repaint(); }
+                            else if (r == 9001) { auto f = UserPaths::styles(); f.createDirectory(); f.revealToUser(); }
                             else if (r == 8999) { styleAny = true; repaint(); }
                             else if (r > 0) { style = r - 1; styleAny = false; repaint(); }
                         });
@@ -3760,7 +3778,7 @@ void GeneratePanel::mouseDown(const juce::MouseEvent& e)
         if (actionRect(i).contains(pos)) { if (onAction) onAction(i); return; }
     if (actionRect(4).contains(pos))
     {   // [r20 item I] KEEP MY NOTES: augment the hand-written material instead of replacing it
-        if (! hadNotes) return;   // nothing to keep - the button is dimmed
+        if (! hadNotes || role == 5) return;   // nothing to keep / Drum Kit - the button is dimmed [r26]
         juce::PopupMenu m;
         m.addSectionHeader("Augment YOUR notes (undo restores)");
         m.addItem(1, "Keep my RHYTHM - write new notes over it");
@@ -3779,6 +3797,16 @@ juce::String GeneratePanel::getTooltip()
     if (! panelRect().contains(pos)) return {};
     if (closeRect().contains(pos))   return "Close the Generate panel (the notes stay).";
     auto inRow = [&](int r) { return rowRect(r).contains(pos); };
+    if (role == 5)
+    {   // [2026-08-01 r26] Drum Kit: the sleeping rows say WHY they sleep (one-liners), and the
+        // dimmed Keep-my-notes says why it has no kit meaning.
+        if (actionRect(4).contains(pos))
+            return "KEEP MY NOTES is asleep in Drum Kit - it augments ONE melodic channel; pick a "
+                   "melodic role to use it.";
+        if (inRow(1) || inRow(2) || inRow(4) || inRow(6) || inRow(7) || inRow(8)
+            || inRow(11) || inRow(12) || (inRow(13) && singableRect().contains(pos)))
+            return "Asleep in Drum Kit - the STYLE's drum DNA drives the kit; this row shapes melodic roles.";
+    }
     if (inRow(0)) return "ROLE: which rule-set writes the part.\n\n"
                          "- Bassline: low, root-heavy, locks against the kick.\n"
                          "- Melody: mid register, phrases with variation.\n"
@@ -3792,9 +3820,10 @@ juce::String GeneratePanel::getTooltip()
                          "Defaults from the loaded sound's bank category.";
     if (inRow(1)) return "KEY + SCALE the generator writes in. Prefilled from this channel's Scale mode, or "
                          "DETECTED from your pitched piano-roll channels - correct it here if the guess is wrong.";
-    if (inRow(2)) return "CHORDS: the harmony the part follows (the shared chord timeline).\n\n"
+    if (inRow(2)) return "CHORDS: the harmony the part follows (the shared chord timeline). Applies to the "
+                         "MELODIC roles (the Drum Kit has no harmony).\n\n"
                          "- Auto: detected from your other channels' notes (stock changes when nothing is heard).\n"
-                         "- Or pick a classic progression - it overrides detection for every role.\n"
+                         "- Or pick a classic progression - it overrides detection for every melodic role.\n"
                          "- Basslines land the ROOT on every change and walk an approach note into it.";
     if (inRow(3)) return "STYLE: the genre DNA - it speaks for EVERY role.\n\n"
                          "- Any style (the default): each NEW IDEA / GENERATE ALL press picks a style from "
@@ -3805,8 +3834,9 @@ juce::String GeneratePanel::getTooltip()
                          "- Melodic roles: the style's bass cells / melody cells / chord-stab templates and "
                          "progression pool drive from-scratch writing, and bias the rhythm when a real groove "
                          "is heard (your groove always outranks the style).\n"
-                         "- Your own styles: put .basamakstyle files in Documents/BASAMAK/Styles (see "
-                         "docs/STYLES.md in the repo) - they appear here, tagged; Refresh rescans.";
+                         "- Your own styles: drop .basamakstyle files in Documents/BASAMAK/Styles (the "
+                         "picker's Show Folder opens it; a STYLES.md format guide ships in the download) - "
+                         "they appear here, tagged; Refresh rescans.";
     if (inRow(4)) return "WRITE AS: where the part lands.\n\n"
                          "- Auto: the channel's current mode wins (step channel = steps, roll = roll notes).\n"
                          "- Steps: ANY role writes step data - the count is chosen to hold the part's "
@@ -3868,6 +3898,8 @@ juce::String GeneratePanel::getTooltip()
                          "the form, the density/register placement, the hat character.\n"
                          "- Targets your EXISTING channels by their loaded sounds (never changes a "
                          "sound); a role with no suitable channel is skipped and named.\n"
+                         "- Each channel keeps its own step/roll output mode - the Write as row applies "
+                         "to single-channel actions only.\n"
                          "- A consent list shows the full plan first; one undo restores everything.";
     if (actionRect(6).contains(pos)) return "VARY ALL: keep this arrangement's IDEA - same style, same "
                          "chords, same form, same skeletons - and reroll only the surface: melody/bass "
@@ -4034,9 +4066,15 @@ juce::String VoiceModDisplay::getTooltip()
                "HOW TO HEAR IT: put Drift at 60%+, press TEST repeatedly - each hit differs. Strongest "
                "with unison 3+ (blur) and a filter on (tone changes per note). One dot = the whole "
                "effect; the numbers are its fixed design, like the chorus knob's rate.";
-    juce::String s = "Voice controls for the selected slot. Hover the UNISON / CHORD / SCALE chips for what each mode "
-                     "does. ";
-    if (vibOn) s += "Vibrato = ~5.5 Hz pitch wobble (works on every engine here).";
+    // [2026-08-01 r26] the fallback describes the four REAL handles (the mode chips left this
+    // visual long ago - Scale voicing lives in the SCALE box above the keyboard).
+    juce::String s = "UNISON for the selected slot - four drag dots (hover each for detail):\n\n"
+                     "- Count (cyan): how many stacked voices.\n"
+                     "- Detune (amber): how far apart they spread, in cents.\n"
+                     "- Width (teal): their STEREO spread.\n"
+                     "- Drift (orange): per-hit analog-style randomness.\n";
+    if (vibOn) s += "- Vibrato (pink): ~5.5 Hz pitch wobble.\n";
+    s += "\nScale voicing is set in the SCALE box above the keyboard (KEYS view).";
     return s;
 }
 void VoiceModDisplay::paint(juce::Graphics& g)
@@ -4936,6 +4974,15 @@ void LfoDisplay::mouseDoubleClick(const juce::MouseEvent& e)
 
 juce::String LfoDisplay::getTooltip()
 {
+    // [2026-08-01 r26] MOD ENV tab selected: the box shows the ENVELOPE GRAPH (no wave, no
+    // Shape/Retrig/Sync buttons are drawn), so those texts must not show - describe the graph.
+    // Hovering another tab still gets that tab's own tip below.
+    if (dest_ == 3 && destAt(getMouseXYRelative().toFloat()) < 0)
+        return "MOD ENV graph - a full A-H-D-S-R envelope, routed as a SOURCE in the matrix faders below.\n\n"
+               "- Drag the 4 handles: ATTACK peak, HOLD, DECAY (its height = the SUSTAIN level), RELEASE.\n"
+               "- It holds at Sustain while a note is held/gated and falls on Release, like the amp envelope.\n"
+               "- Route it (right-click a matrix fader, source = Mod Env) to sweep a filter, pitch, wave "
+               "position - anything.";
     if (shapeBtnRect().contains(getMouseXYRelative().toFloat()))
         return "SHAPE (click = list): the pattern this LFO wobbles in.\n\n"
                "- Sine / Tri: smooth back-and-forth.\n"
@@ -6515,6 +6562,7 @@ DrumSequencerEditor::~DrumSequencerEditor()
                              (juce::Button*)&btnInfluenceTop,
                              (juce::Button*)&btnGenerateTop,   // purpleOutlineLNF [P1]
                              (juce::Button*)&btnTooltips,
+                             (juce::Button*)&btnVolReset,      // tinyBtnLNF - was missing [2026-08-01 r26]
                              (juce::Button*)&btn16View }) b->setLookAndFeel(nullptr);
     keysPanel.btnSlot2.setLookAndFeel(nullptr);   // dropBtnLNF
     keysPanel.btnArp.setLookAndFeel(nullptr);     // dropBtnLNF
@@ -7324,8 +7372,10 @@ void DrumSequencerEditor::resetChannelToDefault(DrumChannel& c, int ch)
     c.mergeWith = -1; c.keysSplitW1 = 60; c.keysSplitW2 = 12;   // MERGE&SPLIT off / identity windows
     { DrumChannel d; c.arpOn = d.arpOn; c.arpLen = d.arpLen; c.arpSync = d.arpSync; c.arpRate = d.arpRate;
       c.arpAlign = d.arpAlign; c.arpHold = d.arpHold; c.arpGate = d.arpGate;   // ARP defaults
+      c.arpAltStrum = d.arpAltStrum;   // [2026-08-01 r26] was missing - Alt strum leaked across Init
       for (int ai = 0; ai < DrumChannel::ARP_ROWS; ++ai) c.arpOffset[ai] = d.arpOffset[ai]; }
     c.keysPolyMode = true;                                    // keys POLY by default on Init
+    c.keysLegato = false;                                     // [2026-08-01 r26] was missing - the Init leak
     c.keysLetRing = false; c.keysLetRingMs = 90;              // [2026-07-19] Let Ring off on Init
     c.clearDrawNotes();
     c.padX = c.padY = 0.5f; c.padLayoutB = false;
@@ -7378,8 +7428,8 @@ void DrumSequencerEditor::writeChannelMix(juce::ValueTree& t, const DrumChannel&
     t.setProperty("keysLetRingMs", ch.keysLetRingMs, nullptr);
     t.setProperty("keysGlide",  ch.keysGlide,  nullptr);   // [2026-07-16 round-3] glide time rides with the sound
     if (ch.arpOn)   // DEDICATED-ARP sounds: the pattern is part of the sound and travels with it.
-    {               // arp OFF = the sound carries NO arp - loading it leaves the channel's arp alone
-                    // (setting an arp up takes long; a plain sound swap must never wipe it - user rule).
+    {               // [2026-08-01 r26] the arp is FULLY per-sound (v1.3.9 reversal): clearSound resets
+                    // it on every pick, so a sound saved arp-OFF simply writes no block and loads OFF.
         t.setProperty("arpOn",   true,        nullptr);
         t.setProperty("arpLen",  ch.arpLen,   nullptr);
         t.setProperty("arpSync", ch.arpSync,  nullptr);
@@ -7481,7 +7531,8 @@ void DrumSequencerEditor::readChannelMix(const juce::ValueTree& t, DrumChannel& 
     ch.keysLetRingMs = juce::jlimit(10, 1000, (int) t.getProperty("keysLetRingMs", 90));
     ch.keysGlide    = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("keysGlide", 0.0f));   // [2026-07-16 round-3]
     if (t.hasProperty("arpOn") && (bool) t.getProperty("arpOn", false))
-    {   // the sound brings its OWN arp -> apply it; sounds without one keep the channel's arp
+    {   // the sound brings its OWN arp -> apply it; sounds without one load arp-OFF (clearSound
+        // already reset every arp field before this read - the v1.3.9 per-sound rule) [r26 comment]
         ch.arpOn   = true;
         ch.arpLen  = juce::jlimit(1, 1 + DrumChannel::ARP_ROWS, (int) t.getProperty("arpLen", 2));
         { const int rawSync = (int) t.getProperty("arpSync", 8);   // -1 = LOCK TO GRID (preserved)
@@ -7504,6 +7555,7 @@ void DrumSequencerEditor::readChannelMix(const juce::ValueTree& t, DrumChannel& 
       ch.chFxAmt[fx]  = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("cfxA" + k, 0.0f));
       ch.chFxChar[fx] = juce::jlimit(0.0f, 1.0f, (float) t.getProperty("cfxC" + k, 0.5f));
       ch.chFxFile[fx] = t.getProperty("cfxF" + k, "").toString();
+      ch.ensureChFxBuffers(fx, ch.chFxType[fx]);   // [2026-08-01 r26] message-thread alloc for the loaded type
       if (ch.chFxType[fx] == DrumChannel::ChFxNamAmp || ch.chFxType[fx] == DrumChannel::ChFxCabIr)
           ch.refreshChFxAssets(fx); }   // message thread (mix load)
     ch.msRigModel = t.getProperty("msRigM", "").toString();   // [2026-07-19] instrument rig
@@ -8230,7 +8282,7 @@ void DrumSequencerEditor::openGeneratePanel()
     }
     generatePanel.style = juce::jlimit(0, juce::jmax(0, GenStyle::count() - 1), generatePanel.style);
     genAllWarned = false;
-    genAllVaryCount = 0; genAllStyleIdx = -1;   // [r23] VARY ALL varies THIS open's arrangement
+    genAllVaryCount = 0; genAllStyleName.clear();   // [r23 -> r26] VARY ALL varies THIS open's arrangement
     genHadNotes = false;
     for (int b = head; b <= end; ++b)
     {   // [r20] BOTH sides count - the Write-as row can target either world
@@ -8239,7 +8291,7 @@ void DrumSequencerEditor::openGeneratePanel()
         for (int i = 0; i < cb.numSteps; ++i) if (cb.steps[i]) genHadNotes = true;
     }
     generatePanel.hadNotes = genHadNotes;   // dims/undims the Keep-my-notes action
-    genWarned = false;
+    genWarnedKit = genWarnedMel = false;    // [2026-08-01 r26] consent resets PER KIND per panel-open
     genVaryCount = 0;
     auto& rnd = juce::Random::getSystemRandom();
     genRhythmSeed = (uint32_t) rnd.nextInt(); genPitchSeed = (uint32_t) rnd.nextInt();
@@ -8296,7 +8348,7 @@ void DrumSequencerEditor::genAction(int action)
         generatePanel.repaint();
         return;
     }
-    if (isDrums && ! genWarned)
+    if (isDrums && ! genWarnedKit)   // [r26] the KIT'S OWN consent flag (a melodic OK never covers it)
     {   // the kit touches channels the user never selected (+ the group's swing) - it ALWAYS
         // asks first, naming everything; empty channels are listed without scary wording
         juce::PopupMenu m;
@@ -8325,10 +8377,10 @@ void DrumSequencerEditor::genAction(int action)
         m.addItem(2, "Cancel");
         m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(
                             generatePanel.actionScreenArea(action)),   // anchor AT the clicked button
-                        [this, action](int r) { if (r == 1) { genWarned = true; genAction(action); } });
+                        [this, action](int r) { if (r == 1) { genWarnedKit = true; genAction(action); } });
         return;
     }
-    if (! isDrums && genHadNotes && ! genWarned && ! keepMode)   // Keep-my-notes IS the augment consent
+    if (! isDrums && genHadNotes && ! genWarnedMel && ! keepMode)   // Keep-my-notes IS the augment consent
     {   // the clear-on-switch convention: warn ONCE per panel-open before replacing hand-made
         // notes - and when the Write-as row will flip the channel's world, say so by name
         const bool chanStepW = ! sq.patterns[head].channels[ch].drawMode;
@@ -8343,7 +8395,7 @@ void DrumSequencerEditor::genAction(int action)
         m.addItem(2, "Cancel");
         m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(
                             generatePanel.actionScreenArea(action)),
-                        [this, action](int r) { if (r == 1) { genWarned = true; genAction(action); } });
+                        [this, action](int r) { if (r == 1) { genWarnedMel = true; genAction(action); } });
         return;
     }
     auto& rnd = juce::Random::getSystemRandom();
@@ -8415,7 +8467,7 @@ void DrumSequencerEditor::genAction(int action)
             + desc + " steps to " + juce::String(chans) + (chans == 1 ? " channel." : " channels.")
             + "  Swing -> " + juce::String(juce::roundToInt(50.0f + 25.0f * out.swing))
             + "% (group-wide)." + choked;
-        genHadNotes = true; genWarned = true;
+        genHadNotes = true; genWarnedKit = true;   // [r26] a kit write grants only KIT consent
         refreshDrawModeButtons();
         stepGrid.update(proc.sequencer, proc.anySolo);
         stepGrid.repaint();
@@ -8529,6 +8581,18 @@ void DrumSequencerEditor::genAction(int action)
     else
         notes = PartGen::generate(o, ctx);
 
+    // [2026-08-01 r26] EMPTY OUTPUT = an honest NO-OP: never commit an undo point or clear-and-write
+    // nothing (the old path wiped the channel and reported a write of 0). The readout explains.
+    if (notes.empty())
+    {
+        generatePanel.contextLine = o.rhythm == 1
+            ? "No legal pocket - the drums cover every cell here; try Driving or Flowing."
+            : "Nothing legal to write against this context - try another Rhythm stance or more Density. "
+              "Your notes were kept.";
+        generatePanel.repaint();
+        return;
+    }
+
     // ---- write: undoable, cleared + split per group bar (the onDrawNotesChanged discipline) ----
     commitUndoNow();   // ONE undo covers count + content + any mode switch, both output modes
     if (stepOut)
@@ -8559,7 +8623,7 @@ void DrumSequencerEditor::genAction(int action)
     }
     if (generatePanel.styleAny && ! fromScratch)   // [r23] the rotating pick is never silent
         generatePanel.contextLine += "  Style: " + juce::String(styleDna.name) + ".";
-    genHadNotes = true; genWarned = true;   // rerolls replace OUR OWN notes without re-asking
+    genHadNotes = true; genWarnedMel = true;   // [r26] rerolls replace OUR OWN melodic notes without re-asking
     generatePanel.hadNotes = true;
     refreshDrawModeButtons();               // a Write-as switch changes the edit-mode button states
     stepGrid.update(proc.sequencer, proc.anySolo);
@@ -8610,7 +8674,7 @@ void DrumSequencerEditor::genAllAction(bool varyAll)
 {
     auto& sq = proc.sequencer;
     const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
-    if (varyAll && ! (genAllWarned && genAllStyleIdx >= 0)) varyAll = false;
+    if (varyAll && ! (genAllWarned && genAllStyleName.isNotEmpty())) varyAll = false;   // [r26] name cache
     const int pinnedIdx = juce::jlimit(0, GenStyle::count() - 1, generatePanel.style);
     const auto plan = GenContext::planArrangement(sq, head, selectedChannel);
     auto chanDataDesc = [&](int chn) -> juce::String
@@ -8673,10 +8737,25 @@ void DrumSequencerEditor::genAllAction(bool varyAll)
         genRhythmSeed = (uint32_t) rnd.nextInt(); genPitchSeed = (uint32_t) rnd.nextInt();
         genVaryCount = 0; genAllVaryCount = 0;
         // [r23] Any style = a seeded pick over the WHOLE registry per press; pinned = respected.
-        genAllStyleIdx = generatePanel.styleAny ? GenContext::pickAnyStyleIndex(genRhythmSeed)
-                                                : pinnedIdx;
+        // [2026-08-01 r26] cached BY NAME - registry INDICES shift when the Styles folder refreshes,
+        // so a stored index could silently vary a DIFFERENT style.
+        genAllStyleName = juce::String(GenStyle::at(juce::jlimit(0, GenStyle::count() - 1,
+            generatePanel.styleAny ? GenContext::pickAnyStyleIndex(genRhythmSeed) : pinnedIdx)).name);
     }
-    const int styleIdx = juce::jlimit(0, GenStyle::count() - 1, genAllStyleIdx);
+    // [r26] resolve the cached NAME against today's registry; a name gone after a Refresh falls
+    // back to a fresh pick, disclosed in the readout (never a silent wrong style).
+    int styleIdx = -1;
+    for (int i = 0; i < GenStyle::count() && styleIdx < 0; ++i)
+        if (genAllStyleName == juce::String(GenStyle::at(i).name)) styleIdx = i;
+    juce::String styleNote;
+    if (styleIdx < 0)
+    {
+        styleIdx = juce::jlimit(0, GenStyle::count() - 1,
+                       generatePanel.styleAny ? GenContext::pickAnyStyleIndex(genRhythmSeed) : pinnedIdx);
+        if (varyAll) styleNote = "  (That style no longer exists after the Refresh - picked "
+                               + juce::String(GenStyle::at(styleIdx).name) + " fresh.)";
+        genAllStyleName = juce::String(GenStyle::at(styleIdx).name);
+    }
     const GenStyle::Style& styleDna = GenStyle::at(styleIdx);
     GenContext::ArrangeOptions ao;
     ao.dna = &styleDna;
@@ -8711,13 +8790,20 @@ void DrumSequencerEditor::genAllAction(bool varyAll)
                                 + (res.chordSteps > 0 ? " as " + juce::String(res.chordSteps) + " steps" : " notes")
                                 + " -> Ch " + juce::String(plan.chords + 1) + ".  ";
     if (res.skipped.isNotEmpty()) line += "Skipped: " + res.skipped + ".  ";
+    if (res.skippedParts.isNotEmpty())   // [2026-08-01 r26] a part that generated ZERO notes never wrote
+        line += "Skipped (kept your notes): " + res.skippedParts + ".  ";
     if (res.swing >= 0.0f)
         line += "Swing -> " + juce::String(juce::roundToInt(50.0f + 25.0f * res.swing)) + "%.";
     if (res.chokeGroup > 0)
         line += "  Hats choked (group " + juce::String(res.chokeGroup) + ").";
     if (res.lattice != 16) line += "  " + juce::String(res.lattice) + "-cell bar grid.";
-    generatePanel.contextLine = line;
-    genHadNotes = true; genWarned = true;   // rerolls replace OUR OWN output without re-asking
+    generatePanel.contextLine = line + styleNote;
+    // [2026-08-01 r26] per-kind consent: each flag reflects what this arrangement ACTUALLY wrote
+    // (kit lanes -> kit consent; melodic parts -> melodic consent) so later single-role actions
+    // of the OTHER kind still ask.
+    genHadNotes = true;
+    if (res.kitChans > 0)                                        genWarnedKit = true;
+    if (plan.bass >= 0 || plan.melody >= 0 || plan.chords >= 0)  genWarnedMel = true;
     generatePanel.hadNotes = true;
     refreshDrawModeButtons();
     stepGrid.update(proc.sequencer, proc.anySolo);
@@ -9294,14 +9380,8 @@ void DrumSequencerEditor::setupComponents()
 
     content.addAndMakeVisible(dragMidi);
     dragMidi.getMidiFile = [this] { return proc.exportMidiFile(selectedChannel); };
-    dragMidi.setTooltip(
-        "Drag this onto a DAW track to export the SELECTED channel as a MIDI clip.\n\n"
-        "- Notes carry their VELOCITY and length; rolls become sub-hits; swing is kept; merged step "
-        "chains come out as one long note.\n"
-        "- Piano-roll channels export the roll exactly as drawn (C4-based, Base Freq independent). "
-        "Step channels export with each pitched slot's Base Freq as the pitch 0-point.\n"
-        "- Slots in Scale mode export their FULL voicing; both slots export together. Pure "
-        "Sample/Noise channels export their step/draw pitch on the channel's own MIDI note.");
+    // [2026-08-01 r26] (a duplicate dragMidi.setTooltip sat here and was silently OVERWRITTEN by the
+    // one in the tooltip block below - one owner per tooltip, the decoy is gone.)
 
 
     // Preset menu
@@ -9525,10 +9605,9 @@ void DrumSequencerEditor::setupComponents()
         "copy FROM.\n"
         "- It un-arms after one use; re-arm to copy a different step.\n"
         "- In Pitch mode, touching a step's SLIDE strip copies just the slide flag.\n\n"
-        "The purple outline marks it as a copy-across action, not per-step editing. Right-click to "
-        "assign a MIDI control.");
-    btnInfluenceTop.midiLearn = &proc.midiLearn;
-    btnInfluenceTop.paramId   = "ui_influence";   // single UI control now (selected channel)
+        "The purple outline marks it as a copy-across action, not per-step editing.");
+    // [2026-08-01 r26] no MIDI-learn offer here (user ruling): the "ui_influence" pid + learn menu
+    // are gone - Influence is a mouse action (the empty pid suppresses the right-click menu).
     btnInfluenceTop.onClick = [this] {
         stepGrid.influenceArmed[selectedChannel] = btnInfluenceTop.getToggleState();
     };
@@ -9550,6 +9629,7 @@ void DrumSequencerEditor::setupComponents()
     btnClearPat.setTooltip("Clear the SELECTED channel in this pattern.\n\n"
                            "- Steps: disables them + resets every per-step value (vel, pan, pitch, loop, roll).\n"
                            "- Piano Roll: deletes all notes.\n"
+                           "- In a MERGED group it clears the channel in EVERY bar of the group (the whole visible row).\n"   // [2026-08-01 r26] scope said out loud
                            "- Other channels untouched. Undoable.");
     btnClearPat.onClick = [this] {
         // Clear the SELECTED channel only - across EVERY bar of a merged group (the whole visible row).
@@ -9620,9 +9700,9 @@ void DrumSequencerEditor::setupComponents()
     btn16View.setLookAndFeel(&tinyBtnLNF);
     btn16View.setClickingTogglesState(false);
     btn16View.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
-    btn16View.setTooltip(
-        "Show 8 or 16 channel rows. Opening 16 hides the sound editor/keys panel (they don't fit "
-        "together); SHOW SOUND EDITOR/KEYS brings it back with 8 rows.\n\n"
+    btn16View.setTooltip(   // [2026-08-01 r26] honest: BOTH directions hide the editor
+        "Show 8 or 16 channel rows. Switching in EITHER direction hides the sound editor/keys panel "
+        "(the view toggle is about seeing rows); SHOW SOUND EDITOR/KEYS brings it back with 8 rows.\n\n"
         "All 16 channels are ALWAYS active - this only changes how many you SEE. Scroll the rest with "
         "the yellow bar or the mouse wheel over the strips.");
     btn16View.onClick = [this] {
@@ -10364,7 +10444,7 @@ void DrumSequencerEditor::setupComponents()
         strip.btnMute->setLookAndFeel(&tinyBtnLNF);
         strip.btnSolo->setLookAndFeel(&tinyBtnLNF);
         strip.btnPoly.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff35b56a));
-        strip.btnPoly.setTooltip("Overlap: lets a sound keep ringing into the next step instead of being cut off - but only if the sound is actually long enough to ring (a short sound still ends on its own). Off = each trigger restarts the sound.\n\nThis is a STEP-mode control - it fades out in Piano Roll, where each note has its own length and Poly is the keyboard's Poly toggle.\n\nNOTE: cutting a sound never cuts its already-sent REVERB/DELAY - those tails live on the master bus and finish on their own (use the reverb Gate / delay Trail for tight wet).\n\nRight-click to assign a MIDI control.");
+        strip.btnPoly.setTooltip("Overlap: lets a sound keep ringing into the next step instead of being cut off - but only if the sound is actually long enough to ring (a short sound still ends on its own). Off = each trigger restarts the sound. In a MERGED group it applies to every bar of the group.\n\nThis is a STEP-mode control - it fades out in Piano Roll, where each note has its own length and Poly is the keyboard's Poly toggle.\n\nNOTE: cutting a sound never cuts its already-sent REVERB/DELAY - those tails live on the master bus and finish on their own (use the reverb Gate / delay Trail for tight wet).\n\nRight-click to assign a MIDI control.");   // [2026-08-01 r26] group scope added
         strip.btnPoly.midiLearn = &proc.midiLearn;   // paramId set per-pattern in updateStripParamIds()
         strip.btnPoly.onClick = [this, ci] {   // group-wide: a merged group is one edit unit [1.5.6]
             selectChannel(ci);
@@ -10499,8 +10579,8 @@ void DrumSequencerEditor::setupComponents()
                                     "- Set the pads to MOMENTARY (not Toggle) in your controller's editor.\n"
                                     "- Works while this window is open (browsing is an editor action).");
         strip.btnTest.setTooltip("Play this channel once with its current settings, to hear it without running the sequencer.");
-        strip.btnMute->setTooltip("Mute: silence this channel.");
-        strip.btnSolo->setTooltip("Solo: play only this channel (and other soloed ones), muting the rest.");
+        strip.btnMute->setTooltip("Mute: silence this channel. In a MERGED group it mutes the channel in every bar of the group.");   // [2026-08-01 r26] scope
+        strip.btnSolo->setTooltip("Solo: play only this channel (and other soloed ones), muting the rest. In a MERGED group it applies to every bar of the group.");
         strip.comboSteps.setTooltip("Number of steps in this channel's pattern, or PIANO ROLL for a free note lane "
                                     "(draw/record melodies and chords; the lens opens the full editor).\n\n"
                                     "- Steps and Piano Roll are SEPARATE: switching CLEARS this channel's content and "
@@ -10575,8 +10655,8 @@ void DrumSequencerEditor::setupComponents()
         + "- Plate: dense, bright, metallic sheen (vintage studios used literal steel plates) - snares, keys.\n"
         + "- Shimmer: every echo pass is pitched UP an octave - a glowing halo for pads and ambient.\n"
         + "- Spring: a guitar-amp spring tank - short, boingy, warbly and near-mono. Guitars and basses.\n\n"
-        + "One mode for the whole preset (all sends share one reverb engine); each sound picks how much "
-        + "goes in with its Rev Send knob.");
+        + "One mode per BUS for the whole preset; each channel picks how much goes in with its Rev send "   // [2026-08-01 r26]
+        + "fader (Channel FX box), and which bus, by right-clicking that fader.");
     setupGroupHeader(hdrDelayG,    "Delay");
     refreshReverbModeHeader();   // AFTER the group-header setup (it sets the real "DELAY A/B" text)
     setupGroupHeader(hdrMasterOut, "MASTER");   // now a sub-header inside the SOUND BLEND box (Pattern Output group removed)
@@ -10748,8 +10828,10 @@ void DrumSequencerEditor::setupComponents()
                            " = a discrete stereo out, DRY, so you can mix/process this drum on its OWN DAW track. "
                            "The DAW does the routing: in your DAW, enable this plugin's extra outputs and send 'Out N' to a "
                            "separate track (Reaper: the plugin's pin connector / track routing). Standalone has only Main.\n"
-                           "- MIDI Out = makes NO sound; instead sends MIDI notes (the channel's MIDI note below, transposed by "
-                           "step Pitch, velocity from the step, ratcheted by Roll) on MIDI channel 1, out the plugin's MIDI output. "
+                           "- MIDI Out = makes NO sound; instead sends MIDI notes (steps: the channel's MIDI note transposed by "
+                           "step Pitch, velocity from the step, ratcheted by Roll; Piano Roll: the drawn notes themselves, "
+                           "C4-absolute) on the channel picked in the Routing popup's 'MIDI Out channel' (1-16), out the "
+                           "plugin's MIDI output. "   // [2026-08-01 r26] was: "on MIDI channel 1" + steps-only
                            "YOUR DAW routes that MIDI to the instrument you want (Reaper: add a MIDI send from this track to the "
                            "synth/sampler track). Mutually exclusive with sound. Strip turns purple (MIDI) / teal (aux out).");
     comboOutput.onChange = [this] {
@@ -10988,6 +11070,8 @@ void DrumSequencerEditor::setupComponents()
                 const bool asset = ch.chFxType[i] == DrumChannel::ChFxNamAmp || ch.chFxType[i] == DrumChannel::ChFxCabIr;
                 if (! asset && ch.chFxType[i] != DrumChannel::ChFxOff && ch.chFxAmt[i] <= 0.001f)
                     ch.chFxAmt[i] = 0.5f;   // picking an effect with amount 0 would be silent - start audible (disclosed)
+                ch.ensureChFxBuffers(i, ch.chFxType[i]);   // [2026-08-01 r26] message-thread buffer alloc
+                                                           // (the audio thread must never allocate)
                 ch.refreshChFxAssets(i);    // [2026-07-18] load/unload the NAM model / Cab IR for the new type
                 ch.markDspDirty(); layoutContent(); refreshDetailPanel();
                 if (proc.auditionOnEdit.load()) proc.requestTestTrigger(selectedChannel);
@@ -12112,7 +12196,7 @@ void DrumSequencerEditor::setupComponents()
             proc.sequencer.channel(selectedChannel).markDspDirty();
             updateSampleLengthLabel();
         };
-        swUseRegion[b].setTooltip("Trim: draw up to 4 play regions on the waveform (each hit plays the next). Off = whole sample.");
+        swUseRegion[b].setTooltip("Trim: draw up to 2 play regions on the waveform (each hit plays the next). Off = whole sample.");   // [2026-08-01 r26] cap is 2
         content.addAndMakeVisible(lblSampleLen[b]);
         lblSampleLen[b].setFont(juce::Font(11.0f)); lblSampleLen[b].setJustificationType(juce::Justification::centred);
         lblSampleLen[b].setColour(juce::Label::textColourId, juce::Colour(0xff8fb0d0));
@@ -12406,7 +12490,8 @@ void DrumSequencerEditor::setupComponents()
                           "And play/stop functions will also be controlled by the DAW.");
     sliderBpm.setTooltip("Tempo in beats per minute. Sets how fast the pattern plays (only editable when DAW Sync is off).");
     sliderSwing.setTooltip("Swing (per pattern) delays every other step, MPC-style: 50% = straight (off), ~66% = "
-                           "triplet shuffle, 75% = maximum drag. Roll sub-hits and the MIDI export follow the same groove.");
+                           "triplet shuffle, 75% = maximum drag. Roll sub-hits and the MIDI export follow the same groove. "
+                           "In a MERGED group it writes EVERY bar of the group (one groove per group).");   // [2026-08-01 r26] r18 scope
     barSigX.setTooltip("Top number of the time signature: how many beats are in one bar. Click to type a value.");
     barSigY.setTooltip("Bottom number of the time signature: which note value counts as one beat. Click to type a value.");
     lblBarResult.setTooltip("How many seconds one full bar lasts, from the BPM and time signature. One pattern = one bar.");
@@ -12496,7 +12581,7 @@ void DrumSequencerEditor::setupComponents()
                                "Turn it up to focus the noise into a band around the Centre frequency (narrower = more pitched).");
     knobFmPitch.setTooltip("Pitch: transposes the FM tone up or down in semitones (sets the carrier base pitch).");
     knobFmSub.setTooltip("Sub: mixes a sub-octave sine under the FM tone for extra body and weight - great for FM kicks and basses. 0% = none.");
-    knobFmSpread.setTooltip("How far apart the FM tones are detuned - more spread = more clangy/metallic.");
+    // [2026-08-01 r26] (a first knobFmSpread.setTooltip here was dead - overwritten by the ratio text below)
     knobFmDepth.setTooltip("FM modulation depth (index): how strongly the modulator bends the carrier. More = brighter, richer, more metallic.");
     knobFmSpread.setTooltip("FM ratio: how the modulator is tuned vs the carrier. Higher = more inharmonic / clangy / bell-like.");
     // New per-source pitch knobs
@@ -12526,10 +12611,10 @@ void DrumSequencerEditor::setupComponents()
     knobPhysPOff.setTooltip("Pitch Offset (Physical): delays where the physical pitch bend begins. 0% = at the start of the sound.");
     knobPhysPos.setTooltip("Position: where the object is struck/plucked. 0% = full/centred; higher combs out harmonics for a more hollow, nasal, bridge-like tone.");
     knobFmFeedback.setTooltip("Feedback: the FM operator modulates itself. Low adds bite/edge; high morphs the sine toward a saw, then into noisy, gritty textures.");
-    freqDisplay.setTooltip("Channel EQ: drag a band to move it, mouse-wheel a bell for width (Q), double-click to enable/disable. H = high-pass, L = low-pass (24 dB/oct), 1/2/3 = bells.");
-
-    comboFilterType.setTooltip("Filter: Off, or Formant (vowel/vocal - Cutoff sweeps A-E-I-O-U, Reso = how vocal; works best on Analog saw or FM). Low/High/Band/Notch are now done on the EQ display above.");
-    comboDriveType.setTooltip("Distortion flavour - each shapes the grit differently (soft, hard, tube, fold, fuzz, bitcrush).");
+    // [2026-08-01 r26] three DEAD DECOYS deleted: freqDisplay overrides getTooltip() (a setTooltip
+    // here is never consulted - the stale "Channel EQ" text sat unread); comboFilterType is the
+    // hidden legacy combo and its text cited the deleted 5-band EQ; a comboDriveType.setTooltip
+    // here OVERWROTE the richer per-type text set at the combo's wiring (incl. Bass Amp + Exciter).
 }
 
 // Legacy per-source on/off toggles are hidden in the 3-slot UI; the dropdowns
@@ -13751,6 +13836,11 @@ void DrumSequencerEditor::selectPattern(int p)
 {
     const int clicked = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, p);
     p = proc.sequencer.groupHead(p);   // a merged group is viewed as ONE unit - always at its head
+    // [2026-08-01 r26] the GENERATE panel is pattern-scoped state (targets, consent, context line) -
+    // a pattern change under it = stale everything. Close it (the layoutContent overlay convention);
+    // this also covers ui_sel_patNext/Prev and every mouse path (all pattern clicks land here).
+    if (p != stepGrid.currentPattern && generatePanel.isVisible())
+        generatePanel.setVisible(false);
     proc.sequencer.setCurrentPattern(p);
     // [2026-07-20, user design - replaces the roll's start TABS] the CLICKED bar is the START
     // MARKER: clicking any member of a merged group aims playback there (stopped = park + play
@@ -15528,6 +15618,14 @@ void DrumSequencerEditor::layoutContent()
                     // Loop toggle + a WIDE dB Gain fader | full-width note range | the amp RIG row.
                     waveform[b].setBounds(sbx[b] + 6, sby[b] + 20, slotW - 12, 40);
                     waveform[b].setLoopDrawEnabled(false);   // no drawable loop here (per-zone AUTO instead) - kills the dead gesture
+                    // [2026-08-01 r26] the MS face tells the MS truth (the plain-sample trim/loop
+                    // text was a lie here - no drawable regions or loop exist on a multisample)
+                    waveform[b].setTooltip("Multisample instrument: one recorded zone per note - the played "
+                        "note picks the nearest zone, velocity picks its layer.\n\n"
+                        "- The drawing shows the zone nearest C4; the moving line is the real playhead.\n"
+                        "- Trim regions and the drawn loop are plain-sample tools - here AUTO LOOP finds "
+                        "each zone's own sustain loop (the button below).\n"
+                        "- Dropping a plain audio file on the slot replaces the instrument with that sample.");
                     knobTop = sby[b] + 64;
                     const int tcx = sbx[b] + 6;
                     btnSmpTog[b][1].setVisible(true); btnSmpTog[b][1].setBounds(tcx, knobTop, 54, 22);   // Reverse
@@ -15549,6 +15647,11 @@ void DrumSequencerEditor::layoutContent()
                 {   // [2026-07-19] plain sample + Loop on: the small AUTO(-loop) button rides the
                     // waveform's top-right corner (loop lives HERE now).
                     waveform[b].setLoopDrawEnabled(true);   // drawable loop on the plain Sample engine
+                    // [2026-08-01 r26] restore the plain-sample text (the MS branch swaps it out)
+                    waveform[b].setTooltip("This slot's sample. With 'Trim' ON, DRAG to draw up to 2 play regions (green, yellow) - "
+                                           "they can overlap, and each hit plays the NEXT one in turn. Double-click to clear them. "
+                                           "Turning Trim off clears them too (plays the whole sample).\n\n"
+                                           "With Loop ON you can drag the cyan loop edges even while Trim is armed.");
                     btnMsLoop[b].setVisible(false);
                     const bool lp = proc.sequencer.channel(selectedChannel).slots[b].smpLoopOn;
                     btnMsAutoLoop[b].setVisible(lp);

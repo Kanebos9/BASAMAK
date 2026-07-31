@@ -204,7 +204,7 @@ void StepGridComponent::paintValueCell(juce::Graphics& g, int ch, int step, juce
                 {
                     const float semis = juce::jlimit(-(float) DrumChannel::PITCH_RANGE, (float) DrumChannel::PITCH_RANGE, pit[ch][step]);
                     const float midY = r.getCentreY();
-                    const float frac = semis / (float) DrumChannel::PITCH_RANGE;   // -1..1 (+/-48 st = C-1..C7 around C3)
+                    const float frac = semis / (float) DrumChannel::PITCH_RANGE;   // -1..1 (+/-48 st = C0..C8 around C4) [r26 comment: scientific pitch]
                     const float h = std::abs(frac) * (r.getHeight() * 0.5f);
                     juce::Rectangle<float> bar = frac >= 0
                         ? juce::Rectangle<float>(r.getX(), midY - h, r.getWidth(), h)
@@ -540,7 +540,7 @@ void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle
     const float rowH2 = half / (float) range;                 // pixel height of one semitone row
     if (overlay)
     {
-        // PIANO-ROLL background: black-key rows shaded + the LEFT note-name column (C3 = semi 0).
+        // PIANO-ROLL background: black-key rows shaded + the LEFT note-name column (C4 = semi 0). [r26 comment]
         // The column is also a SCROLL handle (drag it up/down when the range is < +-36); with big
         // rows EVERY note is named, with tight rows just the Cs. The hovered/drawn note's row is lit.
         static const bool blackPc[12] = { false,true,false,true,false,false,true,false,true,false,true,false };
@@ -605,7 +605,7 @@ void StepGridComponent::paintDrawLane(juce::Graphics& g, int ch, juce::Rectangle
         g.setColour(juce::Colour(0x18ffffff));
         for (int s = -range; s <= range; s += 12) if (s != 0) g.drawHorizontalLine((int) yFor(s), (float) lane.getX(), (float) lane.getRight());
     }
-    if (ctr - range <= 0 && 0 <= ctr + range)   // the C3 (pitch 0) reference line, only while in view
+    if (ctr - range <= 0 && 0 <= ctr + range)   // the C4 (pitch 0) reference line, only while in view [r26 comment]
     { g.setColour(juce::Colour(0x66ffe9b0)); g.fillRect(juce::Rectangle<float>((float) lane.getX(), yFor(0) - 0.5f, (float) lane.getWidth(), 1.0f)); }
     // NOTE BARS - CLIPPED to the lane so nothing spills out of the box; notes outside the visible
     // pitch window draw as thin edge indicators (kept, just off-view).
@@ -948,7 +948,10 @@ void StepGridComponent::paint(juce::Graphics& g)
 
 juce::String StepGridComponent::getTooltip()
 {
-    const int dch = firstRow + juce::jmax(0, getMouseXYRelative().y) / juce::jmax(1, rowH);
+    // [2026-08-01 r26] the BIG roll overlay covers OTHER rows - while it is open, the hover is the
+    // roll (consult drawMagCh like mouseDown does), never the step text of the row underneath.
+    const int dch = drawMagCh >= 0 ? drawMagCh
+                  : firstRow + juce::jmax(0, getMouseXYRelative().y) / juce::jmax(1, rowH);
     if (dch >= 0 && dch < NCH && drawMode[dch])
         return juce::String("PIANO ROLL (free notes; pitch 0 = C4 (middle C), always).\n\n"
                             "- LEFT-drag draws/moves notes; RIGHT-drag erases; the magnifier (top-left) opens the "
@@ -975,8 +978,8 @@ juce::String StepGridComponent::getTooltip()
                             "like any others (undo restores).\n\n"
                             "Humanize/Strum apply here too. Pick a step count in the dropdown to QUANTISE the roll "
                             "to steps.");
-    return juce::String("STEP GRID. Click = toggle steps; the buttons top-right switch edit modes (Vel/Len/Pitch/"
-                        "Loop/Roll/Pan). Hold a step in any value mode to MAGNIFY it for fine edits.\n\n"
+    return juce::String("STEP GRID. Click = toggle steps; the buttons top-right switch edit modes (Vel/Gate/Pitch/"
+                        "Loop/Roll/Pan/Nudge/Mod A/Mod B). Hold a step in any value mode to MAGNIFY it for fine edits.\n\n"   // [2026-08-01 r26] real mode list (Gate, not Len)
                         "MERGE: Shift + CLICK a step to merge it into the previous step's note - the run plays as "
                         "ONE long note (shown as a purple ARROW through the run; great for held bass notes / keys "
                         "recordings). Click the same way again to unmerge. A merged step uses its run's first step's "
