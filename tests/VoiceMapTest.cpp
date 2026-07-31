@@ -3,6 +3,12 @@
 //  [2] sidecar <tune> cents compensation ("auto-tuned by construction": a flat recording plays in tune)
 //  [3] voiced instruments default Auto Loop ON and the loops are derived on the NEW set
 //      (regression for the rebuild-before-swap bug found 2026-07-20)
+//  [7] [2026-07-31 r25] loadMultisample NEVER touches sequence data (roll notes + steps survive).
+//      DSP-layer lock for the "multisample pick wiped my roll notes" bug - the editor-side
+//      offender was applySoundPickId's resetChannelToDefault call (now Factory::clearSound);
+//      the editor itself isn't headless-testable, so the policy there is comment-anchored in
+//      PluginEditor.cpp (MS_ID_BASE branch) + checked manually: pick a multisample on a channel
+//      with roll notes / steps -> the sequence must remain.
 #include "Sequencer.h"
 #include <cstdio>
 #include <cmath>
@@ -147,6 +153,30 @@ int main()
                CHK(l3 && healedRoot == 57 && atC4 > 0.03 && atA3 < atC4 * 0.2)
                    ? "mis-named zone healed (OK)" : "FAIL (name trusted over audio)");
         dir2.deleteRecursively();
+    }
+
+    // [7] [2026-07-31 r25] SEQUENCE DATA SURVIVES loadMultisample: a channel carrying roll notes
+    // AND a step pattern loads an instrument - notes/steps/per-step values must be untouched
+    // (the sound pick contract: picking a sound replaces the SOUND, never the sequence).
+    {
+        auto& ch4 = s->patterns[0].channels[3];
+        for (auto& sl : ch4.slots) sl = DrumChannel::Slot();
+        ch4.slots[0].engine = DrumChannel::SrcSample; ch4.slots[0].weight = 1.0f;
+        ch4.drawMode = true;
+        ch4.addDrawNote(0,  88, 0, 255, 0);
+        ch4.addDrawNote(96, 88, 4, 200, 0);
+        ch4.numSteps = 12; ch4.steps[0] = ch4.steps[5] = true; ch4.stepVel[5] = 0.4f;
+        const bool l4 = ch4.loadMultisample(0, dir);
+        printf("[7] sequence kept: loaded=%d notes=%d (want 2) semi1=%d vel1=%d steps=%d/%d vel5=%.2f numSteps=%d -> %s\n",
+               (int) l4, ch4.drawNoteCount,
+               (int) ch4.drawNotes[1].semi, (int) ch4.drawNotes[1].vel,
+               (int) ch4.steps[0], (int) ch4.steps[5], ch4.stepVel[5], ch4.numSteps,
+               CHK(l4 && ch4.drawNoteCount == 2
+                   && ch4.drawNotes[0].start == 0 && ch4.drawNotes[0].semi == 0
+                   && ch4.drawNotes[1].start == 96 && ch4.drawNotes[1].semi == 4 && ch4.drawNotes[1].vel == 200
+                   && ch4.steps[0] && ch4.steps[5] && std::abs(ch4.stepVel[5] - 0.4f) < 1e-6f
+                   && ch4.numSteps == 12 && ch4.drawMode)
+                   ? "sequence data survives the load (OK)" : "FAIL (load wiped sequence data)");
     }
 
     dir.deleteRecursively();

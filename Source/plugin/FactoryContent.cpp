@@ -78,7 +78,7 @@ static void modRoute(DC::Slot& s, int src, int tgt, float amt)
 static float gPendingHp = 0.0f;
 static void hp(float freq) { gPendingHp = freq; }
 
-static void clearSound(DC& c)
+void clearSound(DC& c)   // [2026-07-31 r25] exported (FactoryContent.h) - the pick paths' one sound-only reset
 {
     c.keysPolyMode = true;   // POLY by default (per-sound); a builder may set it off
     c.keysLegato = false;    // [2026-07-16] plain Poly by default; builders may ship Legato/Glide

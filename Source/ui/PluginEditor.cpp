@@ -7065,22 +7065,27 @@ void DrumSequencerEditor::applySoundPickId(int ch, int id)
     }
     else if (id >= MS_ID_BASE && id < MS_ID_BASE + msFolders.size())
     {   // [2026-07-20] MULTISAMPLES in the picker (user ask: they were hidden in the slot engine
-        // dropdown): Init the sound, load the instrument onto SLOT 1 - one browse surface for
+        // dropdown): reset the SOUND, load the instrument onto SLOT 1 - one browse surface for
         // every sound. mixName = the folder = title/highlight/next-prev all work.
+        // [2026-07-31 r25] SOUND-ONLY reset (user bug: a multisample pick DELETED roll notes).
+        // resetChannelToDefault is the Init/preset reset - it clearDrawNotes()s and wipes the
+        // keys-feel/merge. A sound PICK uses Factory::clearSound (the factory-branch semantics):
+        // steps / roll notes / per-step values / takes / keys-feel / routing all survive.
         const juce::File dir = msFolders[id - MS_ID_BASE];
         if (dir.isDirectory())   // [2026-07-21 r15] validate BEFORE wiping - a deleted/renamed
         {                        // folder in a stale menu must not Init the channel to silence
-            const bool keepDraw = c.drawMode;   // a sound pick must never flip the roll/steps world
-            resetChannelToDefault(c, ch);       // fresh sound state (the Init path's own reset)
-            c.drawMode = keepDraw;
+            Factory::clearSound(c);   // sound/slots/arp/chFx/rig only - sequence data KEPT
             c.slots[0].engine = DrumChannel::SrcSample; c.slots[0].weight = 1.0f;
+            c.restoredSlots = true;   // authored slots - never rebuild from legacy
             if (c.loadMultisample(0, dir))
             {
                 if (c.msSet[0] != nullptr && c.msSet[0]->nVoices > 1)
-                    c.drawMode = true;          // a SINGING instrument opens in the roll (the Keys-bank rule)
+                    c.drawMode = true;   // a SINGING instrument opens in the roll (the Keys-bank
+                                         // applyMix convention: step data kept UNDERNEATH, no clearing)
                 c.mixName = dir.getFileName(); c.mixModified = false;
                 c.markDspDirty(); c.mixHash = channelSoundHash(c);
             }
+            else { c.mixName = juce::String(); c.mixModified = false; }   // failed load: no instrument to name
             updateStripMixLabel(ch);
         }
     }
@@ -9231,7 +9236,10 @@ void DrumSequencerEditor::setupComponents()
                             "- The SLIDE band at each cell's bottom: click it and the step's pitch GLIDES across "
                             "the step into the NEXT step's pitch (303 portamento).\n"
                             "- Slide is only audible when the two steps have DIFFERENT pitches - draw the pitch "
-                            "line first, then slide the notes that should flow together.\n\n"
+                            "line first, then slide the notes that should flow together.\n"
+                            "- On a multisample channel, pitch 0 plays C4 (middle C) and each step offsets in "
+                            "semitones from there - the instrument picks its nearest recorded note; the Base Freq "
+                            "knob is not used.\n\n"
                             "TIP: the glide is clearest with FEW steps + a long Gate (a slow bass line).");
     btnModeProb.setTooltip("Loop-condition mode: make a step fire only on certain passes of the loop.\n\n"
                            "- DRAG a step left/right = the cycle length (N bars).\n"
