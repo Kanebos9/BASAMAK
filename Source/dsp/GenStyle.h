@@ -111,10 +111,29 @@ inline std::string lower(std::string s)
 { for (auto& ch : s) if (ch >= 'A' && ch <= 'Z') ch = (char) (ch - 'A' + 'a'); return s; }
 inline bool num(const std::string& t, double& out)
 {
+    // [2026-08-01 r26] locale-independent STRICT parse (digits, one optional leading '-', one
+    // optional '.'): strtod honoured the C locale (a comma-decimal locale broke every "0.5")
+    // AND accepted "nan"/"inf"; this grammar rejects both by construction. A file with any
+    // invalid number is SKIPPED with its reason (the existing genStyleNote path).
     if (t.empty()) return false;
-    char* end = nullptr;
-    out = std::strtod(t.c_str(), &end);
-    return end != nullptr && *end == '\0';
+    size_t i = 0;
+    bool neg = false;
+    if (t[0] == '-') { neg = true; i = 1; }
+    long long ip = 0; int ipDigits = 0;
+    while (i < t.size() && t[i] >= '0' && t[i] <= '9')
+    { ip = ip * 10 + (t[i] - '0'); ++ipDigits; ++i; if (ipDigits > 12) return false; }
+    double frac = 0.0; int fpDigits = 0;
+    if (i < t.size() && t[i] == '.')
+    {
+        ++i;
+        double sc = 0.1;
+        while (i < t.size() && t[i] >= '0' && t[i] <= '9')
+        { frac += (t[i] - '0') * sc; sc *= 0.1; ++fpDigits; ++i; if (fpDigits > 12) return false; }
+    }
+    if (i != t.size() || (ipDigits == 0 && fpDigits == 0)) return false;
+    out = (double) ip + frac;
+    if (neg) out = -out;
+    return std::isfinite(out);   // belt-and-suspenders
 }
 inline void split(const std::string& s, std::vector<std::string>& out)
 {

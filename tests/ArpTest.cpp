@@ -1,6 +1,10 @@
 // ARP note-selection + rate + pitch. The arp CLOCK lives in the processor (needs bpm/time-sig/keys),
 // but its two failure-prone pieces are shared, pure, and tested here: [1] arpNoteAt (root/offset/rest/
 // wrap), [2] arpRateMul (the 1/3..3 table), [3] a rendered arp note plays the right PITCH via keyDown.
+// [2026-08-01 r26 header refresh] + the SCALE-THEORY locks on the real scaleNoteOffset:
+//   [4a] all 7 C-major degree triad qualities, [4b] harmonic minor's raised-leading-tone DOMINANT,
+//   [4c] off-scale snap (tie -> lower), [4d] natural-minor min7, [4e] guitar voicings = DIATONIC
+//   qualities in the key + auto string counts (E6/D4/A5 shapes) + root snap.
 #include "DrumChannel.h"
 #include <cstdio>
 #include <cmath>

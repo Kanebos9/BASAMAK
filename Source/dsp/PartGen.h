@@ -744,13 +744,25 @@ static inline void sampleOnsets(const Options& o, const Ctx& c, Rng& rrng, std::
             anchor = latColOf(c, latCellNear(c, phraseStart) - 1);
         if (o.rhythm == RhDriving)
         {
-            int bd = 1 << 20;
+            // [2026-08-01 r26] the anchor must live IN the phrase: the unbounded nearest-event
+            // search could pick a landmark BEFORE phraseStart (a previous phrase's kick) - the
+            // "anchor" then opened nothing. Lower bound added; no in-span event = fall back to
+            // the phrase's first strong lattice cell.
+            int bd = 1 << 20; bool found = false;
             for (int i = 0; i < c.nHits; ++i)
             {
-                if (c.hitClk[i] != 0 || c.hitCol[i] >= breathEnd) continue;
+                if (c.hitClk[i] != 0 || c.hitCol[i] >= breathEnd
+                    || c.hitCol[i] < phraseStart) continue;
                 const int d = std::abs(c.hitCol[i] - phraseStart);
-                if (d < bd) { bd = d; anchor = c.hitCol[i]; }
+                if (d < bd) { bd = d; anchor = c.hitCol[i]; found = true; }
             }
+            if (! found)
+                for (int g = latCellNear(c, phraseStart); ; ++g)
+                {
+                    const int col = latColOf(c, g);
+                    if (col >= breathEnd) break;
+                    if (col >= phraseStart && latStrong(c, col, false)) { anchor = col; break; }
+                }
         }
         out.push_back(anchor);
     }
@@ -2827,6 +2839,58 @@ static inline std::vector<Note> generate(const Options& oIn, const Ctx& cIn)
     }
 
     // ============================================================================
+    // [2026-08-01 r26, M5] SINGABLE RANGE CAP (the documented rule, finally enforced):
+    // melodies are hard-capped at 12 st total span when Singable (14 otherwise); the motif's
+    // CORE/hook notes are held toward a 7 st band around the median. A post-pass: outliers
+    // OCTAVE-FOLD into the median band (pitch-class kept - a fold never rewrites identity);
+    // non-core notes may then be pulled to the nearest in-band ladder tone (the M4 tessitura
+    // machinery); core + the final cadence note fold ONLY and move LAST. Runs AFTER the
+    // cadence guard (a fold keeps its landing pc) and BEFORE H10 (hardware outranks theory).
+    // ============================================================================
+    if ((o.role == RoleMelody || o.role == RoleHum) && ! polyChords && ! notes.empty())
+    {
+        const int cap = o.singable ? 12 : 14;
+        std::vector<int> semis; semis.reserve(notes.size());
+        for (auto& n : notes) semis.push_back(n.semi);
+        std::sort(semis.begin(), semis.end());
+        const int med = semis[semis.size() / 2];
+        const int lo = med - cap / 2, hi = lo + cap;             // total span = cap
+        std::vector<int> lad;
+        buildLadder(o, lo, hi, lad);
+        auto fold = [&](int s2, int fLo, int fHi)
+        {
+            while (s2 < fLo && s2 + 12 <= fHi) s2 += 12;
+            while (s2 > fHi && s2 - 12 >= fLo) s2 -= 12;
+            return s2;
+        };
+        for (int pass = 0; pass < 2; ++pass)                     // non-core first, core LAST
+            for (size_t i = 0; i < notes.size(); ++i)
+            {
+                auto& n = notes[i];
+                const bool guarded = n.core || i + 1 == notes.size();   // last = the cadence
+                if ((pass == 0) == guarded) continue;
+                if (guarded)
+                {
+                    // fold-only (identity/cadence pc survives), preferring the 7 st hook band
+                    const int b7 = fold(n.semi, med - 3, med + 4);
+                    n.semi = (b7 >= med - 3 && b7 <= med + 4) ? b7 : fold(n.semi, lo, hi);
+                }
+                else if (n.semi < lo || n.semi > hi)
+                {
+                    int s2 = fold(n.semi, lo, hi);
+                    if ((s2 < lo || s2 > hi) && ! lad.empty())   // pull to the nearest in-band tone
+                    {
+                        int best = lad[0], bd = 1 << 20;
+                        for (int t : lad)
+                            if (std::abs(t - s2) < bd) { bd = std::abs(t - s2); best = t; }
+                        s2 = best;
+                    }
+                    n.semi = juceLikeClamp(lo, hi, s2);
+                }
+            }
+    }
+
+    // ============================================================================
     // [r22 STAGE 6, H10] MULTISAMPLE REACH: every note stays within 5 st of the target
     // instrument's nearest ZONE (the varispeed cap - past that a stretched zone reads as
     // chipmunk/mud). Octave folds first (pitch-class preserving); a range narrower than an
@@ -2866,10 +2930,71 @@ static inline void repitch(const Options& oIn, const Ctx& cIn, std::vector<Note>
     c.bars = std::max(1, std::min(MAX_BARS, c.bars));
     prepareChordsImpl(o, c);
     prepareLatticeImpl(c);   // [r21] the strong-col rule reads the lattice strength map
-    std::sort(notes.begin(), notes.end(), [](const Note& a, const Note& b) { return a.start < b.start; });
+    std::sort(notes.begin(), notes.end(), [](const Note& a, const Note& b)
+              { return a.start != b.start ? a.start < b.start : a.semi < b.semi; });
+    // [2026-08-01 r26] CHORD-AWARE: same-start note stacks are CHORD UNITS - the per-note
+    // substitution used to repitch each stack member independently (duplicate pitches, voicing
+    // destroyed). A stack is now re-voiced against the chord timeline (nearest distinct chord
+    // tones, ascending = no duplicates by construction, H1 low-interval limits); the single
+    // notes between stacks keep the full per-note pitching rules. Mono/single-line channels
+    // (no stacks) keep the exact old path.
+    bool hasStack = false;
+    for (size_t i = 1; i < notes.size(); ++i)
+        if (notes[i].start == notes[i - 1].start) { hasStack = true; break; }
     Rng prng(o.pitchSeed);
-    PitchState st;
-    pitchPhrase(o, c, prng, notes, st, 0, c.bars * COLS, true, -1, 0);
+    if (! hasStack)
+    {
+        PitchState st;
+        pitchPhrase(o, c, prng, notes, st, 0, c.bars * COLS, true, -1, 0);
+    }
+    else
+    {
+        // singles ride the old rules; extracted so pitchPhrase never sees a stack member
+        std::vector<size_t> singleIdx;
+        std::vector<Note>   singles;
+        for (size_t i = 0; i < notes.size(); ++i)
+        {
+            const bool inStack = (i > 0 && notes[i].start == notes[i - 1].start)
+                              || (i + 1 < notes.size() && notes[i].start == notes[i + 1].start);
+            if (! inStack) { singleIdx.push_back(i); singles.push_back(notes[i]); }
+        }
+        if (! singles.empty())
+        {
+            PitchState st;
+            pitchPhrase(o, c, prng, singles, st, 0, c.bars * COLS, true, -1, 0);
+            for (size_t k = 0; k < singleIdx.size(); ++k) notes[singleIdx[k]].semi = singles[k].semi;
+        }
+        for (size_t i = 0; i < notes.size(); )
+        {
+            size_t j = i + 1;
+            while (j < notes.size() && notes[j].start == notes[i].start) ++j;
+            if (j - i >= 2)                                       // one stack = one voicing
+            {
+                bool cp[12]; chordPcs(o, chordRootDegAt(o, c, notes[i].start), cp);
+                int prev = -999;
+                for (size_t k = i; k < j; ++k)                    // ascending original order
+                {
+                    const int base = notes[k].semi;
+                    int best = -999;
+                    for (int d = 0; d <= 24 && best <= -900; ++d)
+                        for (int cand : { base - d, base + d })
+                        {
+                            if (cand < -48 || cand > 48 || ! cp[pc(cand)]) continue;
+                            if (cand <= prev) continue;           // ascending = distinct pitches
+                            // H1 low-interval limits: no muddy close intervals down low
+                            if (prev > -900 && ((prev < -12 && cand - prev <= 4)
+                                             || (prev < -5  && cand - prev <= 2))) continue;
+                            best = cand; break;
+                        }
+                    if (best <= -900) best = prev > -900 ? prev + 12 : base;   // top-up fallback
+                    if (prev > -900 && best <= prev && prev < 48) best = prev + 1;
+                    best = std::min(48, best);
+                    notes[k].semi = best; prev = best;
+                }
+            }
+            i = j;
+        }
+    }
     for (auto& n : notes) n.semi = std::max(-48, std::min(48, n.semi));
 }
 } // namespace PartGen

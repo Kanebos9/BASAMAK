@@ -382,7 +382,13 @@ static inline void applyStyleSkeleton(const GenStyle::Style& d, PartGen::Ctx& c)
             for (int b2 = a; b2 > 0 && cols[b2] < cols[b2 - 1]; --b2)
             { std::swap(cols[b2], cols[b2 - 1]); std::swap(strs[b2], strs[b2 - 1]); }
     };
-    sortHits(c.nHits, c.hitCol, c.hitStr);
+    // [2026-08-01 r26] carry hitClk through the combined-list sort like GenContext's loop does
+    // (all 0 today - the canon skeleton is all events - but a silent clk/col mismatch waits
+    // for the first non-zero writer otherwise)
+    for (int a = 1; a < c.nHits; ++a)
+        for (int b2 = a; b2 > 0 && c.hitCol[b2] < c.hitCol[b2 - 1]; --b2)
+        { std::swap(c.hitCol[b2], c.hitCol[b2 - 1]); std::swap(c.hitStr[b2], c.hitStr[b2 - 1]);
+          std::swap(c.hitClk[b2], c.hitClk[b2 - 1]); }
     sortHits(c.nKick, c.kickCol, c.kickStr);
     sortHits(c.nSnare, c.snareCol, c.snareStr);
     sortHits(c.nHat, c.hatCol, c.hatStr);

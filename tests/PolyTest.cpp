@@ -1,6 +1,7 @@
 // POLY KEYS regression: [1] a held 3-note chord rings ALL THREE tones (poly keyDown = no cut),
 // [2] keyUp(one note) releases ONLY that note's voice while the others sustain,
-// [3] MONO keyDown still CUTS the previous note (the classic lead/slide feel is preserved).
+// [3] MONO keyDown still CUTS the previous note (the classic lead/slide feel is preserved),
+// [4] UNISON STEREO WIDTH: spread 1 = L/R differ (side RMS > 0), spread 0 = bit-mono.  [2026-08-01 r26 header refresh]
 #include "DrumChannel.h"
 #include <cstdio>
 #include <cmath>

@@ -753,6 +753,9 @@ struct ArrangeOptions
 struct ArrangeResult
 {
     juce::String kitDesc, skipped;      // per-lane counts / the roles that found no channel
+    juce::String skippedParts;          // [2026-08-01 r26] parts that generated ZERO notes -
+                                        // their write is skipped (existing channel data kept);
+                                        // the editor readout names them
     int   kitChans = 0;
     float swing = -1.0f;                // written group-wide when >= 0
     int   chokeGroup = 0;
@@ -803,11 +806,13 @@ inline ArrangeResult generateArrangement(Sequencer& sq, int head, int end,
     }
     else skip("kit");
     // ---- 2..4) the melodic parts, EACH GATHERING what was written before it ----
-    auto genPart = [&](int role, int ch, int& outN, int& outSteps)
+    bool latticeSet = false;   // [2026-08-01 r26] report the FOUNDATION lattice (first gather,
+                               // which hears the kit) - the LAST part's used to overwrite it
+    auto genPart = [&](const char* nm, int role, int ch, int& outN, int& outSteps)
     {
         Readout ro;
         PartGen::Ctx ctx = build(sq, head, end, ch, &ro);
-        res.lattice = ro.lattice;
+        if (! latticeSet) { res.lattice = ro.lattice; latticeSet = true; }
         const bool scratch = ctx.nHits == 0;
         if (scratch && ao.dna != nullptr) DrumGen::applyStyleSkeleton(*ao.dna, ctx);
         PartGen::Options o;
@@ -825,6 +830,15 @@ inline ArrangeResult generateArrangement(Sequencer& sq, int head, int end,
         const bool chanStep = ! sq.patterns[head].channels[ch].drawMode;
         if (role == PartGen::RoleChords && chanStep) o.forceMono = true;   // H9 degrade
         auto notes = PartGen::generate(o, ctx);
+        if (notes.empty())
+        {
+            // [2026-08-01 r26] EMPTY-PART GUARD: skip ONLY this part's write (the writers
+            // clear the channel first - an empty write would DESTROY existing data). The
+            // arrangement-wide commit stays (other parts wrote); the readout names the skip.
+            res.skippedParts += juce::String(res.skippedParts.isEmpty() ? "" : ", ") + nm;
+            outN = 0; outSteps = 0;
+            return;
+        }
         if (chanStep)
         {
             const auto r = writeStepOutput(sq, head, bars, ch, notes, &ctx,
@@ -839,11 +853,11 @@ inline ArrangeResult generateArrangement(Sequencer& sq, int head, int end,
             outN = r.written; outSteps = 0;
         }
     };
-    if (plan.bass   >= 0) genPart(PartGen::RoleBass,   plan.bass,   res.bassN,  res.bassSteps);
+    if (plan.bass   >= 0) genPart("bass",   PartGen::RoleBass,   plan.bass,   res.bassN,  res.bassSteps);
     else skip("bass");
-    if (plan.melody >= 0) genPart(PartGen::RoleMelody, plan.melody, res.melN,   res.melSteps);
+    if (plan.melody >= 0) genPart("melody", PartGen::RoleMelody, plan.melody, res.melN,   res.melSteps);
     else skip("melody");
-    if (plan.chords >= 0) genPart(PartGen::RoleChords, plan.chords, res.chordN, res.chordSteps);
+    if (plan.chords >= 0) genPart("chords", PartGen::RoleChords, plan.chords, res.chordN, res.chordSteps);
     else skip("chords");
     return res;
 }

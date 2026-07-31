@@ -3,7 +3,10 @@
 //       this version - "NAM A2" was the user's requirement; verified, not guessed),
 //   [2] classic WaveNet + LSTM models load too (the files people actually download),
 //   [3] output is finite, non-trivial, and DIFFERS from the input (the model actually ran),
-//   [4] loading garbage fails CLEANLY (error string, no crash).
+//   [4] loading garbage fails CLEANLY (error string, no crash),
+//   [5] CHANNEL FX integration: FX A = NAM Amp is audible vs dry; empty file = bit-identical,
+//   [6] the 2x-oversampled path: engineOS=2 halfband decimate/interpolate round-trip is transparent,
+//   [7] CAB IR wiring: a generated IR loads through ChFxCabIr and convolves audibly.  [2026-08-01 r26 header refresh]
 #include <JuceHeader.h>
 #include <cmath>
 #include "NamWrapper.h"

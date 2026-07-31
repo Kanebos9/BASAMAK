@@ -1,8 +1,12 @@
 // VoiceMapTest [2026-07-20] - locks the SYLLABLE VOICE multisample model:
+//  [0]/[0b] fixture written + loadMultisample sees the voice folders (nVoices, Auto Loop)
 //  [1] cyclic pitch->voice mapping (note mod nVoices picks the "voice N" subfolder)
 //  [2] sidecar <tune> cents compensation ("auto-tuned by construction": a flat recording plays in tune)
 //  [3] voiced instruments default Auto Loop ON and the loops are derived on the NEW set
 //      (regression for the rebuild-before-swap bug found 2026-07-20)
+//  [4] sidecar amp-env application (authored envelope travels with the instrument)
+//  [5] shared decoded-instrument registry: two loads of one folder = ONE MsSet (pointer equal)
+//  [6] load-time pitch verify self-heal (a mis-named zone plays at its MEASURED pitch)
 //  [7] [2026-07-31 r25] loadMultisample NEVER touches sequence data (roll notes + steps survive).
 //      DSP-layer lock for the "multisample pick wiped my roll notes" bug - the editor-side
 //      offender was applySoundPickId's resetChannelToDefault call (now Factory::clearSound);

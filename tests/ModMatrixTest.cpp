@@ -7,6 +7,13 @@
 //   [4] Extreme amounts on every route stay finite.
 //   [5] LFO is a pure MATRIX SOURCE: routing LFO1->Filter1 Cutoff wobbles the filter; an LFO with no
 //       route = EXACTLY the no-LFO baseline (LFOs do nothing until routed in the matrix).
+// [2026-08-01 r26 header refresh] the suite has grown far past [5] - current coverage in brief:
+//   [6] per-voice modulation (chord == sum of single notes), [7]/[8] channel FX slots + matrix->FX,
+//   [9]/[16] de-zipper + weight-skip liveness, [10] Sub/Formant, [11]/[12] audio-rate + key-tracked FM,
+//   [13] bipolar Bell, [14] FreqShift SSB image rejection, [15] env-time per-hit latch, [17] ADAA alias
+//   cut, [18] MPE per-channel pressure, [19] remap curves, [20] unison-16 half-cycle spread, [21]
+//   count-morph fades, [22] bass-retrigger/choke fades, [23] OTT audibility, [24] free-LFO live while
+//   stopped, [25] channel FILTER/EQ, [26] Sync/Bend/Fold trio, [27] Resonator FX, [28] Metal Cluster.
 #include "Sequencer.h"
 #include <cstdio>
 #include <cmath>

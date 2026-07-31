@@ -2,6 +2,8 @@
 //  [1] melody notes play at their columns (C3 beat 1, G3 beat 2)
 //  [2] an overlapping 3-note chord (beat 3) rings ALL THREE tones (overlap-aware trigger)
 //  [3] quantize-to-steps helper: overlap detection flags chords, clean melodies pass
+//  [4] ONE-SHOT notes = the STEP contract: on a sustained sound a one-shot roll note renders
+//      bit-identical to a bare step (maxdiff ~0) while a GATED note differs.  [2026-08-01 r26 header refresh]
 #include "Sequencer.h"
 #include <cstdio>
 #include <cmath>

@@ -7,6 +7,8 @@
 //   [5] FREE-RUN determinism: with a mid-bar note, bar N and bar N+1 render IDENTICALLY
 //       (timeline anchor) while FREE != RETRIG (the note joins the wave mid-flight)
 //   [6] FDN reverb: Hall deterministic; Room/Plate/Shimmer differ from Hall; all finite
+// [2026-08-01 r26] every bit-identity check above also asserts a LEVEL floor (rms/energy) -
+// two silent renders are bit-identical too, so silence can never fake a pass.
 #include "Sequencer.h"
 #include "FDNReverb.h"
 #include <cstdio>
@@ -47,6 +49,10 @@ static std::vector<float> render(const Cfg& cfg, double secs)
 
 static float maxdiff(const std::vector<float>& a, const std::vector<float>& b)
 { float m = 0.0f; for (size_t i = 0; i < a.size() && i < b.size(); ++i) m = std::max(m, std::abs(a[i] - b[i])); return m; }
+// [2026-08-01 r26] level guard for the bit-identity checks: two SILENT renders are also
+// bit-identical - every "repeat maxdiff == 0" assertion must prove the render actually sounded
+static float rmsAll(const std::vector<float>& x)
+{ double e = 0; for (float v : x) e += (double) v * v; return x.empty() ? 0.0f : (float) std::sqrt(e / (double) x.size()); }
 static int zc(const std::vector<float>& x, int a, int n)
 { int z = 0; for (int i = a + 1; i < a + n && i < (int) x.size(); ++i) if ((x[i-1] <= 0) != (x[i] <= 0)) ++z; return z; }
 static bool finite(const std::vector<float>& x)
@@ -61,8 +67,8 @@ int main()
         // differs, so the honest probe = TWO CONSECUTIVE NOTES in one render (steps 0 + 4, short
         // dec so the first tail is gone), not two fresh instances (same seed = same tape).
         Cfg c0; auto a = render(c0, 0.5), b = render(c0, 0.5);
-        printf("[1] drift 0: repeat maxdiff=%.6f (expect 0) -> %s\n", maxdiff(a, b),
-               CHK(maxdiff(a, b) == 0.0f) ? "OK" : "FAIL");
+        printf("[1] drift 0: repeat maxdiff=%.6f (expect 0), rms=%.4f (>0.01) -> %s\n", maxdiff(a, b), rmsAll(a),
+               CHK(maxdiff(a, b) == 0.0f && rmsAll(a) > 0.01f) ? "OK" : "FAIL");
         Cfg c1; c1.drift = 0.6f; c1.step2 = 4; c1.dec = 0.12f;   // notes at 0 s and 1 s (120 BPM)
         auto d = render(c1, 2.0);
         const int N = (int)(0.4 * SR);
@@ -79,9 +85,9 @@ int main()
         Cfg f0; f0.volShape = -2;                 // filter on, drive 0
         auto a = render(f0, 0.5), b = render(f0, 0.5);
         Cfg f1 = f0; f1.fDrive = 0.6f; auto d = render(f1, 0.5);
-        printf("[3] filter drive: 0 repeat maxdiff=%.6f (expect 0), drive 0.6 vs 0 maxdiff=%.3f (expect >0.01) -> %s\n",
-               maxdiff(a, b), maxdiff(a, d),
-               CHK(maxdiff(a, b) == 0.0f && maxdiff(a, d) > 0.01f && finite(d)) ? "OK" : "FAIL");
+        printf("[3] filter drive: 0 repeat maxdiff=%.6f (expect 0, rms=%.4f), drive 0.6 vs 0 maxdiff=%.3f (expect >0.01) -> %s\n",
+               maxdiff(a, b), rmsAll(a), maxdiff(a, d),
+               CHK(maxdiff(a, b) == 0.0f && rmsAll(a) > 0.01f && maxdiff(a, d) > 0.01f && finite(d)) ? "OK" : "FAIL");
     }
     {   // [4] LFO SHAPE
         Cfg sN; sN.volShape = 0; Cfg sQ; sQ.volShape = 3;
@@ -95,9 +101,9 @@ int main()
         auto oF = render(fr, 4.0), oR = render(rt, 4.0);
         const int bar = (int)(2.0 * SR);
         std::vector<float> b1(oF.begin(), oF.begin() + bar), b2(oF.begin() + bar, oF.begin() + 2 * bar);
-        printf("[5] free-run: bar1-vs-bar2 maxdiff=%.6f (expect ~0 = deterministic), free-vs-retrig maxdiff=%.3f (expect >0.01) -> %s\n",
-               maxdiff(b1, b2), maxdiff(oF, oR),
-               CHK(maxdiff(b1, b2) < 1.0e-4f && maxdiff(oF, oR) > 0.01f) ? "OK" : "FAIL");
+        printf("[5] free-run: bar1-vs-bar2 maxdiff=%.6f (expect ~0 = deterministic, rms=%.4f), free-vs-retrig maxdiff=%.3f (expect >0.01) -> %s\n",
+               maxdiff(b1, b2), rmsAll(b1), maxdiff(oF, oR),
+               CHK(maxdiff(b1, b2) < 1.0e-4f && rmsAll(b1) > 0.01f && maxdiff(oF, oR) > 0.01f) ? "OK" : "FAIL");
     }
     {   // [6] FDN modes: impulse responses
         auto ir = [&](int mode) {
@@ -112,7 +118,8 @@ int main()
         const double er = energy(shim) / juce::jmax(1.0e-9, energy(hall));   // blow-up guard: shimmer must
         printf("[6] reverb: hall repeat=%.6f (0), room/plate/shimmer vs hall = %.3f/%.3f/%.3f, shim/hall energy=%.2f (0.2..4) -> %s\n",
                maxdiff(hall, hall2), maxdiff(room, hall), maxdiff(plate, hall), maxdiff(shim, hall), er,
-               CHK(maxdiff(hall, hall2) == 0.0f && maxdiff(room, hall) > 0.001f && maxdiff(plate, hall) > 0.001f
+               CHK(maxdiff(hall, hall2) == 0.0f && energy(hall) > 1.0e-6   // [2026-08-01 r26] level guard
+                   && maxdiff(room, hall) > 0.001f && maxdiff(plate, hall) > 0.001f
                    && maxdiff(shim, hall) > 0.001f && finite(shim) && er > 0.2 && er < 4.0) ? "OK" : "FAIL");
     }
     printf(fails == 0 ? ">>> AliveTest PASS\n" : ">>> AliveTest FAIL (%d)\n", fails);

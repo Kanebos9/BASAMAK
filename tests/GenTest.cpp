@@ -12,10 +12,20 @@
 // sound-aware lengths, and the STEP-COUNT AUTHORITY writer. Plus the DEV SCORECARD: LHL
 // syncopation (G3 weights), chord-tone-on-strong %, proximity %, leap-recovery violations,
 // motif 3-gram self-similarity - informational prints + the doc's hard bands asserted.
+// [31]-[49] [r19/r20]: panel-neutral defaults, output-mode matrix, DRUM KIT determinism/canon/
+// backbeat/ghosts/hat-alternation/fills/writer + the drum scorecard, motif coverage, Q/A ends,
+// LHL band, push, breath caps, accents, repitch exactness, comp voicing/H1/H2/forceMono,
+// comp-in-gaps, G5 nudge band.
+// [50]-[53] [r21]: the user's 7/14 lattice scenario, classify guard, lattice derivation,
+// lattice determinism + the chooser truncation fix.
+// [54]-[63] [r22]: style-file parse/skip/collision/breadth, style differentiation, kit micro,
+// appoggiatura, H7 counter-line, G6/G10/H10, GENERATE ALL, the variety mandate.
 // [64]-[68] [2026-07-22 r23]: LANDMARKS vs CLOCK (the deneme scenario: saturated hat walls =
 // accents, never events; per-bar starvation floor; 74/76% saturation boundary) + WIDE NEW /
 // VARY ALL (macro-layer variety: Any-style picks, progression/comp/hat fans, register/density
 // spread) + per-role NEW-IDEA divergence floors (rhythm/pitch seed swaps must move the output).
+// [69]-[70] [2026-08-01 r26]: the M5 singable range cap (span <= 12/14 st) + chord-aware
+// KEEP-MY-RHYTHM repitch (same-start stacks = voicing units, no duplicate pitches).
 #include "PartGen.h"
 #include "GenContext.h"
 #include <algorithm>
@@ -136,18 +146,21 @@ int main()
         for (uint32_t s = 1; s <= 6 && ok; ++s)
         {
             Options o; o.scale = kMajor; o.color = 0; o.rhythmSeed = s; o.pitchSeed = s * 7 + 1;
-            for (auto& n : generate(o, ctx1))
+            const auto ns = generate(o, ctx1);
+            if (ns.empty()) ok = false;   // [2026-08-01 r26] empty output = a vacuous pass
+            for (auto& n : ns)
                 if (! inScale(n.semi, 0, kMajor, 7)) ok = false;
         }
-        CHECK(ok, "[2] color=Safe stays in the scale (6 seeds)");
+        CHECK(ok, "[2] color=Safe stays in the scale (6 seeds, non-empty)");
     }
 
     // [3] register bounds: melody mid stays near its centre
     {
         Options o; o.scale = kMajor; o.color = 0; o.registerBand = 1; o.rhythmSeed = 3; o.pitchSeed = 5;
         bool ok = true;
-        for (auto& n : generate(o, ctx1)) if (n.semi < -13 || n.semi > 5) ok = false;
-        CHECK(ok, "[3] melody mid register within centre-4 +-9");
+        const auto ns = generate(o, ctx1);
+        for (auto& n : ns) if (n.semi < -13 || n.semi > 5) ok = false;
+        CHECK(ok && ! ns.empty(), "[3] melody mid register within centre-4 +-9 (non-empty)");
     }
 
     // [4] bassline lives low
@@ -827,17 +840,18 @@ int main()
 
     // [37] hat alternation: no two consecutive equal velocities, every style (D3's law)
     {
-        bool ok = true;
+        bool ok = true, any = false;   // [2026-08-01 r26] empty lanes = a vacuous pass
         for (int st = 0; st < DrumGen::NUM_STYLES; ++st)
             for (uint32_t s = 1; s <= 3; ++s)
             {
                 DrumGen::Options d; d.style = st; d.bars = 2; d.rhythmSeed = s; d.auxSeed = s * 5 + 1;
                 auto o = DrumGen::generate(d);
+                if (! o.lane[DrumGen::LHat].empty()) any = true;
                 for (size_t i = 1; i < o.lane[DrumGen::LHat].size(); ++i)
                     if (std::fabs(o.lane[DrumGen::LHat][i].vel - o.lane[DrumGen::LHat][i - 1].vel) < 0.004f)
                         ok = false;
             }
-        CHECK(ok, "[37] hat lane never repeats a velocity back to back (all styles)");
+        CHECK(ok && any, "[37] hat lane never repeats a velocity back to back (all styles, non-empty)");
     }
 
     // [38] fills: only the phrase-final bar changes; off = every bar identical
@@ -2222,6 +2236,54 @@ int main()
             CHECK(onKick && cnt > 0,
                   "[68i] bass Driving stays ON the kicks across seeds (G4 push = the one licensed leave)");
         }
+    }
+
+    // [69] [2026-08-01 r26, M5] SINGABLE RANGE CAP (the documented rule, now enforced as a
+    // post-pass): melody total span <= 12 st when Singable, <= 14 st otherwise, across seeds
+    {
+        bool ok = true;
+        Ctx cs; cs.bars = 2;
+        for (int i = 0; i < 16; i += 4) cs.grooveHit[i] = cs.grooveHit[16 + i] = 1.0f;
+        for (uint32_t s = 1; s <= 5 && ok; ++s)
+            for (int sing = 0; sing <= 1 && ok; ++sing)
+            {
+                Options o; o.scale = kMajor; o.role = RoleMelody; o.singable = sing != 0;
+                o.rhythmSeed = s * 0x9E3779B9u + 1; o.pitchSeed = s * 0x85EBCA6Bu + 3;
+                auto n = generate(o, cs);
+                if (n.empty()) { ok = false; break; }
+                int lo = 99, hi = -99;
+                for (auto& x : n) { lo = std::min(lo, x.semi); hi = std::max(hi, x.semi); }
+                if (hi - lo > (sing != 0 ? 12 : 14)) ok = false;
+            }
+        CHECK(ok, "[69] M5 range cap: singable span <= 12 st, plain melody <= 14 st (5 seeds)");
+    }
+
+    // [70] [2026-08-01 r26] KEEP-MY-RHYTHM x CHORDS: same-start note stacks are chord UNITS -
+    // repitch keeps every stack stacked (onsets + lens exact), no duplicate pitches inside a
+    // stack (the old per-note substitution collapsed voicings onto one tone), all in scale
+    {
+        Ctx ck; ck.bars = 1;
+        std::vector<PartGen::Note> user;
+        auto push = [&](int st, int semi)
+        { PartGen::Note n; n.start = st; n.len = 48; n.semi = semi; n.vel = 200; user.push_back(n); };
+        push(0, 0);   push(0, 3);   push(0, 8);      // stack 1 (a hand-played chord)
+        push(96, 5);                                 // single line between the stacks
+        push(192, -1); push(192, 4); push(192, 9);   // stack 2
+        push(288, 2);                                // single
+        auto notes = user;
+        Options o; o.scale = kMajor; o.pitchSeed = 91;
+        PartGen::repitch(o, ck, notes);
+        bool rhythmSame = notes.size() == user.size(), scaleOk = true, noDup = true;
+        for (size_t i = 0; i < notes.size() && rhythmSame; ++i)
+        {
+            rhythmSame = notes[i].start == user[i].start && notes[i].len == user[i].len;
+            if (! inScale(notes[i].semi, 0, kMajor, 7)) scaleOk = false;
+        }
+        for (size_t i = 0; i < notes.size(); ++i)
+            for (size_t j = i + 1; j < notes.size(); ++j)
+                if (notes[i].start == notes[j].start && notes[i].semi == notes[j].semi) noDup = false;
+        CHECK(rhythmSame && scaleOk && noDup,
+              "[70] chord-aware repitch: stacks stay stacks, distinct pitches, in scale");
     }
 
     printf(fails == 0 ? "GenTest: ALL PASS\n" : "GenTest: %d FAILURES\n", fails);
