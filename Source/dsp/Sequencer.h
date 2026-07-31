@@ -134,7 +134,10 @@ public:
                           bool  drawStrumUp = false;       // per-note STRUM direction (true = up / alt. strum)
                           bool  drawLegato = false;        // [2026-07-16] per-note LEGATO: inherit the ringing envelope (no re-attack)
                           int   drawStrumPct = -1;         // per-note STRUM amount override (0..100; -1 = Strum knob)
-                          float drawNotePan = 0.0f; };     // per-note PAN (-1..+1); overrides the whole-channel drawPan
+                          float drawNotePan = 0.0f;        // per-note PAN (-1..+1); overrides the whole-channel drawPan
+                          int   pattern = -1; };           // [2026-08-01 r26] the pattern this event was SCANNED from
+                                                           // (-1 = current): tail-of-bar events fire AFTER onBarComplete
+                                                           // moved playPattern, so they must pin their own bar's data
 
     // [start, end) of step `s` (bar fraction 0..1) with this pattern's swing applied. The
     // MIDI exporter reuses it so exported clips carry the same groove the engine plays.

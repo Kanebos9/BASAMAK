@@ -49,19 +49,25 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
 
     auto fireEvent = [this, sampleRate](const TriggerEvent& e)
     {
-        auto& c = patterns[playPattern].channels[e.channel];   // steps fire from the PLAYING pattern
+        // [2026-08-01 r26] BAR-BOUNDARY EVENTS fire on the pattern they were SCANNED from: the
+        // tail-of-bar scan runs BEFORE onBarComplete() but the events fire AFTER it moved
+        // playPattern - end-of-bar hits used the NEXT bar's velocity/pitch/pan/mute/solo. The
+        // scan stamps e.pattern; -1 = current (safety). The old bar's channels keep rendering
+        // via the fadeOutPattern / merged-group / viewed blocks, so the voices still sound.
+        const int pat = (e.pattern >= 0 && e.pattern < NUM_PATTERNS) ? e.pattern : playPattern;
+        auto& c = patterns[pat].channels[e.channel];   // steps fire from the pattern that scanned them
         // [2026-07-15 23:00] MUTED (or solo-excluded) channels DON'T FIRE AT ALL. They used to
         // trigger silently (renderInto only gated the OUTPUT), so voices accumulated frozen while
         // muted and all became audible at once on unmute ("really loud suddenly" + the roll note
         // the playhead had already passed playing after unmute - both user reports, same root).
         // Skipping here also stops a muted channel's duck pulses, chokes and MIDI-out notes -
         // a silent channel shouldn't push the mix around.
-        if (c.mute || (anySoloIn(patterns[playPattern]) && ! c.solo)) return;
+        if (c.mute || (anySoloIn(patterns[pat]) && ! c.solo)) return;
         // SIDECHAIN DUCK: this hit pushes down every channel set to "Duck by" this channel
         // (Routing popup). Level-only - the ducked sound recovers; nothing is cut like choke.
         for (int o = 0; o < NUM_CHANNELS; ++o)
         {
-            auto& d = patterns[playPattern].channels[o];
+            auto& d = patterns[pat].channels[o];
             if (o != e.channel && d.duckBy == e.channel && d.duckAmt > 0.001f) d.duckPulse();
         }
         if (c.midiOut) return;   // MIDI-out channels make no internal sound (they emit notes in the processor)
@@ -91,10 +97,10 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
         // choking hit was quieter than the tail it cut.
         if (c.chokeGroup > 0)
             for (int o = 0; o < NUM_CHANNELS; ++o)
-                if (o != e.channel && patterns[playPattern].channels[o].chokeGroup == c.chokeGroup)
+                if (o != e.channel && patterns[pat].channels[o].chokeGroup == c.chokeGroup)
                 {   // [2026-07-14 10:05] choke fade is PITCH-AWARE now (3 ms on a sub tail = a click;
                     // hats keep their tight ~3-5 ms feel automatically via their higher base).
-                    auto& oc = patterns[playPattern].channels[o];
+                    auto& oc = patterns[pat].channels[o];
                     oc.fadeOutVoices(oc.retrigFadeSec());
                 }
         // SLIDE = glide TOWARD THE NEXT STEP: the slid step plays its own attack at its own pitch,
@@ -121,6 +127,9 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
             auto& chan = patterns[playPattern].channels[ch];
             chan.lfoBarSeconds = (float) blockBarSeconds;   // tempo-synced per-slot LFOs
             chan.modWheel      = modWheel;                   // live mod wheel (shared mod source)
+            chan.pitchWheel    = pitchWheel;                 // [2026-08-01 r26] live pitch wheel - every OTHER render
+                                                             // loop forwards it; the main loop's omission left a stale
+                                                             // bend frozen on a channel after a view/pattern switch
             // FREE-RUN LFO anchor: bars into the playing unit at THIS segment's start (group bar
             // index + fraction). Same bar position = same phase on every pass (deterministic).
             // [2026-07-16] ONLY while the transport actually plays: this loop also runs STOPPED
@@ -128,11 +137,19 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
             // barPosition into "bar position 0" every block - which RESET the free-run clock
             // per block = FREE LFOs frozen at phase 0 on live keys (the Sequencer Bass bug).
             // Stopped = the -1 sentinel -> renderInto's lfoFreeSec wall clock keeps them moving.
-            chan.lfoBarPos = isCurrentlyPlaying
-                ? juce::jmax(0.0,
-                    (double)(playPattern - groupHead(playPattern)) + barPosition
-                    - (double)(numSamples - segStart) / juce::jmax(1.0, blockBarSeconds * sampleRate))
-                : -1.0;
+            // [2026-08-01 r26] BAR-WRAP CONTINUITY: on the crossing block the post-wrap position
+            // minus the backtrack goes NEGATIVE and jmax(0, ...) collapsed the anchor to 0 for
+            // one block = a free-LFO phase jump at every unit wrap. Fold a negative value back by
+            // the playing UNIT's length in bars (the timeline is periodic in the unit) = the
+            // exact pre-wrap position. The not-playing -1 sentinel is unchanged.
+            if (isCurrentlyPlaying)
+            {
+                double anc = (double)(playPattern - groupHead(playPattern)) + barPosition
+                             - (double)(numSamples - segStart) / juce::jmax(1.0, blockBarSeconds * sampleRate);
+                if (anc < 0.0) anc += (double)(groupEnd(playPattern) - groupHead(playPattern) + 1);
+                chan.lfoBarPos = juce::jmax(0.0, anc);
+            }
+            else chan.lfoBarPos = -1.0;
             // STEP MOD lanes: the current step position (within-bar fraction * numSteps) at this
             // segment; stopped = -1 (no step is playing - the lanes read as silent, not "step 0").
             if (isCurrentlyPlaying)
@@ -187,8 +204,10 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
                 gc.lfoBarSeconds = (float) blockBarSeconds; gc.modWheel = modWheel; gc.pitchWheel = pitchWheel;
                 if (! gc.midiOut && gc.anyVoiceActive())
                 {   // ringing group members share the playing unit's timeline anchor
-                    gc.lfoBarPos = juce::jmax(0.0, (double)(playPattern - groupHead(playPattern)) + barPosition
-                                                   - (double) numSamples / juce::jmax(1.0, blockBarSeconds * sampleRate));
+                    double anc = (double)(playPattern - groupHead(playPattern)) + barPosition
+                                 - (double) numSamples / juce::jmax(1.0, blockBarSeconds * sampleRate);
+                    if (anc < 0.0) anc += (double)(groupEnd(playPattern) - groupHead(playPattern) + 1);   // [2026-08-01 r26] bar-wrap continuity (see the main loop)
+                    gc.lfoBarPos = juce::jmax(0.0, anc);
                     { double bf = barPosition - (double) numSamples / juce::jmax(1.0, blockBarSeconds * sampleRate);
                       bf -= std::floor(bf); gc.modStepPos = (float) (bf * (double) juce::jmax(1, gc.numSteps)); }
                     gc.renderInto(audio, 0, numSamples, soloG);
@@ -508,6 +527,7 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
                     }
                 }
                 TriggerEvent e; e.channel = ch; e.step = 0; e.offset = off; e.gate = gate;
+                e.pattern = playPattern;   // [2026-08-01 r26] pin to the SCANNED bar (see fireEvent)
                 e.isDraw = true; e.drawPitch = (float) nt.semi;
                 e.drawVel = (float) nt.vel / 255.0f;                  // per-note velocity
                 e.drawSlot = nt.slot;                                 // per-note slot tag
@@ -609,7 +629,11 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
                     }
                     slideLen = (long) juce::jmax(256.0, (en - st) * samplesPerBar);
                 }
-                events.add({ ch, s, velScale, j, roll, off, gate, slideLen, slideTo });
+                {   // [2026-08-01 r26] pin the event to the SCANNED bar (see fireEvent)
+                    TriggerEvent te { ch, s, velScale, j, roll, off, gate, slideLen, slideTo };
+                    te.pattern = playPattern;
+                    events.add(te);
+                }
             }
         }
     }

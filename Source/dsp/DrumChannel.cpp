@@ -1070,6 +1070,11 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
     }
     if (legacyRev > 0.001f && reverbSend <= 0.001f) reverbSend = juce::jlimit(0.0f, 1.0f, legacyRev);
     if (legacyDel > 0.001f && delaySend  <= 0.001f) delaySend  = juce::jlimit(0.0f, 1.0f, legacyDel);
+    // [2026-08-01 r26] every load path lands here AFTER readChannel/readChannelMix set chFxType
+    // (incl. the legacy migration just above) - size the FX delay lines on the message thread
+    // (the render's DRY fallback never allocates; without this a loaded Chorus channel would
+    // stay dry until the next prepareToPlay).
+    for (int f2 = 0; f2 < 3; ++f2) ensureChFxBuffers(f2, chFxType[f2]);
     if (n > 0) ensureKsBuffers();   // restored slots may use a KS engine (message thread)
     rebuildAddTables();   // drawn harmonics -> tables (message thread; load paths)
     return n > 0;
@@ -1085,7 +1090,10 @@ void DrumChannel::prepareToPlay(double sampleRate, int maxBlockSize)
     namMono.assign((size_t) juce::jmax(64, maxBlockSize), 0.0f);
     namHost.assign((size_t) juce::jmax(32, maxBlockSize / 2 + 8), 0.0f);
     for (int fx = 0; fx < 3; ++fx)
+    {
         if (chFxType[fx] == ChFxNamAmp || chFxType[fx] == ChFxCabIr) refreshChFxAssets(fx);
+        ensureChFxBuffers(fx, chFxType[fx]);   // [2026-08-01 r26] size the FX delay lines at the (new) rate - message thread
+    }
     if (msRigModel.isNotEmpty() || msRigIr.isNotEmpty()) refreshMsRig();   // [2026-07-19] rate-correct reload
 
     for (auto& b : formantBP) b.reset();
@@ -1558,6 +1566,11 @@ bool DrumChannel::loadMultisample(int slot, const juce::File& folder)
     }
     slotSample[slot].loadedAtRate = hostRate;
     updateStretch(slot);
+    // [2026-08-01 r26] AUTO-loop is derived on the NEW LOCAL set BEFORE it is published/registered
+    // (the [2026-07-20] fix had it deriving on the OLD set - DECISIONS #220; deriving AFTER the
+    // swap then mutated a set the audio thread was already reading = a mid-derive no-loop/torn
+    // interim). msLoopOn is already known here (applyMsSidecar ran above).
+    if (slots[slot].msLoopOn) msDeriveLoops(*set);
     {   // [2026-07-21 r15] swap under the sample lock; a null msSet (e.g. the readSlots path) must
         // not wipe an older retiree still feeding a fading voice
         const juce::ScopedLock sl3 (sampleLock);
@@ -1565,9 +1578,6 @@ bool DrumChannel::loadMultisample(int slot, const juce::File& folder)
         msSet[slot] = set;
     }
     msSetRegistry()[regKey] = set;    // [2026-07-20] future identical loads SHARE this decode
-    // [2026-07-20] BUG FIX: this used to run BEFORE the swap above = it derived loops on the OLD
-    // set, so a fresh sidecar-enabled load never actually looped until the button was re-toggled.
-    if (slots[slot].msLoopOn) msRebuildLoops(slot);   // AUTO-loop: per-zone regions on the NEW set
     return true;
 }
 
@@ -1624,6 +1634,34 @@ static const std::array<float, 23>& namHalfBand()
     return h;
 }
 
+// [2026-08-01 r26] MESSAGE THREAD ONLY: size the channel-FX delay lines for this slot's type
+// so the render never assign()s (= mallocs) on the audio thread (the five inline resizes were
+// audio-thread allocations). The resize runs under sampleLock - renderInto TRY-locks it for the
+// whole block, so a block landing mid-resize just skips (the documented sample-swap tolerance);
+// the render falls back to DRY when the line is not sized yet. Called from refreshChFxAssets
+// (= every type-pick / load / clearSound site already routes through it) + prepareToPlay (rate
+// changes). NO blanket pre-size across patterns (the ~130 MB lazy-KS lesson).
+void DrumChannel::ensureChFxBuffers(int fx, int type)
+{
+    if (fx < 0 || fx >= 3) return;
+    int len = 0;
+    switch (type)
+    {
+        case ChFxResonator:                  len = juce::jmax(64, (int) (sr / 25.0));  break;   // reaches ~25 Hz
+        case ChFxFlanger: case ChFxFlangerS: len = juce::jmax(64, (int) (0.012 * sr)); break;
+        case ChFxRotary:  case ChFxRotaryS:  len = juce::jmax(64, (int) (0.006 * sr)); break;
+        case ChFxTape:    case ChFxTapeS:    len = juce::jmax(64, (int) (0.008 * sr)); break;
+        case ChFxChorus:  case ChFxChorusS:  len = juce::jmax(64, (int) (0.06  * sr)); break;
+        default: return;   // types with no delay line (their state is fixed-size arrays)
+    }
+    if ((int) chFxDL[fx].size() != len)
+    {
+        const juce::ScopedLock sl2 (sampleLock);   // the audio thread try-locks around the whole render
+        chFxDL[fx].assign((size_t) len, 0.0f); chFxDR[fx].assign((size_t) len, 0.0f);
+        chFxW[fx] = 0; chFxPhs[fx] = 0.0;
+    }
+}
+
 // [2026-07-18] NAM/CAB asset loader (MESSAGE THREAD). (Re)loads whatever chFxType[fx] +
 // chFxFile[fx] name: NAM Amp -> the wrapper (prewarm runs here, tens of ms); Cab IR -> a
 // prepared juce::dsp::Convolution (its loadImpulseResponse resamples + swaps safely). A type
@@ -1632,6 +1670,7 @@ void DrumChannel::refreshChFxAssets(int fx)
 {
     if (fx < 0 || fx >= 3) return;
     const int type = chFxType[fx];
+    ensureChFxBuffers(fx, type);   // [2026-08-01 r26] size the delay line here too - every type-change site already calls this
     const double hostR  = engineOS > 0 ? sr / (double) engineOS : sr;
     const int    engBlk = juce::jmax(64, (int) namMono.size());   // sized in prepareToPlay
 
@@ -1722,15 +1761,25 @@ void DrumChannel::refreshMsRig()
 
 // [2026-07-19] Re-derive every zone's AUTO-loop region (message thread). Deterministic, so it runs
 // on load and on the Loop toggle - no per-zone data is persisted, only slots[].msLoopOn.
+// [2026-08-01 r26] split: msRebuildLoops = the slot-facing face (now IDEMPOTENT - derivation is
+// deterministic, a set already derived never re-derives, which also makes the editor toggle safe
+// on SHARED sets); msDeriveLoops = the body, so the FRESH-load path can run it on the NEW local
+// set BEFORE publishing (derive on the NEW set, never the outgoing one - DECISIONS #220's inverse).
 void DrumChannel::msRebuildLoops(int slot)
 {
     if (slot < 0 || slot >= NUM_SLOTS || msSet[slot] == nullptr) return;
+    if (msSet[slot]->loopsDerived) return;   // [2026-08-01 r26] already derived (deterministic) - no live-set mutation
+    msDeriveLoops(*msSet[slot]);
+}
+
+void DrumChannel::msDeriveLoops(MsSet& set)
+{
     // [2026-07-21 r15] RATE BUG: zone buffers are decoded at HOST rate, but `sr` here is the 2x
     // engine rate - the period search ran an octave off. Divide engineOS out (the render's
     // sr / engineOS convention everywhere else).
     const double srSafe = sr > 0 ? sr : 96000.0;
     const double sr2 = engineOS > 0 ? srSafe / (double) engineOS : srSafe;
-    for (auto& z : msSet[slot]->zones)
+    for (auto& z : set.zones)
     {
         // [2026-07-21 r15] compute into LOCALS, assign LAST - shared sets are read live by other
         // channels' audio threads; the old pre-zero left a no-loop interim mid-rebuild.
@@ -1739,7 +1788,7 @@ void DrumChannel::msRebuildLoops(int slot)
             has = msFindLoop(z.layers.back().buf, sr2, lo, hi);   // loudest layer
         z.loopLo = lo; z.loopHi = hi; z.hasLoop = has;
     }
-    msSet[slot]->loopsDerived = true;   // [2026-07-21 r15] gates the registry-hit re-derive
+    set.loopsDerived = true;   // [2026-07-21 r15] gates the registry-hit re-derive
 }
 
 // [2026-07-19] SIDECAR: the instrument folder's optional, human-readable settings file - gain,
@@ -2765,6 +2814,11 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
         // unmute (belt + braces with the fireEvent skip; also covers voices started BEFORE the
         // mute was toggled, and live-keys voices).
         for (auto& v : voices) v.playHead = -1.0;
+        // [2026-08-01 r26] mute = HARD silence (documented design): drop the channel-FX engage
+        // flags NOW so the stale delay-line audio can never pre-echo on unmute (the next engage
+        // runs the clean-start path).
+        chFxRun[0] = chFxRun[1] = chFxRun[2] = false;
+        chFxTailSamp = 0;
         feedSilence(); return;
     }
 
@@ -2774,7 +2828,28 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
 
     bool anyActive = false;
     for (auto& v : voices) if (v.active()) { anyActive = true; break; }
-    if (!anyActive) { feedSilence(); return; }
+    // [2026-08-01 r26] CHANNEL FX ACROSS SILENCE: the bare !anyActive early-return froze the FX
+    // section with chFxRun[] still TRUE - delay lines held stale audio (a pre-echo GHOST on the
+    // next hit, because the engage-clear was skipped) and the NAM/cab convolution tails hard-
+    // stopped. Now the render keeps running on silence for a short TAIL window after the last
+    // voice dies (the smoothed amounts + lines + convolution flush), then clears chFxRun[] when
+    // truly dormant so the next engage does the clean-start path. Channels with no channel FX /
+    // rig engaged still return immediately = zero cost for plain channels.
+    if (anyActive)
+        chFxTailSamp = (int) (sr * 1.5);   // ~1.5 s window (covers the resonator ring + cab tails)
+    else
+    {
+        const bool fxTail = chFxTailSamp > 0
+                            && (chFxRun[0] || chFxRun[1] || chFxRun[2]
+                                || msRigNamLive.load(std::memory_order_acquire)  != nullptr
+                                || msRigConvLive.load(std::memory_order_acquire) != nullptr);
+        if (! fxTail)
+        {
+            chFxRun[0] = chFxRun[1] = chFxRun[2] = false;   // dormant: next engage = clean start
+            feedSilence(); return;
+        }
+        chFxTailSamp = juce::jmax(0, chFxTailSamp - numSamples);
+    }
 
     // ===================== SLOT-BASED RENDERING =====================
     // slots[] are now authoritative (the UI edits them directly). They are filled
@@ -4899,7 +4974,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     // samples/sample, the delay-line precedent) so note changes swoop, never click.
                     // Loop = fb through a ~4 kHz damper = string-like ring; anti-gunshot clamps kept.
                     const int rlen = juce::jmax(64, (int) (sr / 25.0));   // reaches ~25 Hz
-                    if ((int) chFxDL[fx].size() != rlen) { chFxDL[fx].assign((size_t) rlen, 0.0f); chFxDR[fx].assign((size_t) rlen, 0.0f); chFxW[fx] = 0; chFxPhs[fx] = 0.0; }
+                    if ((int) chFxDL[fx].size() != rlen) break;   // [2026-08-01 r26] line not sized yet (ensureChFxBuffers, message thread) - DRY fallback, the audio thread never allocates
                     const double f0r  = juce::jlimit(30.0, 4000.0, (double) resoTrackHz * std::pow(2.0, ((double) ch1 - 0.5) * 2.0));
                     const double dTgt = juce::jlimit(2.0, (double) rlen - 4.0, sr / f0r);
                     double dCur = chFxPhs[fx] <= 0.0 ? dTgt : chFxPhs[fx];   // chFxPhs = the smoothed delay here
@@ -4998,7 +5073,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 case ChFxFlanger:
                 {   // swept short delay + feedback (jet sweep); CHARACTER = speed + bite (0.5 = old 0.20 Hz / 0.7 fb)
                     const int flen = juce::jmax(64, (int) (0.012 * sr));
-                    if ((int) chFxDL[fx].size() != flen) { chFxDL[fx].assign((size_t) flen, 0.0f); chFxDR[fx].assign((size_t) flen, 0.0f); chFxW[fx] = 0; chFxPhs[fx] = 0.0; }
+                    if ((int) chFxDL[fx].size() != flen) break;   // [2026-08-01 r26] not sized yet (ensureChFxBuffers) - DRY fallback
                     int w = chFxW[fx]; double ph = chFxPhs[fx];
                     const double dPh   = 2.0 * kPi * (typeSync ? syncHz : 0.20 * std::pow(4.0, 2.0 * (double) ch1 - 1.0)) / sr;   // free: 0.05..0.8 Hz
                     const float  baseS = (float) (0.0010 * sr), depthS = (float) (0.0040 * sr);   // 1..5 ms sweep
@@ -5136,7 +5211,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     // delay) + AM + pan; the ROTOR (lows) spins at 0.34x - gentle AM + slight pan.
                     // CHARACTER = speed (0.7 Hz chorale .. 7 Hz tremolo). Amount = intensity.
                     const int flen = juce::jmax(64, (int) (0.006 * sr));
-                    if ((int) chFxDL[fx].size() != flen) { chFxDL[fx].assign((size_t) flen, 0.0f); chFxDR[fx].assign((size_t) flen, 0.0f); chFxW[fx] = 0; chFxPhs[fx] = 0.0; }
+                    if ((int) chFxDL[fx].size() != flen) break;   // [2026-08-01 r26] not sized yet (ensureChFxBuffers) - DRY fallback
                     int w = chFxW[fx]; double ph = chFxPhs[fx]; double phR = chFxPhs2[fx];   // rotor = its OWN accumulator (non-integer 0.34x of a wrapped phase JUMPED at every wrap = clicks)
                     const double hornHz = typeSync ? syncHz : 0.7 * std::pow(10.0, (double) ch1);   // free: 0.7..7 Hz
                     const double dPh = 2.0 * kPi * hornHz / sr;
@@ -5180,7 +5255,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                     // pitch wobble (wow + a faster flutter) + gentle HF softening. CHARACTER = wobble
                     // speed. NOTE: adds a small constant delay (~3 ms) while engaged (disclosed).
                     const int flen = juce::jmax(64, (int) (0.008 * sr));
-                    if ((int) chFxDL[fx].size() != flen) { chFxDL[fx].assign((size_t) flen, 0.0f); chFxDR[fx].assign((size_t) flen, 0.0f); chFxW[fx] = 0; chFxPhs[fx] = 0.0; }
+                    if ((int) chFxDL[fx].size() != flen) break;   // [2026-08-01 r26] not sized yet (ensureChFxBuffers) - DRY fallback
                     int w = chFxW[fx]; double ph = chFxPhs[fx]; double phF = chFxPhs2[fx];   // flutter = its OWN accumulator (see the header note)
                     const double rate = typeSync ? syncHz : 0.8 * std::pow(4.0, 2.0 * (double) ch1 - 1.0);   // free: 0.2..3.2 Hz wow
                     const double dPh  = 2.0 * kPi * rate / sr;
@@ -5248,7 +5323,7 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
                 default:
                 {   // 3-voice stereo ensemble; CHARACTER = rate + depth (0.5 = old 0.36 Hz / 3.5 ms)
                     const int dlen = juce::jmax(64, (int) (0.06 * sr));
-                    if ((int) chFxDL[fx].size() != dlen) { chFxDL[fx].assign((size_t) dlen, 0.0f); chFxDR[fx].assign((size_t) dlen, 0.0f); chFxW[fx] = 0; chFxPhs[fx] = 0.0; }
+                    if ((int) chFxDL[fx].size() != dlen) break;   // [2026-08-01 r26] not sized yet (ensureChFxBuffers) - DRY fallback
                     int w = chFxW[fx]; double ph = chFxPhs[fx];
                     const double dPh    = 2.0 * kPi * (typeSync ? syncHz : 0.36 * std::pow(4.0, 2.0 * (double) ch1 - 1.0)) / sr;   // free: 0.09..1.44 Hz
                     const float  baseS  = (float) (0.011 * sr);

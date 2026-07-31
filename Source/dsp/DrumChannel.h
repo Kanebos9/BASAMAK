@@ -805,6 +805,10 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     float  chFiltIc1[2][2] = {}, chFiltIc2[2][2] = {}; // stereo SVF state per filter
     float  chFiltGm[2] = { -1.0f, -1.0f }, chFiltKm[2] = { -1.0f, -1.0f };   // smoothed coeffs (-1 = snap)
     bool   chFxRun[3] = {};                          // engage tracking: off->on clears that slot's state (no stale burst)
+    int    chFxTailSamp = 0;                         // [2026-08-01 r26] channel-FX TAIL countdown (engine samples): re-seeded
+                                                     // while voices sound; after the last voice dies the FX/rig section keeps
+                                                     // running this long (lines + convolution flush), then chFxRun[] clears
+                                                     // so re-engage does the clean-start path (kills the pre-echo ghost)
     // [2026-07-18] NAM AMP + CAB IR assets, per FX slot. Message thread loads + owns via the
     // Hold/Old shared_ptr pair (Old = graveyard: the audio thread may still be inside the retired
     // instance this block - the MsSet precedent); the audio thread reads ONLY the atomic pointer.
@@ -817,6 +821,15 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     std::vector<float> namMono, namHost;             // NAM scratch: engine-rate mono + host-rate half
     float namDnHist[3][24] = {}, namUpHist[3][24] = {};   // 23-tap halfband FIR history (down / up)
     void refreshChFxAssets(int fx);                  // MESSAGE THREAD: (re)load by chFxType+chFxFile
+    // [2026-08-01 r26] MESSAGE THREAD ONLY (the ensureKsBuffers idea, resize-tolerant): size the
+    // channel-FX delay lines for the slot's type BEFORE the audio thread needs them - the render
+    // used to assign() (= malloc) the line inline on first use, an audio-thread allocation. The
+    // resize runs under sampleLock (renderInto try-locks it for the whole block, so a concurrent
+    // block just skips - the sample-swap tolerance); the render falls back to DRY (skips the
+    // effect) when the needed line is not sized yet. Called from refreshChFxAssets (= every type
+    // pick / project+mix load / clearSound site) and prepareToPlay (rate changes). Deliberately
+    // NOT pre-sized for all lines/patterns (the ~130 MB lazy-KS lesson).
+    void ensureChFxBuffers(int fx, int type);
     // [2026-07-19] INSTRUMENT RIG (user design): a DEDICATED NAM amp + Cab IR pair owned by the
     // Multisample Instruments panel - the 3 generic Channel FX slots stay free. Runs on the
     // summed channel BEFORE FX A/B/C (amp first, then your effects), same halfband machinery.
@@ -833,6 +846,11 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     void applyMsSidecar(int slot, const juce::File& folder, int nVoices);   // [2026-07-20] slot-side sidecar
                                                      // (gain/reverse/loop/env/rig) - shared-load path reuses it
     void msRebuildLoops(int slot);                   // [2026-07-19] per-zone AUTO-loop (deterministic; on load + toggle)
+                                                     // [2026-08-01 r26] idempotent: early-returns once loopsDerived
+    struct MsSet;                                    // defined below (multisample section)
+    void msDeriveLoops(MsSet& set);                  // [2026-08-01 r26] the derivation body - fresh loads run it on the
+                                                     // NEW LOCAL set BEFORE publishing (derive on the NEW set, never the
+                                                     // outgoing one - DECISIONS #220's inverse race)
     // [2026-07-19] MULTISAMPLE SCALE/CHORD (option B): at note-on, pick each diatonic chord tone's
     // OWN nearest zone (buffer/loop/normalize/varispeed) into the voice's per-tone arrays. Called
     // from trigger() (steps/draw) + keyDown() (keys) when a multisample slot has scaleOn.
