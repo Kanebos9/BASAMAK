@@ -33,7 +33,7 @@ Go to the [Releases](https://github.com/Kanebos9/BASAMAK/releases) page, downloa
 ## Building from source
 
 ### 1. Dependencies
-- **CMake ≥ 3.22** and a C++17 compiler (macOS: Xcode CLT · Windows: Visual Studio 2022 · Linux: g++/clang).
+- **CMake ≥ 3.22** and a **C++20-capable** compiler (macOS: Xcode CLT · Windows: Visual Studio 2022 · Linux: g++/clang) — the bundled `nam_core` static library builds at C++20; the plugin code itself is C++17.
 - **JUCE 8** — cloned separately (not vendored here): `git clone https://github.com/juce-framework/JUCE`
 - **SoundTouch** (time-stretch) is **bundled** in `external/soundtouch` and compiled in automatically.
 
@@ -50,7 +50,7 @@ cmake -B build -DJUCE_DIR=/path/to/JUCE -DDAVULSEQ_RELEASE=ON
 cmake --build build --config Release --parallel
 ```
 (JUCE at `~/JUCE`? You can omit `-DJUCE_DIR`. macOS universal: add `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"`.)
-Builds land in `build/DrumSequencer_artefacts/Release/` as `BASAMAK.vst3` / `BASAMAK.component` / the Standalone app.
+Builds land in `build/BASAMAK_artefacts/Release/` as `BASAMAK.vst3` / `BASAMAK.component` / the Standalone app.
 
 ### 3. Install
 Copy the built plugin to your plugin folder, or use the scripts in `Distribution/scripts/`:

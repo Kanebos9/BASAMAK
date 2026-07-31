@@ -71,6 +71,10 @@ jobs:
           cp -R Resources/TouchOSC "$OUT/TouchOSC"                                       # TouchOSC control-surface template
           cp -R "Resources/launchpad+launchkey custom midi modes" "$OUT/launchpad+launchkey custom midi modes"   # Novation custom modes (.syx) pairing with the factory MIDI map
           echo "$VER" > "$OUT/VERSION"
+          # [2026-08-01 r26] ship the license + third-party attributions + the style-file spec in the zip root
+          cp LICENSE "$OUT/" 2>/dev/null || true
+          cp ATTRIBUTIONS.md "$OUT/" 2>/dev/null || true
+          cp docs/STYLES.md "$OUT/" 2>/dev/null || true
           cp Distribution/INSTALL.txt "$OUT/" 2>/dev/null || true
           if [ "${{ matrix.name }}" = "macOS" ]; then
             cp Distribution/scripts/install-macos.command "$OUT/Install BASAMAK.command"; chmod +x "$OUT/Install BASAMAK.command"
@@ -107,6 +111,10 @@ jobs:
           Copy-Item Resources/TouchOSC "$out\TouchOSC" -Recurse      # TouchOSC control-surface template
           Copy-Item "Resources/launchpad+launchkey custom midi modes" "$out\launchpad+launchkey custom midi modes" -Recurse   # Novation custom modes (.syx) pairing with the factory MIDI map
           Copy-Item Distribution/scripts/install-windows.bat "$out\"
+          # [2026-08-01 r26] ship the license + third-party attributions + the style-file spec in the zip root
+          Copy-Item LICENSE "$out\" -ErrorAction SilentlyContinue
+          Copy-Item ATTRIBUTIONS.md "$out\" -ErrorAction SilentlyContinue
+          Copy-Item docs/STYLES.md "$out\" -ErrorAction SilentlyContinue
           Copy-Item Distribution/INSTALL.txt "$out\" -ErrorAction SilentlyContinue
           Compress-Archive -Path $out -DestinationPath "$out.zip" -Force
 

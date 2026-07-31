@@ -84,4 +84,6 @@ mel.density 1.0         # topline onset-budget multiplier (trap ~0.55, reggaeton
 - **With a real groove**: your context always wins - the style only *biases* where onsets
   prefer to land; the pocket/snare/kick disciplines still move anything that fights your drums.
 - A style needs none of these sections: whatever is missing falls back to the engine's generic
-  rules. Start by copying a factory style's text from `Source/dsp/GenStyle.h` and editing.
+  rules. The 8 factory styles are built into the plugin; to make your own, write any
+  `.basamakstyle` file in this format into `Documents/BASAMAK/Styles/` and it appears in the
+  Style picker (the example above is a complete working starting point).
