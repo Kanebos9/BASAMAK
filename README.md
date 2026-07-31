@@ -6,9 +6,9 @@
 
 <img width="1440" height="764" alt="Screenshot 2026-07-14 at 09 58 20" src="https://github.com/user-attachments/assets/bab7d80c-a6cb-47d0-9cfa-e1d312e60874" />
 
-It comes as VST3, AU (macOS), and Standalone for macOS, Windows, and Linux. Its built-in sounds are **synthesized** rather than sampled. But you can load sample as well. It also comes with a CC0 sample library.
+It comes as VST3, AU (macOS), and Standalone for macOS, Windows, and Linux. Its built-in sounds are both **synthesized** and sampled (it has multisample recording option too in case users want to create their own instrument in it.).
 
-There are different sound sources, they mainly come from modal, karplus strong, granular and a very flexible oscillator (it has additive, wavetable, FM features too)
+There are different sound sources, they mainly come from modal, karplus strong, granular, multisample and a very flexible oscillator (it has additive, wavetable, FM features too)
 
 Created by **Oğuzhan Yazıcı**.
 
