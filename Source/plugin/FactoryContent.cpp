@@ -3247,6 +3247,7 @@ juce::StringArray presetNames()
 // the previous preset). Then the chosen groove is laid onto pattern 0.
 static void resetAll(Sequencer& s)
 {
+    s.drums.restore({});
     for (int p = 0; p < Sequencer::NUM_PATTERNS; ++p)
     {
         auto& P = s.patterns[p];

@@ -216,6 +216,8 @@ void DrumSequencerProcessor::previewFile(const juce::File& f)
 void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                                            juce::MidiBuffer& midi)
 {
+    const juce::ScopedTryLock stateLock(getCallbackLock());
+    if (!stateLock.isLocked()) { audio.clear(); midi.clear(); return; }
     juce::ScopedNoDenormals noDenormals;
     juce::AudioProcessLoadMeasurer::ScopedTimer cpuTimer(loadMeasurer, audio.getNumSamples());   // [2026-07-14 01:50]
     // [2026-07-18] MULTISAMPLE RECORDING TAP: mirror the INPUT bus into the ring BEFORE the
@@ -250,6 +252,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
     // context); local to the audio thread, so the message-thread ring stays single-producer.
     KeyQEvt midiKeyEvts[64]; int nMidiKeyEvts = 0;
 
+    sequencer.drums.beginBlock();
     //-- Handle MIDI input (MIDI learn + notes -> keys + CC routing)
     for (auto meta : midi)
     {
@@ -277,6 +280,12 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             lastAtMs.store(juce::Time::getMillisecondCounter(), std::memory_order_relaxed);
         }
 
+        if ((sequencer.drums.enabled || (sequencer.drums.learnChannel >= 0 && msg.isNoteOn())) && msg.isNoteOnOrOff()) {
+            if (msg.isNoteOn())
+                sequencer.drums.noteOn(msg.getNoteNumber(),msg.getChannel(),msg.getVelocity(),
+                    juce::jlimit(0, audio.getNumSamples()-1,meta.samplePosition)*kEngineOS);
+            continue; // drum note-offs never truncate natural decay or reach the keyboard
+        }
         // MIDI learn
         if (midiLearn.processMidiMessage(msg))
             continue;
@@ -386,6 +395,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
     //   events. In "this pattern" modes every pattern LOOP is its own take: at each loop boundary
     //   a marker is logged and the channel restarts CLEAN for the next pass. A key held across a
     //   step boundary AUTO-MERGES the new step (one long note - see DrumChannel::stepMerge).
+    if (!sequencer.drums.enabled)
     {
         const int  chIdx = juce::jlimit(0, Sequencer::NUM_CHANNELS - 1, lastSelectedChannel);
         keysSampleClock += (uint64_t) audio.getNumSamples();   // [2026-07-19] Let Ring strum-window clock (per-block granular ~ block ms; the window is ~90 ms >> a block)
@@ -1122,6 +1132,14 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             auxPtrs[i]  = &auxViews[i];
         }
     }
+    if (sequencer.drums.enabled) {
+        sequencer.recordSuppressCh.store(-1); sequencer.recordSuppressCh2.store(-1);
+        sequencer.recordLoopLock.store(sequencer.drums.recording && !sequencer.drums.followChain);
+        if (sequencer.drums.recording && sequencer.drums.inputCount > 0 && !sequencer.isCurrentlyPlaying && !sequencer.dawSync)
+            sequencer.startStandalone();
+        // Discard stale on-screen keyboard messages while its controls are disabled.
+        keyQTail.store(keyQHead.load());
+    }
     reverbSendOS.clear(); delaySendOS.clear();   // per-channel send sums accumulate here (OS rate)
     reverbSendOSB.clear(); delaySendOSB.clear(); // bus B sums
     // (The sequencer computes each rendered pattern's OWN anySolo internally - passing the
@@ -1172,13 +1190,15 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
 
         for (auto& e : events)
         {
-            auto& ch = sequencer.patterns[sequencer.playPattern].channels[e.channel];
+            const int ep = e.pattern >= 0 ? e.pattern : sequencer.playPattern;
+            auto& ch = sequencer.patterns[ep].channels[e.channel];
+            if (ch.mute || (Sequencer::anySoloIn(sequencer.patterns[ep]) && !ch.solo)) continue;
             if (! ch.midiOut) continue;
             const int midiCh = juce::jlimit(1, 16, ch.midiOutChannel);   // per-channel MIDI out channel
             // PIANO-ROLL notes emit MIDI too: the roll is C4-ABSOLUTE (row 0 = C4 = MIDI 60), so a
             // note plays its OWN pitch directly (the base-note picker is disabled + ignored in the
             // roll - you pick pitches on the grid). Step mode uses the base note + per-step pitch.
-            const int note  = e.isDraw ? juce::jlimit(0, 127, 60 + juce::roundToInt(e.drawPitch))
+            const int note  = e.drumHit ? juce::jlimit(0,127,ch.midiNote) : e.isDraw ? juce::jlimit(0, 127, 60 + juce::roundToInt(e.drawPitch))
                                        : juce::jlimit(0, 127, ch.midiNote + juce::roundToInt(ch.stepPitch[e.step]));
             const float v   = e.isDraw ? juce::jlimit(0.0f, 1.0f, e.drawVel)
                                        : juce::jlimit(0.0f, 1.0f, ch.stepVel[e.step] * e.velScale);
@@ -1194,7 +1214,8 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
             // Note length: piano-roll notes carry their own gate (host-rate samples); steps use the
             // per-step Length as a fraction of the step.
             int len;
-            if (e.isDraw) len = juce::jmax(1, (int) (e.gate / kEngineOS));
+            if (e.drumHit) len = juce::jmax(1,(int)(currentSampleRate * 0.01));
+            else if (e.isDraw) len = juce::jmax(1, (int) (e.gate / kEngineOS));
             else {
                 const double samplesPerStep = barSamples / juce::jmax(1, ch.numSteps);
                 const float  gl = juce::jlimit(0.0f, 1.0f, ch.stepNoteLen[e.step]);
@@ -1578,10 +1599,12 @@ void DrumSequencerProcessor::routeCC(const juce::MidiMessage& msg)
 
     juce::String pid = midiLearn.getParamForCC(cc, mch);
     if (pid.isEmpty()) return;
+    if (sequencer.drums.enabled && (pid.startsWith("ui_mode_") || pid.startsWith("ui_selstep_")
+        || pid.startsWith("ui_patstep_") || pid.contains("_step"))) return;
 
     // Global controls (play/stop are global; switching patterns won't stop them)
     if (pid == "global_play")       { if (on && !sequencer.dawSync) sequencer.startStandalone(); return; }
-    if (pid == "global_stop")       { if (on && !sequencer.dawSync) { sequencer.stopStandalone(); silenceRequest.store(true); } return; }
+    if (pid == "global_stop")       { if (on && !sequencer.dawSync) standaloneStop(); return; }
     if (pid == "global_pause")      { if (on) standalonePause();                                  return; }
     if (pid == "ui_sel_stopRing")   { if (on) stopRingRequest.store(true);                         return; }   // [2026-07-19] Let Ring: damp the ring (100 ms) - the live palm-mute
     if (pid == "global_dawsync")    { if (on) sequencer.dawSync = !sequencer.dawSync;             return; }
@@ -2137,6 +2160,18 @@ juce::File DrumSequencerProcessor::exportMidiFile(int channel)
     seq.addEvent(juce::MidiMessage::timeSignatureMetaEvent(juce::jmax(1, currentTimeSigNum),
                                                            juce::jmax(1, currentTimeSigDen)), 0.0);
 
+    if(sequencer.drums.enabled) {
+        const juce::ScopedLock lock(getCallbackLock());const auto& d=sequencer.drums;
+        int head=sequencer.groupHead(sequencer.currentPattern),end=sequencer.groupEnd(head);
+        for(int p=head;p<=end;++p)for(int i=0;i<d.patterns[(size_t)p].count;++i){const auto& h=d.patterns[(size_t)p].hits[(size_t)i];
+            const int n=d.notes[(size_t)h.channel]>=0?d.notes[(size_t)h.channel]:sequencer.patterns[p].channels[h.channel].midiNote;
+            int mc=d.midiChannels[(size_t)h.channel]>0?d.midiChannels[(size_t)h.channel]:10;
+            const double t=(p-head+h.pos)*barTicks;seq.addEvent(juce::MidiMessage::noteOn(mc,n,(juce::uint8)juce::jlimit(1,127,(int)std::lround(h.velocity*127))),t);
+            seq.addEvent(juce::MidiMessage::noteOff(mc,n),t+juce::jmax(1.0,barTicks/384.0));}
+        seq.updateMatchedPairs();midiFile.addTrack(seq);
+        auto file=juce::File::getSpecialLocation(juce::File::tempDirectory).getNonexistentChildFile("BASAMAK-kit", ".mid");
+        juce::FileOutputStream out(file);if(out.openedOk())midiFile.writeTo(out);return file;
+    }
     const int ch = juce::jlimit(0, Sequencer::NUM_CHANNELS - 1, channel);
     // MERGED GROUP: export every bar of the group back to back (bar b at tick offset b * barTicks).
     const int gHead = sequencer.groupHead(sequencer.currentPattern);
@@ -2216,6 +2251,12 @@ juce::File DrumSequencerProcessor::exportMidiFile(int channel)
             {
                 const auto& nt = chn.drawNotes[ni];
                 const auto vel = (juce::uint8) juce::jlimit(1, 127, (int) nt.vel >> 1);
+                if(nt.drumHit) {
+                    const int note=chn.midiOut?chn.midiNote:(sequencer.drums.notes[(size_t)ch]>=0?sequencer.drums.notes[(size_t)ch]:chn.midiNote);
+                    seq.addEvent(juce::MidiMessage::noteOn(midiCh,note,vel),tickOff+nt.start*colTicks);
+                    seq.addEvent(juce::MidiMessage::noteOff(midiCh,note),tickOff+(nt.start+1)*colTicks);
+                    continue;
+                }
                 emitNotes((int) nt.semi, vel, (double) nt.start * colTicks,
                           (double) (nt.start + nt.len) * colTicks, (int) nt.slot);   // per-slot voiced + slot-tag aware
             }
@@ -2719,9 +2760,12 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
 // readChannel (so sounds, EQ, FX, steps + routing all copy), plus the per-pattern settings.
 void DrumSequencerProcessor::copyPattern(int src, int dst)
 {
+    const juce::ScopedLock lock(getCallbackLock());
+    if(sequencer.drums.recording)return;
     if (src == dst || src < 0 || dst < 0
         || src >= Sequencer::NUM_PATTERNS || dst >= Sequencer::NUM_PATTERNS) return;
 
+    if(sequencer.drums.enabled)sequencer.drums.patterns[(size_t)dst]=sequencer.drums.patterns[(size_t)src];
     auto& S = sequencer.patterns[src];
     auto& D = sequencer.patterns[dst];
     // [2026-07-20, user order] pattern copy moves CONTENT, never FLOW: play mode / chain /
@@ -2740,6 +2784,16 @@ void DrumSequencerProcessor::copyPattern(int src, int dst)
 
 void DrumSequencerProcessor::copyChannel(int pat, int src, int dst)
 {
+    const juce::ScopedLock lock(getCallbackLock());
+    if(sequencer.drums.recording)return;
+    if(sequencer.drums.enabled && src!=dst && pat>=0&&pat<64&&src>=0&&src<16&&dst>=0&&dst<16) {
+        auto& lane=sequencer.drums.patterns[(size_t)pat];int nSrc=0,nDst=0;
+        for(int i=0;i<lane.count;++i){nSrc+=lane.hits[(size_t)i].channel==src;nDst+=lane.hits[(size_t)i].channel==dst;}
+        if(lane.count-nDst+nSrc>LiveDrumming::MAX_HITS)return;
+        for(int i=lane.count-1;i>=0;--i)if(lane.hits[(size_t)i].channel==dst)lane.erase(i);
+        const int count=lane.count;for(int i=0;i<count;++i)if(lane.hits[(size_t)i].channel==src){auto hit=lane.hits[(size_t)i];hit.channel=dst;lane.add(hit);}
+    }
+
     if (src == dst || pat < 0 || pat >= Sequencer::NUM_PATTERNS
         || src < 0 || dst < 0 || src >= Sequencer::NUM_CHANNELS || dst >= Sequencer::NUM_CHANNELS) return;
 
@@ -2775,6 +2829,7 @@ void DrumSequencerProcessor::copyChannel(int pat, int src, int dst)
 
 juce::ValueTree DrumSequencerProcessor::captureStateTree()
 {
+    const juce::ScopedLock lock(getCallbackLock());
     juce::ValueTree state("DrumSeqState");
 
     state.setProperty("perBarModes", true, nullptr);   // [1.5.0] merged groups = per-bar play modes (migration stamp)
@@ -2897,6 +2952,8 @@ juce::ValueTree DrumSequencerProcessor::captureStateTree()
         state.appendChild(patState, nullptr);
     }
 
+    state.appendChild(sequencer.drums.save(), nullptr);
+    state.setProperty("editorScale", editorScale, nullptr);
     state.appendChild(midiLearn.saveState(), nullptr);
 
     return state;
@@ -2923,6 +2980,10 @@ void DrumSequencerProcessor::setStateInformation(const void* data, int sizeInByt
 
 void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
 {
+    const juce::ScopedLock lock(getCallbackLock());
+    sequencer.drums.restore(state.getChildWithName("LiveDrumming"));
+    editorScale = juce::jlimit(0.4,2.0,(double)state.getProperty("editorScale",0.85));
+    keysRecording.store(false); sequencer.recordLoopLock.store(false);
     sequencer.dawSync        = (bool)state.getProperty("dawSync",  false);
     sequencer.standaloneBpm  = (float)state.getProperty("bpm",     120.0f);
     sequencer.timeSigNum     = (int)  state.getProperty("tsNum",   4);

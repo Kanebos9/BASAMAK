@@ -953,7 +953,8 @@ juce::String StepGridComponent::getTooltip()
     const int dch = drawMagCh >= 0 ? drawMagCh
                   : firstRow + juce::jmax(0, getMouseXYRelative().y) / juce::jmax(1, rowH);
     if (dch >= 0 && dch < NCH && drawMode[dch])
-        return juce::String("PIANO ROLL (free notes; pitch 0 = C4 (middle C), always).\n\n"
+        return juce::String("PIANO ROLL (free notes; pitch 0 = C4, except channel-tuned drum hits).\n\n"
+                            "- Converted DRUM HITS use the channel's Base Freq and natural decay. Right-click > Piano-roll pitch returns a hit to melodic editing. Moving its pitch also returns it to melodic editing.\n"
                             "- LEFT-drag draws/moves notes; RIGHT-drag erases; the magnifier (top-left) opens the "
                             "BIG editor.\n"
                             "- The colour buttons pick which SOUND SLOT new notes play: orange = both, yellow = "
@@ -1482,6 +1483,7 @@ void StepGridComponent::mouseDrag(const juce::MouseEvent& e)
             {
                 auto& n = drawNotes[ch2][i];
                 n.start = (int16_t) juce::jlimit(0, totalCols() - 1, (int) prOrigStart[i] + dCol);
+                if(dSemi != 0) n.drumHit = 0;
                 n.semi  = (int8_t)  juce::jlimit(-DrumChannel::PITCH_RANGE, DrumChannel::PITCH_RANGE, (int) prOrigSemi[i] + dSemi);
             }
         if (prIdx >= 0 && prIdx < drawNoteCount[ch2]) { drawReadSemi = drawNotes[ch2][prIdx].semi;
@@ -1501,7 +1503,9 @@ void StepGridComponent::mouseDrag(const juce::MouseEvent& e)
         if (prMode == 1)   // MOVE: pitch + time (start snaps to the grid; length may cross bar lines)
         {
             n.start = (int16_t) juce::jlimit(0, totalCols() - 1, prSnap(juce::jmax(0, col - prGrabDCol)));
+            const int oldPitch = n.semi;
             n.semi  = (int8_t) juce::jlimit(-DrumChannel::PITCH_RANGE, DrumChannel::PITCH_RANGE, yToDrawSemi(lane, e.getPosition().y, drawRange, drawViewCenter) - prGrabDSemi);
+            if(n.semi != oldPitch)n.drumHit=0;
             drawReadSemi = n.semi;
             if (onRollPreview) onRollPreview((int) n.semi);   // hear the pitch as you drag
         }
@@ -1650,6 +1654,8 @@ void StepGridComponent::showRollNoteMenu(int ch2, int idx)
     }
     juce::PopupMenu m;
     m.addSectionHeader(sel ? "Selected notes" : "Note");
+    m.addItem(3, "Channel tuning (converted drum hit; natural decay)", true, nn.drumHit != 0);
+    m.addItem(4, "Piano-roll pitch", true, nn.drumHit == 0);
     m.addItem(1, "Gate OFF: ring naturally (like a step)", true, nn.oneShot != 0);
     m.addItem(2, "Gate ON: hold for the note length",       true, nn.oneShot == 0);
     m.addSeparator();
@@ -1722,7 +1728,9 @@ void StepGridComponent::showRollNoteMenu(int ch2, int idx)
                 repaint(); return;
             }
             if (r == 1)      apply(+[](DrumChannel::DrawNote& n, int){ n.oneShot = 1; }, 0);
-            else if (r == 2) apply(+[](DrumChannel::DrawNote& n, int){ n.oneShot = 0; }, 0);
+            else if (r == 2) apply(+[](DrumChannel::DrawNote& n, int){ n.oneShot = 0; n.drumHit = 0; }, 0);
+            else if (r == 3) apply(+[](DrumChannel::DrawNote& n, int){ n.drumHit = n.oneShot = 1; }, 0);
+            else if (r == 4) apply(+[](DrumChannel::DrawNote& n, int){ n.drumHit = 0; }, 0);
             else if (r == 5) apply(+[](DrumChannel::DrawNote& n, int){ n.strumUp = 0; }, 0);
             else if (r == 6) apply(+[](DrumChannel::DrawNote& n, int){ n.strumUp = 1; }, 0);
             else if (r == 20) apply(+[](DrumChannel::DrawNote& n, int){ n.strumPct = 255; }, 0);

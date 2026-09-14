@@ -2149,7 +2149,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         // each pitched slot at its own Base Freq knob via keySemis (user: "TEST should use the
         // Base Freq knob"). Step channels already use the knob - knobBase is a no-op there.
         if (knobBase && drawMode
-            && (sl.engine == SrcOsc || sl.engine == SrcPhys || sl.engine == SrcModal))
+            && (sl.engine == SrcOsc || sl.engine == SrcPhys || sl.engine == SrcModal || sl.engine == SrcGrain))
         {
             const double own = (sl.engine == SrcPhys) ? (double) sl.physFreq : (double) sl.oscFreq;
             const double base = slotBaseHz(s, sl);

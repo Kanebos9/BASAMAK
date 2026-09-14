@@ -120,3 +120,7 @@ Everything else is either at standard, ahead of it, or simpler BY A DECISION THE
 we shipped a naive version of a solved problem - fixed 2026-07-07 (alternating pairs), and this
 document is the standing check so that class of miss doesn't repeat: **when building a NEW
 feature, check this file's reference column / the industry standard FIRST, then build.**
+
+## Live Drumming (1.5.8)
+
+Per-channel MIDI input note/channel assignments with Learn; selection-independent pad routing; one shared instrument-row roll; whole-kit recording and takes; explicit mode conversion or clearing with Undo. MIDI export covers the kit. Window scaling buttons fit the available display. See [setup and behavior](LIVE-DRUMMING.md).

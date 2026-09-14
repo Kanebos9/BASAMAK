@@ -1,7 +1,7 @@
 # BASAMAK - a free, open-source drum & sample step-sequencer plugin (VST3 / AU / Standalone).
 # Copyright (C) 2026 Oguzhan Yazici. Licensed under the GNU AGPL v3 (see LICENSE).
 cmake_minimum_required(VERSION 3.22)
-project(BASAMAK VERSION 1.5.7)   # [2026-08-01] r26 review wave rides in 1.5.7 (unreleased); the USER assigns the next bump
+project(BASAMAK VERSION 1.5.8)   # Live Drumming + explicit window scaling (user-assigned version)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -103,6 +103,7 @@ if(BASAMAK_TESTS)
         target_sources(${T} PRIVATE
             Source/dsp/DrumChannel.cpp
             Source/dsp/Sequencer.cpp
+            Source/dsp/LiveDrumming.cpp
             Source/plugin/FactoryContent.cpp
             tests/${T}.cpp)
         target_include_directories(${T} PRIVATE Source/dsp Source/midi Source/ui Source/plugin)
@@ -122,6 +123,10 @@ target_sources(BASAMAK PRIVATE
     Source/ui/StepGridComponent.cpp
     Source/dsp/DrumChannel.cpp
     Source/dsp/Sequencer.cpp
+    Source/dsp/LiveDrumming.cpp
+    Source/ui/DrumGridComponent.cpp
+    Source/ui/LiveDrummingEditor.cpp
+    Source/plugin/DrumConversion.cpp
     Source/midi/MidiLearnManager.cpp
 )
 
@@ -176,4 +181,14 @@ else()
     else()
         message(STATUS "BASAMAK: SoundTouch NOT found -> time-stretch disabled")
     endif()
+endif()
+
+# Exercises the actual processor and editor as well as the kit engine.
+if(BASAMAK_TESTS)
+    juce_add_console_app(LiveDrumTest)
+    juce_generate_juce_header(LiveDrumTest)
+    target_sources(LiveDrumTest PRIVATE tests/LiveDrumTest.cpp)
+    target_include_directories(LiveDrumTest PRIVATE Source/dsp Source/midi Source/ui Source/plugin)
+    target_link_libraries(LiveDrumTest PRIVATE BASAMAK juce::juce_audio_utils juce::juce_dsp juce::juce_gui_extra)
+    target_compile_definitions(LiveDrumTest PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
 endif()

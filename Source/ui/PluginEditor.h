@@ -1,6 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
+#include "DrumGridComponent.h"
 
 //==============================================================================
 // Draws the 8×N step grid. Steps fill the component's actual width, so the
@@ -2488,6 +2489,8 @@ public:
     void setKeyDim(int midi, bool d)   { kb.setDim(midi, d); }
     void setSplitMark(bool on)         { if (kb.splitMark != on) { kb.splitMark = on; kb.repaint(); } }
 
+    bool drummingUi = false;
+    void setDrumming(bool);
     void paint(juce::Graphics&) override;
     void resized() override;
 private:
@@ -3562,7 +3565,7 @@ public:
     static constexpr int FX_BOX_H  = 206;   // per-slot FX box height (knobs compressed for the 3rd FX row below)
     static constexpr int CHFX_TOP  = 212;   // CHANNEL FX header top (below the FX box)
     static constexpr int CHFX_BOX_H = 126;  // CHANNEL FX box height (212 + 126 = 338 = colH)
-    static constexpr int DESIGN_H = 778;   // detail panel ends at the content (no dead bottom band)
+    static constexpr int DESIGN_H = 826;   // detail panel ends at the content (no dead bottom band)
 
     // How many channel rows the grid shows (4/8/12/16). The engine always has NUM_CHANNELS;
     // this only controls the UI. setVisibleChannels recomputes the layout height + relays out.
@@ -3600,6 +3603,24 @@ private:
     void positionZoomPanel();                 // place/scale the floating panel from zoomRect
     void unzoom();
 
+    DrumGridComponent drumGrid { proc };
+    DrumModePrompt drumModePrompt;
+    juce::TextButton btnLiveDrumming { "LIVE DRUMMING" }, btnWindowMinus { "-" }, btnWindowPlus { "+" };
+    juce::ComboBox drumSnap;
+    juce::TextButton btnDrumQuantize { "Quantize" };
+    juce::Label lblDrumStatus;
+    int drumCountdown = 0, drumGoTicks = 0, drumLastTake = -1;
+    unsigned drumStopSerial = 0;
+    juce::String regularRecTip, regularRecModeTip, regularTakesTip, regularClearTip, regularDragTip;
+    bool drumRecWasPlaying = false, lastDrumEnabled = false;
+    void setupLiveDrumming();
+    void refreshLiveDrumming();
+    void tickLiveDrumming();
+    void requestDrummingSwitch();
+    void startDrumRecord();
+    void stopDrumRecord();
+    void showDrumTakes();
+    void applyWindowScale(double scale);
     //-- Step grid
     StepGridComponent stepGrid;
     StepMagnifierOverlay stepMagOverlay;   // top-most: redraws the magnified step above the top bar/strips
@@ -3744,7 +3765,7 @@ private:
     // ==== KEYS view (on-screen piano). Radio with the sound editor: the KEYS button shows the
     // OTHER view's name. The panel covers everything right of the slot boxes. =================
     KeysPanel        keysPanel { proc.midiLearn };
-    LearnableButton btnKeysView { "KEYS" };            // MIDI = "ui_sel_keysView" [2026-07-15 22:30]
+    LearnableButton btnKeysView { "KEYS/RECORD" };            // MIDI = "ui_sel_keysView" [2026-07-15 22:30]
     bool keysView = false;                     // session-only; the sound editor is the default view
     // Takes live on the PROCESSOR (proc.keysTakes - persisted with the state/preset). The editor
     // ASSEMBLES them from the audio thread's event log: a 0xFF marker = loop boundary = the take

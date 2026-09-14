@@ -30,6 +30,10 @@ Built with [JUCE](https://juce.com). Licensed under the **GNU AGPL v3** (see [`L
 ## Download (for regular users)
 Go to the [Releases](https://github.com/Kanebos9/BASAMAK/releases) page, download the zip for your OS (windows, mac or linux) from the latest release, unzip it, and run the included installer.
 
+## Live Drumming
+
+Version 1.5.8 adds per-channel MIDI input assignments, a shared drum roll, whole-kit recording/takes, and window size buttons. See the [Live Drumming guide](docs/LIVE-DRUMMING.md) for OKTO B setup and mode conversion.
+
 ## Building from source
 
 ### 1. Dependencies

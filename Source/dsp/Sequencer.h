@@ -1,6 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include "DrumChannel.h"
+#include "LiveDrumming.h"
 
 //==============================================================================
 // Timing is tracked as a fractional position within a bar (0..1).
@@ -97,6 +98,7 @@ public:
         MasterFX master;          // per-pattern master FX + output
     };
 
+    LiveDrumming drums;
     Pattern patterns[NUM_PATTERNS];
     int     currentPattern = 0;   // the VIEWED / edited pattern (what the editor shows)
     int     playPattern    = 0;   // the pattern the transport is actually playing (advances on its own)
@@ -120,10 +122,11 @@ public:
     // offset = SAMPLE-ACCURATE position of the hit within this block (at the engine's rate).
     // The render is split at these offsets so triggers land exactly on the grid instead of
     // being quantised to block starts (which jittered up to a whole buffer, ~12 ms at 512).
-    struct TriggerEvent { int channel; int step; float velScale = 1.0f; int sub = 0; int roll = 1; int offset = 0;
+    struct TriggerEvent { int channel = 0; int step = 0; float velScale = 1.0f; int sub = 0; int roll = 1; int offset = 0;
                           long gate = 0;      // gate > 0 = cut the hit after this many samples (per-step Length)
                           long slideLen = 0;      // slide glide time in samples (0 = step has no slide)
                           float slideTo = 0.0f;   // slide TARGET pitch (the NEXT active step's pitch, semitones)
+                          bool  drumHit = false; // fixed channel tuning, one-shot percussion
                           bool  isDraw = false;   // PIANO-ROLL note: use drawPitch + per-note drawVel + channel drawPan
                           float drawPitch = 0.0f;
                           float drawVel = 1.0f;      // per-note velocity (0..1)

@@ -397,3 +397,15 @@
 > Older user-approved semantics (per-step Length = decay-rescale, slide-toward-next, one term
 > per concept, no probability, master preset-wide, etc.) are DESIGN, recorded in CLAUDE.md /
 > HISTORY.md — not repeated here.
+
+
+## Live Drumming (1.5.8)
+
+| # | Decision | Why | Status |
+|---|---|---|---|
+| 262 | MIDI In is one note plus Any/exact MIDI channel per sound channel, preset-wide. Learn consumes its strike; overlapping assignments move to the new row. Defaults follow initial BASAMAK instruments and documented OKTO notes. | Avoid accidental double triggering and dependence on the selected editor channel. | OPEN |
+| 263 | Live hits use native channel tuning, velocity, natural decay, existing sound voicing/effects and Overlap. Pad note-offs do not gate percussion; MIDI Out drum notes have a 10 ms gate. Step editing, keyboard performance controls, channel Merge & Split and Generate are inactive; explicit hit timing makes Swing read-only. | Eight simultaneous pads need independent percussion triggers; preserve authored sounds. | OPEN |
+| 264 | This-pattern recording makes one whole-group take per pass; Follow-chain makes one take per visited bar. Fresh pass, no overdub. MIDI timing is retained; Snap only affects edits. 2048 hits/bar, 20 takes/start pattern, 1000 total, bounded audio-thread recording log. | Independent kit takes without modifying the regular keyboard recorder. | OPEN |
+| 265 | Keep-and-convert includes all notes and saved takes; chord hits collapse to the loudest strike, pitch/gate/slot/glide/step modulation/conditions are discarded going to drums. Going back uses native-tuning one-shot DrawNotes and rounds to 384 positions/bar. Limits are preflighted; failed conversion does not mutate state. Separate channel takes are not automatically combined; kit takes split by channel/current pattern group, using the regular recorder’s whole-group scope; preserve silent bars when returning to kit takes. | The two editors have different representations; disclose losses and preserve each captured performance rather than infer matching takes. | OPEN |
+| 266 | Clear in Live mode clears all displayed drum rows but preserves takes. Drag-MIDI exports the whole displayed kit using input assignments (fallback output note; Any input channel exports on 10). Pattern copy copies live hits; channel copy duplicates its hits; mappings and saved kit takes stay independent. | Give kit-wide operations consistent scope. | OPEN |
+| 267 | Window −/+ changes scale by 5%, constrained to available display area and a 40% minimum; the corner handle keeps fixed aspect ratio. Scale is serialized with project/preset. | Recover usable dimensions in hosts whose window frame clips content. | OPEN |

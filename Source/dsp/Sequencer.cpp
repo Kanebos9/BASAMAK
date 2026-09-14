@@ -40,6 +40,19 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
     else if (playing)
         advanceStandalone(sampleRate, numSamples, events);
 
+    if (drums.enabled) {
+        // Unconsumed inputs belong to a stopped transport (or its stopped remainder).
+        // They still sound, but do not enter the recording.
+        for (int i = 0; i < drums.inputCount; ++i) {
+            auto& in = drums.input[(size_t)i]; if (in.consumed) continue;
+            TriggerEvent e; e.channel = in.channel; e.offset = juce::jlimit(0,numSamples-1,in.offset);
+            e.pattern = isCurrentlyPlaying ? playPattern : currentPattern;
+            e.drumHit = e.isDraw = e.drawOneShot = true; e.drawVel = in.velocity;
+            events.add(e); in.consumed = true;
+        }
+        if (!isCurrentlyPlaying && drums.recording && drums.passHead >= 0) drums.stopRecording();
+    }
+
     // Events now carry a sample-accurate block offset. Sort by offset, then render the
     // PLAYING pattern in segments split at those offsets so each hit starts exactly on
     // the grid (previously everything was quantised to the block start = up to a whole
@@ -71,6 +84,19 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
             if (o != e.channel && d.duckBy == e.channel && d.duckAmt > 0.001f) d.duckPulse();
         }
         if (c.midiOut) return;   // MIDI-out channels make no internal sound (they emit notes in the processor)
+        if (e.drumHit) {
+            if (c.chokeGroup > 0)
+                for (int p = drums.enabled ? 0 : pat; p < (drums.enabled ? NUM_PATTERNS : pat + 1); ++p)
+                    for (int o = 0; o < NUM_CHANNELS; ++o)
+                        if (o != e.channel && patterns[p].channels[o].chokeGroup == c.chokeGroup)
+                            patterns[p].channels[o].fadeOutVoices(patterns[p].channels[o].retrigFadeSec());
+            const int mask = e.drawSlot == 1 ? 0b01 : e.drawSlot == 2 ? 0b10 : 0;
+            c.strumFlip = e.drawStrumUp;
+            c.strumOverride = e.drawStrumPct >= 0 ? e.drawStrumPct * 0.01f : -1.0f;
+            c.legatoNext = false;
+            c.trigger(e.drawVel, 0.0f, e.drawNotePan, 0, 0.0f, 0, false, mask, false, true);
+            return;
+        }
         if (e.isDraw) {   // PIANO-ROLL note (chord tones overlap, melody cuts). drawSlot 0=both, 1/2=one slot.
             const int mask = e.drawSlot == 1 ? 0b01 : e.drawSlot == 2 ? 0b10 : 0b11;
             // ONE-SHOT notes = the STEP contract: instant trigger, no gate, pure AHD natural ring
@@ -112,8 +138,13 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
                   e.slideLen > 0 ? e.slideTo : 0.0f, e.slideLen);   // velScale = roll ramp
     };
 
-    // Each rendered pattern is muted against ITS OWN solo flags (solo is per pattern).
-    const bool soloPlay = anySoloIn(patterns[playPattern]);
+    bool drumRender[NUM_PATTERNS] = {};
+    if (drums.enabled) {
+        drumRender[playPattern] = drumRender[currentPattern] = true;
+        for (const auto& e : events) if(e.pattern >= 0) drumRender[e.pattern] = true;
+        for(int p=0;p<NUM_PATTERNS;++p) if(!drumRender[p])
+            for(const auto& c:patterns[p].channels) if(c.anyVoiceActive()){drumRender[p]=true;break;}
+    }
 
     int idx = 0, segStart = 0;
     while (segStart < numSamples)
@@ -122,9 +153,12 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
         int segEnd = numSamples;
         if (idx < events.size()) segEnd = juce::jlimit(segStart + 1, numSamples, events[idx].offset);
 
+        for(int renderPat=0;renderPat<NUM_PATTERNS;++renderPat) {
+        if(drums.enabled ? !drumRender[renderPat] : renderPat != playPattern) continue;
+        const bool soloPlay = anySoloIn(patterns[renderPat]);
         for (int ch = 0; ch < NUM_CHANNELS; ++ch)
         {
-            auto& chan = patterns[playPattern].channels[ch];
+            auto& chan = patterns[renderPat].channels[ch];
             chan.lfoBarSeconds = (float) blockBarSeconds;   // tempo-synced per-slot LFOs
             chan.modWheel      = modWheel;                   // live mod wheel (shared mod source)
             chan.pitchWheel    = pitchWheel;                 // [2026-08-01 r26] live pitch wheel - every OTHER render
@@ -167,9 +201,12 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
                             toMain ? reverbSendBusB : nullptr,   // channel revBus/delBus pick A or B
                             toMain ? delaySendBusB  : nullptr);
         }
+        } // rendered patterns
         segStart = segEnd;
     }
     while (idx < events.size()) fireEvent(events[idx++]);   // safety: offsets are clamped < numSamples
+
+    if (drums.enabled) return events; // every sounding pattern was rendered in timestamped segments
 
     // A pattern we just switched AWAY from (NextAfterN) keeps rendering its still-ringing voices
     // (tails) into Main until they finish, so the switch doesn't hard-cut them = no click. No new
@@ -444,6 +481,32 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
     // carry a sub-sample epsilon after a wrap; treat anything within a quarter sample of 0 as the
     // bar start so column-0/step-0 hits are never dropped (the dedupe stops double-fires).
     const double zeroTol = 0.25 / juce::jmax(1.0, samplesPerBar);
+    if (drums.enabled) {
+        drums.enterSegment(playPattern, loopCount);
+        auto addHit = [&](const LiveDrumming::Hit& h, int off) {
+            TriggerEvent e; e.channel = h.channel; e.step = 0; e.pattern = playPattern;
+            e.offset = off; e.drumHit = e.isDraw = e.drawOneShot = true;
+            e.drawVel = h.velocity; e.drawNotePan = h.pan; events.add(e);
+        };
+        if (!drums.recording) {
+            const auto& lane = drums.patterns[(size_t)playPattern];
+            for (int i = 0; i < lane.count; ++i) {
+                const auto& h = lane.hits[(size_t)i];
+                // Half-open intervals prevent duplicated hits at adjacent block boundaries.
+                if ((h.pos >= oldPos || (h.pos == 0.0 && oldPos <= zeroTol)) && h.pos < newPos)
+                    addHit(h, baseOffset + juce::jlimit(0, spanSamples - 1, (int)std::lround((h.pos-oldPos)*samplesPerBar)));
+            }
+        }
+        for (int i = 0; i < drums.inputCount; ++i) {
+            auto& in = drums.input[(size_t)i];
+            if (in.consumed || in.offset < baseOffset || in.offset >= baseOffset + spanSamples) continue;
+            in.consumed = true;
+            LiveDrumming::Hit h {oldPos + (in.offset-baseOffset)/samplesPerBar, in.channel, in.velocity, 0};
+            h.pos = juce::jlimit(0.0,std::nextafter(1.0,0.0),h.pos);
+            addHit(h,in.offset); drums.record(playPattern,h);
+        }
+        return;
+    }
     Pattern& pp = patterns[playPattern];   // triggers come from the PLAYING pattern
 
     for (int ch = 0; ch < NUM_CHANNELS; ++ch)
@@ -532,6 +595,7 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
                 e.drawVel = (float) nt.vel / 255.0f;                  // per-note velocity
                 e.drawSlot = nt.slot;                                 // per-note slot tag
                 e.drawOneShot = nt.oneShot != 0;
+                e.drumHit = nt.drumHit != 0;
                 e.drawStrumUp = nt.strumUp != 0;
                 e.drawLegato = legato;   // geometry + Mode (see above), not a stored flag
                 e.drawStrumPct = nt.strumPct > 100 ? -1 : (int) nt.strumPct;

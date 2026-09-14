@@ -135,13 +135,20 @@ public:
     // Called by editor to trigger standalone play/stop. Stop also cuts any
     // ringing voice tails (handled on the audio thread via silenceRequest).
     void standalonePlay()  { sequencer.startStandalone(); }
-    void standaloneStop()  { sequencer.stopStandalone(); silenceRequest.store(true); }
+    std::atomic<unsigned> transportStopSerial { 0 };
+    void standaloneStop()
+    {
+        const juce::ScopedLock lock(getCallbackLock());
+        ++transportStopSerial;
+        if (sequencer.drums.enabled) sequencer.drums.stopRecording();
+        sequencer.stopStandalone(); silenceRequest.store(true);
+    }
     // [2026-07-18] PAUSE (user feature): freeze the transport in place; tails/FX ring out
     // naturally (no silenceRequest). Toggles: paused -> resume. Inert in DAW-sync (the host's
     // transport owns pause there) and while RECORDING (a rolling take must never be paused).
     void standalonePause()
     {
-        if (sequencer.dawSync || keysRecording.load()) return;
+        if (sequencer.dawSync || keysRecording.load() || sequencer.drums.recording) return;
         if (sequencer.paused)              sequencer.startStandalone();
         else if (sequencer.playing)        sequencer.pauseStandalone();
     }
@@ -383,6 +390,8 @@ public:
     // confusion cost a debugging session: Reaper was pointed at an unplugged interface).
     std::atomic<uint32_t> processHeartbeat { 0 };
 
+    double editorScale = 0.85;
+    bool switchDrumming(bool enable, bool convert, juce::String& error);
     // Export sequence as MIDI file for drag-to-DAW
     juce::File exportMidiFile(int channel);   // Drag MIDI: the SELECTED channel only, as a melody
 

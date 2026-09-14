@@ -25,3 +25,6 @@
 /CLAUDE.md
 /docs/HISTORY.md
 build_tests/
+
+# Isolated release QA build (does not auto-install plugins)
+/build_live/

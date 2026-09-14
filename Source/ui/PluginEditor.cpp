@@ -103,7 +103,7 @@ static float processRamMB()
 // Design height grows with the visible channel-row count. Keep these magic numbers in sync with the
 // layout constants GRID_TOP(84)/ROW_H(44) + the 24px gap + the 366px detail-panel block (see below).
 // [2026-08-01 r26] (the comment said ROW_H(38) - the code below always used the real 44)
-// At 8 channels this returns 778 == DESIGN_H.
+// At 8 channels this returns 826 == DESIGN_H.
 // The channel area shows at most 8 rows; more channels scroll (see channelBar). 44 = ROW_H (keep in sync).
 static int contentHeightFor(int visCh, bool detail = true)
 {
@@ -6497,6 +6497,7 @@ DrumSequencerEditor::DrumSequencerEditor(DrumSequencerProcessor& p)
     categoryList = DrumSoundGenerator::categories();
 
     setupComponents();
+    setupLiveDrumming();
     for (auto& fo : srcFade) content.addAndMakeVisible(fo);  // above the knobs (dims off sources)
     for (auto& b : zoomBtns) b.toFront(false);   // keep the zoom "+" clickable on top
     rescanSamples();
@@ -6520,24 +6521,16 @@ DrumSequencerEditor::DrumSequencerEditor(DrumSequencerProcessor& p)
     refreshCountButtons();
 
     setResizable(true, true);
-    setResizeLimits(DESIGN_W / 2, contentHeightPx / 2, DESIGN_W * 2, contentHeightPx * 2);
-
-    // Open at a size that fits the user's screen (the content scales to fit), so
-    // the whole plugin is visible on first open instead of being cut off.
-    double scale = 1.0;
-    if (auto* disp = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
-    {
-        auto area = disp->userArea;
-        scale = juce::jmin(1.0, (area.getWidth()  * 0.96) / (double) DESIGN_W,
-                                (area.getHeight() * 0.90) / (double) contentHeightPx);
-    }
-    setSize(juce::roundToInt(DESIGN_W * scale), juce::roundToInt(contentHeightPx * scale));
+    applyWindowScale(proc.editorScale);
+    refreshLiveDrumming();
+    drumGrid.update();
     startTimerHz(60);   // smooth playhead motion (the grid/meters update every tick; heavy hashing is throttled below)
     proc.midiLearn.addListener(this);
 }
 
 DrumSequencerEditor::~DrumSequencerEditor()
 {
+    if (proc.sequencer.drums.recording || drumCountdown > 0) stopDrumRecord();
     proc.midiLearn.removeListener(this);
     stopTimer();
     msWizard.close();   // [2026-07-21 r15] wizard cleanup on teardown: stop the input tap + any
@@ -7270,6 +7263,12 @@ juce::int64 DrumSequencerEditor::stateHash() const
     auto f   = [](float x) { juce::int64 b = 0; std::memcpy(&b, &x, sizeof(float)); return b; };
     auto& s = proc.sequencer;
     juce::int64 h = 1125899906842597LL;
+    const juce::ScopedLock drumLock(proc.getCallbackLock());
+    const auto& d=s.drums; h=mix(h,d.enabled);
+    for(int ch=0;ch<16;++ch){h=mix(h,d.notes[(size_t)ch]);h=mix(h,d.midiChannels[(size_t)ch]);}
+    auto hashHit=[&](const LiveDrumming::Hit& hit){h=mix(h,(juce::int64)(hit.pos*1.0e12));h=mix(h,hit.channel);h=mix(h,f(hit.velocity));h=mix(h,f(hit.pan));};
+    for(const auto& lane:d.patterns){h=mix(h,lane.count);for(int i=0;i<lane.count;++i)hashHit(lane.hits[(size_t)i]);}
+    for(const auto& t:d.takes){h=mix(h,t.name.hashCode64());h=mix(h,t.head);h=mix(h,t.bars);for(const auto& hit:t.hits){h=mix(h,hit.pattern);hashHit(hit.hit);}}
     for (int p = 0; p < Sequencer::NUM_PATTERNS; ++p)
     {
         auto& P = s.patterns[p];
@@ -7311,7 +7310,7 @@ juce::int64 DrumSequencerEditor::stateHash() const
             h = mix(h, ch.drawMode ? 1 : 0);
             if (ch.drawMode) { h = mix(h, f(ch.drawVel)); h = mix(h, f(ch.drawPan)); h = mix(h, f(ch.drawTuneCents));
                 for (int i = 0; i < ch.drawNoteCount; ++i) { const auto& nt = ch.drawNotes[i];
-                    h = mix(h, nt.start); h = mix(h, nt.len); h = mix(h, (int) nt.semi + 128); h = mix(h, (int) nt.vel); h = mix(h, (int) nt.slot); h = mix(h, (int) nt.glide); h = mix(h, (int) nt.oneShot); h = mix(h, (int) nt.strumUp); h = mix(h, (int) nt.strumPct); h = mix(h, (int) nt.pan); h = mix(h, (int) nt.condLen); h = mix(h, (int) nt.condMask); } }
+                    h = mix(h, nt.start); h = mix(h, nt.len); h = mix(h, (int) nt.semi + 128); h = mix(h, (int) nt.vel); h = mix(h, (int) nt.slot); h = mix(h, (int) nt.glide); h = mix(h, (int) nt.oneShot); h = mix(h, (int) nt.drumHit); h = mix(h, (int) nt.strumUp); h = mix(h, (int) nt.strumPct); h = mix(h, (int) nt.pan); h = mix(h, (int) nt.condLen); h = mix(h, (int) nt.condMask); } }
         }
     }
     h = mix(h, f(s.standaloneBpm)); h = mix(h, s.timeSigNum); h = mix(h, s.timeSigDen);
@@ -8025,6 +8024,8 @@ void DrumSequencerEditor::syncAfterStateChange()
 // leftover parameter changes from any previous pattern.
 void DrumSequencerEditor::initPreset()
 {
+    { const juce::ScopedLock lock(proc.getCallbackLock());
+      proc.sequencer.drums.restore({}); drumCountdown=0; }
     auto& s = proc.sequencer;
     s.standaloneBpm = 120.0f; s.timeSigNum = 4; s.timeSigDen = 4; s.currentPattern = 0;
     // Recorded takes are preset-level (like the factory + file-load paths) - a fresh preset has none.
@@ -8106,6 +8107,8 @@ void DrumSequencerEditor::askLoopCount(const juce::String& title, int defVal, st
 
 void DrumSequencerEditor::fullRefresh()
 {
+    drumModePrompt.setVisible(false);
+    refreshLiveDrumming();
     barTimeSigX = proc.sequencer.timeSigNum;
     barTimeSigY = proc.sequencer.timeSigDen;
     rescanSoundMixes();
@@ -8132,6 +8135,7 @@ void DrumSequencerEditor::fullRefresh()
     visiblePatterns = Sequencer::NUM_PATTERNS;   // always the full count (64 since r24; the 16/32 toggle is gone)
     firstPatternCol = juce::jlimit(0, juce::jmax(0, visiblePatterns - patShown()), firstPatternCol);
     refreshCountButtons();
+    applyWindowScale(proc.editorScale);
 }
 
 //== Undo / redo (whole-instrument state snapshots) ===========================
@@ -8873,6 +8877,9 @@ int DrumSequencerEditor::currentSoundPickId(int ch) const
 void DrumSequencerEditor::applySelCC(int t, float v, bool& slotDirty, bool& keysDirty)
 {
     using P = DrumSequencerProcessor;
+    if(proc.sequencer.drums.enabled && (t==P::SelStrum||t==P::SelMinVel||t==P::SelMaxVel||t==P::SelGlide||t==P::SelSlotOfs
+       ||t==P::SelScaleNotes||t==P::SelScaleType||t==P::SelScaleKey
+       ||t==P::SelScaleTypeNext||t==P::SelScaleTypePrev||t==P::SelScaleKeyNext||t==P::SelScaleKeyPrev||t==P::SelScaleNotesNext||t==P::SelScaleNotesPrev|| (t>=P::SelStepBase&&t<P::SelStepBase+DrumChannel::MAX_STEPS))) return;
     auto& ch = proc.sequencer.channel(selectedChannel);
     auto& sl = ch.slots[envTargetSlot()];
     if (t >= P::SelStepBase && t < P::SelStepBase + DrumChannel::MAX_STEPS)
@@ -9089,6 +9096,7 @@ void DrumSequencerEditor::stepSoundBank(int dir)
 
 void DrumSequencerEditor::doUndo()
 {
+    if(proc.sequencer.drums.recording||drumCountdown>0)return;
     // The passive timer commits a snapshot ~0.1 s AFTER each edit, so for a split-second the top
     // of the stack can be STALE (the pre-edit state) while the screen shows a newer change. Undoing
     // in that window used to skip a step. Force-commit any uncommitted current state FIRST, so the
@@ -9103,6 +9111,7 @@ void DrumSequencerEditor::doUndo()
 
 void DrumSequencerEditor::doRedo()
 {
+    if(proc.sequencer.drums.recording||drumCountdown>0)return;
     if (redoStack.empty()) return;
     undoStack.push_back(redoStack.back());
     redoStack.pop_back();
@@ -9409,6 +9418,8 @@ void DrumSequencerEditor::setupComponents()
         // SHIFT+CLICK = MERGE this pattern onto the previous one (toggle). Merged patterns play as ONE
         // multi-bar unit and mirror the HEAD's channel sounds (one sound editor, no clashing).
         pb.onShiftClick = [this, p] {
+            if (proc.sequencer.drums.recording || drumCountdown > 0) return;
+            const juce::ScopedLock lock(proc.getCallbackLock());
             if (p == 0) return;   // nothing before pattern 1 to merge with
             auto& sq = proc.sequencer;
             const bool turnOn = ! sq.patterns[p].mergeWithPrev;
@@ -9427,7 +9438,7 @@ void DrumSequencerEditor::setupComponents()
                     for (int b = head; b <= pEnd; ++b) sum += juce::jmax(1, sq.patterns[b].channels[c].numSteps);
                     if (sum > worstSum) { worstSum = sum; worstCh = c; }
                 }
-                if (bars > StepGridComponent::GRP_MAX || worstSum > DrumChannel::MAX_STEPS)
+                if (bars > StepGridComponent::GRP_MAX || (!sq.drums.enabled && worstSum > DrumChannel::MAX_STEPS))
                 {
                     juce::PopupMenu mm;
                     mm.addSectionHeader(bars > StepGridComponent::GRP_MAX
@@ -9502,7 +9513,9 @@ void DrumSequencerEditor::setupComponents()
             }
             auto doMerge = [this, p, mHead, mEnd]() {
                 auto& sq2 = proc.sequencer;
+                if(sq2.drums.recording||drumCountdown>0)return;
                 commitUndoNow();
+                const juce::ScopedLock lock(proc.getCallbackLock());
                 sq2.patterns[p].mergeWithPrev = true;
                 // [1.5.0] PER-BAR playback defaults reproducing the old group feel: every internal
                 // bar chains to the NEXT once; the END chains back to the HEAD (= the group loops).
@@ -9632,6 +9645,12 @@ void DrumSequencerEditor::setupComponents()
                            "- In a MERGED group it clears the channel in EVERY bar of the group (the whole visible row).\n"   // [2026-08-01 r26] scope said out loud
                            "- Other channels untouched. Undoable.");
     btnClearPat.onClick = [this] {
+        if(proc.sequencer.drums.enabled) {
+            if(proc.sequencer.drums.recording || drumCountdown>0)return;
+            commitUndoNow(); const juce::ScopedLock lock(proc.getCallbackLock());
+            for(int p=proc.sequencer.groupHead(currentPattern());p<=proc.sequencer.groupEnd(currentPattern());++p)proc.sequencer.drums.patterns[(size_t)p].count=0;
+            drumGrid.update(); return;
+        }
         // Clear the SELECTED channel only - across EVERY bar of a merged group (the whole visible row).
         commitUndoNow();   // so this Clear is undoable even right after recording (user request)
         auto& sq = proc.sequencer;
@@ -9740,10 +9759,9 @@ void DrumSequencerEditor::setupComponents()
         btnToggleDetail.setColour(juce::TextButton::buttonColourId, detailShown ? juce::Colour(0xff20203a) : juce::Colour(0xff35c0ff));
         btnToggleDetail.setColour(juce::TextButton::textColourOffId, detailShown ? juce::Colours::lightgrey : juce::Colours::black);
         contentHeightPx = contentHeightFor(visibleChannels, detailShown);
-        setResizeLimits(DESIGN_W / 2, contentHeightPx / 2, DESIGN_W * 2, contentHeightPx * 2);
-        const double sc = juce::jmax(0.1, (double) getWidth() / (double) DESIGN_W);
+        const double sc = proc.editorScale;
         layoutContent();
-        setSize(getWidth(), juce::roundToInt(contentHeightPx * sc));
+        applyWindowScale(sc);
         repaint();
     };
 
@@ -9760,7 +9778,7 @@ void DrumSequencerEditor::setupComponents()
     btnKeysView.paramId = "ui_sel_keysView"; btnKeysView.midiLearn = &proc.midiLearn;         // right-click = learn
     btnKeysView.setLookAndFeel(&tinyBtnLNF);
     btnKeysView.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
-    btnKeysView.setTooltip("Switch between the SOUND EDITOR and the on-screen KEYS piano.\n\n"
+    btnKeysView.setTooltip("KEYS/RECORD: switch between sound editing and keyboard/recording controls. Live Drumming keeps kit recording available and dims keyboard controls.\n\n"
                            "- Keys play the SELECTED channel at the pressed pitch (Freq knobs are never changed).\n"
                            "- Every engine plays; 'Keep pitch' samples just don't transpose.\n"
                            "- REC records what you play into the channel as piano-roll notes.");
@@ -9777,6 +9795,10 @@ void DrumSequencerEditor::setupComponents()
         "- The pitch reference is fixed: C4 (middle C) = pitch 0.\n\n"
         "Press again to stop; the last take stays loaded on the channel.");
     keysPanel.btnRec.onClick = [this] {
+        if (proc.sequencer.drums.enabled) {
+            if (proc.sequencer.drums.recording || drumCountdown > 0) stopDrumRecord(); else startDrumRecord();
+            return;
+        }
         if (proc.keysRecording.load() || keysCountdownTicks > 0) { keysStopRecord(true); return; }
         // Recording writes into PIANO ROLL. If the armed channel (or its merge partner) is in step
         // mode WITH steps, warn - starting switches it to the roll and CLEARS those steps (user).
@@ -9985,6 +10007,7 @@ void DrumSequencerEditor::setupComponents()
         "- Deleting lives in the 'Delete a take' submenu.\n"
         "- Edited a loaded take? 'Save changes' options appear at the top of this menu.");
     keysPanel.btnTakes.onClick = [this] {
+        if (proc.sequencer.drums.enabled) { showDrumTakes(); return; }
         juce::PopupMenu m, delSub;
         int shown = 0;
         // Save options for the loaded take, only when it's been hand-edited (dirty).
@@ -10854,17 +10877,34 @@ void DrumSequencerEditor::setupComponents()
     content.addAndMakeVisible(btnRoute);
     btnRoute.setLookAndFeel(&dropBtnLNF);   // draws a down-triangle (it's a dropdown)
     btnRoute.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
-    btnRoute.setTooltip("Routing overview: wire every channel at once (channel-wide, all patterns).\n\n"
+    btnRoute.setTooltip("Routing overview: configure MIDI In and sound/MIDI output for every channel (all patterns).\n\n"
+                        "- MIDI In: pick a note and MIDI channel, or Learn then strike a pad. Active in Live Drumming; editing selection never changes routing. Note numbers identify drums, not their pitch.\n"
                         "- Main = the normal mix.\n"
                         "- Out N = its own aux output - route it to a separate DAW track.\n"
                         "- MIDI Out = no internal sound; the channel sequences another plugin on a note "
-                        "('Change MIDI Out note' picks it; note length = this channel's amp-envelope length).\n"
+                        "('Change MIDI Out note' picks it for steps and channel-tuned drum hits; pitched roll notes use their own pitches). Live drum hits use a 10 ms MIDI gate.\n"
                         "- Strip colours: purple = MIDI, teal = aux out.");
     btnRoute.onClick = [this] {
+        const juce::ScopedLock drumLock(proc.getCallbackLock());
         juce::PopupMenu menu;
         for (int ch = 0; ch < Sequencer::NUM_CHANNELS; ++ch) {
             auto& c = proc.sequencer.channel(ch);
             juce::PopupMenu sub;
+            const auto& d=proc.sequencer.drums;
+            juce::PopupMenu input;
+            input.addSectionHeader("Active in LIVE DRUMMING; independent of channel selection");
+            input.addSectionHeader("Notes select sounds at their configured pitch; velocity follows your strike");
+            input.addItem(800000+ch,d.learnChannel==ch?"Cancel learning":"Learn: strike a pad",!d.recording);
+            input.addItem(810000+ch,"Off (unassign)",!d.recording,d.notes[(size_t)ch]<0);
+            juce::PopupMenu inputNotes;
+            for(int note=0;note<128;++note)inputNotes.addItem(820000+ch*200+note,"Note "+juce::String(note)+" ("+juce::MidiMessage::getMidiNoteName(note,true,true,4)+")",true,d.notes[(size_t)ch]==note);
+            input.addSubMenu("Input note",inputNotes,!d.recording);
+            juce::PopupMenu inputChannels;
+            for(int mc=0;mc<=16;++mc)inputChannels.addItem(900000+ch*100+mc,mc==0?"Any MIDI channel":"MIDI channel "+juce::String(mc),true,d.midiChannels[(size_t)ch]==mc);
+            input.addSubMenu("Input MIDI channel",inputChannels,!d.recording);
+            input.addSectionHeader("Learning moves an overlapping assignment from its old channel");
+            sub.addSubMenu("MIDI In: "+(d.notes[(size_t)ch]<0?juce::String("Off"):juce::String(d.notes[(size_t)ch])+" / "+(d.midiChannels[(size_t)ch]==0?juce::String("Any"):"ch "+juce::String(d.midiChannels[(size_t)ch]))),input);
+            sub.addSeparator();
             sub.addItem(500000 + ch, "Sound -> Main out (ch 1/2)", true, !c.midiOut && c.outputBus == 0);   // 500000+ch (NOT 0 - id 0 = "no selection")
             for (int o = 1; o <= DrumSequencerProcessor::NUM_AUX_OUTS; ++o)
                 sub.addItem(ch * 100 + o, "Sound -> Out " + juce::String(o)
@@ -10872,9 +10912,12 @@ void DrumSequencerEditor::setupComponents()
                             true, !c.midiOut && c.outputBus == o);
             sub.addSeparator();
             // MIDI Out. In the PIANO ROLL the notes come from the grid (C4-absolute), so the base-note
-            // picker is redundant -> the item shows that and the "Change note" submenu is disabled (user).
+            // picker is redundant for pitched notes. Converted channel-tuned hits still use the fixed note.
+            const bool fixedOutputNote = !c.drawMode || proc.sequencer.drums.enabled
+                || std::any_of(c.drawNotes, c.drawNotes + c.drawNoteCount,
+                               [](const auto& note) { return note.drumHit != 0; });
             sub.addItem(ch * 100 + 50,
-                        c.drawMode ? "MIDI Out (notes from the Piano Roll)"
+                        !fixedOutputNote ? "MIDI Out (notes from the Piano Roll)"
                                    : "MIDI Out (" + juce::MidiMessage::getMidiNoteName(c.midiNote, true, true, 4) + ")",
                         true, c.midiOut);
             juce::PopupMenu notes;
@@ -10882,7 +10925,7 @@ void DrumSequencerEditor::setupComponents()
                 notes.addItem(100000 + ch * 200 + n,
                               juce::MidiMessage::getMidiNoteName(n, true, true, 4) + " (" + juce::String(n) + ")",
                               true, c.midiOut && c.midiNote == n);
-            sub.addSubMenu("Change MIDI Out note", notes, ! c.drawMode);   // disabled in Piano Roll (pitch comes from the grid)
+            sub.addSubMenu("Change MIDI Out note", notes, fixedOutputNote);   // only pitched-only piano rolls derive every note from the grid
             // MIDI Out channel (1-16) - so different drums can drive different instruments / DAW MIDI tracks.
             juce::PopupMenu mchan;
             for (int mc = 1; mc <= 16; ++mc)
@@ -10922,6 +10965,15 @@ void DrumSequencerEditor::setupComponents()
         }
         menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(btnRoute), [this](int r) {
             if (r <= 0) return;
+            if (r >= 800000) {
+                commitUndoNow();const juce::ScopedLock lock(proc.getCallbackLock());auto& d=proc.sequencer.drums;
+                if(d.recording)return;
+                if(r>=900000){int x=r-900000,ch=x/100;d.assign(ch,d.notes[(size_t)ch],x%100);}
+                else if(r>=820000){int x=r-820000,ch=x/200;d.assign(ch,x%200,d.midiChannels[(size_t)ch]);}
+                else if(r>=810000){int ch=r-810000;d.assign(ch,-1,0);d.learnChannel=-1;}
+                else {int ch=r-800000;d.learnChannel=d.learnChannel==ch?-1:ch;}
+                refreshLiveDrumming();return;
+            }
             if (r >= 700000) {                         // "Duck amount" -> channel-wide
                 const int x = r - 700000, ch = x / 100, a = (x % 100) - 1;
                 static const float amts[4] = { 0.25f, 0.5f, 0.75f, 1.0f };
@@ -12832,7 +12884,7 @@ void DrumSequencerEditor::setShapeSlot(int s)
 //==============================================================================
 void DrumSequencerEditor::applyKeysView()
 {
-    btnKeysView.setButtonText(keysView ? "SOUND EDITOR" : "KEYS");
+    btnKeysView.setButtonText(keysView ? "SOUND EDITOR" : "KEYS/RECORD");
     // [2026-07-15 19:45] no highlight in either state (user: the yellow "SOUND EDITOR" while the
     // keys were open meant nothing - the button is a plain view switch, like its neighbours).
     btnKeysView.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff20203a));
@@ -12841,7 +12893,7 @@ void DrumSequencerEditor::applyKeysView()
     // shouldn't switch to Piano Roll" - the old force flipped a STEP channel onto its empty
     // roll, silencing its pattern). RECORDING still forces Piano Roll (keysStartRecord + the
     // processor's chain branch) - that's where the roll is actually needed.
-    if (! keysView && (proc.keysRecording.load() || keysCountdownTicks > 0))
+    if (!proc.sequencer.drums.enabled && ! keysView && (proc.keysRecording.load() || keysCountdownTicks > 0))
         keysStopRecord(true);   // leaving the panel ends the take
     refreshKeysPanel();
     layoutContent();
@@ -13030,9 +13082,8 @@ void DrumSequencerEditor::keysLoadTake(int idx)
         for (const auto& nt : t.drawNotes)
         {
             const int b = juce::jlimit(0, end - head, (int) nt.start / DrumChannel::DRAW_RES);
-            sq.patterns[head + b].channels[t.channel].addDrawNote((int) nt.start - b * DrumChannel::DRAW_RES,
-                                                                  nt.len, nt.semi, nt.vel, nt.slot, nt.glide, nt.oneShot,
-                                                                  nt.strumUp, nt.strumPct == 255 ? -1 : nt.strumPct, nt.pan);
+            auto copy = nt; copy.start = (int16_t)((int)nt.start - b * DrumChannel::DRAW_RES);
+            sq.patterns[head + b].channels[t.channel].addDrawNote(copy);
         }
         selectChannel(t.channel);
         strips[t.channel].comboSteps.setSelectedId(StepGridComponent::DRAW_ITEM_ID, juce::dontSendNotification);
@@ -13078,7 +13129,7 @@ juce::int64 DrumSequencerEditor::takeDataHash(const DrumSequencerProcessor::Keys
     auto mix = [&](juce::int64 v) { h = h * 33 ^ v; };
     mix(t.channel); mix(t.isDraw ? 1 : 0);
     if (t.isDraw) { mix(t.drawPat); for (const auto& nt : t.drawNotes)
-                    { mix(nt.start); mix(nt.len); mix((int) nt.semi + 128); mix((int) nt.vel); mix((int) nt.slot); mix((int) nt.glide); mix((int) nt.oneShot); mix((int) nt.strumUp); mix((int) nt.strumPct); mix((int) nt.pan); mix((int) nt.condLen); mix((int) nt.condMask); } }
+                    { mix(nt.start); mix(nt.len); mix((int) nt.semi + 128); mix((int) nt.vel); mix((int) nt.slot); mix((int) nt.glide); mix((int) nt.oneShot); mix((int) nt.drumHit); mix((int) nt.strumUp); mix((int) nt.strumPct); mix((int) nt.pan); mix((int) nt.condLen); mix((int) nt.condMask); } }
     else for (auto& e : t.evts) { mix(e.pattern); mix(e.step); mix((int) e.semis + 128); mix(e.flags); }
     return h;
 }
@@ -13132,6 +13183,8 @@ bool DrumSequencerEditor::keysTakeDirty(int idx) const
 
 void DrumSequencerEditor::refreshKeysPanel()
 {
+    keysPanel.setDrumming(proc.sequencer.drums.enabled);
+    if (proc.sequencer.drums.enabled) { refreshLiveDrumming(); return; }
     keysHighlightMaskLo = keysHighlightMaskHi = ~0ULL;   // channel/slot settings may have changed -> recompute the key highlight next tick
     keysHighlightArpNote = -2;
     const bool recLive = proc.keysRecording.load() || keysCountdownTicks > 0;
@@ -13376,6 +13429,7 @@ void DrumSequencerEditor::updateKeyboardHighlight()
 // (pairs are roll-only). Any existing pairing of either party is dissolved first.
 void DrumSequencerEditor::setChannelMerge(int a, int b)
 {
+    if(proc.sequencer.drums.enabled) return;
     if (a == b || b < 0 || b >= Sequencer::NUM_CHANNELS || std::abs(a - b) != 1) return;
     auto& sq = proc.sequencer;
     // Channel Merge & Split is PER PATTERN now (user: it must not spread to every pattern). It DOES
@@ -13782,6 +13836,7 @@ DrumChannel& DrumSequencerEditor::groupStepChannel(int ch, int& step)
 // nothing is edited. Edits always happen on the CURRENT pattern -> sync flows current -> members.
 void DrumSequencerEditor::syncMergedGroupSounds()
 {
+    const juce::ScopedLock lock(proc.getCallbackLock());
     auto& sq = proc.sequencer;
     const int cp = currentPattern();
     const int head = sq.groupHead(cp), end = sq.groupEnd(cp);
@@ -13799,7 +13854,7 @@ void DrumSequencerEditor::syncMergedGroupSounds()
 // sense - so grey + disable Len/Pitch/Roll for a draw channel. Vel/Pan stay (whole-channel).
 void DrumSequencerEditor::refreshDrawModeButtons()
 {
-    const bool draw = proc.sequencer.channel(selectedChannel).drawMode;
+    const bool draw = proc.sequencer.drums.enabled || proc.sequencer.channel(selectedChannel).drawMode;
     // PIANO ROLL: every per-note property (velocity, pan, gate, pitch, glide, strum, slot) is edited
     // INSIDE the roll - by pointer gestures and the right-click note menu. So ALL step edit-mode
     // buttons AND Influence are disabled/faded here (user); only Clear stays live. Step mode keeps them.
@@ -13834,6 +13889,7 @@ void DrumSequencerEditor::selectChannel(int ch)
 
 void DrumSequencerEditor::selectPattern(int p)
 {
+    if(proc.sequencer.drums.enabled && (drumCountdown>0 || (proc.sequencer.drums.recording&&!proc.sequencer.isCurrentlyPlaying)))return;
     const int clicked = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, p);
     p = proc.sequencer.groupHead(p);   // a merged group is viewed as ONE unit - always at its head
     // [2026-08-01 r26] the GENERATE panel is pattern-scoped state (targets, consent, context line) -
@@ -14223,7 +14279,7 @@ void DrumSequencerEditor::refreshChannelStrips()
         strips[i].btnPoly.setToggleState  (proc.sequencer.channel(i).allowOverlap, juce::dontSendNotification);
         // OVERLAP is a STEP concept (a step ringing into the next). In the piano roll each note has
         // its own length + poly is the keyboard Poly toggle, so it's inert here -> fade it (user review).
-        { const bool roll = proc.sequencer.channel(i).drawMode;
+        { const bool roll = proc.sequencer.channel(i).drawMode && !proc.sequencer.drums.enabled;
           if (strips[i].btnPoly.isEnabled() == roll) { strips[i].btnPoly.setEnabled(! roll);
                                                        strips[i].btnPoly.setAlpha(roll ? 0.4f : 1.0f); } }
         { auto& cc = proc.sequencer.channel(i);
@@ -14240,9 +14296,10 @@ void DrumSequencerEditor::refreshChannelStrips()
           // check, so it can't regress even if someone drops the change-only test later.
           if (! strips[i].comboSteps.isPopupActive() && strips[i].comboSteps.getSelectedId() != tgt)
               strips[i].comboSteps.setSelectedId(tgt, juce::dontSendNotification);
-          const bool lockRoll = proc.sequencer.channel(i).mergeWith >= 0;   // merged pairs are PIANO-ROLL only
+          const bool lockRoll = proc.sequencer.drums.enabled || proc.sequencer.channel(i).mergeWith >= 0;   // merged pairs are PIANO-ROLL only
           if (strips[i].comboSteps.isEnabled() == lockRoll)
-              strips[i].comboSteps.setEnabled(! lockRoll); }
+              strips[i].comboSteps.setEnabled(! lockRoll);
+          strips[i].comboSteps.setAlpha(lockRoll?0.35f:1.0f); }
         updateStripMixLabel(i);   // per-pattern sound-mix name (+ * if edited)
     }
     refreshRouting();   // recolour strips by MIDI/aux routing
@@ -14410,7 +14467,8 @@ void DrumSequencerEditor::timerCallback()
 
     // KEYS: 3s count-in, auto-finalise the take when the transport stops, the +/-24 reference
     // warning flash, and cheap UI refresh whenever the recording state / ref / take count moves.
-    if (keysView)
+    tickLiveDrumming();
+    if (keysView && !proc.sequencer.drums.enabled)
     {
         if (keysCountdownTicks > 0)
         {
@@ -14694,7 +14752,8 @@ void DrumSequencerEditor::timerCallback()
     // of the 60 Hz ticks), not on every frame - the heavy per-tick hashing was dropping the playhead
     // to a stutter while recording. The playhead/grid/meters still update at the full 60 Hz below.
     // (per-action snapshots: settled + no mouse button held -> one undo step; a drag = one step.)
-    if (! applyingUndo && ! proc.keysRecording.load() && timerCounter % 3 == 0)
+    if (proc.sequencer.drums.enabled && proc.sequencer.drums.recording && timerCounter % 3 == 0) syncMergedGroupSounds();
+    if (! applyingUndo && ! proc.keysRecording.load() && !proc.sequencer.drums.recording && drumCountdown == 0 && timerCounter % 3 == 0)
     {
         syncMergedGroupSounds();   // merged patterns mirror the edited pattern's sounds (change-only)
         juce::int64 h = stateHash();
@@ -14858,6 +14917,7 @@ void DrumSequencerEditor::resized()
     float offX = ((float)getWidth()  - DESIGN_W * s) * 0.5f;
     float offY = ((float)getHeight() - DH * s) * 0.5f;
 
+    if (getWidth() > 0 && getHeight() > 0) proc.editorScale = s;
     content.setBounds(0, 0, DESIGN_W, contentHeightPx);
     content.setTransform(juce::AffineTransform::scale(s).translated(offX, offY));
     if (zoomed) positionZoomPanel();
@@ -14980,7 +15040,7 @@ void DrumSequencerEditor::paintStripOutline(juce::Graphics& g)
         g.setColour(juce::Colour(0xffb46bff));   // merge violet (matches the C4 split marker + Merge UI)
         for (int c = 0; c + 1 < Sequencer::NUM_CHANNELS; ++c)
         {
-            if (sq.channel(c).mergeWith != c + 1) continue;   // draw once, from the LOWER channel of the pair
+            if (sq.drums.enabled || sq.channel(c).mergeWith != c + 1) continue;   // draw once, from the LOWER channel of the pair
             const int rA = c - firstChannelRow, rB = rA + 1;
             if (rB < 0 || rA >= viewRows()) continue;         // pair fully scrolled out of view
             const int top = GRID_TOP + juce::jmax(0, rA) * ROW_H;
@@ -15122,10 +15182,9 @@ void DrumSequencerEditor::setVisibleChannels(int n)
     channelBar.setRangeLimits(0.0, (double) Sequencer::NUM_CHANNELS, juce::dontSendNotification);
     channelBar.setCurrentRange((double) firstChannelRow, (double) viewRows(), juce::dontSendNotification);
     refreshCountButtons();
-    setResizeLimits(DESIGN_W / 2, contentHeightPx / 2, DESIGN_W * 2, contentHeightPx * 2);
-    const double s = juce::jmax(0.1, (double) getWidth() / (double) DESIGN_W);  // keep the current width-scale
+    const double scale = proc.editorScale;
     layoutContent();
-    setSize(getWidth(), juce::roundToInt(contentHeightPx * s));   // adjust height -> triggers resized()
+    applyWindowScale(scale);
     repaint();
 }
 
@@ -15240,7 +15299,8 @@ void DrumSequencerEditor::layoutContent()
     barSigY.setBounds     (520, 12, 20, 21);
     lblBarResult.setBounds(546, 8,  66, 24);   // bar length (seconds)
     lblPreset.setBounds   (0, 0, 0, 0);          // empty caption removed - the combo's "Presets" placeholder is the label
-    comboPreset.setBounds (614, 7, 152, 26);     // wider so "Presets" never clips (Windows renders fonts wider than macOS)
+    comboPreset.setBounds (614, 7, 96, 26);
+    btnWindowMinus.setBounds(714,7,24,26); btnWindowPlus.setBounds(742,7,24,26); // explicit window scaling     // wider so "Presets" never clips (Windows renders fonts wider than macOS)
     btnRoute.setBounds    (772, 7, 80,  26);   // routing dropdown (▼ drawn by DropButtonLNF)
     btnUndo.setBounds     (858, 7, 28,  26);   // ↶ icon
     btnRedo.setBounds     (888, 7, 28,  26);   // ↷ icon
@@ -15258,7 +15318,7 @@ void DrumSequencerEditor::layoutContent()
     lblPatterns.setBounds(6, PAT_Y + 2, 60, 15);
     lblPatternsBars.setBounds(6, PAT_Y + 17, 60, 15);   // "(Bars)" under "Patterns", same size/colour
     {
-        const int px0 = 70, pw = 33, pg = 3, step = pw + pg, shown = patShown();
+        const int px0 = 70, pw = 27, pg = 1, step = pw + pg, shown = patShown();
         firstPatternCol = juce::jlimit(0, juce::jmax(0, visiblePatterns - shown), firstPatternCol);
         for (int p = 0; p < Sequencer::NUM_PATTERNS; ++p) {
             const int col = p - firstPatternCol;
@@ -15274,6 +15334,7 @@ void DrumSequencerEditor::layoutContent()
             patternBar.setCurrentRange((double) firstPatternCol, (double) shown, juce::dontSendNotification);
         }
     }
+    btnLiveDrumming.setBounds(527,PAT_Y+8,126,26);
     patModeBtn.setBounds(664, PAT_Y + 8, 160, 26);   // shortened to make room for the wider edit-mode buttons (user)
     // Channel-count (8/16) + pattern-count (16/32) toggles, right next to the loop dropdown (Follow moved to the top bar).
 
@@ -15297,6 +15358,12 @@ void DrumSequencerEditor::layoutContent()
     btnGenerateTop.setBounds (1396, PAT_Y + 8, 60, 24);// [P1] the universal Generate door
     btnClearPat.setBounds (1459, PAT_Y + 8, 45, 24);   // Clear - flush near the right edge
 
+    const bool drumMode = proc.sequencer.drums.enabled;
+    drumSnap.setBounds(930,PAT_Y+8,104,24); btnDrumQuantize.setBounds(1040,PAT_Y+8,82,24);
+    lblDrumStatus.setBounds(1130,PAT_Y+3,315,36);
+    drumSnap.setVisible(drumMode); btnDrumQuantize.setVisible(drumMode); lblDrumStatus.setVisible(drumMode);
+    for (auto* b : { &btnModeVel,&btnModeLen,&btnModePitch,&btnModeProb,&btnModeRoll,&btnModePan,&btnModeNudge,&btnModeModA,&btnModeModB }) b->setVisible(!drumMode);
+    btnInfluenceTop.setVisible(!drumMode); btnGenerateTop.setVisible(!drumMode);
     // Channel strips:  [#] [sound ▸ sub-menu] [M] [S] [Ø] [steps]
     // Only the channels in the scroll window [firstChannelRow, +viewRows) are shown, mapped to on-screen
     // rows. The rest are hidden (the engine still runs them). When scrolling is active a scrollbar sits at
@@ -15337,6 +15404,11 @@ void DrumSequencerEditor::layoutContent()
     stepGrid.visibleRows = vr;
     stepGrid.firstRow    = firstChannelRow;
     stepGrid.setBounds(gridLeft, GRID_TOP, gridW, vr * ROW_H);
+    stepGrid.setVisible(!drumMode);
+    drumGrid.setBounds(stepGrid.getBounds()); drumGrid.setVisible(drumMode);
+    drumGrid.firstRow=firstChannelRow; drumGrid.rows=vr; drumGrid.rowHeight=ROW_H;
+    drumModePrompt.setBounds((DESIGN_W-620)/2,110,620,242);
+    if(drumModePrompt.isVisible())drumModePrompt.toFront(false);
     // Magnifier overlay covers the whole content canvas (so a magnified first-row/-column cell can
     // spill over the top bar + channel strips) and stays front-most + mouse-transparent.
     stepMagOverlay.setBounds(content.getLocalBounds());
