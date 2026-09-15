@@ -2413,13 +2413,12 @@ namespace
 // field without adding it here is a compile error, rather than a stale undo-cache bug.
 template <typename T> void copySavedField(T& dst, const T& src)
 {
+    // One template avoids MSVC's ambiguous scalar-vs-array reference overloads.
+    // Trivial arrays are copied whole, including padding used by the snapshot cache.
     if constexpr (std::is_trivially_copyable_v<T>) std::memcpy(&dst, &src, sizeof(T));
+    else if constexpr (std::is_array_v<T>)
+        for (size_t i = 0; i < std::extent_v<T>; ++i) copySavedField(dst[i], src[i]);
     else dst = src;
-}
-template <typename T, size_t N> void copySavedField(T (&dst)[N], const T (&src)[N])
-{
-    if constexpr (std::is_trivially_copyable_v<T>) std::memcpy(dst, src, sizeof(dst));
-    else for (size_t i = 0; i < N; ++i) copySavedField(dst[i], src[i]);
 }
 template <typename T> bool sameSavedField(const T& a, const T& b)
 {

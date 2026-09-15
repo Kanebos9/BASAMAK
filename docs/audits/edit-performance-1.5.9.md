@@ -165,3 +165,19 @@ user VST3/AU folders and /Applications. Each destination contains exactly one
 BASAMAK bundle. Previous installs are preserved in
 `backups/20260915-1.5.9-edit-stutter-installed`. The existing REAPER session was
 left running. Apple `auval -v aumu Bsmk OZ95` passed.
+
+## Windows compiler follow-up
+
+The Windows build for `e854020` (MSVC 19.51.36256.0, downloaded run
+94796825618) reported three C2668 errors. Both `copySavedField` templates
+matched fixed arrays: float[5] in saved channel capture and int[8] in pattern
+chain capture. The fix uses one C++17 template: trivially copyable values,
+including arrays, use the same byte copy; non-trivial arrays recurse by extent;
+other objects use assignment. Call sites and the saved-state format are unchanged.
+
+An extracted before/after C++17 fixture checks scalar, float/int/bool arrays,
+nested arrays, padded structs and non-trivial string arrays. All copies match.
+The actual processor and LiveDrumTest were rebuilt locally, and LiveDrumTest
+(`--ui`, including snapshot/undo regressions) passed with zero failures. Windows MSVC is not
+available on this Mac; confirmation on that compiler requires a fresh CI run
+from the fix commit. Version remains 1.5.9.
