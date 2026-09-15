@@ -34,7 +34,35 @@ int main() {
                Factory::presetNames()[preset].toRawUTF8(), sounds, CHK(allAuthored && sounds > 0) ? "OK" : "FAIL");
         // [2] it makes sound
         for (auto& p : s->patterns) for (auto& c : p.channels) c.prepareToPlay(SR, bs);
-        s->startStandalone();
+        if (s->drums.enabled)
+        {
+            CHK(!s->drums.hasNotes() && s->drums.takes.empty());
+            const int physicalNotes[] = {49, 48, 45, 51, 36, 38, 43, 42};
+            for (int ch = 0; ch < 8; ++ch) CHK(s->drums.target(physicalNotes[ch], 10) == ch);
+            // Check sound identity as well as note routing: moving just the map swaps the pads.
+            if (Factory::presetNames()[preset] == "Live Drums - Room Session")
+            {
+                CHK(s->patterns[0].channels[4].mixName == "Break Kick");
+                CHK(s->patterns[0].channels[5].mixName == "Mod Snare");
+            }
+            juce::AudioBuffer<float> hit(2, bs);
+            for (int ch = 0; ch < Sequencer::NUM_CHANNELS; ++ch)
+            {
+                CHK(s->drums.notes[(size_t)ch] >= 0);
+                CHK(s->drums.target(s->drums.notes[(size_t)ch], 10) == ch);
+                auto& c = s->patterns[0].channels[ch];
+                c.trigger(0.8f, 0, 0, 0, 0, 0, false, 0, false, true);
+                double peak = 0;
+                for (int b = 0; b < 12; ++b)
+                { hit.clear(); c.renderInto(hit, 0, bs, false); peak = std::max(peak, (double)hit.getMagnitude(0, bs)); }
+                printf("    pad %2d %-18s peak %.4f\n", ch + 1, c.mixName.toRawUTF8(), peak);
+                CHK(std::isfinite(peak) && peak > 0.001 && peak < 4.0);
+            }
+            // A live kit has no demo notes: exercise incoming pad routing for the render below.
+            s->drums.beginBlock();
+            s->drums.noteOn(36, 10, 100, 0);
+        }
+        else s->startStandalone();
         double acc = 0.0;
         juce::AudioBuffer<float> buf(2, bs);
         const int blocks = (int) (1.0 * SR / bs);

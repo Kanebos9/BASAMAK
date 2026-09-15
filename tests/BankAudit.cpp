@@ -17,7 +17,10 @@ static double goertzel(const std::vector<float>& x, size_t a, size_t b, double f
     const double re=s1-s2*cw, im=s2*sw; return std::sqrt(re*re+im*im)/(0.5*(double)juce::jmax((size_t)1,n));
 }
 
-int main() {
+int main(int argc, char** argv) {
+    const bool nativeDrums = argc > 1 && juce::String(argv[1]) == "--native-drums";
+    const juce::StringArray newDrums { "Cajon Slap", "Udu Pot",
+                                     "Cabasa", "Tambourine", "Flexatone", "Spring Knock", "Trash Stack" };
     const double SR = 48000.0; const int bs = 512;
     const auto names = Factory::mixNames();
     const auto cats  = Factory::mixCategories();
@@ -28,20 +31,39 @@ int main() {
 
     std::vector<std::array<double, NB>> fA(N), fB(N);
     std::vector<double> dec(N);
+    std::vector<bool> active(N, true);
     for (int i = 0; i < N; ++i)
     {
+        if (nativeDrums && !juce::StringArray{"Kicks", "Snares", "Claps", "Hi-Hats", "Cymbals", "Toms", "Percussion", "Electro Perc"}.contains(cats[i]))
+        { active[i] = false; continue; }
         auto* ch = new DrumChannel();
         Factory::applyMix(*ch, i);
         // PITCH-BLIND (user rule): drawMode = the C4-absolute keys world (slotBaseHz), so every
         // sound is compared at the SAME pitch - a kick and a bell differ by character, never by
         // where their Base Freq knob happens to sit.
-        ch->drawMode = true;
+        ch->drawMode = !nativeDrums;
         ch->prepareToPlay(SR, bs);
         ch->trigger(1.0f);
         std::vector<float> out; out.reserve((size_t) SR);
         juce::AudioBuffer<float> buf(2, bs);
         for (int blk = 0; blk < (int)(1.0 * SR / bs) + 1; ++blk)
         { buf.clear(); ch->renderInto(buf, 0, bs, false); for (int k = 0; k < bs; ++k) out.push_back(buf.getSample(0, k)); }
+        if (nativeDrums && newDrums.contains(names[i]))
+        {
+            auto folder = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("BASAMAK-new-drums");
+            folder.createDirectory();
+            auto file = folder.getChildFile(names[i] + ".wav"); file.deleteFile();
+            juce::WavAudioFormat format;
+            auto stream = file.createOutputStream();
+            if (stream)
+                if (auto* writer = format.createWriterFor(stream.get(), SR, 1, 24, {}, 0))
+                {
+                    stream.release();
+                    const float* ptr = out.data();
+                    writer->writeFromFloatArrays(&ptr, 1, (int)out.size());
+                    delete writer;
+                }
+        }
         // decay: time until a 10ms RMS falls below -30 dB of the peak RMS
         double pk = 1e-12; std::vector<double> rms;
         for (size_t p = 0; p + 480 < out.size(); p += 480)
@@ -65,7 +87,7 @@ int main() {
     for (int i = 0; i < N; ++i)
         for (int j = i + 1; j < N; ++j)
         {
-            if (cats[i] != cats[j]) continue;   // only within a family
+            if (!active[i] || !active[j] || (!nativeDrums && cats[i] != cats[j])) continue;
             double dA = 0, dB = 0;
             for (int b = 0; b < NB; ++b) { dA += fA[i][b]*fA[j][b]; dB += fB[i][b]*fB[j][b]; }
             const double dd = std::fabs(std::log(std::max(0.02, dec[i]) / std::max(0.02, dec[j])));
@@ -76,18 +98,19 @@ int main() {
     juce::StringArray seen;
     printf("BASAMAK factory-bank similarity scores (%d sounds)\n", N);
     printf("==================================================\n");
+    if (nativeDrums) printf("NATIVE DRUM TUNING: compares every percussion family; audition WAVs in the temp BASAMAK-new-drums folder.\n");
     printf("WHAT THE SCORE MEASURES (0..1, higher = more alike):\n");
     printf("  55%% attack spectrum   - 24 log-spaced bands over the first 5-150 ms (the hit's colour)\n");
     printf("  35%% body spectrum     - the same bands over 150-550 ms (the ring/tail's colour)\n");
     printf("  10%% decay-time match  - how similarly fast the two sounds die away\n");
-    printf("PITCH-BLIND: every sound is rendered in the C4-absolute keys world (drawMode), so the\n");
-    printf("Base Freq knob never affects the score (user rule: pitch means nothing on a keyboard).\n");
+    if (!nativeDrums) printf("PITCH-BLIND: every sound is rendered at C4; Base Freq does not affect the score.\n");
     printf("BLIND SPOTS (judge by ear): stereo width/chorus (mono render), wavetable/LFO MOTION\n");
     printf("(one static window), arp riffs (arp runs in the processor). Sustained same-pitch pads\n");
     printf("SATURATE the metric - 0.95+ in Keys/Pads/Leads is normal, not proof of a twin.\n\n");
     printf("== top similar pairs PER CATEGORY ==\n");
     for (int c = 0; c < cats.size(); ++c)
     {
+        if (!active[c]) continue;
         if (seen.contains(cats[c])) continue;
         seen.add(cats[c]);
         printf("-- %s --\n", cats[c].toRawUTF8());
@@ -100,5 +123,14 @@ int main() {
             ++shown;
         }
     }
+    printf("\n== nearest existing/new neighbours for each new drum ==\n");
+    for (int i = 0; i < N; ++i)
+        if (newDrums.contains(names[i]))
+        {
+            int shown = 0;
+            for (const auto& p : pairs)
+                if ((p.a == i || p.b == i) && shown++ < 3)
+                    printf("  %.3f  %-16s ~ %s\n", p.sim, names[i].toRawUTF8(), names[p.a == i ? p.b : p.a].toRawUTF8());
+        }
     return 0;
 }

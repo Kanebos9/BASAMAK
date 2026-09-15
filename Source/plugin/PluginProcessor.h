@@ -393,9 +393,13 @@ public:
     double editorScale = 0.85;
     bool switchDrumming(bool enable, bool convert, juce::String& error);
     // Export sequence as MIDI file for drag-to-DAW
-    juce::File exportMidiFile(int channel);   // Drag MIDI: the SELECTED channel only, as a melody
+    juce::File exportMidiFile(int channel);   // Selected regular channel, or the whole live drum kit.
+    bool hasDrummingSwitchData();            // Notes/takes anywhere that need a conversion choice.
 
 private:
+    void processBlockSlice(juce::AudioBuffer<float>&, juce::MidiBuffer&, juce::AudioPlayHead*);
+    juce::AudioBuffer<float> keySliceAudio;
+    juce::MidiBuffer keySliceMidi, keySliceOutput;
     double currentSampleRate  = 44100.0;
     int    currentBlockSize   = 512;
 

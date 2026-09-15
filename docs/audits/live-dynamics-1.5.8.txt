@@ -1,0 +1,23 @@
+[1] duck dips:      pre=0.4202 dip=0.1695 (dry dip=0.3827) -> level pushed down (DUCK OK)
+[2] duck recovers:  rec=0.2325 (dry=0.2338) -> level back up (RELEASE OK)
+[3] duck armed-but-silent = bit-identical to off: maxdiff=0.000000000 -> OK
+[live same bar] duck dip=0.443 recovery=0.994 -> OK
+[live same bar] duck disabled/silent mode 2 delta=0.000000000 -> OK
+[live same bar] duck disabled/silent mode 3 delta=0.000000000 -> OK
+[live same bar] duck disabled/silent mode 4 delta=0.000000000 -> OK
+[live same bar] overlap=0 choke-mode=0 old-row voices=1 (want 1) -> OK
+[live same bar] overlap=0 choke-mode=1 old-row voices=0 (want 0) -> OK
+[live same bar] overlap=0 choke-mode=2 old-row voices=1 (want 1) -> OK
+[live same bar] overlap=1 choke-mode=0 old-row voices=2 (want 2) -> OK
+[live same bar] overlap=1 choke-mode=1 old-row voices=0 (want 0) -> OK
+[live same bar] overlap=1 choke-mode=2 old-row voices=1 (want 1) -> OK
+[live old-bar tails] duck dip=0.443 recovery=0.994 -> OK
+[live old-bar tails] duck disabled/silent mode 2 delta=0.000000000 -> OK
+[live old-bar tails] duck disabled/silent mode 3 delta=0.000000000 -> OK
+[live old-bar tails] duck disabled/silent mode 4 delta=0.000000000 -> OK
+[live old-bar tails] overlap=0 choke-mode=0 old-row voices=1 (want 1) -> OK
+[live old-bar tails] overlap=0 choke-mode=1 old-row voices=0 (want 0) -> OK
+[live old-bar tails] overlap=0 choke-mode=2 old-row voices=1 (want 1) -> OK
+[live old-bar tails] overlap=1 choke-mode=0 old-row voices=2 (want 2) -> OK
+[live old-bar tails] overlap=1 choke-mode=1 old-row voices=0 (want 0) -> OK
+[live old-bar tails] overlap=1 choke-mode=2 old-row voices=1 (want 1) -> OK

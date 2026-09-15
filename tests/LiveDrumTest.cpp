@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "FactoryContent.h"
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -80,9 +81,186 @@ int main(int argc, char **argv)
     juce::ScopedJuceInitialiser_GUI init;
     printf("Live drumming: mapping, timestamps, takes, persistence, conversion and UI\n");
     {
+        // Fractional roll timing: sample-offset MIDI, short gates, close hits, persistence,
+        // backward compatibility and both exports. No old 384-column quantization remains.
+        auto p = std::make_unique<DrumSequencerProcessor>();
+        auto &s = p->sequencer;
+        auto &c = s.patterns[0].channels[0];
+        tone(c, 261.625565f);
+        c.drawMode = true;
+        p->prepareToPlay(48000, 512);
+        p->keysArmedPattern = 0;
+        s.startStandalone();
+        juce::AudioBuffer<float> a(2, 512);
+        juce::MidiBuffer midi;
+        p->processBlock(a, midi); // start at sample 512
+        p->keysRecording = true;
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, (juce::uint8)95), 33);
+        midi.addEvent(juce::MidiMessage::noteOff(1, 60), 211);
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, (juce::uint8)73), 289);
+        midi.addEvent(juce::MidiMessage::noteOff(1, 60), 450);
+        p->processBlock(a, midi);
+        p->keysRecording = false;
+        CHECK(c.drawNoteCount == 2);
+        if (c.drawNoteCount == 2)
+        {
+            CHECK(std::abs(c.drawNotes[0].start - 545.0 / 250) < 1e-9);
+            CHECK(std::abs(c.drawNotes[0].len - 178.0 / 250) < 1e-9);
+            CHECK(std::abs(c.drawNotes[1].start - 801.0 / 250) < 1e-9);
+            CHECK(std::abs(c.drawNotes[1].len - 161.0 / 250) < 1e-9);
+        }
+        DrumSequencerProcessor::KeysTake take;
+        take.name = "Fine timing"; take.channel = 0; take.drawPat = 0; take.isDraw = true;
+        take.drawNotes.assign(c.drawNotes, c.drawNotes + c.drawNoteCount);
+        p->keysTakes.push_back(take);
+        auto state = p->captureStateTree();
+        c.clearDrawNotes();
+        p->applyStateTree(state);
+        CHECK(c.drawNoteCount == 2 && std::abs(c.drawNotes[0].start - 2.18) < 1e-9);
+        CHECK(p->keysTakes.size() == 1 && std::abs(p->keysTakes[0].drawNotes[0].len - 0.712) < 1e-9);
+        auto old = DrumChannel::DrawNote::unpack(juce::StringArray::fromTokens("96:48:7:200", ":", ""));
+        CHECK(old.start == 96 && old.len == 48 && old.semi == 7);
+        // Both onsets lie close to a grid line; render must keep their exact positions/gates.
+        s.reset(); s.startStandalone(); s.recordSuppressCh = -1;
+        int count = 0;
+        for (int block = 0; block < 3; ++block)
+            for (const auto &e : s.processBlock(a, 48000, 512, nullptr))
+                if (e.isDraw && e.channel == 0)
+                {
+                    const int expected = count == 0 ? 545 : 801;
+                    CHECK(std::abs(block * 512 + e.offset - expected) <= 1);
+                    CHECK(std::abs(e.gate - (count == 0 ? 178 : 161)) <= 1);
+                    ++count;
+                }
+        CHECK(count == 2);
+        auto verifyExport = [&](bool kit)
+        {
+            auto file = p->exportMidiFile(kit ? 15 : 0);
+            juce::FileInputStream stream(file);
+            juce::MidiFile mf;
+            CHECK(mf.readFrom(stream));
+            CHECK(mf.getTimeFormat() == 9600);
+            int ons = 0;
+            for (int i = 0; i < mf.getTrack(0)->getNumEvents(); ++i)
+            {
+                auto &msg = mf.getTrack(0)->getEventPointer(i)->message;
+                if (msg.isNoteOn())
+                {
+                    CHECK(msg.getNoteNumber() == (kit ? 49 : 60));
+                    CHECK(std::abs(msg.getTimeStamp() - (ons == 0 ? 218.0 : 320.4)) <= 1.0);
+                    CHECK(msg.getVelocity() == (ons == 0 ? 95 : 73));
+                    ++ons;
+                }
+            }
+            CHECK(ons == 2);
+            CHECK(mf.getTrack(0)->getEndTime() == 38400); // silent remainder survives dragging
+            file.deleteFile();
+        };
+        verifyExport(false);
+        juce::String error;
+        CHECK(p->switchDrumming(true, true, error));
+        CHECK(std::abs(s.drums.patterns[0].hits[0].pos * 384 - 2.18) < 1e-9);
+        verifyExport(true);
+        CHECK(p->switchDrumming(false, true, error));
+        CHECK(std::abs(c.drawNotes[0].start - 2.18) < 1e-9);
+        // Host start at sample zero must be capturable too (including a sub-column release).
+        c.clearDrawNotes(); s.reset(); s.dawSync = true;
+        TestPlayHead host; host.playing = true; p->setPlayHead(&host);
+        p->keysRecording = true; p->keysLoopSeen = -1;
+        midi.clear();
+        midi.addEvent(juce::MidiMessage::noteOn(1, 62, (juce::uint8)100), 0);
+        midi.addEvent(juce::MidiMessage::noteOff(1, 62), 127);
+        p->processBlock(a, midi);
+        CHECK(c.drawNoteCount == 1);
+        CHECK(c.drawNotes[0].start == 0 && std::abs(c.drawNotes[0].len - 127.0 / 250) < 1e-9);
+        p->keysRecording = false; p->setPlayHead(nullptr);
+        c.clearDrawNotes(); s.dawSync = false; s.reset(); s.startStandalone();
+        s.recordSuppressCh = -1;
+        c.addDrawNote(2.01, 0.03, 0, 100);
+        c.addDrawNote(2.1, 0.03, 2, 100); // same old integer column, across an audio-block boundary
+        int closeHits = 0;
+        for (int block = 0; block < 2; ++block)
+            for (const auto &e : s.processBlock(a, 48000, 512, nullptr))
+                if (e.channel == 0 && e.isDraw) ++closeHits;
+        CHECK(closeHits == 2);
+    }
+    {
+        // A host bar boundary inside a callback closes the previous take precisely,
+        // then keeps the held key in the next pass until its sample-offset release.
+        auto p = std::make_unique<DrumSequencerProcessor>();
+        auto& s = p->sequencer;
+        auto& c = s.patterns[0].channels[0];
+        tone(c, 261.625565f); c.drawMode = true;
+        p->prepareToPlay(48000, 512);
+        TestPlayHead host; host.playing = true; host.ppq = 95990.0 / 24000;
+        p->setPlayHead(&host); s.dawSync = true;
+        p->keysArmedPattern = 0; p->keysRecording = true;
+        juce::AudioBuffer<float> audio(2, 512);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, (juce::uint8)100), 5);
+        midi.addEvent(juce::MidiMessage::noteOff(1, 60), 30);
+        p->processBlock(audio, midi);
+        CHECK(p->keysDrawTakeReady.load() && p->keysDrawTakeCount == 1);
+        CHECK(std::abs(p->keysDrawTakeNotes[0].start - 383.98) < 1e-9);
+        CHECK(std::abs(p->keysDrawTakeNotes[0].len - 0.02) < 1e-9);
+        CHECK(c.drawNoteCount == 1 && c.drawNotes[0].start == 0);
+        CHECK(std::abs(c.drawNotes[0].len - 0.08) < 1e-9);
+        p->keysRecording = false; p->setPlayHead(nullptr);
+    }
+    {
+        auto p = std::make_unique<DrumSequencerProcessor>();
+        CHECK(!p->hasDrummingSwitchData());
+        auto &last = p->sequencer.patterns[63].channels[15];
+        last.steps[63] = true; // even data hidden by the current step count must be protected
+        CHECK(p->hasDrummingSwitchData()); last.steps[63] = false;
+        last.addDrawNote(0.123, 0.456, 0, 100);
+        CHECK(p->hasDrummingSwitchData()); last.clearDrawNotes();
+        p->sequencer.drums.takes.push_back({"Saved kit take", 63, 1, {{63, {0.1, 15, 1, 0}}}});
+        CHECK(p->hasDrummingSwitchData()); p->sequencer.drums.takes.clear();
+        if (argc > 1 && juce::String(argv[1]) == "--ui")
+        {
+            auto &c = p->sequencer.patterns[0].channels[0];
+            c.drawMode = true;
+            StepGridComponent grid;
+            grid.setSize(1000, 352); grid.setGridDiv(0);
+            grid.update(p->sequencer, false);
+            std::vector<DrumChannel::DrawNote> edited;
+            grid.onDrawNotesChanged = [&](int, const DrumChannel::DrawNote* notes, int count)
+            { edited.assign(notes, notes + count); };
+            auto mouse = [&](float x, bool dragged)
+            {
+                auto now = juce::Time::getCurrentTime();
+                return juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), {x, 22},
+                    juce::ModifierKeys(juce::ModifierKeys::leftButtonModifier), 1, 0, 0, 0, 0,
+                    &grid, &grid, now, {103, 22}, now, 1, dragged);
+            };
+            grid.mouseDown(mouse(103, false));
+            grid.mouseDrag(mouse(119, true));
+            grid.mouseUp(mouse(119, true));
+            CHECK(edited.size() == 1);
+            if (!edited.empty()) CHECK(std::abs(edited[0].start - 103.0 / 1000 * 384) < 1e-9);
+            std::unique_ptr<juce::AudioProcessorEditor> ed(p->createEditor());
+            auto* toggle = button(*ed, "LIVE DRUMMING");
+            auto* keep = button(*ed, "Keep and convert");
+            CHECK(toggle && keep);
+            if (toggle && keep)
+            {
+                toggle->onClick();
+                CHECK(p->sequencer.drums.enabled && !keep->getParentComponent()->isVisible());
+                toggle->onClick();
+                CHECK(!p->sequencer.drums.enabled && !keep->getParentComponent()->isVisible());
+                last.steps[3] = true;
+                toggle->onClick();
+                CHECK(!p->sequencer.drums.enabled && keep->getParentComponent()->isVisible());
+                button(*ed, "Cancel")->onClick();
+                CHECK(last.steps[3]);
+            }
+        }
+    }
+    {
         auto d = std::make_unique<LiveDrumming>();
-        CHECK(d->target(36, 10) == 0);
-        CHECK(d->target(38, 10) == 1);
+        const int padNotes[] = {49, 48, 45, 51, 36, 38, 43, 42};
+        for (int ch = 0; ch < 8; ++ch) CHECK(d->target(padNotes[ch], 10) == ch);
         CHECK(d->target(127, 10) == -1);
         d->assign(15, 36, 10);
         CHECK(d->target(36, 10) == 15);
@@ -112,7 +290,7 @@ int main(int argc, char **argv)
         CHECK(d->enabled && d->takes.size() == 1 && d->notes[3] == 80);
         CHECK(d->patterns[1].hits[0].channel == 15);
         d->restore({});
-        CHECK(!d->enabled && d->takes.empty() && d->notes[0] == 36);
+        CHECK(!d->enabled && d->takes.empty() && d->notes[0] == 49);
     }
     {
         auto s = std::make_unique<Sequencer>();
@@ -453,6 +631,49 @@ int main(int argc, char **argv)
                 CHECK(ed->getWidth() < before);
                 CHECK(std::abs((double)ed->getWidth() / ed->getHeight() - 1510.0 / 826) < 0.01);
             }
+        }
+    }
+    {
+        // The normal physical OKTO pads keep their instruments even with another editor row selected.
+        auto p = std::make_unique<DrumSequencerProcessor>();
+        auto& s = p->sequencer;
+        const int kit = Factory::presetNames().indexOf("Live Drums - Room Session");
+        CHECK(kit >= 0);
+        Factory::applyPreset(s, kit);
+        CHECK(s.drums.enabled);
+        CHECK(s.patterns[0].channels[4].mixName == "Break Kick");
+        CHECK(s.patterns[0].channels[5].mixName == "Mod Snare");
+        p->lastSelectedChannel = 15;
+        p->prepareToPlay(48000, 512);
+        s.drums.arm(0, 0, false);
+        juce::AudioBuffer<float> audio(2, 512);
+        juce::MidiBuffer midi;
+        const int physicalNotes[] = {49, 48, 45, 51, 36, 38, 43, 42};
+        for (int ch = 0; ch < 8; ++ch)
+            midi.addEvent(juce::MidiMessage::noteOn(10, physicalNotes[ch], (juce::uint8)100), 10 + ch * 50);
+        p->processBlock(audio, midi);
+        CHECK(s.drums.patterns[0].count == 8);
+        for (int ch = 0; ch < s.drums.patterns[0].count; ++ch)
+            CHECK(s.drums.patterns[0].hits[(size_t)ch].channel == ch);
+        CHECK(audio.getMagnitude(0, 512) > 0.001f);
+        p->standaloneStop();
+        p->releaseResources();
+        if (argc > 1 && juce::String(argv[1]) == "--ui")
+        {
+            std::unique_ptr<juce::AudioProcessorEditor> ed(p->createEditor());
+            auto* overlap = button(*ed, "OV");
+            CHECK(overlap && overlap->isEnabled());
+            if (overlap)
+            {
+                const bool before = s.patterns[0].channels[0].allowOverlap;
+                overlap->setToggleState(!before, juce::dontSendNotification);
+                overlap->onClick();
+                CHECK(s.patterns[0].channels[0].allowOverlap == !before);
+                overlap->setToggleState(before, juce::dontSendNotification);
+                overlap->onClick();
+                CHECK(s.patterns[0].channels[0].allowOverlap == before);
+            }
+            snapshot(*ed, "basamak-okto-physical-kit");
         }
     }
     printf("LiveDrumTest: %s (%d failures)\n", fails ? "FAIL" : "PASS", fails);

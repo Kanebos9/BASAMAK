@@ -25,16 +25,66 @@ Recording retains incoming timing. **Snap** only affects added/moved hits; **Qua
 
 Mute, Solo, Overlap, sound editing, effects, aux routing, MIDI Out, choke groups and ducking remain available. Step editing, keyboard Merge & Split and Generate are unavailable in this mode. Swing is read-only because drum hit timing is explicit. Pattern merging remains available while stopped/not recording; merged bars share sound settings as before. Existing sound voicing and effects remain part of each instrument.
 
+## Overlap, Duck and Choke
+
+These controls remain your choice in Live Drumming:
+
+- **OV On:** successive hits on the same channel can ring together. **OV Off:** the next hit fades the previous tail, including tails still sounding from another bar. It applies to the current pattern or merged group. Short sounds still finish naturally.
+- **Routing > Channel > Duck:** choose which other channel temporarily lowers this channel’s level, and how much. **Off** or zero amount disables it. The sound recovers after the triggering hit; tails from earlier bars are included.
+- **Routing > Channel > Choke group:** channels in the same nonzero group cut each other’s tails, including across bars. **Off (no choke)** removes the channel from choke groups. Choke can cut another channel even when that other channel has OV On; OV governs repeats on the same channel. Factory kits group closed/open/pedal hat positions together.
+
+Cutting a voice does not erase reverb or delay already sent to the master effects. Their Gate/Trail controls handle those effect tails separately. In the regular piano roll, note lengths and keyboard Poly govern overlap, so OV is dimmed there.
+
 ## Switching modes
 
-The switch offers **Keep and convert**, **Start fresh**, or **Cancel**. Hover each choice for details. Both conversion and clearing affect all patterns and saved takes; sounds, effects, mixer settings, chains and MIDI assignments remain.
+If every pattern and saved-take list is empty, switching modes is immediate. Otherwise the switch offers **Keep and convert**, **Start fresh**, or **Cancel**. Hover each choice for details. Both conversion and clearing affect all patterns and saved takes; sounds, effects, mixer settings, chains and MIDI assignments remain.
 
 To Live Drumming, conversion keeps hit rhythm, velocity and pan. Step swing/nudge/ratchets become explicit hit times. Melodies become fixed-pitch drum hits, simultaneous chord notes collapse to the loudest strike, and note lengths, per-note slot choices, glide, step modulation and loop conditions do not carry over. Separate channel takes become separate kit takes; they are not guessed into matching performances.
 
-To regular mode, each channel receives one-shot piano-roll notes using its existing tuning. Timing rounds to the regular roll's 384 positions per bar; velocity uses its existing 8-bit resolution. Converted notes expose **Channel tuning** in their right-click menu. Choose **Piano-roll pitch** or move the pitch to use regular melodic notes. Kit takes become separate channel takes for the current pattern groups. A partial-bar/group take uses the regular recorder’s whole-group loading scope; takes spanning unmerged groups are split so they remain accessible. If the notes/takes cannot fit regular-mode limits, conversion leaves everything untouched and explains the limit.
+To regular mode, each channel receives one-shot piano-roll notes using its existing tuning. Timing is preserved with fractional note positions; velocity uses the regular roll's existing 8-bit resolution. Converted notes expose **Channel tuning** in their right-click menu. Choose **Piano-roll pitch** or move the pitch to use regular melodic notes. Kit takes become separate channel takes for the current pattern groups. A partial-bar/group take uses the regular recorder’s whole-group loading scope; takes spanning unmerged groups are split so they remain accessible. If the notes/takes cannot fit regular-mode limits, conversion leaves everything untouched and explains the limit.
 
 Start fresh clears notes and takes. Cancel changes nothing. Undo restores the previous mode and its sequence data.
 
 ## Window size
 
 Use **− / +** beside Presets to change the entire window in 5% increments. The corner resize handle remains available. Scaling preserves the layout's aspect ratio, fits the display's available area, and is saved in the project/preset. The keyboard and sound editor fit within the same scaled layout.
+
+## Timing precision
+
+Both piano rolls retain fractional note positions. The regular roll still uses 384 logical columns per bar to describe its grid, but starts and lengths are no longer restricted to whole columns. Snap Off allows continuous placement; recording does not snap. MIDI keyboard input is processed at the sample offsets supplied by the host, including note releases. Saved takes, undo, project files and mode conversion retain the fine timing. Existing integer-position projects load at exactly their previous positions.
+
+DRAG MIDI uses **9600 ticks per quarter note** in both modes, about **0.052 ms per tick at 120 BPM**. This is an export-file resolution; it does not impose a grid on either internal roll. Exports include the displayed pattern/group's silent remainder. Drum exports include all rows with input-note assignments (Any channel becomes MIDI channel 10). Per-hit pan and sound/effect settings are not carried by the MIDI file.
+
+## Ready-to-play factory kits
+
+Find these under **Presets > Factory**. They open in Live Drumming mode with empty sequences, all 64 patterns using the same kit, and no saved takes. All sounds are synthesized in BASAMAK, so no external sample library is required. These are stylistic kits, not sampled replicas of acoustic instruments.
+
+| Preset | Character |
+|---|---|
+| Live Drums - Room Session | Short kick, resonant snare, rounded toms |
+| Live Drums - Dry Funk | Short kick and snare, tight hats, dry accents |
+| Live Drums - Brush Lounge | Brushed snare, soft kick, sizzle and bell ride |
+| Live Drums - 808 Circuit | Booming kick, electronic toms, metallic hats and clap |
+| Live Drums - Warehouse | Punchy 909-style drums, bright hats and processed clap |
+| Live Drums - Dusty Breaks | Boxy kick, roomy snare, compressed clap and rough cymbals |
+| Live Drums - Cajon Circle | Wooden bass/slap, rattles and hand-percussion voices |
+| Live Drums - Skin and Clay | Skin drum, tabla, udu, conga and bongo |
+| Live Drums - Cinematic Ritual | Deep drums, gong, metal and longer resonances |
+| Live Drums - Scrap Yard | Steel kick, spring knock, FM clang and trash stack |
+
+Every kit preserves the OKTO B's normal physical pad positions, viewed from the player (L/R CH and X-STICK off):
+
+| Physical position | BASAMAK channel | Normal role | MIDI note |
+|---|---:|---|---:|
+| Top left | 1 | Crash | 49 |
+| Top middle-left | 2 | Tom 1 (high) | 48 |
+| Top middle-right | 3 | Tom 2 (mid) | 45 |
+| Top right | 4 | Ride | 51 |
+| Bottom left | 5 | Kick | 36 |
+| Bottom middle-left | 6 | Snare | 38 |
+| Bottom middle-right | 7 | Tom 3 (low) | 43 |
+| Bottom right | 8 | Closed hi-hat | 42 |
+
+Sounds, MIDI In and MIDI Out notes follow that order together. Rows 9–11 provide the alternate open hi-hat (46), snare rim (37) and pedal hi-hat (44) triggers. Rows 12–16 add **39, 54, 56, 75, 82** for extra percussion. Every kit accepts any MIDI channel. New default input assignments also follow the physical order; saved project/preset assignments load unchanged. Closed/open/pedal positions (42/46/44) share a choke group. The same pad keeps its role when switching kits, although hand-percussion and experimental kits replace conventional drums with their own textures. If your OKTO kit has edited MIDI KEY assignments, use Routing > MIDI In > Learn.
+
+Seven new sounds are available individually in Sound Bank: **Trash Stack, Cajon Slap, Udu Pot, Cabasa, Tambourine, Flexatone, Spring Knock**. All their sound settings remain visible and editable.

@@ -1,5 +1,27 @@
 #include "PluginProcessor.h"
 
+bool DrumSequencerProcessor::hasDrummingSwitchData()
+{
+    const juce::ScopedLock lock(getCallbackLock());
+    const auto &d = sequencer.drums;
+    if (!keysTakes.empty() || !d.takes.empty() || !d.pendingTake.hits.empty() || d.logCount > 0 ||
+        (keysDrawTakeReady.load() && keysDrawTakeCount > 0))
+        return true;
+    for (const auto &lane : d.patterns)
+        if (lane.count > 0)
+            return true;
+    for (const auto &pattern : sequencer.patterns)
+        for (const auto &ch : pattern.channels)
+        {
+            if (ch.drawNoteCount > 0)
+                return true;
+            for (bool on : ch.steps)
+                if (on)
+                    return true;
+        }
+    return false;
+}
+
 // Conversion is prepared entirely before mutation. A capacity failure leaves the project
 // untouched; the UI can explain it and offer Start fresh or Cancel instead.
 bool DrumSequencerProcessor::switchDrumming(bool enable, bool convert, juce::String &error)
@@ -51,19 +73,17 @@ bool DrumSequencerProcessor::switchDrumming(bool enable, bool convert, juce::Str
     auto fromNote =
         [&](std::vector<LiveDrumming::RecordedHit> &out, int base, int ch, const DrumChannel::DrawNote &n)
     {
-        const int p = base + n.start / DrumChannel::DRAW_RES;
+        const int p = base + (int)(n.start / DrumChannel::DRAW_RES);
         const float pan = n.pan == DrumChannel::PAN_INHERIT
                               ? sequencer.patterns[juce::jlimit(0, 63, p)].channels[ch].drawPan
                               : n.pan * 0.01f;
-        addHit(out, p, ch, (double)(n.start % DrumChannel::DRAW_RES) / DrumChannel::DRAW_RES, n.vel / 255.0f,
+        addHit(out, p, ch, std::fmod(n.start, DrumChannel::DRAW_RES) / DrumChannel::DRAW_RES, n.vel / 255.0f,
                pan);
     };
     auto toNote = [](const LiveDrumming::Hit &h, int barOffset)
     {
         DrumChannel::DrawNote n;
-        n.start = (int16_t)(barOffset * DrumChannel::DRAW_RES +
-                            juce::jlimit(0, DrumChannel::DRAW_RES - 1,
-                                         (int)std::lround(h.pos * DrumChannel::DRAW_RES)));
+        n.start = (barOffset + h.pos) * DrumChannel::DRAW_RES;
         n.len = 1;
         n.semi = 0;
         n.vel = (uint8_t)juce::jlimit(1, 255, (int)std::lround(h.velocity * 255));

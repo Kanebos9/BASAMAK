@@ -111,6 +111,9 @@ void DrumSequencerProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
 {
     currentSampleRate = sampleRate;
     currentBlockSize  = samplesPerBlock;
+    keySliceAudio.setSize(juce::jmax(getTotalNumInputChannels(), getTotalNumOutputChannels()), 1);
+    keySliceMidi.ensureSize(65536);
+    keySliceOutput.ensureSize(65536);
     loadMeasurer.reset(sampleRate, samplesPerBlock);   // [2026-07-14 01:50] CPU readout
     msTapRing.setSize(1, juce::jmax(1024, (int)(sampleRate * 8.0)));   // [2026-07-18] wizard input tap
     msTapRing.clear();
@@ -218,8 +221,73 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
 {
     const juce::ScopedTryLock stateLock(getCallbackLock());
     if (!stateLock.isLocked()) { audio.clear(); midi.clear(); return; }
+    juce::AudioProcessLoadMeasurer::ScopedTimer cpuTimer(loadMeasurer, audio.getNumSamples());
+    if (audio.getNumSamples() <= 0) return;
+    // Keyboard notes must be played AND recorded at their host sample offsets. The
+    // original callback is reused per slice; effects/oversampling retain their state.
+    bool split = !sequencer.drums.enabled && keysRecording.load();
+    if (!sequencer.drums.enabled && !split)
+        for (const auto meta : midi)
+            if (meta.samplePosition > 0 && meta.getMessage().isNoteOnOrOff()) { split = true; break; }
+    if (!split) { processBlockSlice(audio, midi, getPlayHead()); return; }
+
+    struct SlicePlayHead final : juce::AudioPlayHead
+    {
+        juce::AudioPlayHead* host;
+        double sr;
+        int offset = 0;
+        SlicePlayHead(juce::AudioPlayHead* h, double rate) : host(h), sr(rate) {}
+        juce::Optional<PositionInfo> getPosition() const override
+        {
+            auto pos = host ? host->getPosition() : juce::Optional<PositionInfo>{};
+            if (!pos || (!pos->getIsPlaying() && !pos->getIsRecording())) return pos;
+            if (auto t = pos->getTimeInSamples()) pos->setTimeInSamples(*t + offset);
+            if (auto t = pos->getTimeInSeconds()) pos->setTimeInSeconds(*t + offset / sr);
+            if (auto ppq = pos->getPpqPosition())
+                pos->setPpqPosition(*ppq + offset / sr * pos->getBpm().orFallback(120.0) / 60.0);
+            return pos;
+        }
+    } head(getPlayHead(), currentSampleRate);
+    keySliceOutput.clear();
+    const int size = audio.getNumSamples();
+    for (int start = 0; start < size;)
+    {
+        head.offset = start;
+        sequencer.syncInputClock(&head, currentSampleRate);
+        int end = size;
+        for (const auto meta : midi)
+            if (meta.samplePosition > start && meta.getMessage().isNoteOnOrOff())
+            { end = juce::jmin(end, meta.samplePosition); break; }
+        if (keysRecording.load() && sequencer.isCurrentlyPlaying)
+        {
+            double barSeconds = sequencer.timeSigNum * 4.0 / sequencer.timeSigDen
+                                * 60.0 / sequencer.standaloneBpm;
+            if (sequencer.dawSync)
+                if (auto pos = head.getPosition())
+                {
+                    auto ts = pos->getTimeSignature().orFallback(juce::AudioPlayHead::TimeSignature{4, 4});
+                    barSeconds = ts.numerator * 4.0 / juce::jmax(1, ts.denominator)
+                                 * 60.0 / juce::jmax(1.0, pos->getBpm().orFallback(120.0));
+                }
+            const int toBar = juce::jmax(1, (int)std::ceil((1.0 - sequencer.barPos())
+                                                         * barSeconds * currentSampleRate - 1.0e-7));
+            end = juce::jmin(end, start + toBar);
+        }
+        keySliceMidi.clear();
+        keySliceMidi.addEvents(midi, start, end - start, -start);
+        keySliceAudio.setDataToReferTo(audio.getArrayOfWritePointers(), audio.getNumChannels(), start, end - start);
+        processBlockSlice(keySliceAudio, keySliceMidi, &head);
+        keySliceOutput.addEvents(keySliceMidi, 0, end - start, start);
+        start = end;
+    }
+    midi.swapWith(keySliceOutput);
+}
+
+void DrumSequencerProcessor::processBlockSlice(juce::AudioBuffer<float>& audio,
+                                               juce::MidiBuffer& midi, juce::AudioPlayHead* sliceHead)
+{
     juce::ScopedNoDenormals noDenormals;
-    juce::AudioProcessLoadMeasurer::ScopedTimer cpuTimer(loadMeasurer, audio.getNumSamples());   // [2026-07-14 01:50]
+    if (!sequencer.drums.enabled) sequencer.syncInputClock(sliceHead, currentSampleRate);
     // [2026-07-18] MULTISAMPLE RECORDING TAP: mirror the INPUT bus into the ring BEFORE the
     // output clear wipes it (the input aliases these channels). Off = zero cost.
     if (msTapOn.load(std::memory_order_relaxed) && getBusCount(true) > 0)
@@ -398,7 +466,6 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
     if (!sequencer.drums.enabled)
     {
         const int  chIdx = juce::jlimit(0, Sequencer::NUM_CHANNELS - 1, lastSelectedChannel);
-        keysSampleClock += (uint64_t) audio.getNumSamples();   // [2026-07-19] Let Ring strum-window clock (per-block granular ~ block ms; the window is ~90 ms >> a block)
         const bool rec   = keysRecording.load(std::memory_order_relaxed);
         // Which pattern the keyboard plays (and records into):
         //  - chain record: the PLAYING pattern (follow the chain -> its loaded sound + slot-2 setting);
@@ -486,6 +553,17 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                     {
                         const bool sameGroup = sequencer.inGroup(pp2)
                                                && sequencer.groupHead(pp2) == sequencer.groupHead(seenP);
+                        // Close held notes exactly at the completed bar/group boundary before
+                        // taking the snapshot; the last rendered block may end between columns.
+                        for (int i = 0; i < keysHeldCount; ++i)
+                        {
+                            const int op = keysHeldOpenPat[i], oi = keysHeldOpenIdx[i];
+                            if (op < 0 || oi < 0 || op > seenP) continue;
+                            auto& cc = sequencer.patterns[op].channels[keysHeldOpenChan[i]];
+                            if (oi < cc.drawNoteCount)
+                                cc.drawNotes[oi].len = juce::jmax(DrumChannel::DRAW_MIN_LEN,
+                                    (seenP - op + 1.0) * DrumChannel::DRAW_RES - cc.drawNotes[oi].start);
+                        }
                         if (sameGroup && pp2 == seenP + 1)
                         {
                             // INTERNAL bar advance of a merged group: nothing to do - held notes keep
@@ -507,7 +585,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                                     for (int i = 0; i < nc && nn < DRAW_TAKE_MAX; ++i)
                                     {
                                         keysDrawTakeNotes[nn] = rch.drawNotes[i];
-                                        keysDrawTakeNotes[nn].start = (int16_t) (keysDrawTakeNotes[nn].start
+                                        keysDrawTakeNotes[nn].start = (keysDrawTakeNotes[nn].start
                                                                                  + (b - gh) * DrumChannel::DRAW_RES);
                                         ++nn;
                                     }
@@ -647,21 +725,19 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                 && std::abs(note - 60) <= DrumChannel::PITCH_RANGE)    // arp notes beyond the roll's range: skip
             {
                 const double gridPerBar = arpNPB(arpKc);
-                const int colLen = juce::jmax(1, (int) ((double) DrumChannel::DRAW_RES / gridPerBar));
+                const double colLen = DrumChannel::DRAW_RES / gridPerBar;
                 // FREE (unquantised) stamping - recording captures what actually played:
                 // gated notes of len = cell x GATE (exactly when the live keyUp happens), the
                 // UPSTROKE's lighter accent baked into the velocity. The previous stamp is
                 // TRIMMED if block jitter made it poke into this one (no false overlap warnings).
-                const int col = arpKicked ? 0 : juce::jlimit(0, DrumChannel::DRAW_RES - 1,
-                                                             (int) (sequencer.barPos() * DrumChannel::DRAW_RES));
-                const int len = juce::jmax(1, (int) std::lround((double) colLen
-                                    * juce::jlimit(0.1f, 1.0f, arpKc.arpGate)));
+                const double col = arpKicked ? 0 : sequencer.barPos() * DrumChannel::DRAW_RES;
+                const double len = colLen * juce::jlimit(0.1f, 1.0f, arpKc.arpGate);
                 auto& pch = sequencer.patterns[sequencer.playPattern].channels[chIdx];
                 if (arpLastStampIdx >= 0 && arpLastStampIdx < pch.drawNoteCount
                     && arpLastStampPat == sequencer.playPattern
                     && col > pch.drawNotes[arpLastStampIdx].start
                     && pch.drawNotes[arpLastStampIdx].start + pch.drawNotes[arpLastStampIdx].len > col)
-                    pch.drawNotes[arpLastStampIdx].len = (int16_t) juce::jmax(1, col - pch.drawNotes[arpLastStampIdx].start);
+                    pch.drawNotes[arpLastStampIdx].len = juce::jmax(DrumChannel::DRAW_MIN_LEN, col - pch.drawNotes[arpLastStampIdx].start);
                 // Velocity is stamped CLEAN: the Strum UP flag reproduces the upstroke accent
                 // (x0.82) through the SAME DSP gate as live - baking it into velocity too played
                 // recorded upstrokes at 0.67x live (double-applied), and made recordings quieter
@@ -726,9 +802,8 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                         && sequencer.groupHead(op) == sequencer.groupHead(sequencer.playPattern))
                     {
                         auto& nt = pch.drawNotes[oi];
-                        const int cur = barDelta * DrumChannel::DRAW_RES
-                                      + juce::jlimit(0, DrumChannel::DRAW_RES - 1, (int) (sequencer.barPos() * DrumChannel::DRAW_RES));
-                        if (cur >= nt.start) nt.len = (int16_t) juce::jlimit(1, DrumChannel::DRAW_RES * 8, cur - nt.start + 1);
+                        const double cur = (barDelta + sequencer.barPos()) * DrumChannel::DRAW_RES;
+                        if (cur >= nt.start) nt.len = juce::jlimit(DrumChannel::DRAW_MIN_LEN, DrumChannel::DRAW_RES * 8.0, cur - nt.start);
                     }
                 }
             keysHeldCount = 0;
@@ -834,9 +909,8 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                 {
                     openPat = juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, sequencer.playPattern);
                     auto& pch = sequencer.patterns[openPat].channels[tgtCh];   // EACH half records into ITS channel's roll
-                    const int cur = kicked ? 0 : juce::jlimit(0, DrumChannel::DRAW_RES - 1,
-                                                              (int) (sequencer.barPos() * DrumChannel::DRAW_RES));
-                    openIdx = pch.addDrawNote(cur, 1, playNote - 60, (int) std::lround(kvel * 255.0f));
+                    const double cur = kicked ? 0 : sequencer.barPos() * DrumChannel::DRAW_RES;
+                    openIdx = pch.addDrawNote(cur, DrumChannel::DRAW_MIN_LEN, playNote - 60, (int) std::lround(kvel * 255.0f));
                     // [2026-07-16 round-5] NOTHING is stamped for legato/glide any more (user
                     // design): the recorded note GEOMETRY (overlap/butt) already says what was
                     // played, and playback derives slide + envelope-continuation from it plus the
@@ -899,10 +973,8 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                     && sequencer.groupHead(openPat) == sequencer.groupHead(sequencer.playPattern) && barDelta >= 0)
                 {
                     auto& nt = pch.drawNotes[openIdx];
-                    const int cur = barDelta * DrumChannel::DRAW_RES
-                                  + juce::jlimit(0, DrumChannel::DRAW_RES - 1,
-                                                 (int) (sequencer.barPos() * DrumChannel::DRAW_RES));
-                    if (cur >= nt.start) nt.len = (int16_t) juce::jlimit(1, DrumChannel::DRAW_RES * 8, cur - nt.start + 1);
+                    const double cur = (barDelta + sequencer.barPos()) * DrumChannel::DRAW_RES;
+                    if (cur >= nt.start) nt.len = juce::jlimit(DrumChannel::DRAW_MIN_LEN, DrumChannel::DRAW_RES * 8.0, cur - nt.start);
                 }
             }
             // MONO slide safety (unchanged rule): a stale up (released note != the held one) does
@@ -1062,7 +1134,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
         {
             juce::ignoreUnused(held);
             const int R = DrumChannel::DRAW_RES;
-            const int cur = juce::jlimit(0, R - 1, (int) (sequencer.barPos() * R));
+            const double cur = sequencer.barPos() * R;
             for (int i = 0; i < keysHeldCount; ++i)
             {
                 const int oi = keysHeldOpenIdx[i], op = keysHeldOpenPat[i];
@@ -1074,13 +1146,15 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
                                 .channels[juce::jlimit(0, Sequencer::NUM_CHANNELS - 1, keysHeldOpenChan[i])];
                 if (oi >= pch.drawNoteCount) continue;
                 auto& nt = pch.drawNotes[oi];
-                const int curAbs = barDelta * R + cur;
+                const double curAbs = barDelta * R + cur;
                 if (curAbs >= nt.start)
-                    nt.len = (int16_t) juce::jlimit(1, R * 8, curAbs - nt.start + 1);
+                    nt.len = juce::jlimit(DrumChannel::DRAW_MIN_LEN, R * 8.0, curAbs - nt.start);
             }
-            keysDrawLastCol.store(cur, std::memory_order_relaxed);
+            keysDrawLastCol.store((int)cur, std::memory_order_relaxed);
         }
     }
+
+    keysSampleClock += (uint64_t)audio.getNumSamples(); // clock points at the next slice's first sample
 
     //-- Stop pressed: FADE any ringing tails on every channel (pitch-aware, capped 20 ms - still
     //   reads as instant; the old hard cut clicked on ringing subs). [2026-07-14 10:40]
@@ -1145,7 +1219,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
     // (The sequencer computes each rendered pattern's OWN anySolo internally - passing the
     //  VIEWED pattern's used to silence the whole playing pattern when view != playback.)
     auto events = sequencer.processBlock(osMain, currentSampleRate * kEngineOS, nOS,
-                                          getPlayHead(), auxPtrs, NUM_AUX_OUTS,
+                                          sliceHead, auxPtrs, NUM_AUX_OUTS,
                                           &reverbSendOS, &delaySendOS,
                                           &reverbSendOSB, &delaySendOSB);
     engineOS->processSamplesDown(hostBlock);   // -> `audio` at the host rate
@@ -1246,7 +1320,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
     //   sequencer is DAW-synced; otherwise use the plugin's own (standalone) BPM.
     if (sequencer.dawSync)
     {
-        if (auto* ph = getPlayHead())
+        if (auto* ph = sliceHead)
         {
             if (const auto pos = ph->getPosition())
             {
@@ -2148,7 +2222,7 @@ juce::File DrumSequencerProcessor::exportMidiFile(int channel)
     // MERGED chains export as ONE long note spanning the whole chain. Velocity / rolls / swing /
     // Length / tempo + time-sig meta all carry over.
     juce::MidiFile midiFile;
-    constexpr int tpq = 96;   // ticks per quarter note
+    constexpr int tpq = 9600; // Preserve performed timing in both regular and kit exports.
     midiFile.setTicksPerQuarterNote(tpq);
 
     juce::MidiMessageSequence seq;
@@ -2167,7 +2241,8 @@ juce::File DrumSequencerProcessor::exportMidiFile(int channel)
             const int n=d.notes[(size_t)h.channel]>=0?d.notes[(size_t)h.channel]:sequencer.patterns[p].channels[h.channel].midiNote;
             int mc=d.midiChannels[(size_t)h.channel]>0?d.midiChannels[(size_t)h.channel]:10;
             const double t=(p-head+h.pos)*barTicks;seq.addEvent(juce::MidiMessage::noteOn(mc,n,(juce::uint8)juce::jlimit(1,127,(int)std::lround(h.velocity*127))),t);
-            seq.addEvent(juce::MidiMessage::noteOff(mc,n),t+juce::jmax(1.0,barTicks/384.0));}
+            seq.addEvent(juce::MidiMessage::noteOff(mc,n),t+juce::jmax(tpq / 96.0,barTicks/384.0));}
+        seq.addEvent(juce::MidiMessage::endOfTrack(), (end - head + 1) * barTicks);
         seq.updateMatchedPairs();midiFile.addTrack(seq);
         auto file=juce::File::getSpecialLocation(juce::File::tempDirectory).getNonexistentChildFile("BASAMAK-kit", ".mid");
         juce::FileOutputStream out(file);if(out.openedOk())midiFile.writeTo(out);return file;
@@ -2298,14 +2373,15 @@ juce::File DrumSequencerProcessor::exportMidiFile(int channel)
                 const float v   = juce::jlimit(0.0f, 1.0f, chn.stepVel[step] * velScale);
                 const auto  vel = (juce::uint8) juce::jlimit(1, 127, juce::roundToInt(v * 127.0f));
                 const double startTick = pos * barTicks;
-                double endTick = startTick + juce::jmax(4.0, lenSteps * stepTicks);
+                double endTick = startTick + juce::jmax(tpq / 24.0, lenSteps * stepTicks);
                 if (mergedChain && j == roll - 1)   // the last sub-hit rings through the merged chain
-                    endTick = juce::jmax(startTick + 4.0, chainGateEnd * barTicks);
+                    endTick = juce::jmax(startTick + tpq / 24.0, chainGateEnd * barTicks);
                 emitNotes(semis, vel, startTick, endTick);   // per-slot voiced (chord/scale aware)
             }
         }
     }
 
+    seq.addEvent(juce::MidiMessage::endOfTrack(), (gEnd - gHead + 1) * barTicks);
     seq.updateMatchedPairs();
     seq.sort();
     midiFile.addTrack(seq);
@@ -3035,7 +3111,7 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
                         while (e < ds.length() && e < DrumChannel::DRAW_RES && (int) ds[e] == cch) ++e;
                         const int vc = (i < vs.length()) ? juce::jlimit(0, 127, (int) vs[i] - 35) : 127;
                         if ((int) t.drawNotes.size() < DrumChannel::DRAW_MAX_NOTES)
-                            t.drawNotes.push_back({ (int16_t) i, (int16_t) (e - i),
+                            t.drawNotes.push_back({ (double) i, (double) (e - i),
                                                     (int8_t) juce::jlimit(-DrumChannel::PITCH_RANGE, DrumChannel::PITCH_RANGE, cch - 70), (uint8_t) (vc << 1) });
                         i = e;
                     }

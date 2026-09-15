@@ -1657,7 +1657,7 @@ int main()
         {
             const auto& dn = C4c.drawNotes[i];
             if (dn.start != 0)   // bar anchors are licensed to overlap
-            { if (melOcc2[juce::jlimit(0, 15, dn.start / 24)]) ++under; else ++inGap; }
+            { if (melOcc2[juce::jlimit(0, 15, (int)(dn.start / 24))]) ++under; else ++inGap; }
             if (dn.semi > melMed2) ++laneViol;
         }
         printf("  SCORE arrangement comp           inGap=%d under=%d total=%d melMed=%d\n",

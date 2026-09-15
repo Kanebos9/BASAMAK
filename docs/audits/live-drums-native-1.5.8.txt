@@ -1,0 +1,123 @@
+BASAMAK factory-bank similarity scores (274 sounds)
+==================================================
+NATIVE DRUM TUNING: compares every percussion family; audition WAVs in the temp BASAMAK-new-drums folder.
+WHAT THE SCORE MEASURES (0..1, higher = more alike):
+  55% attack spectrum   - 24 log-spaced bands over the first 5-150 ms (the hit's colour)
+  35% body spectrum     - the same bands over 150-550 ms (the ring/tail's colour)
+  10% decay-time match  - how similarly fast the two sounds die away
+BLIND SPOTS (judge by ear): stereo width/chorus (mono render), wavetable/LFO MOTION
+(one static window), arp riffs (arp runs in the processor). Sustained same-pitch pads
+SATURATE the metric - 0.95+ in Keys/Pads/Leads is normal, not proof of a twin.
+
+== top similar pairs PER CATEGORY ==
+-- Kicks --
+  0.930  909 Kick         ~  Punch Kick       (dec 0.69s/0.39s)
+  0.890  Punch Kick       ~  FM Tom           (dec 0.39s/0.40s)
+  0.889  FM Kick          ~  909 Kick         (dec 0.97s/0.69s)
+  0.870  909 Kick         ~  FM Tom           (dec 0.69s/0.40s)
+  0.839  FM Kick          ~  FM Tom           (dec 0.97s/0.40s)
+  0.833  Sub Kick         ~  Particle Perc    (dec 1.00s/0.21s)
+  0.802  FM Kick          ~  Punch Kick       (dec 0.97s/0.39s)
+  0.769  Steel Kick       ~  Rumble Kick      (dec 0.96s/0.85s)
+  0.753  Steel Kick       ~  808 Mid Tom      (dec 0.96s/0.47s)
+  0.748  Break Kick       ~  Snap Kick        (dec 0.25s/0.43s)
+-- Snares --
+  0.902  Snap Snare       ~  Snap Clap        (dec 0.11s/0.09s)
+  0.877  Snap Snare       ~  Cabasa           (dec 0.11s/0.13s)
+  0.873  Clack Snare      ~  Filter Zap       (dec 1.00s/0.36s)
+  0.872  606 Snare        ~  Snap Snare       (dec 0.14s/0.11s)
+  0.863  Clack Snare      ~  FM Clang         (dec 1.00s/0.34s)
+  0.857  Brush Snare      ~  Squash Clap      (dec 0.33s/0.44s)
+  0.850  606 Snare        ~  Snap Clap        (dec 0.14s/0.09s)
+  0.821  Mod Snare        ~  808 Rimshot      (dec 0.92s/0.09s)
+  0.818  Room Snare       ~  Squash Clap      (dec 0.40s/0.44s)
+  0.791  606 Snare        ~  Static Hit       (dec 0.14s/0.15s)
+-- Claps --
+  0.933  Clap             ~  808 Clap         (dec 0.12s/0.16s)
+  0.882  Big Clap         ~  Squash Clap      (dec 0.44s/0.44s)
+  0.858  808 Clap         ~  Big Clap         (dec 0.16s/0.44s)
+  0.823  Snap Clap        ~  Cabasa           (dec 0.09s/0.13s)
+  0.803  Clap             ~  Squash Clap      (dec 0.12s/0.44s)
+  0.789  Clap             ~  Big Clap         (dec 0.12s/0.44s)
+  0.786  808 Clap         ~  Squash Clap      (dec 0.16s/0.44s)
+  0.781  Neon Clap        ~  Mod Metal Plate  (dec 1.00s/1.00s)
+  0.771  Big Clap         ~  Bell Cymbal      (dec 0.44s/1.00s)
+  0.763  Neon Clap        ~  Roto Tom         (dec 1.00s/0.49s)
+-- Hi-Hats --
+  0.906  Open Hat         ~  808 OH           (dec 0.45s/0.39s)
+  0.895  Open Hat         ~  Crash            (dec 0.45s/1.00s)
+  0.876  808 OH           ~  Shaker           (dec 0.39s/0.21s)
+  0.833  808 OH           ~  Crash            (dec 0.39s/1.00s)
+  0.821  808 OH           ~  909 Crash        (dec 0.39s/1.00s)
+  0.804  Open Hat         ~  Crisp Hat        (dec 0.45s/0.06s)
+  0.787  Open Hat         ~  Sizzle           (dec 0.45s/1.00s)
+  0.767  Crisp Hat        ~  Shaker           (dec 0.06s/0.21s)
+  0.767  Open Hat         ~  Shaker           (dec 0.45s/0.21s)
+  0.757  Crisp Hat        ~  Crash            (dec 0.06s/1.00s)
+-- Cymbals --
+  0.825  Crash            ~  909 Crash        (dec 1.00s/1.00s)
+  0.816  Mod Gong         ~  909 Hi Tom       (dec 1.00s/0.39s)
+  0.815  Bell Ride        ~  Tambourine       (dec 1.00s/1.00s)
+  0.784  Crash            ~  Sizzle           (dec 1.00s/1.00s)
+  0.731  Mod Gong         ~  808 Hi Tom       (dec 1.00s/0.41s)
+  0.727  Bell Cymbal      ~  Mod Wood Block   (dec 1.00s/0.89s)
+  0.717  Crash            ~  Shaker           (dec 1.00s/0.21s)
+  0.716  Bell Cymbal      ~  Mouth Pop        (dec 1.00s/0.10s)
+  0.712  909 Crash        ~  Shaker           (dec 1.00s/0.21s)
+  0.699  909 Crash        ~  Tambourine       (dec 1.00s/1.00s)
+-- Toms --
+  0.926  808 Low Tom      ~  909 Low Tom      (dec 0.53s/0.47s)
+  0.871  808 Hi Tom       ~  909 Hi Tom       (dec 0.41s/0.39s)
+  0.834  Mod Tom          ~  Comet Tom        (dec 1.00s/1.00s)
+  0.814  808 Mid Tom      ~  909 Mid Tom      (dec 0.47s/0.43s)
+  0.717  909 Low Tom      ~  Udu Pot          (dec 0.47s/0.22s)
+  0.694  808 Hi Tom       ~  Laser Zap        (dec 0.41s/0.35s)
+  0.691  808 Low Tom      ~  Udu Pot          (dec 0.53s/0.22s)
+  0.688  808 Mid Tom      ~  Roto Tom         (dec 0.47s/0.49s)
+  0.683  Roto Tom         ~  Mod Metal Plate  (dec 0.49s/1.00s)
+  0.683  808 Low Tom      ~  Comet Tom        (dec 0.53s/1.00s)
+-- Percussion --
+  0.862  808 Conga        ~  Wire Perc        (dec 0.31s/0.21s)
+  0.793  Mod Wood Block   ~  Mouth Pop        (dec 0.89s/0.10s)
+  0.782  Udu Pot          ~  Comet Tom        (dec 0.22s/1.00s)
+  0.780  Cajon Slap       ~  808 Rimshot      (dec 0.14s/0.09s)
+  0.778  Mod Metal Plate  ~  Spring Knock     (dec 1.00s/1.00s)
+  0.764  Rimshot          ~  FM Clang         (dec 0.06s/0.34s)
+  0.760  Mod Metal Plate  ~  Zap              (dec 1.00s/0.26s)
+  0.760  Bongo            ~  FM Clang         (dec 0.24s/0.34s)
+  0.753  Rimshot          ~  Filter Zap       (dec 0.06s/0.36s)
+  0.736  Tabla            ~  Cluster Cymbal   (dec 0.30s/1.00s)
+-- Electro Perc --
+  0.985  FM Clang         ~  Filter Zap       (dec 0.34s/0.36s)
+  0.731  FM Clang         ~  Buzz Hit         (dec 0.34s/0.20s)
+  0.691  Filter Zap       ~  Buzz Hit         (dec 0.36s/0.20s)
+  0.678  Zap              ~  Laser Zap        (dec 0.26s/0.35s)
+  0.670  Zap              ~  Wire Perc        (dec 0.26s/0.21s)
+  0.649  Spring Knock     ~  Zap              (dec 1.00s/0.26s)
+  0.647  Spring Knock     ~  Cluster Cymbal   (dec 1.00s/1.00s)
+  0.622  Spring Knock     ~  Wire Perc        (dec 1.00s/0.21s)
+  0.620  Spring Knock     ~  Laser Zap        (dec 1.00s/0.35s)
+  0.616  Laser Zap        ~  Cluster Cymbal   (dec 0.35s/1.00s)
+
+== nearest existing/new neighbours for each new drum ==
+  0.757  Trash Stack      ~ Room Snare
+  0.666  Trash Stack      ~ 909 Hi Tom
+  0.638  Trash Stack      ~ Cluster Cymbal
+  0.785  Cajon Slap       ~ Mod Snare
+  0.780  Cajon Slap       ~ 808 Rimshot
+  0.666  Cajon Slap       ~ Zap
+  0.782  Udu Pot          ~ Comet Tom
+  0.717  Udu Pot          ~ 909 Low Tom
+  0.698  Udu Pot          ~ Particle Perc
+  0.877  Cabasa           ~ Snap Snare
+  0.823  Cabasa           ~ Snap Clap
+  0.727  Cabasa           ~ 606 Snare
+  0.815  Tambourine       ~ Bell Ride
+  0.699  Tambourine       ~ 909 Crash
+  0.656  Tambourine       ~ 909 OH
+  0.676  Flexatone        ~ Bell Cymbal
+  0.666  Flexatone        ~ Big Clap
+  0.624  Flexatone        ~ 808 Clap
+  0.778  Spring Knock     ~ Mod Metal Plate
+  0.668  Spring Knock     ~ Mod Tom
+  0.656  Spring Knock     ~ Bell Cymbal

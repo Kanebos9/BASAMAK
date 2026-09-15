@@ -121,7 +121,7 @@ void StepGridComponent::update(const Sequencer& seq, bool hasSolo)
                     for (int i = 0; i < nc && nn < MIR_MAX; ++i)
                     {
                         drawNotes[ch][nn] = c.drawNotes[i];
-                        drawNotes[ch][nn].start = (int16_t) (drawNotes[ch][nn].start + b * DrumChannel::DRAW_RES);
+                        drawNotes[ch][nn].start += b * DrumChannel::DRAW_RES;
                         ++nn;
                     }
                 }
@@ -408,8 +408,8 @@ juce::Rectangle<int> StepGridComponent::drawOverlayRect() const
     return { 0, 0, getWidth(), getHeight() };   // the editor covers the WHOLE sequencer area (user)
 }
 
-int StepGridComponent::drawColAt(int x) const
-{ return juce::jlimit(0, totalCols() - 1, (int) ((float) x / (float) juce::jmax(1, getWidth()) * (float) totalCols())); }
+double StepGridComponent::drawColAt(double x) const
+{ return juce::jlimit(0.0, std::nextafter((double)totalCols(), 0.0), x / juce::jmax(1, getWidth()) * totalCols()); }
 
 int StepGridComponent::yToDrawSemi(juce::Rectangle<int> rect, int y, int range, int centre) const
 {
@@ -419,7 +419,7 @@ int StepGridComponent::yToDrawSemi(juce::Rectangle<int> rect, int y, int range, 
 }
 
 // Topmost note covering (col, semi) - semi tolerance +-1 so thin bars are grabbable. -1 = none.
-int StepGridComponent::prNoteAt(int ch, int col, int semi) const
+int StepGridComponent::prNoteAt(int ch, double col, int semi) const
 {
     for (int i = drawNoteCount[ch] - 1; i >= 0; --i)   // last drawn wins (drawn on top)
     {
@@ -431,31 +431,31 @@ int StepGridComponent::prNoteAt(int ch, int col, int semi) const
 
 // Remove / trim / split every note that crosses columns [lo..hi] (ANY pitch) - the line stroke and
 // the right-drag eraser both clear what they pass over, like the old column lane did.
-void StepGridComponent::eraseColRange(int ch, int lo, int hi)
+void StepGridComponent::eraseColRange(int ch, double lo, double hi)
 {
     for (int i = drawNoteCount[ch] - 1; i >= 0; --i)
     {
         auto& n = drawNotes[ch][i];
         if (strokeNoteIdx == i) continue;                       // never eat the note we're drawing
-        const int a = n.start, b = n.start + n.len - 1;         // inclusive span
-        if (b < lo || a > hi) continue;                         // no overlap
-        if (a >= lo && b <= hi)                                 // fully covered -> remove
+        const double a = n.start, b = n.start + n.len;         // inclusive span
+        if (b <= lo || a >= hi + 1.0) continue;                         // no overlap
+        if (a >= lo && b <= hi + 1.0)                                 // fully covered -> remove
         {
             for (int j = i; j < drawNoteCount[ch] - 1; ++j) drawNotes[ch][j] = drawNotes[ch][j + 1];
             --drawNoteCount[ch];
             if (strokeNoteIdx > i) --strokeNoteIdx;             // keep the stroke handle stable
             continue;
         }
-        if (a < lo && b > hi)                                    // covers the range -> split in two
+        if (a < lo && b > hi + 1.0)                                    // covers the range -> split in two
         {
-            const int rightStart = hi + 1, rightLen = b - hi;
-            n.len = (int16_t) (lo - a);
-            if (drawNoteCount[ch] < DrumChannel::DRAW_MAX_NOTES)
-                drawNotes[ch][drawNoteCount[ch]++] = { (int16_t) rightStart, (int16_t) rightLen, n.semi, n.vel, n.slot };
+            auto right = n; right.start = hi + 1.0; right.len = b - right.start;
+            n.len = lo - a;
+            if (drawNoteCount[ch] < MIR_MAX)
+                drawNotes[ch][drawNoteCount[ch]++] = right;
             continue;
         }
-        if (a < lo)      n.len = (int16_t) (lo - a);            // overlaps from the left -> trim tail
-        else           { n.len = (int16_t) (b - hi); n.start = (int16_t) (hi + 1); }   // from the right -> trim head
+        if (a < lo)      n.len = lo - a;            // overlaps from the left -> trim tail
+        else           { n.len = b - (hi + 1.0); n.start = hi + 1.0; }   // from the right -> trim head
     }
 }
 
@@ -472,9 +472,9 @@ void StepGridComponent::drawStrokeTo(int ch, juce::Point<int> pos)
     const int semiRaw = yToDrawSemi(rect, pos.y, 36);
     if (! drawErase && strokeLockSemi <= -100) strokeLockSemi = semiRaw;
     const int semi = drawErase ? semiRaw : strokeLockSemi;
-    const int col = drawColAt(pos.x);
-    const int lo = juce::jmin(col, drawLastCol < 0 ? col : drawLastCol);
-    const int hi = juce::jmax(col, drawLastCol < 0 ? col : drawLastCol);
+    const double col = drawColAt(pos.x);
+    const double lo = juce::jmin(col, drawLastCol < 0 ? col : drawLastCol);
+    const double hi = juce::jmax(col, drawLastCol < 0 ? col : drawLastCol);
     if (drawErase)
     {
         strokeNoteIdx = -1;
@@ -487,12 +487,12 @@ void StepGridComponent::drawStrokeTo(int ch, juce::Point<int> pos)
         if (strokeNoteIdx >= 0 && strokeNoteIdx < cnt && (int) drawNotes[ch][strokeNoteIdx].semi == semi)
         {   // extend the current stroke note to cover [lo..hi] - it may cross bar lines (continuous note)
             auto& n = drawNotes[ch][strokeNoteIdx];
-            const int a = juce::jmin((int) n.start, lo), b = juce::jmax((int) n.start + n.len - 1, hi);
-            n.start = (int16_t) a; n.len = (int16_t) juce::jmax(1, b - a + 1);
+            const double a = juce::jmin(n.start, (double)lo), b = juce::jmax(n.start + n.len - 1, (double)hi);
+            n.start = a; n.len = juce::jmax(1.0, b - a + 1);
         }
         else if (cnt < MIR_MAX)                                 // new pitch (or first stroke) -> new note
         {
-            drawNotes[ch][cnt] = { (int16_t) lo, (int16_t) juce::jmax(1, hi - lo + 1), (int8_t) semi,
+            drawNotes[ch][cnt] = { (double) lo, juce::jmax(1.0, hi - lo + 1), (int8_t) semi,
                                    (uint8_t) juce::jlimit(0, 255, (int) std::lround(dVel[ch] * 255.0f)),
                                    (uint8_t) prTargetSlot };
             strokeNoteIdx = cnt; ++cnt; strokeCreatedNew = true;
@@ -1165,7 +1165,7 @@ void StepGridComponent::mouseMove(const juce::MouseEvent& e)
     const auto p = e.getPosition();
     const int prevSemi = drawReadSemi, prevHover = prHoverSemi;
     drawReadSemi = -128; prHoverSemi = -999;
-    int hch = -1, col = 0, idx = -1;
+    int hch = -1, idx = -1; double col = 0;
     if (drawMagCh >= 0 && prLane(drawOverlayRect()).contains(p))
     {
         hch = drawMagCh;
@@ -1270,7 +1270,7 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
                 return;
             }
             const int ch2 = drawMagCh;
-            const int col = prColAt(lane, p.x);
+            const double col = prColAt(lane, e.position.x);
             const int semi = yToDrawSemi(lane, p.y, drawRange, drawViewCenter);
             const int idx = prNoteAt(ch2, col, semi);
             if (e.mods.isRightButtonDown() || e.mods.isPopupMenu())
@@ -1289,7 +1289,7 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
             {
                 prClearSel();
                 const auto& n = drawNotes[ch2][idx];
-                const float colW = (float) lane.getWidth() / (float) DrumChannel::DRAW_RES;
+                const float colW = (float) lane.getWidth() / (float) totalCols();
                 const float noteR = (float) lane.getX() + (float) (n.start + n.len) * colW;
                 prIdx = idx;
                 prMode = ((float) p.x > noteR - 6.0f) ? 2 : 1;   // near the right edge = RESIZE, else MOVE
@@ -1300,10 +1300,10 @@ void StepGridComponent::mouseDown(const juce::MouseEvent& e)
             {   // empty space -> CREATE (snapped start, one grid cell long; drag right to lengthen).
                 // A note lives inside ONE bar (crossing the bar line would re-trigger anyway).
                 prClearSel();
-                const int start = prSnap(col);
-                const int cw = drawGridDiv > 0 ? DrumChannel::DRAW_RES / drawGridDiv : 12;
-                const int barEnd = (start / DrumChannel::DRAW_RES + 1) * DrumChannel::DRAW_RES;
-                drawNotes[ch2][drawNoteCount[ch2]] = { (int16_t) start, (int16_t) juce::jmax(1, juce::jmin(cw, barEnd - start)),
+                const double start = prSnap(col);
+                const double cw = drawGridDiv > 0 ? (double)DrumChannel::DRAW_RES / drawGridDiv : 12.0;
+                const double barEnd = (std::floor(start / DrumChannel::DRAW_RES) + 1) * DrumChannel::DRAW_RES;
+                drawNotes[ch2][drawNoteCount[ch2]] = { start, juce::jmax(DrumChannel::DRAW_MIN_LEN, juce::jmin(cw, barEnd - start)),
                                                        (int8_t) juce::jlimit(-DrumChannel::PITCH_RANGE, DrumChannel::PITCH_RANGE, semi),
                                                        (uint8_t) juce::jlimit(0, 255, (int) std::lround(dVel[ch2] * 255.0f)),
                                                        (uint8_t) prTargetSlot };
@@ -1474,15 +1474,15 @@ void StepGridComponent::mouseDrag(const juce::MouseEvent& e)
     {
         const int ch2 = drawMagCh;
         const auto lane = prLane(drawOverlayRect());
-        int dCol = prColAt(lane, e.getPosition().x) - prGrabDCol;
-        if (drawGridDiv > 0) { const int cw = DrumChannel::DRAW_RES / drawGridDiv;
-                               dCol = (int) std::lround((double) dCol / cw) * cw; }
+        double dCol = prColAt(lane, e.position.x) - prGrabDCol;
+        if (drawGridDiv > 0) { const double cw = (double)DrumChannel::DRAW_RES / drawGridDiv;
+                               dCol = std::round(dCol / cw) * cw; }
         const int dSemi = yToDrawSemi(lane, e.getPosition().y, drawRange, drawViewCenter) - prGrabDSemi;
         for (int i = 0; i < drawNoteCount[ch2]; ++i)
             if (prSel[i])
             {
                 auto& n = drawNotes[ch2][i];
-                n.start = (int16_t) juce::jlimit(0, totalCols() - 1, (int) prOrigStart[i] + dCol);
+                n.start = juce::jlimit(0.0, std::nextafter((double)totalCols(), 0.0), prOrigStart[i] + dCol);
                 if(dSemi != 0) n.drumHit = 0;
                 n.semi  = (int8_t)  juce::jlimit(-DrumChannel::PITCH_RANGE, DrumChannel::PITCH_RANGE, (int) prOrigSemi[i] + dSemi);
             }
@@ -1497,12 +1497,12 @@ void StepGridComponent::mouseDrag(const juce::MouseEvent& e)
     {
         const int ch2 = drawMagCh;
         const auto lane = prLane(drawOverlayRect());
-        const int col = prColAt(lane, e.getPosition().x);
+        const double col = prColAt(lane, e.position.x);
         auto& n = drawNotes[ch2][prIdx];
         const int RES = DrumChannel::DRAW_RES;
         if (prMode == 1)   // MOVE: pitch + time (start snaps to the grid; length may cross bar lines)
         {
-            n.start = (int16_t) juce::jlimit(0, totalCols() - 1, prSnap(juce::jmax(0, col - prGrabDCol)));
+            n.start = juce::jlimit(0.0, std::nextafter((double)totalCols(), 0.0), prSnap(juce::jmax(0.0, col - prGrabDCol)));
             const int oldPitch = n.semi;
             n.semi  = (int8_t) juce::jlimit(-DrumChannel::PITCH_RANGE, DrumChannel::PITCH_RANGE, yToDrawSemi(lane, e.getPosition().y, drawRange, drawViewCenter) - prGrabDSemi);
             if(n.semi != oldPitch)n.drumHit=0;
@@ -1511,13 +1511,14 @@ void StepGridComponent::mouseDrag(const juce::MouseEvent& e)
         }
         else               // RESIZE / CREATE-stretch: the right edge follows the cursor (end snaps UP;
         {                  // notes may SPAN bar lines - the note keeps sounding into the next bar)
-            int end = col + 1;
+            double end = col;
             if (drawGridDiv > 0)
             {
-                const int cw = RES / drawGridDiv;
-                end = ((col / cw) + 1) * cw;                 // snap the end to the NEXT grid line
+                const double cw = (double)RES / drawGridDiv;
+                end = (std::floor(col / cw) + 1) * cw;                 // snap the end to the NEXT grid line
             }
-            n.len = (int16_t) juce::jlimit(1, totalCols() - (int) n.start, end - (int) n.start);
+            n.len = juce::jlimit(DrumChannel::DRAW_MIN_LEN,
+                                juce::jmax(DrumChannel::DRAW_MIN_LEN, totalCols() - n.start), end - n.start);
         }
         pushNotes(ch2);
         repaint();
@@ -1571,7 +1572,7 @@ void StepGridComponent::mouseUp(const juce::MouseEvent&)
         const auto lane = prLane(drawOverlayRect());
         const auto rect = juce::Rectangle<int>::leftTopRightBottom(juce::jmin(prMarqA.x, prMarqB.x), juce::jmin(prMarqA.y, prMarqB.y),
                                                                    juce::jmax(prMarqA.x, prMarqB.x), juce::jmax(prMarqA.y, prMarqB.y));
-        const int c0 = prColAt(lane, rect.getX()), c1 = prColAt(lane, rect.getRight());
+        const double c0 = prColAt(lane, rect.getX()), c1 = prColAt(lane, rect.getRight());
         const int sHi = yToDrawSemi(lane, rect.getY(), drawRange, drawViewCenter);      // top = higher pitch
         const int sLo = yToDrawSemi(lane, rect.getBottom(), drawRange, drawViewCenter);
         prClearSel();
@@ -1637,7 +1638,7 @@ void StepGridComponent::showRollNoteMenu(int ch2, int idx)
     //  - a SINGLE note whose SOUND voices it into a chord (Scale/Chord = it has "shadow" notes).
     bool strumOk;
     {
-        int fs = -1, fl = -1, count = 0; bool uniform = true;
+        double fs = -1, fl = -1; int count = 0; bool uniform = true;
         for (int i = 0; i < drawNoteCount[ch2]; ++i)
             if (i == idx || (sel && prSel[i])) {
                 if (count == 0) { fs = drawNotes[ch2][i].start; fl = drawNotes[ch2][i].len; }

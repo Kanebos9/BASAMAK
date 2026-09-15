@@ -142,14 +142,15 @@ public:
     // audio thread can read while the editor edits - same data-race-tolerant style as the step
     // arrays. Playback triggers each note at its start (overlap-aware: chords don't cut each other)
     // and gates it for its length; the engine's unison/detune/chord/scale apply per note.
-    static constexpr int  DRAW_RES = 384;      // columns/bar (divisible by every step count -> clean quantise)
+    static constexpr int  DRAW_RES = 384;      // logical columns/bar; note times can be fractional
+    static constexpr double DRAW_MIN_LEN = 1.0e-6;
     static constexpr int8_t DRAW_GAP = -128;   // legacy "no note" marker (old-project migration only)
     static constexpr int  DRAW_MAX_NOTES = 256;
     // slot = which sound slot(s) play this note: 0 = both, 1 = slot 1 only, 2 = slot 2 only. Lets a
     // channel draw two independent lines (e.g. a bass on slot 1, a lead on slot 2). Colours: both =
     // orange, slot 1 = yellow, slot 2 = pink (matches the keyboard highlight).
     static constexpr int8_t PAN_INHERIT = 127;   // per-note pan sentinel: use the whole-channel drawPan
-    struct DrawNote { int16_t start = 0, len = 1; int8_t semi = 0; uint8_t vel = 255; uint8_t slot = 0;
+    struct DrawNote { double start = 0, len = 1; int8_t semi = 0; uint8_t vel = 255; uint8_t slot = 0;
                       uint8_t glide = 0;      // DORMANT [2026-07-16 round-5]: glide/legato are GEOMETRY-DRIVEN now
                                               //  (overlap/butt + the sound's Mode + Glide knob decide at playback) -
                                               //  this old per-note flag is kept ONLY for pack-format stability
@@ -166,11 +167,16 @@ public:
                       uint8_t condMask = 0;    //  system, per note): fire only on chosen loops of an N-loop
                                                //  cycle. condLen 1 OR mask 0 = every loop (default).
                       uint8_t drumHit = 0; // channel tuning; converted percussion note
+        DrawNote() = default;
+        DrawNote(double st, double length, int pitch, int velocity = 255, int slotId = 0)
+            : start(st), len(length), semi((int8_t)pitch), vel((uint8_t)velocity), slot((uint8_t)slotId) {}
+        static double boundedTime(double value, double lo, double hi)
+        { return std::isfinite(value) ? juce::jlimit(lo, hi, value) : lo; }
         // ONE serialization format (was smeared across 4 sites; adding a field used to mean editing
         // all of them by hand). "start:len:semi:vel:slot:glide:oneShot:strumUp:strumPct:pan:condLen:
         // condMask:legacyLegato:drumHit" - the caller appends the ',' separator. unpack() is old-string tolerant.
         juce::String pack() const {
-            return juce::String((int) start) + ":" + juce::String((int) len) + ":" + juce::String((int) semi)
+            return juce::String(start, 12) + ":" + juce::String(len, 12) + ":" + juce::String((int) semi)
                  + ":" + juce::String((int) vel) + ":" + juce::String((int) slot) + ":" + juce::String((int) glide)
                  + ":" + juce::String((int) oneShot) + ":" + juce::String((int) strumUp)
                  + ":" + juce::String((int) strumPct) + ":" + juce::String((int) pan)
@@ -180,8 +186,9 @@ public:
         static DrawNote unpack(const juce::StringArray& f) {
             DrawNote n;
             if (f.size() < 3) return n;
-            n.start   = (int16_t) juce::jlimit(0, DRAW_RES * 8 - 1, f[0].getIntValue());   // loose (concat takes); addDrawNote tightens
-            n.len     = (int16_t) juce::jlimit(1, DRAW_RES * 8, f[1].getIntValue());
+            // Old integer fields are exact values in the same units: no tempo/grid migration.
+            n.start   = boundedTime(f[0].getDoubleValue(), 0.0, std::nextafter(DRAW_RES * 8.0, 0.0));
+            n.len     = boundedTime(f[1].getDoubleValue(), DRAW_MIN_LEN, DRAW_RES * 8.0);
             n.semi    = (int8_t)  juce::jlimit(-PITCH_RANGE, PITCH_RANGE, f[2].getIntValue());
             n.vel     = (uint8_t) juce::jlimit(0, 255, f.size() > 3 ? f[3].getIntValue() : 255);
             n.slot    = (uint8_t) juce::jlimit(0, 2, f.size() > 4 ? f[4].getIntValue() : 0);
@@ -211,8 +218,8 @@ public:
         if (drawNoteCount >= DRAW_MAX_NOTES) return -1;
         const int i = drawNoteCount;
         DrawNote n = src;
-        n.start = (int16_t) juce::jlimit(0, DRAW_RES - 1, (int) src.start);
-        n.len   = (int16_t) juce::jlimit(1, DRAW_RES * 8, (int) src.len);   // len may cross bars (merged groups)
+        n.start = DrawNote::boundedTime(src.start, 0.0, std::nextafter((double)DRAW_RES, 0.0));
+        n.len   = DrawNote::boundedTime(src.len, DRAW_MIN_LEN, DRAW_RES * 8.0);
         n.semi  = (int8_t)  juce::jlimit(-PITCH_RANGE, PITCH_RANGE, (int) src.semi);
         n.slot  = (uint8_t) juce::jlimit(0, 2, (int) src.slot);
         drawNotes[i] = n;
@@ -220,11 +227,11 @@ public:
         return i;
     }
     // Convenience field-wise append (most call sites). strumPct<0 -> 255 (follow knob); pan defaults to inherit.
-    int addDrawNote(int start, int len, int semi, int vel, int slot = 0, int glide = 0, int oneShot = 0,
+    int addDrawNote(double start, double len, int semi, int vel, int slot = 0, int glide = 0, int oneShot = 0,
                     int strumUp = 0, int strumPct = -1, int pan = PAN_INHERIT)
     {
         DrawNote n;
-        n.start = (int16_t) start; n.len = (int16_t) len; n.semi = (int8_t) semi;
+        n.start = start; n.len = len; n.semi = (int8_t) semi;
         n.vel = (uint8_t) juce::jlimit(0, 255, vel); n.slot = (uint8_t) slot;
         n.glide = (uint8_t) (glide ? 1 : 0); n.oneShot = (uint8_t) (oneShot ? 1 : 0);
         n.strumUp = (uint8_t) (strumUp ? 1 : 0);

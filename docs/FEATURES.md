@@ -124,3 +124,11 @@ feature, check this file's reference column / the industry standard FIRST, then 
 ## Live Drumming (1.5.8)
 
 Per-channel MIDI input note/channel assignments with Learn; selection-independent pad routing; one shared instrument-row roll; whole-kit recording and takes; explicit mode conversion or clearing with Undo. MIDI export covers the kit. Window scaling buttons fit the available display. See [setup and behavior](LIVE-DRUMMING.md).
+
+## 1.5.8 follow-up: timing and live kits
+
+Both rolls now retain fractional timing; regular notes are no longer limited to integer columns. Incoming keyboard MIDI uses host sample offsets for live sound and recording. Existing project timing is unchanged on load. Takes, conversion, undo and exports preserve this timing; MIDI files use 9600 PPQ. Empty mode switches are immediate, while other patterns and saved takes still require the existing conversion choice.
+
+Seven additional synthesized percussion sounds and ten empty, controller-ready Live Drums factory kits cover soft room drums, dry funk, brushed lounge, 808, warehouse, dusty breaks, cajon, skin/clay percussion, cinematic and industrial sounds. All documented OKTO B default trigger notes are mapped in every kit. See [the guide](LIVE-DRUMMING.md) for the names, mapping and remaining conversion differences.
+
+Live Drumming keeps Overlap, Duck and Choke user-controlled. OV Off cuts prior hits on the same row across bars; Duck reaches ringing tails from earlier bars; choke groups cut other grouped rows. Expanded audio tests cover on/off, zero duck amount, recovery, and tails crossing patterns.

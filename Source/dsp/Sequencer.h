@@ -213,6 +213,7 @@ public:
                                  while (p + 1 < NUM_PATTERNS && patterns[p + 1].mergeWithPrev) ++p; return p; }
     bool inGroup(int p) const  { return groupEnd(p) > groupHead(p); }
 
+    void syncInputClock(juce::AudioPlayHead*, double sampleRate);
     juce::Array<TriggerEvent> processBlock(
         juce::AudioBuffer<float>& audio,        // the Main output bus
         double sampleRate,
@@ -270,7 +271,7 @@ private:
     // Seam dedupe: the DAW path recomputes oldPos from the host ppq each block; a floating-point
     // mismatch at the block seam could re-cross (double-fire) a tick. Remember the last tick id
     // + the loop it fired on per channel and skip exact repeats.
-    int lastTick[NUM_CHANNELS]     = {};
+    double lastTick[NUM_CHANNELS] = {}; // draw timestamps retain fractional-column precision
     int lastTickLoop[NUM_CHANNELS] = {};
     void resetTickDedupe() { for (int i = 0; i < NUM_CHANNELS; ++i) { lastTick[i] = -1; lastTickLoop[i] = -1; } }
 

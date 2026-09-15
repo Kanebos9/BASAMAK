@@ -1,11 +1,10 @@
-BASAMAK factory-bank similarity scores (264 sounds)
+BASAMAK factory-bank similarity scores (274 sounds)
 ==================================================
 WHAT THE SCORE MEASURES (0..1, higher = more alike):
   55% attack spectrum   - 24 log-spaced bands over the first 5-150 ms (the hit's colour)
   35% body spectrum     - the same bands over 150-550 ms (the ring/tail's colour)
   10% decay-time match  - how similarly fast the two sounds die away
-PITCH-BLIND: every sound is rendered in the C4-absolute keys world (drawMode), so the
-Base Freq knob never affects the score (user rule: pitch means nothing on a keyboard).
+PITCH-BLIND: every sound is rendered at C4; Base Freq does not affect the score.
 BLIND SPOTS (judge by ear): stereo width/chorus (mono render), wavetable/LFO MOTION
 (one static window), arp riffs (arp runs in the processor). Sustained same-pitch pads
 SATURATE the metric - 0.95+ in Keys/Pads/Leads is normal, not proof of a twin.
@@ -80,21 +79,21 @@ SATURATE the metric - 0.95+ in Keys/Pads/Leads is normal, not proof of a twin.
 -- Percussion --
   0.963  Woodblock        ~  808 Rimshot      (dec 0.08s/0.09s)
   0.961  808 Conga        ~  Tabla            (dec 0.31s/0.34s)
+  0.924  Cajon Slap       ~  Woodblock        (dec 0.13s/0.08s)
+  0.905  Cajon Slap       ~  808 Rimshot      (dec 0.13s/0.09s)
   0.896  808 Conga        ~  Mod Wood Block   (dec 0.31s/0.89s)
   0.891  Woodblock        ~  808 Conga        (dec 0.08s/0.31s)
   0.888  808 Cowbell      ~  Mod Metal Plate  (dec 0.34s/1.00s)
+  0.887  Cajon Slap       ~  808 Conga        (dec 0.13s/0.31s)
   0.885  Woodblock        ~  Mod Wood Block   (dec 0.08s/0.89s)
   0.878  Woodblock        ~  Tabla            (dec 0.08s/0.34s)
-  0.869  Tabla            ~  Mod Wood Block   (dec 0.34s/0.89s)
-  0.867  808 Rimshot      ~  808 Conga        (dec 0.09s/0.31s)
-  0.859  808 Rimshot      ~  Mod Wood Block   (dec 0.09s/0.89s)
 -- Electro Perc --
   0.974  FM Clang         ~  Filter Zap       (dec 0.34s/0.41s)
   0.940  Zap              ~  Laser Zap        (dec 0.26s/0.36s)
   0.939  FM Clang         ~  Buzz Hit         (dec 0.34s/0.20s)
   0.923  Filter Zap       ~  Buzz Hit         (dec 0.41s/0.20s)
   0.897  Buzz Hit         ~  Wire Perc        (dec 0.20s/0.21s)
-  0.859  FM Clang         ~  Wire Perc        (dec 0.34s/0.21s)
+  0.860  FM Clang         ~  Wire Perc        (dec 0.34s/0.21s)
   0.848  Zap              ~  Wire Perc        (dec 0.26s/0.21s)
   0.847  Filter Zap       ~  Wire Perc        (dec 0.41s/0.21s)
   0.841  FM Clang         ~  Laser Zap        (dec 0.34s/0.36s)
@@ -134,15 +133,19 @@ SATURATE the metric - 0.95+ in Keys/Pads/Leads is normal, not proof of a twin.
   1.000  Comb Pad         ~  Odyssey Pad      (dec 1.00s/1.00s)
 -- Leads --
   0.997  Synth Brass      ~  Swirl Lead       (dec 0.95s/0.96s)
-  0.997  Drift Lead       ~  Flute            (dec 0.80s/0.79s)
   0.994  FM Lead          ~  Drift Lead       (dec 0.82s/0.80s)
-  0.994  Whistle          ~  Saw Lead         (dec 0.73s/0.72s)
-  0.993  Bloom Lead       ~  Clarinet         (dec 0.67s/0.64s)
   0.993  FM Lead          ~  Hyper Saw        (dec 0.82s/0.85s)
-  0.993  FM Lead          ~  Flute            (dec 0.82s/0.79s)
-  0.991  Whistle          ~  Bloom Lead       (dec 0.73s/0.67s)
   0.990  Pulse Lead       ~  Quint Lead       (dec 0.59s/0.59s)
-  0.990  Whistle          ~  Drift Lead       (dec 0.73s/0.80s)
+  0.988  Saw Lead         ~  Bloom Lead       (dec 0.72s/0.67s)
+  0.987  Hyper Saw        ~  Drift Lead       (dec 0.85s/0.80s)
+  0.985  FM Lead          ~  Saw Lead         (dec 0.82s/0.72s)
+  0.985  Saw Lead         ~  Drift Lead       (dec 0.72s/0.80s)
+  0.985  Quint Lead       ~  Bloom Lead       (dec 0.59s/0.67s)
+  0.983  Singing Lead     ~  Hyper Saw        (dec 0.89s/0.85s)
+-- Winds --
+  0.990  Whistle          ~  Flute            (dec 0.73s/0.79s)
+  0.985  Whistle          ~  Clarinet         (dec 0.73s/0.64s)
+  0.978  Clarinet         ~  Flute            (dec 0.64s/0.79s)
 -- Plucks & Strings --
   0.992  Harp             ~  Synth Pluck      (dec 0.43s/0.41s)
   0.985  Pluck            ~  Dream Pluck      (dec 0.64s/0.57s)
@@ -209,3 +212,26 @@ SATURATE the metric - 0.95+ in Keys/Pads/Leads is normal, not proof of a twin.
   0.733  Chopper          ~  Evil Laugh       (dec 1.00s/1.00s)
   0.684  Dust Motes       ~  Evil Laugh       (dec 0.88s/1.00s)
   0.642  Wind             ~  Ocean            (dec 0.97s/1.00s)
+
+== nearest existing/new neighbours for each new drum ==
+  0.638  Trash Stack      ~ Cluster Cymbal
+  0.441  Trash Stack      ~ China
+  0.158  Trash Stack      ~ 909 Crash
+  0.924  Cajon Slap       ~ Woodblock
+  0.905  Cajon Slap       ~ 808 Rimshot
+  0.887  Cajon Slap       ~ 808 Conga
+  0.776  Udu Pot          ~ 808 Conga
+  0.750  Udu Pot          ~ Tabla
+  0.743  Udu Pot          ~ Cajon Slap
+  0.623  Cabasa           ~ Shaker
+  0.330  Cabasa           ~ Tambourine
+  0.205  Cabasa           ~ Cajon Slap
+  0.559  Tambourine       ~ Shaker
+  0.460  Tambourine       ~ Bongo
+  0.436  Tambourine       ~ Mod Metal Plate
+  0.637  Flexatone        ~ Mod Wood Block
+  0.636  Flexatone        ~ Mod Metal Plate
+  0.609  Flexatone        ~ Woodblock
+  0.429  Spring Knock     ~ Static Hit
+  0.384  Spring Knock     ~ Particle Perc
+  0.379  Spring Knock     ~ Zap

@@ -55,8 +55,7 @@ class DrumModePrompt : public juce::Component
         keep.setTooltip("Convert notes and saved takes across ALL patterns. To drums: keep rhythm, velocity "
                         "and pan; pitches, held lengths, per-slot choices, step modulation and loop conditions become natural "
                         "drum hits. Simultaneous chord notes become one hit. To regular: create one-shot "
-                        "piano-roll notes using each channel's tuning; timing rounds to the piano-roll "
-                        "resolution. Undo restores the previous mode.");
+                        "piano-roll notes using each channel's tuning and preserving hit timing. Undo restores the previous mode.");
         fresh.setTooltip(
             "Delete sequence notes and saved takes in ALL patterns. Keep every sound, effect, mixer setting, "
             "pattern chain and MIDI assignment. Undo restores the previous mode.");
@@ -94,8 +93,7 @@ class DrumModePrompt : public juce::Component
                                       "fixed-pitch drum hits; chords become one hit. Note lengths, slot "
                                       "choices, glide, step modulation and loop conditions do not carry over."
                                     : "Keep and convert puts each drum on its channel's regular piano roll, "
-                                      "using natural decay and the channel's tuning. Timing rounds to the "
-                                      "piano roll's resolution. Kit takes become separate channel takes within each pattern group."),
+                                      "using natural decay and the channel's tuning. Hit timing is preserved. Kit takes become separate channel takes within each pattern group."),
                          18, 52, getWidth() - 36, 78, juce::Justification::topLeft, 4);
         g.setColour(juce::Colour(0xffc2c9d8));
         g.setFont(13);

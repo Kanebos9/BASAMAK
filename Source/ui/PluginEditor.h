@@ -116,7 +116,7 @@ private:
     bool   drawMode[NCH] = {};
     DrumChannel::DrawNote drawNotes[NCH][MIR_MAX] = {};
     int    drawNoteCount[NCH] = {};
-    int    drawDragCh = -1, drawLastCol = -1;          // channel being line-drawn + last column (interp)
+    int    drawDragCh = -1; double drawLastCol = -1;          // channel being line-drawn + last column (interp)
     int    strokeNoteIdx = -1;                          // the note the current ROW line-stroke is extending
     bool   strokeCreatedNew = false;                    // this stroke APPENDED a note (vs extending an old one)
     int    tapNoteCh = -1, tapNoteIdx = -1;             // the note a single CLICK just created (a double-click
@@ -132,7 +132,8 @@ private:
     // Overlay pointer gestures: 0 = none, 1 = MOVE a note, 2 = RESIZE its right edge, 3 = CREATE new,
     // 4 = SCROLL the pitch view (drag the left note-name column when the range is < +-36),
     // 5 = MARQUEE area-select, 6 = MOVE the whole selection, 8 = PENDING right-click (menu if no drag, else marquee).
-    int    prMode = 0, prIdx = -1, prGrabDCol = 0, prGrabDSemi = 0;
+    int    prMode = 0, prIdx = -1, prGrabDSemi = 0;
+    double prGrabDCol = 0;
     int    prRightIdx = -1;                             // note under a pending right-click (prMode 8) - menu target on no-drag
     int    drawViewCenter = 0;                          // overlay pitch-view centre (semitones; 0 = C3 row centred)
     int    prScrollGrabY = 0, prScrollGrabC = 0;        // scroll-gesture anchors
@@ -143,7 +144,7 @@ private:
     bool   prSel[MIR_MAX] = {};
     int    prSelCount = 0;
     juce::Point<int> prMarqA, prMarqB;                  // marquee corners while prMode == 5
-    int32_t prOrigStart[MIR_MAX] = {};                  // originals for the group move (concat columns)
+    double prOrigStart[MIR_MAX] = {};                  // originals for the group move (concat columns)
     int8_t  prOrigSemi[MIR_MAX]  = {};
     void   prClearSel() { if (prSelCount > 0) { for (auto& b : prSel) b = false; prSelCount = 0; } }
     int    prViewClamp() const { return DrumChannel::PITCH_RANGE - drawRange; }   // |center| max: window stays inside +-48
@@ -156,15 +157,16 @@ private:
     { return ov.withTrimmedTop(PR_HEAD).withTrimmedLeft(PR_KEYS); }
     int    yToDrawSemi(juce::Rectangle<int> rect, int y, int range, int centre = 0) const;   // pixel Y -> semitone (view-centre aware)
     void   drawStrokeTo(int ch, juce::Point<int> pos);               // ROW line gesture (erase-under + extend note)
-    int    drawColAt(int x) const;                                   // pixel X -> column (row rect)
-    int    prColAt(juce::Rectangle<int> lane, int x) const           // pixel X -> concat column (overlay lane)
-    { return juce::jlimit(0, totalCols() - 1,
-             (int) ((float)(x - lane.getX()) / (float) juce::jmax(1, lane.getWidth()) * (float) totalCols())); }
-    int    prSnap(int col) const                                     // snap a concat column to the overlay grid
-    { if (drawGridDiv <= 0) return col; const int cw = DrumChannel::DRAW_RES / drawGridDiv;   // grid repeats per BAR
-      return juce::jlimit(0, totalCols() - 1, (col / cw) * cw); }
-    int    prNoteAt(int ch, int col, int semi) const;                // topmost note covering (col, semi) or -1
-    void   eraseColRange(int ch, int lo, int hi);                    // remove/trim/split notes crossing [lo..hi]
+    double drawColAt(double x) const;                                   // pixel X -> column (row rect)
+    double prColAt(juce::Rectangle<int> lane, double x) const
+    { return juce::jlimit(0.0, std::nextafter((double)totalCols(), 0.0),
+                         (x - lane.getX()) / juce::jmax(1, lane.getWidth()) * totalCols()); }
+    double prSnap(double col) const
+    { if (drawGridDiv <= 0) return col;
+      const double cell = (double)DrumChannel::DRAW_RES / drawGridDiv;
+      return juce::jlimit(0.0, totalCols() - cell, std::floor(col / cell) * cell); }
+    int prNoteAt(int ch, double col, int semi) const;
+    void   eraseColRange(int ch, double lo, double hi);                    // remove/trim/split notes crossing [lo..hi]
     void   pushNotes(int ch)                                         // mirror -> channel (whole list)
     { if (onDrawNotesChanged) onDrawNotesChanged(ch, drawNotes[ch], drawNoteCount[ch]); }
     bool   muted[NCH]       = {};

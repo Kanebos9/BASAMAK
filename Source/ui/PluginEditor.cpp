@@ -7310,7 +7310,7 @@ juce::int64 DrumSequencerEditor::stateHash() const
             h = mix(h, ch.drawMode ? 1 : 0);
             if (ch.drawMode) { h = mix(h, f(ch.drawVel)); h = mix(h, f(ch.drawPan)); h = mix(h, f(ch.drawTuneCents));
                 for (int i = 0; i < ch.drawNoteCount; ++i) { const auto& nt = ch.drawNotes[i];
-                    h = mix(h, nt.start); h = mix(h, nt.len); h = mix(h, (int) nt.semi + 128); h = mix(h, (int) nt.vel); h = mix(h, (int) nt.slot); h = mix(h, (int) nt.glide); h = mix(h, (int) nt.oneShot); h = mix(h, (int) nt.drumHit); h = mix(h, (int) nt.strumUp); h = mix(h, (int) nt.strumPct); h = mix(h, (int) nt.pan); h = mix(h, (int) nt.condLen); h = mix(h, (int) nt.condMask); } }
+                    h = mix(h, (uint64_t)std::llround(nt.start * 1.0e9)); h = mix(h, (uint64_t)std::llround(nt.len * 1.0e9)); h = mix(h, (int) nt.semi + 128); h = mix(h, (int) nt.vel); h = mix(h, (int) nt.slot); h = mix(h, (int) nt.glide); h = mix(h, (int) nt.oneShot); h = mix(h, (int) nt.drumHit); h = mix(h, (int) nt.strumUp); h = mix(h, (int) nt.strumPct); h = mix(h, (int) nt.pan); h = mix(h, (int) nt.condLen); h = mix(h, (int) nt.condMask); } }
         }
     }
     h = mix(h, f(s.standaloneBpm)); h = mix(h, s.timeSigNum); h = mix(h, s.timeSigDen);
@@ -7785,6 +7785,7 @@ void DrumSequencerEditor::handlePresetChange()
 
     if (id >= FACTORY_PST_BASE && id < FACTORY_PST_BASE + Factory::presetNames().size())
     {
+        const juce::ScopedLock lock(proc.getCallbackLock());
         const int pi = id - FACTORY_PST_BASE;
         Factory::applyPreset(proc.sequencer, pi);
         proc.keysTakes.clear(); keysLoadedTakeIdx = -1; keysLoadedTakeHash = 0;   // takes are preset-level (applyPreset/resetAll only reset the sequencer)
@@ -8544,7 +8545,7 @@ void DrumSequencerEditor::genAction(int action)
                 for (int i = 0; i < cb.drawNoteCount; ++i)
                 {
                     const auto& dn = cb.drawNotes[i];
-                    ex.push_back({ b * DrumChannel::DRAW_RES + dn.start, dn.len, dn.semi, dn.vel, false });
+                    ex.push_back({ b * DrumChannel::DRAW_RES + (int)std::lround(dn.start), (int)std::lround(dn.len), dn.semi, dn.vel, false });
                 }
             else
                 for (int i = 0; i < cb.numSteps; ++i)
@@ -9467,10 +9468,10 @@ void DrumSequencerEditor::setupComponents()
                         auto& n = pc.drawNotes[i];
                         if (n.start + n.len > RES)   // spills past this bar
                         {
-                            const int overflow = juce::jmin(RES, n.start + n.len - RES);
+                            const double overflow = juce::jmin((double)RES, n.start + n.len - RES);
                             nc.addDrawNote(0, overflow, n.semi, n.vel, n.slot, 0, /*oneShot*/ 0,
                                            n.strumUp, n.strumPct == 255 ? -1 : n.strumPct, n.pan);
-                            n.len = (int16_t) (RES - n.start);   // head ends at the bar line
+                            n.len = RES - n.start;   // head ends at the bar line
                         }
                     }
                 }
@@ -10314,15 +10315,15 @@ void DrumSequencerEditor::setupComponents()
                 const int ch  = selectedChannel;   // the big editor always shows the selected channel
                 auto& sq = proc.sequencer;
                 const int head = sq.groupHead(currentPattern()), end = sq.groupEnd(currentPattern());
-                const int cell = juce::jmax(1, DrumChannel::DRAW_RES / div);
+                const double cell = (double)DrumChannel::DRAW_RES / div;
                 commitUndoNow();
                 for (int b = head; b <= end; ++b) {
                     auto& cc = sq.patterns[b].channels[ch];
                     for (int i = 0; i < cc.drawNoteCount; ++i) {
                         auto& n = cc.drawNotes[i];
-                        const int snapped = ((int) (n.start + cell / 2) / cell) * cell;   // nearest grid line
-                        n.start = (int16_t) juce::jlimit(0, DrumChannel::DRAW_RES - 1, snapped);
-                        n.len   = (int16_t) juce::jmax(cell, (int) n.len);                // at least one cell long
+                        const double snapped = std::round(n.start / cell) * cell;   // nearest grid line
+                        n.start = juce::jlimit(0.0, DrumChannel::DRAW_RES - cell, snapped);
+                        n.len = juce::jmax(cell, n.len);                // at least one cell long
                     }
                 }
                 stepGrid.update(proc.sequencer, proc.anySolo);
@@ -10344,7 +10345,7 @@ void DrumSequencerEditor::setupComponents()
             // [2026-07-15 23:40] push the WHOLE STRUCT (the parameter-list overload silently DROPPED
             // any field it didn't name - the brand-new loop condition reverted on every push).
             DrumChannel::DrawNote nn = nt;
-            nn.start = (int16_t) juce::jlimit(0, RES - 1, (int) nt.start - b * RES);
+            nn.start = nt.start - b * RES;
             sq.patterns[head + b].channels[ch].addDrawNote(nn);
         }
     };
@@ -10467,7 +10468,14 @@ void DrumSequencerEditor::setupComponents()
         strip.btnMute->setLookAndFeel(&tinyBtnLNF);
         strip.btnSolo->setLookAndFeel(&tinyBtnLNF);
         strip.btnPoly.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff35b56a));
-        strip.btnPoly.setTooltip("Overlap: lets a sound keep ringing into the next step instead of being cut off - but only if the sound is actually long enough to ring (a short sound still ends on its own). Off = each trigger restarts the sound. In a MERGED group it applies to every bar of the group.\n\nThis is a STEP-mode control - it fades out in Piano Roll, where each note has its own length and Poly is the keyboard's Poly toggle.\n\nNOTE: cutting a sound never cuts its already-sent REVERB/DELAY - those tails live on the master bus and finish on their own (use the reverb Gate / delay Trail for tight wet).\n\nRight-click to assign a MIDI control.");   // [2026-08-01 r26] group scope added
+        strip.btnPoly.setTooltip(
+            "Overlap: On lets successive hits on this channel ring together. Off makes each new hit fade "
+            "the previous tail and restart the sound. Short sounds still end on their own.\n\n"
+            "Works in Steps and LIVE DRUMMING. Applies to the current pattern, or every bar of a merged "
+            "group. In the regular Piano Roll, note lengths and the keyboard Poly control handle overlap.\n\n"
+            "Choke groups can still cut tails on other channels. Already-sent REVERB/DELAY tails finish "
+            "on the master bus; use reverb Gate / delay Trail for tight wet effects.\n\n"
+            "Right-click to assign a MIDI control.");
         strip.btnPoly.midiLearn = &proc.midiLearn;   // paramId set per-pattern in updateStripParamIds()
         strip.btnPoly.onClick = [this, ci] {   // group-wide: a merged group is one edit unit [1.5.6]
             selectChannel(ci);
@@ -13010,7 +13018,7 @@ void DrumSequencerEditor::keysStopRecord(bool finalize)
                 for (int i = 0; i < cb.drawNoteCount && (int) t.drawNotes.size() < DrumSequencerProcessor::DRAW_TAKE_MAX; ++i)
                 {
                     auto nt = cb.drawNotes[i];
-                    nt.start = (int16_t) (nt.start + (b - head) * DrumChannel::DRAW_RES);
+                    nt.start += (b - head) * DrumChannel::DRAW_RES;
                     t.drawNotes.push_back(nt);
                 }
             }
@@ -13082,7 +13090,7 @@ void DrumSequencerEditor::keysLoadTake(int idx)
         for (const auto& nt : t.drawNotes)
         {
             const int b = juce::jlimit(0, end - head, (int) nt.start / DrumChannel::DRAW_RES);
-            auto copy = nt; copy.start = (int16_t)((int)nt.start - b * DrumChannel::DRAW_RES);
+            auto copy = nt; copy.start = nt.start - b * DrumChannel::DRAW_RES;
             sq.patterns[head + b].channels[t.channel].addDrawNote(copy);
         }
         selectChannel(t.channel);
@@ -13129,7 +13137,7 @@ juce::int64 DrumSequencerEditor::takeDataHash(const DrumSequencerProcessor::Keys
     auto mix = [&](juce::int64 v) { h = h * 33 ^ v; };
     mix(t.channel); mix(t.isDraw ? 1 : 0);
     if (t.isDraw) { mix(t.drawPat); for (const auto& nt : t.drawNotes)
-                    { mix(nt.start); mix(nt.len); mix((int) nt.semi + 128); mix((int) nt.vel); mix((int) nt.slot); mix((int) nt.glide); mix((int) nt.oneShot); mix((int) nt.drumHit); mix((int) nt.strumUp); mix((int) nt.strumPct); mix((int) nt.pan); mix((int) nt.condLen); mix((int) nt.condMask); } }
+                    { mix((uint64_t)std::llround(nt.start * 1.0e9)); mix((uint64_t)std::llround(nt.len * 1.0e9)); mix((int) nt.semi + 128); mix((int) nt.vel); mix((int) nt.slot); mix((int) nt.glide); mix((int) nt.oneShot); mix((int) nt.drumHit); mix((int) nt.strumUp); mix((int) nt.strumPct); mix((int) nt.pan); mix((int) nt.condLen); mix((int) nt.condMask); } }
     else for (auto& e : t.evts) { mix(e.pattern); mix(e.step); mix((int) e.semis + 128); mix(e.flags); }
     return h;
 }
@@ -13151,7 +13159,7 @@ DrumSequencerProcessor::KeysTake DrumSequencerEditor::captureTakeFromChannel(int
             for (int i = 0; i < cb.drawNoteCount && (int) t.drawNotes.size() < DrumSequencerProcessor::DRAW_TAKE_MAX; ++i)
             {
                 auto nt = cb.drawNotes[i];
-                nt.start = (int16_t) (nt.start + (b - head) * DrumChannel::DRAW_RES);
+                nt.start += (b - head) * DrumChannel::DRAW_RES;
                 t.drawNotes.push_back(nt);
             }
         }

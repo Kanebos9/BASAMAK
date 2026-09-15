@@ -32,7 +32,7 @@ Go to the [Releases](https://github.com/Kanebos9/BASAMAK/releases) page, downloa
 
 ## Live Drumming
 
-Version 1.5.8 adds per-channel MIDI input assignments, a shared drum roll, whole-kit recording/takes, and window size buttons. See the [Live Drumming guide](docs/LIVE-DRUMMING.md) for OKTO B setup and mode conversion.
+Version 1.5.8 adds per-channel MIDI input assignments, a shared drum roll, whole-kit recording/takes, ten ready-to-play Live Drums kits, seven additional percussion sounds, and window size buttons. Both piano rolls retain fine timing, and MIDI export uses 9600 PPQ. See the [Live Drumming guide](docs/LIVE-DRUMMING.md) for OKTO B setup and mode conversion.
 
 ## Building from source
 

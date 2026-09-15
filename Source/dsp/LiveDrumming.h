@@ -92,9 +92,10 @@ class LiveDrumming
     }
     void defaultMap()
     {
-        // Match BASAMAK's initial channel labels; remaining rows cover the OKTO's
-        // other documented notes. Learn always follows the user's actual kit.
-        notes = {{36, 38, 42, 46, 39, 45, 49, 37, 43, 48, 51, 44, -1, -1, -1, -1}};
+        // OKTO B physical pads, viewed by the player: top row left-to-right, then bottom.
+        // Crash, Tom 1, Tom 2, Ride / Kick, Snare, Tom 3, closed Hi-Hat.
+        // Open/pedal hats and rim are separate trigger notes; Learn follows edited hardware kits.
+        notes = {{49, 48, 45, 51, 36, 38, 43, 42, 46, 37, 44, 39, -1, -1, -1, -1}};
         midiChannels.fill(0);
         learnChannel = -1;
     }

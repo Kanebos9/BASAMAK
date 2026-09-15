@@ -39,8 +39,8 @@ void DrumSequencerEditor::setupLiveDrumming()
         "LIVE DRUMMING: MIDI notes trigger their assigned sound channels regardless of which channel you are "
         "editing. Assign pads in Routing > Channel > MIDI In (Learn). The common drum roll has one row per "
         "channel; KEYS/RECORD records the whole kit. Keyboard performance controls, Merge & Split, Generate "
-        "and step editing are unavailable in this mode. Switching offers Keep and convert, Start fresh, or "
-        "Cancel, with an explanation of what changes.");
+        "and step editing are unavailable in this mode. Empty sequences switch immediately. If any pattern "
+        "or saved take contains data, choose Keep and convert, Start fresh, or Cancel.");
     btnLiveDrumming.onClick = [this] { requestDrummingSwitch(); };
     btnWindowMinus.setTooltip("Make the entire plugin window smaller (5% of design size). Size is remembered "
                               "in the project. Use this if your host's window frame clips the plugin.");
@@ -105,8 +105,18 @@ void DrumSequencerEditor::requestDrummingSwitch()
     if (proc.keysRecording.load() || proc.sequencer.drums.recording || drumCountdown > 0 ||
         keysCountdownTicks > 0)
         return;
+    const juce::ScopedLock lock(proc.getCallbackLock());
+    drainDrawTake();
+    proc.sequencer.drums.drainLog();
     drumModePrompt.destinationDrums = !proc.sequencer.drums.enabled;
     drumModePrompt.error.clear();
+    if (!proc.hasDrummingSwitchData())
+    {
+        // Reuse the normal transaction and undo path without presenting an empty-data question.
+        drumModePrompt.onChoice(1);
+        if (drumModePrompt.error.isEmpty())
+            return;
+    }
     drumModePrompt.setVisible(true);
     drumModePrompt.toFront(false);
 }
@@ -172,7 +182,7 @@ void DrumSequencerEditor::refreshLiveDrumming()
                            "remain available. Undo restores the cleared hits. Unavailable while recording.");
     dragMidi.setTooltip("Drag to your DAW to export ALL drum channels in the displayed pattern/group as one "
                         "MIDI clip. Hits use their MIDI In assignments (or the MIDI Out note when "
-                        "unassigned), preserving rhythm and velocity.");
+                        "unassigned), preserving rhythm and velocity at 9600 ticks per quarter note.");
     keysPanel.btnRec.setTooltip(
         "Record ALL assigned drum channels together, including channels outside the visible rows. This "
         "pattern: each full pass of the pattern/merged group becomes a kit take. Follow chain: each visited "

@@ -2532,6 +2532,88 @@ static void oWobbleStep(DC& c) {   // a PROGRAMMED dubstep wobble: 8 drawn filte
     chFx(c, DC::ChFxComp, 0.35f); c.volume = 0.9f;
 }
 
+// Live percussion expansion: sample-free, visible slot controls throughout. These add
+// new excitation/body combinations instead of retuning the existing electronic drums.
+static void ldCajonSlap(DC& c)
+{
+    auto& b = mkSlot(c, DC::SrcModal);
+    b.modalMaterial = 5; b.oscFreq = 410; b.modalDecay = 0.015f;
+    b.modalTone = 0.8f; b.modalHit = 0.78f; b.modalStruct = 0.24f;
+    b.atk = 0.001f; b.dec = 0.15f;
+    auto& n = mkSlot2(c, DC::SrcNoise, 0.38f);
+    n.noiseType = 1; n.noiseCenter = 1700; n.noiseWidth = 0.25f;
+    n.noiseCrackle = 0.42f; n.atk = 0.0005f; n.dec = 0.07f;
+    c.volume = 0.82f;
+}
+static void ldUduPot(DC& c)
+{
+    auto& b = mkSlot(c, DC::SrcOsc);
+    b.oscFreq = 135; b.oscShape = b.oscShapeB = DC::WvSine;
+    b.pEnvP[0] = -9; b.pEnvT[0] = 0.06f;
+    b.atk = 0.002f; b.dec = 0.18f;
+    auto& n = mkSlot2(c, DC::SrcNoise, 0.74f);
+    n.noiseType = 2; n.noiseCenter = 520; n.noiseRes = 0.65f;
+    n.noiseWidth = 0.12f; n.atk = 0.001f; n.dec = 0.065f;
+    c.volume = 0.9f;
+}
+static void ldCabasa(DC& c)
+{
+    auto& n = mkSlot(c, DC::SrcNoise);
+    n.noiseType = 1; n.noiseCenter = 4600; n.noiseWidth = 0.4f;
+    n.atk = 0.003f; n.hold = 0.018f; n.dec = 0.11f;
+    n.lfoRate[0] = 72; n.lfoAmt[0] = 0.8f; n.lfoShape[0] = 0;
+    modRoute(n, DC::MSLfoFilt, DC::MTVol, 0.8f);
+    n.filterType = DC::HighPass; n.filterCutoff = 1700;
+    c.volume = 0.45f;
+}
+static void ldTambourine(DC& c)
+{
+    auto& b = mkSlot(c, DC::SrcModal);
+    b.modalMaterial = 4; b.oscFreq = 2100; b.modalDecay = 0.23f;
+    b.modalTone = 0.85f; b.modalStruct = 0.82f; b.modalHit = 0.65f;
+    b.atk = 0.001f; b.dec = 0.34f;
+    b.filterType = DC::HighPass; b.filterCutoff = 2500;
+    auto& n = mkSlot2(c, DC::SrcNoise, 0.6f);
+    n.noiseType = 0; n.noiseCenter = 6500; n.noiseWidth = 0.45f;
+    n.noiseCrackle = 0.55f; n.atk = 0.004f; n.dec = 0.18f;
+    c.allowOverlap = true; c.volume = 0.7f;
+}
+static void ldFlexatone(DC& c)
+{
+    auto& b = mkSlot(c, DC::SrcModal);
+    b.modalMaterial = 4; b.oscFreq = 790; b.modalDecay = 0.48f;
+    b.modalTone = 0.45f; b.modalStruct = 0.18f; b.modalHit = 0.65f;
+    b.atk = 0.001f; b.dec = 0.8f;
+    b.pEnvP[0] = -7; b.pEnvT[0] = 0.24f;
+    b.lfoRate[0] = 9; b.lfoAmt[0] = 0.45f;
+    modRoute(b, DC::MSLfoFilt, DC::MTPitch, 0.2f);
+    c.allowOverlap = true; c.volume = 0.66f;
+}
+static void ldSpringKnock(DC& c)
+{
+    auto& b = mkSlot(c, DC::SrcModal);
+    b.modalMaterial = 1; b.oscFreq = 165; b.modalDecay = 0.45f;
+    b.modalTone = 0.5f; b.modalStruct = 0.88f; b.modalHit = 0.7f;
+    b.atk = 0.001f; b.dec = 0.65f;
+    b.pEnvP[0] = 13; b.pEnvT[0] = 0.085f;
+    b.lfoRate[0] = 24; b.lfoAmt[0] = 0.6f;
+    modRoute(b, DC::MSLfoFilt, DC::MTPitch, 0.17f);
+    c.volume = 0.72f;
+}
+static void ldTrashStack(DC& c)
+{
+    auto& b = mkSlot(c, DC::SrcModal);
+    b.modalMaterial = DC::modalMaterialCount() - 1;
+    b.modalDecay = 0.08f; b.modalTone = 0.6f; b.modalDamp = 0.75f;
+    b.atk = 0.001f; b.dec = 0.15f;
+    b.filterType = DC::BandPass; b.filterCutoff = 2600; b.filterReso = 0.8f;
+    b.fxDriveType = DC::Foldback; b.fxDrive = 0.25f;
+    auto& n = mkSlot2(c, DC::SrcNoise, 0.45f);
+    n.noiseType = 1; n.noiseCenter = 1800; n.noiseWidth = 0.5f;
+    n.atk = 0.001f; n.dec = 0.095f;
+    c.volume = 0.85f;
+}
+
 static const struct { const char* name; Builder build; const char* cat; } kMixes[] = {
     // Categories are by INSTRUMENT (never by engine). Grouped + ordered like catOrder[] in
     // rebuildSoundMixMenu() - a category missing there is silently dropped from the menu.
@@ -2577,6 +2659,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Foot Hat", mFootHat, "Hi-Hats" },
     { "Crisp Hat", xCrispHat, "Hi-Hats" },
     // ---- Cymbals ----
+    { "Trash Stack", ldTrashStack, "Cymbals" },
     { "Crash", mCrash, "Cymbals" },
     { "Bell Cymbal", m909Ride, "Cymbals" },      // was "909 Ride" (user: it sounds like a bell)
     { "909 Crash", m909Crash, "Cymbals" },
@@ -2595,6 +2678,11 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Roto Tom", mRotoTom, "Toms" },
     { "Mod Tom", moTomDrum, "Toms" },
     // ---- Percussion ----
+    { "Cajon Slap", ldCajonSlap, "Percussion" },
+    { "Udu Pot", ldUduPot, "Percussion" },
+    { "Cabasa", ldCabasa, "Percussion" },
+    { "Tambourine", ldTambourine, "Percussion" },
+    { "Flexatone", ldFlexatone, "Percussion" },
     { "Rimshot", mRimshot, "Percussion" },
     { "Woodblock", mWoodblock, "Percussion" },
     { "Shaker", mShaker, "Percussion" },
@@ -2611,6 +2699,7 @@ static const struct { const char* name; Builder build; const char* cat; } kMixes
     { "Mod Wood Block", moWoodBlock, "Percussion" },
     { "Mod Cowbell", moCowbell, "Percussion" },
     // ---- Electro Perc ----
+    { "Spring Knock", ldSpringKnock, "Electro Perc" },
     { "Zap", mZap, "Electro Perc" },
     { "Particle Perc", grParticlePerc, "Electro Perc" },   // GRANULAR
     { "Scatter Kit", oScatterKit, "Electro Perc" },   // ORIGINALS: per-hit Random -> grain position + pan (never lands twice)
@@ -3221,6 +3310,78 @@ static void pLofiChill(Sequencer& s)
     songChain(s, 4, 0.22f);
 }
 
+// Ready-to-play kits share one controller layout across every pattern. All rolls stay empty.
+// The first eleven assignments cover every default OKTO B trigger in the supplied manual;
+// the last five are standard extra percussion notes for other pads/controllers.
+static void liveKit(Sequencer& s, const std::array<Builder, 16>& sounds, float bpm, float verb)
+{
+    static constexpr int notes[16] = {49, 48, 45, 51, 36, 38, 43, 42, 46, 37, 44, 39, 54, 56, 75, 82};
+    // Builders below are authored by instrument role. Reorder the sounds together with
+    // the input/output notes so the kick and snare stay on the physical bottom-left pads.
+    static constexpr int soundOrder[16] = {7, 6, 5, 8, 0, 1, 4, 2, 3, 9, 10, 11, 12, 13, 14, 15};
+    s.drums.enabled = true;
+    s.standaloneBpm = bpm; s.timeSigNum = 4; s.timeSigDen = 4;
+    for (int ch = 0; ch < 16; ++ch)
+    {
+        s.drums.notes[(size_t)ch] = notes[ch];
+        s.drums.midiChannels[(size_t)ch] = 0; // Any: accepts the OKTO default channel 10 or a user channel.
+    }
+    for (int p = 0; p < Sequencer::NUM_PATTERNS; ++p)
+    {
+        s.patterns[p].master.reverbWet = verb;
+        for (int ch = 0; ch < 16; ++ch)
+        {
+            buildChP(s, p, ch, sounds[(size_t)soundOrder[ch]], 16, {});
+            auto& c = s.patterns[p].channels[ch];
+            c.channelName = c.mixName;
+            c.midiNote = notes[ch]; c.midiOutChannel = 10;
+            // Closed/open/pedal hats cut each other; cymbal and hand-percussion tails may overlap.
+            c.chokeGroup = (notes[ch] == 42 || notes[ch] == 46 || notes[ch] == 44) ? 1 : 0;
+            if (notes[ch] == 46 || notes[ch] == 49 || notes[ch] == 51) c.allowOverlap = true;
+        }
+    }
+}
+static void pLiveFeltRoom(Sequencer& s)
+{
+    liveKit(s, {{mBreakKick, mModSnare, mClosedHat, mOpenHat, moTomDrum, m909MidTom, mRotoTom, mCrash, mBellRide, m909Rim, mFootHat, mClap, ldTambourine, moCowbell, mWoodClave, mShaker}}, 100, 0.12f);
+}
+static void pLiveDryFunk(Sequencer& s)
+{
+    liveKit(s, {{mBreakKick, mSnapSnare, m606ClosedHat, m909OpenHat, m909LowTom, m909MidTom, m909HiTom, ldTrashStack, m909Ride, mRimshot, mFootHat, mSnapClap, ldCabasa, m808Cowbell, mWoodblock, mShaker}}, 110, 0.06f);
+}
+static void pLiveBrushLounge(Sequencer& s)
+{
+    liveKit(s, {{mBreakKick, mBrushSnare, mFootHat, mOpenHat, moTomDrum, m808MidTom, m808HiTom, mSizzle, mBellRide, m808Rimshot, mClosedHat, ldCajonSlap, ldTambourine, moCowbell, mWoodClave, ldCabasa}}, 92, 0.16f);
+}
+static void pLiveEightOhEight(Sequencer& s)
+{
+    liveKit(s, {{m808Kick, m606Snare, m808ClosedHat, m808OpenHat, m808LowTom, m808MidTom, m808HiTom, yClusterCymbal, m909Ride, m808Rimshot, mFootHat, m808Clap, mShaker, m808Cowbell, m808Clave, mGlitchTick}}, 128, 0.08f);
+}
+static void pLiveWarehouse(Sequencer& s)
+{
+    liveKit(s, {{m909Kick, xTightSnare, m909ClosedHat, m909OpenHat, m909LowTom, m909MidTom, m909HiTom, m909Crash, m909Ride, m909Rim, mFootHat, nNeonClap, ldTambourine, m808Cowbell, mStaticHit, xCrispHat}}, 132, 0.2f);
+}
+static void pLiveDustyBreaks(Sequencer& s)
+{
+    liveKit(s, {{mBreakKick, mRoomSnare, m606ClosedHat, m808OpenHat, m808LowTom, mFMTom, m808HiTom, ldTrashStack, mSizzle, mRimshot, mFootHat, xSquashClap, ldCabasa, mWoodblock, m808Clave, mShaker}}, 94, 0.12f);
+}
+static void pLiveCajonCircle(Sequencer& s)
+{
+    liveKit(s, {{mLogDrum, ldCajonSlap, ldCabasa, ldTambourine, ldUduPot, m808Conga, mBongo, ldFlexatone, moCowbell, mWoodClave, mShaker, mClap, mRotoTom, m808Cowbell, mWoodblock, mFootHat}}, 105, 0.1f);
+}
+static void pLiveSkinAndClay(Sequencer& s)
+{
+    liveKit(s, {{mRotoTom, mTabla, mShaker, ldTambourine, ldUduPot, m808Conga, mBongo, moGong, moCowbell, ldCajonSlap, ldCabasa, mClap, ldFlexatone, m808Cowbell, mWoodClave, mWoodblock}}, 108, 0.2f);
+}
+static void pLiveCinematic(Sequencer& s)
+{
+    liveKit(s, {{mSubKick, mRotoTom, ldCabasa, mSizzle, mLogDrum, moTomDrum, yCometTom, moGong, moMetalPlate, ldCajonSlap, mFootHat, mBigClap, ldTambourine, ldFlexatone, mWoodblock, ldSpringKnock}}, 80, 0.3f);
+}
+static void pLiveScrapYard(Sequencer& s)
+{
+    liveKit(s, {{uSteelKick, mClackSnare, mMetalHat, mBuzzHit, ldSpringKnock, yCometTom, nFmClang, ldTrashStack, moMetalPlate, mGlitchTick, mStaticHit, xSquashClap, ldTambourine, moCowbell, mChirp, grParticlePerc}}, 118, 0.12f);
+}
+
 using PresetFn = void (*)(Sequencer&);
 static const struct { const char* name; PresetFn build; } kPresets[] = {
     { "Riser + Drop",       pRiserDrop },
@@ -3232,6 +3393,17 @@ static const struct { const char* name; PresetFn build; } kPresets[] = {
     { "When the Saints (trad.)", pSaints },
     { "Prelude in C (Bach)",    pPreludeC },
     { "Lofi Chill (groove)",    pLofiChill },
+    { "Live Drums - Room Session", pLiveFeltRoom },
+    { "Live Drums - Dry Funk", pLiveDryFunk },
+    { "Live Drums - Brush Lounge", pLiveBrushLounge },
+    { "Live Drums - 808 Circuit", pLiveEightOhEight },
+    { "Live Drums - Warehouse", pLiveWarehouse },
+    { "Live Drums - Dusty Breaks", pLiveDustyBreaks },
+    { "Live Drums - Cajon Circle", pLiveCajonCircle },
+    { "Live Drums - Skin and Clay", pLiveSkinAndClay },
+    { "Live Drums - Cinematic Ritual", pLiveCinematic },
+    { "Live Drums - Scrap Yard", pLiveScrapYard },
+
 };
 static constexpr int kNumPresets = (int) (sizeof(kPresets) / sizeof(kPresets[0]));
 
@@ -3247,6 +3419,8 @@ juce::StringArray presetNames()
 // the previous preset). Then the chosen groove is laid onto pattern 0.
 static void resetAll(Sequencer& s)
 {
+    static const char* names[] = { "Kick", "Snare", "Closed Hat", "Open Hat", "Clap", "Tom", "Crash", "Rim" };
+    static constexpr int notes[] = {36, 38, 40, 41, 43, 45, 47, 48};
     s.drums.restore({});
     for (int p = 0; p < Sequencer::NUM_PATTERNS; ++p)
     {
@@ -3259,6 +3433,8 @@ static void resetAll(Sequencer& s)
         for (int c = 0; c < Sequencer::NUM_CHANNELS; ++c)
         {
             auto& ch = P.channels[c];
+            ch.channelName = c < 8 ? juce::String(names[c]) : "Ch " + juce::String(c + 1);
+            ch.midiNote = c < 8 ? notes[c] : 49 + c - 8;
             clearSound(ch);
             finishSound(ch);   // even an EMPTY channel carries its (init) sound as slots - the
                                // modern invariant; applyPreset's blanket legacy pass is GONE

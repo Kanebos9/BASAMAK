@@ -14,6 +14,14 @@ void Sequencer::reset()
     resetTickDedupe();
 }
 
+void Sequencer::syncInputClock(juce::AudioPlayHead* head, double sampleRate)
+{
+    // Set the recording cursor to the START of this audio slice, including a host start/seek.
+    // Zero-length clock sync never generates or deduplicates sequenced events.
+    if (dawSync) { juce::Array<TriggerEvent> unused; advanceDaw(head, sampleRate, 0, unused); }
+    else isCurrentlyPlaying = playing && !finished;
+}
+
 //==============================================================================
 juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
     juce::AudioBuffer<float>& audio,
@@ -78,13 +86,24 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
         if (c.mute || (anySoloIn(patterns[pat]) && ! c.solo)) return;
         // SIDECHAIN DUCK: this hit pushes down every channel set to "Duck by" this channel
         // (Routing popup). Level-only - the ducked sound recovers; nothing is cut like choke.
+        for (int p = drums.enabled ? 0 : pat; p < (drums.enabled ? NUM_PATTERNS : pat + 1); ++p)
         for (int o = 0; o < NUM_CHANNELS; ++o)
         {
-            auto& d = patterns[pat].channels[o];
+            auto& d = patterns[p].channels[o];
+            // Live kits keep tails from previous bars. Duck those ringing voices too,
+            // without leaving a duck pulse armed on an idle, unrendered future pattern.
+            if (p != pat && !d.anyVoiceActive()) continue;
             if (o != e.channel && d.duckBy == e.channel && d.duckAmt > 0.001f) d.duckPulse();
         }
         if (c.midiOut) return;   // MIDI-out channels make no internal sound (they emit notes in the processor)
         if (e.drumHit) {
+            if (drums.enabled && !c.allowOverlap)
+                for (int p = 0; p < NUM_PATTERNS; ++p)
+                    if (p != pat)
+                    {
+                        auto& old = patterns[p].channels[e.channel];
+                        old.fadeOutVoices(old.retrigFadeSec());
+                    }
             if (c.chokeGroup > 0)
                 for (int p = drums.enabled ? 0 : pat; p < (drums.enabled ? NUM_PATTERNS : pat + 1); ++p)
                     for (int o = 0; o < NUM_CHANNELS; ++o)
@@ -286,7 +305,9 @@ void Sequencer::advanceStandalone(double sampleRate, int numSamples,
     isCurrentlyPlaying = true;
 
     const double samplesPerBar = 1.0 / juce::jmax(1.0e-12, barsPerSample);
-    if (newPos < 1.0)
+    // A slice ending exactly at the bar line can land a floating-point ulp below 1.
+    // Complete that bar now; otherwise the next host slice starts at zero without a wrap.
+    if (newPos < 1.0 && 1.0 - newPos > barsPerSample * 1.0e-3)
     {
         checkChannelTriggers(oldPos, newPos, numSamples, 0, samplesPerBar, events);
         barPosition = newPos;
@@ -369,6 +390,7 @@ void Sequencer::advanceDaw(juce::AudioPlayHead* dawHead, double sampleRate, int 
 
     double oldPos = std::fmod(ppqPos / quartersPerBar, 1.0);
     if (oldPos < 0.0) oldPos += 1.0;
+    if (numSamples == 0) { barPosition = oldPos; return; }
 
     // Advance by one block (ppq is in quarter notes)
     double beatsPerSample = hostBpm / (60.0 * sampleRate);
@@ -376,7 +398,7 @@ void Sequencer::advanceDaw(juce::AudioPlayHead* dawHead, double sampleRate, int 
     double newPos = oldPos + numSamples * barsPerSample;
 
     const double samplesPerBar = 1.0 / juce::jmax(1.0e-12, barsPerSample);
-    if (newPos < 1.0)
+    if (newPos < 1.0 && 1.0 - newPos > barsPerSample * 1.0e-3)
     {
         checkChannelTriggers(oldPos, newPos, numSamples, 0, samplesPerBar, events);
         barPosition = newPos;
@@ -526,15 +548,15 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
             const int nN = juce::jlimit(0, DrumChannel::DRAW_MAX_NOTES, c.drawNoteCount);
             // Seam dedupe: compare against the PREVIOUS pass's value and set AFTER the loop, so a
             // chord (several notes at the SAME start col, fired in one pass) is never self-deduped.
-            const int prevTick = lastTick[ch]; const int prevTickLoop = lastTickLoop[ch];
-            int firedCol = -1;
+            const double prevTick = lastTick[ch]; const int prevTickLoop = lastTickLoop[ch];
+            double firedCol = -1;
             for (int ni = 0; ni < nN; ++ni)
             {
                 const auto nt = c.drawNotes[ni];                      // copy (editor may edit concurrently)
                 const double colPos = (double) nt.start / (double) R; // bar-fraction of the note's start
                 const bool atZero = (oldPos <= zeroTol && colPos == 0.0);
                 if (! atZero && ! (colPos > oldPos && colPos <= newPos)) continue;
-                if (prevTick == 100000 + (int) nt.start && prevTickLoop == loopCount) continue;   // seam re-crossing
+                if (prevTick == 100000 + nt.start && prevTickLoop == loopCount) continue;   // seam re-crossing
                 firedCol = nt.start;
                 // [2026-07-15 23:00] per-NOTE loop condition (the step Loop system, per note):
                 // fire only on the chosen loops of an N-loop cycle. Len 1 / mask 0 = every loop.
@@ -559,7 +581,7 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
                 // clamped to 1) - segBars/span*spanSamples exploded to ~1e11 samples there, which
                 // was the "first note rings much longer from the second loop on" bug.
                 const double segBars = (double) nt.len / (double) R;
-                const long gate = (long) juce::jmax(64.0, segBars * samplesPerBar);
+                const long gate = (long) juce::jmax(1.0, segBars * samplesPerBar);
                 const int off = baseOffset + (int) juce::jlimit(0.0, (double) spanSamples - 1.0,
                                                 (colPos - oldPos) / span * (double) spanSamples);
                 // GEOMETRY-DRIVEN LEGATO + GLIDE [2026-07-16 round-5, user design - replaced the
@@ -573,7 +595,7 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
                 if (c.keysLegato || c.keysGlide > 0.0001f)
                 {
                     const int adjGap = R / 64;
-                    int bestStart = -1; int bestSemi = 0;
+                    double bestStart = -1; int bestSemi = 0;
                     for (int mj = 0; mj < nN; ++mj)
                     {
                         if (mj == ni) continue;
