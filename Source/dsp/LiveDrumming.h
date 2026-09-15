@@ -70,6 +70,7 @@ class LiveDrumming
     bool enabled = false;
     std::array<Lane, PATTERNS> patterns;
     std::array<int, CHANNELS> notes;
+    std::array<int, CHANNELS> alternateNotes; // same sound, velocity range and MIDI channel as primary
     std::array<int, CHANNELS> midiChannels{}; // 0 = any; 1..16 = exact MIDI channel
     int learnChannel = -1;
     int lastNote = -1, lastMidiChannel = 0, lastVelocity = 0;
@@ -94,8 +95,10 @@ class LiveDrumming
     {
         // OKTO B physical pads, viewed by the player: top row left-to-right, then bottom.
         // Crash, Tom 1, Tom 2, Ride / Kick, Snare, Tom 3, closed Hi-Hat.
-        // Open/pedal hats and rim are separate trigger notes; Learn follows edited hardware kits.
-        notes = {{49, 48, 45, 51, 36, 38, 43, 42, 46, 37, 44, 39, -1, -1, -1, -1}};
+        // Both open/closed messages from physical pad 8 play row 8's sound.
+        notes = {{49, 48, 45, 51, 36, 38, 43, 42, 53, 37, 44, 39, -1, -1, -1, -1}};
+        alternateNotes.fill(-1);
+        alternateNotes[7] = 46;
         midiChannels.fill(0);
         learnChannel = -1;
     }
@@ -105,18 +108,41 @@ class LiveDrumming
             return;
         note = juce::jlimit(-1, 127, note);
         midiChannel = juce::jlimit(0, 16, midiChannel);
-        // An overlapping assignment moves to this row; one pad never accidentally doubles.
-        for (int c = 0; c < CHANNELS; ++c)
-            if (c != ch && notes[(size_t)c] == note &&
-                (midiChannel == 0 || midiChannels[(size_t)c] == 0 || midiChannels[(size_t)c] == midiChannel))
-                notes[(size_t)c] = -1;
         notes[(size_t)ch] = note;
         midiChannels[(size_t)ch] = midiChannel;
+        if (note < 0 || alternateNotes[(size_t)ch] == note) alternateNotes[(size_t)ch] = -1;
+        claimNote(ch, note);
+        claimNote(ch, alternateNotes[(size_t)ch]);
+    }
+    void assignAlternate(int ch, int note)
+    {
+        if (ch < 0 || ch >= CHANNELS) return;
+        note = juce::jlimit(-1, 127, note);
+        if (notes[(size_t)ch] < 0 && note >= 0) { assign(ch, note, midiChannels[(size_t)ch]); return; }
+        alternateNotes[(size_t)ch] = note == notes[(size_t)ch] ? -1 : note;
+        claimNote(ch, alternateNotes[(size_t)ch]);
+    }
+    void claimNote(int ch, int note)
+    {
+        if (note < 0) return;
+        // One incoming message triggers one row; disjoint MIDI channels may share notes.
+        const int mc = midiChannels[(size_t)ch];
+        for (int c = 0; c < CHANNELS; ++c)
+            if (c != ch && (mc == 0 || midiChannels[(size_t)c] == 0 || midiChannels[(size_t)c] == mc))
+            {
+                if (alternateNotes[(size_t)c] == note) alternateNotes[(size_t)c] = -1;
+                if (notes[(size_t)c] == note)
+                {
+                    notes[(size_t)c] = alternateNotes[(size_t)c];
+                    alternateNotes[(size_t)c] = -1;
+                }
+            }
     }
     int target(int note, int midiChannel) const
     {
+        if (note < 0 || note > 127) return -1;
         for (int c = 0; c < CHANNELS; ++c)
-            if (notes[(size_t)c] == note &&
+            if ((notes[(size_t)c] == note || alternateNotes[(size_t)c] == note) &&
                 (midiChannels[(size_t)c] == 0 || midiChannels[(size_t)c] == midiChannel))
                 return c;
         return -1;
@@ -133,6 +159,7 @@ class LiveDrumming
         ++activity;
         if (learnChannel >= 0)
         {
+            alternateNotes[(size_t)learnChannel] = -1;
             assign(learnChannel, note, midiChannel);
             learnChannel = -1;
             return;

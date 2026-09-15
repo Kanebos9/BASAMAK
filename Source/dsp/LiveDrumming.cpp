@@ -27,6 +27,7 @@ juce::ValueTree LiveDrumming::save() const
         juce::ValueTree m("Map");
         m.setProperty("ch", c, nullptr);
         m.setProperty("note", notes[(size_t)c], nullptr);
+        m.setProperty("alternate", alternateNotes[(size_t)c], nullptr);
         m.setProperty("midiCh", midiChannels[(size_t)c], nullptr);
         root.addChild(m, -1, nullptr);
     }
@@ -71,6 +72,8 @@ void LiveDrumming::restore(const juce::ValueTree &root)
     if (!root.isValid())
         return;
     // Read mappings together: persisted disjoint MIDI channels may share a note.
+    // Existing saved maps have no implicit aliases; never reroute a user's project on load.
+    if (root.getChildWithName("Map").isValid()) alternateNotes.fill(-1);
     for (auto child : root)
         if (child.hasType("Map"))
         {
@@ -78,6 +81,7 @@ void LiveDrumming::restore(const juce::ValueTree &root)
             if (c < 0 || c >= CHANNELS)
                 continue;
             notes[(size_t)c] = juce::jlimit(-1, 127, (int)child.getProperty("note", -1));
+            alternateNotes[(size_t)c] = juce::jlimit(-1, 127, (int)child.getProperty("alternate", -1));
             midiChannels[(size_t)c] = juce::jlimit(0, 16, (int)child.getProperty("midiCh", 0));
         }
     for (auto child : root)

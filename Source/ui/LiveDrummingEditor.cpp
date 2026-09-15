@@ -14,7 +14,9 @@ void KeysPanel::setDrumming(bool on)
     for (int i = 0; i < getNumChildComponents(); ++i)
     {
         auto *c = getChildComponent(i);
-        const bool active = !on || c == &btnRec || c == &comboRecMode || c == &btnTakes || c == &lblRecMode;
+        const bool active = !on || c == &btnRec || c == &comboRecMode || c == &btnTakes || c == &lblRecMode
+            || c == &minVelKnob || c == &maxVelKnob || c == &lblMinVel || c == &lblMaxVel
+            || c == &humanKnob || c == &lblHuman;
         c->setEnabled(active);
         c->setAlpha(active ? 1.0f : 0.35f);
     }
@@ -38,7 +40,8 @@ void DrumSequencerEditor::setupLiveDrumming()
     btnLiveDrumming.setTooltip(
         "LIVE DRUMMING: MIDI notes trigger their assigned sound channels regardless of which channel you are "
         "editing. Assign pads in Routing > Channel > MIDI In (Learn). The common drum roll has one row per "
-        "channel; KEYS/RECORD records the whole kit. Keyboard performance controls, Merge & Split, Generate "
+        "channel; KEYS/RECORD records the whole kit and edits each channel's Min/Max Velocity and Slot Offset. "
+        "Other keyboard controls, Merge & Split, Generate "
         "and step editing are unavailable in this mode. Empty sequences switch immediately. If any pattern "
         "or saved take contains data, choose Keep and convert, Start fresh, or Cancel.");
     btnLiveDrumming.onClick = [this] { requestDrummingSwitch(); };
@@ -163,6 +166,15 @@ void DrumSequencerEditor::refreshLiveDrumming()
     lblSwing.setAlpha(d.enabled ? 0.35f : 1.0f);
     if (!d.enabled)
         return;
+    const auto& channel = proc.sequencer.channel(selectedChannel);
+    keysPanel.minVelKnob.setValue(channel.keysMinVel, juce::dontSendNotification);
+    keysPanel.maxVelKnob.setValue(channel.keysMaxVel, juce::dontSendNotification);
+    keysPanel.humanKnob.setValue(channel.humanizeAmt, juce::dontSendNotification);
+    const bool twoSlots = channel.slots[0].engine >= 0 && channel.slots[0].weight > 0.001f
+                       && channel.slots[1].engine >= 0 && channel.slots[1].weight > 0.001f;
+    keysPanel.humanKnob.setEnabled(twoSlots);
+    keysPanel.humanKnob.setAlpha(twoSlots ? 1.0f : 0.35f);
+    keysPanel.lblHuman.setAlpha(twoSlots ? 1.0f : 0.35f);
     btnUndo.setEnabled(!d.recording && drumCountdown == 0 && undoStack.size() >= 2);
     btnRedo.setEnabled(!d.recording && drumCountdown == 0 && !redoStack.empty());
     drumModePrompt.keep.setEnabled(!d.recording);
@@ -181,7 +193,7 @@ void DrumSequencerEditor::refreshLiveDrumming()
     btnClearPat.setTooltip("Clear ALL drum channels in the displayed pattern/merged group. Saved takes "
                            "remain available. Undo restores the cleared hits. Unavailable while recording.");
     dragMidi.setTooltip("Drag to your DAW to export ALL drum channels in the displayed pattern/group as one "
-                        "MIDI clip. Hits use their MIDI In assignments (or the MIDI Out note when "
+                        "MIDI clip. Hits use the primary MIDI In note, including hits from an alternate input (or the MIDI Out note when "
                         "unassigned), preserving rhythm and velocity at 9600 ticks per quarter note.");
     keysPanel.btnRec.setTooltip(
         "Record ALL assigned drum channels together, including channels outside the visible rows. This "

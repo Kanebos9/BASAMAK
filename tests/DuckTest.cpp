@@ -38,6 +38,7 @@ static std::vector<float> render(int mode, bool live = false, bool otherPattern 
     if (mode == 2) { tone.duckBy = 2; tone.duckAmt = 0.9f; }   // ch2 has no steps = never pulses
     if (mode == 3) { tone.duckBy = 0; tone.duckAmt = 0; }
     if (mode == 4) { tone.duckBy = 0; tone.duckAmt = 0.9f; }
+    if (mode == 5) tone.liveChokeBy = 0; // Live-only setting cannot change regular playback
     auto& nextKick = s->patterns[1].channels[0];
     auto& nextTone = s->patterns[1].channels[1];
     mkTone(nextKick, 60.0f, 0.05f); mkTone(nextTone, 330.0f, 4.0f);
@@ -81,6 +82,8 @@ static int liveTailCount(bool overlap, int mode, bool otherPattern, bool& audibl
             if (ch < 2) mkTone(c, 330.0f + ch * 110, 4.0f);
             c.allowOverlap = true;
             c.chokeGroup = mode == 1 && ch < 2 ? 1 : 0;
+            c.liveChokeBy = (mode == 3 || mode == 5) && ch == 0 ? 1 : mode == 4 && ch == 1 ? 0 : -1;
+            c.mute = mode == 5 && ch == 1;
             c.prepareToPlay(48000, 512);
         }
     juce::AudioBuffer<float> b(2, 512);
@@ -122,6 +125,12 @@ int main() {
     { auto armed = render(2);
       for (size_t i = 0; i < dry.size() && i < armed.size(); ++i) maxdiff = juce::jmax(maxdiff, (double) std::abs(dry[i] - armed[i])); }
     printf("[3] duck armed-but-silent = bit-identical to off: maxdiff=%.9f -> %s\n", maxdiff, CHK(maxdiff == 0.0) ? "OK" : "FAIL");
+    {
+        auto regularWithLiveChoke = render(5);
+        double delta = 0;
+        for (size_t i = 0; i < dry.size(); ++i) delta = std::max(delta, (double)std::abs(dry[i] - regularWithLiveChoke[i]));
+        printf("[regular] Live-only choke leaves regular playback unchanged: %.9f -> %s\n", delta, CHK(delta == 0) ? "OK" : "FAIL");
+    }
     for (bool across : {false, true})
     {
         auto liveDry = render(0, true, across), liveWet = render(1, true, across);
@@ -139,11 +148,11 @@ int main() {
                    across ? "old-bar tails" : "same bar", mode, delta, CHK(delta == 0) ? "OK" : "FAIL");
         }
         for (bool overlap : {false, true})
-            for (int mode : {0, 1, 2})
+            for (int mode : {0, 1, 2, 3, 4, 5})
             {
                 bool audible = false;
                 const int tails = liveTailCount(overlap, mode, across, audible);
-                const int expected = mode == 0 ? (overlap ? 2 : 1) : mode == 1 ? 0 : 1;
+                const int expected = mode == 0 ? (overlap ? 2 : 1) : (mode == 1 || mode == 3) ? 0 : 1;
                 printf("[live %s] overlap=%d choke-mode=%d old-row voices=%d (want %d) -> %s\n",
                        across ? "old-bar tails" : "same bar", overlap, mode, tails, expected,
                        CHK(audible && tails == expected) ? "OK" : "FAIL");

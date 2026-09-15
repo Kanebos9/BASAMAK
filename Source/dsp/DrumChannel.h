@@ -316,6 +316,7 @@ public:
     int   sliceCount  = 1;      // sample slicing: 1 = whole; N = chop the region into N equal slices,
     int   sliceCounter = 0;     // and each consecutive hit plays the next slice (transient runtime state)
     int   chokeGroup = 0;       // 0 = none; channels sharing a group cut each other's tails (e.g. hi-hats)
+    int   liveChokeBy = -1;     // Live Drumming: this row is cut by hits on the chosen row, one-way
     // SIDECHAIN DUCK (channel-wide, set in the Routing popup): when channel `duckBy` fires a hit,
     // THIS channel's level dips by duckAmt and recovers over ~130 ms (classic kick-ducks-bass pump).
     // Unlike CHOKE this never cuts the sound - it only pushes the volume down and lets it back up.
@@ -1071,9 +1072,16 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     int8_t revBus = 0, delBus = 0;   // which shared bus this channel feeds (0 = A, 1 = B; channel-wide like routing)
     //   keysMinVel / keysMaxVel = the FLOOR + CEILING for keyboard velocity: a played key's velocity is
     //     remapped [0..1] -> [keysMinVel..keysMaxVel], so soft playing still sounds and loud is tamed.
-    //     Per pattern/channel, keys only. Defaults 0/1 = raw velocity.
+    //     Per pattern/channel, keys and incoming live pads. Defaults 0/1 = raw velocity.
     float keysMinVel  = 0.0f;   // 0..1
     float keysMaxVel  = 1.0f;   // 0..1
+    float liveInputVelocity(float velocity) const
+    {
+        const float lo = juce::jlimit(0.0f, 1.0f, keysMinVel);
+        const float hi = juce::jlimit(lo, 1.0f, keysMaxVel);
+        // Keep the positive MIDI-note floor shared by kit lanes, takes and export.
+        return juce::jlimit(1.0f / 127, 1.0f, lo + velocity * (hi - lo));
+    }
     //   keysGlide = MONO LEGATO portamento: when > 0 and you press a new key while still HOLDING the
     //     previous one, the new note SLIDES from the old pitch to the new over keysGlide*0.4 s. Live keys
     //     only (mono); 0 = off = instant (bit-identical). Poly never glides. Per pattern/channel, keys only.

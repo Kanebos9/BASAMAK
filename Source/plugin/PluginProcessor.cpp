@@ -2507,6 +2507,7 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
     chState.setProperty("keysLegato", ch.keysLegato, nullptr);     // [2026-07-16] the mode dropdown's legato/glide axis
     chState.setProperty("keysLetRing", ch.keysLetRing, nullptr);   // [2026-07-19] Let Ring mode + its window
     chState.setProperty("keysLetRingMs", ch.keysLetRingMs, nullptr);
+    chState.setProperty("liveChokeBy", ch.liveChokeBy, nullptr);
     chState.setProperty("chokeGrp", ch.chokeGroup,     nullptr);   // choke group (channel-wide)
     chState.setProperty("duckBy",   ch.duckBy,         nullptr);   // sidechain duck (channel-wide)
     chState.setProperty("duckAmt",  ch.duckAmt,        nullptr);
@@ -2715,6 +2716,7 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
     ch.keysLetRing  = (bool) child.getProperty("keysLetRing", false);
     ch.keysLetRingMs = juce::jlimit(10, 1000, (int) child.getProperty("keysLetRingMs", 90));
     ch.chokeGroup  = (int)  child.getProperty("chokeGrp", 0);
+    ch.liveChokeBy = juce::jlimit(-1, Sequencer::NUM_CHANNELS - 1, (int)child.getProperty("liveChokeBy", -1));
     ch.duckBy      = juce::jlimit(-1, Sequencer::NUM_CHANNELS - 1, (int) child.getProperty("duckBy", -1));
     ch.duckAmt     = juce::jlimit(0.0f, 1.0f, (float) child.getProperty("duckAmt", 0.5f));
     ch.numSteps    = (int)child.getProperty("numSteps",   8);
@@ -2877,6 +2879,7 @@ void DrumSequencerProcessor::copyChannel(int pat, int src, int dst)
     const int  keepBus   = chans[dst].outputBus;   // routing is channel-wide -> keep the destination's
     const bool keepMidi  = chans[dst].midiOut;
     const int  keepMidiCh= chans[dst].midiOutChannel;
+    const int keepLiveChoke = chans[dst].liveChokeBy;
     const int  keepChoke = chans[dst].chokeGroup;  // choke is channel-wide too
     const int  keepDuckBy = chans[dst].duckBy; const float keepDuckAmt = chans[dst].duckAmt;
     const int  keepMerge = chans[dst].mergeWith;                    // MERGE&SPLIT pairing is PER-PATTERN - keep this pattern's dest pairing
@@ -2890,6 +2893,7 @@ void DrumSequencerProcessor::copyChannel(int pat, int src, int dst)
     chans[dst].midiOut    = keepMidi;
     chans[dst].midiOutChannel = keepMidiCh;
     chans[dst].chokeGroup = keepChoke;
+    chans[dst].liveChokeBy = keepLiveChoke;
     chans[dst].duckBy = keepDuckBy; chans[dst].duckAmt = keepDuckAmt;
     chans[dst].mergeWith = keepMerge;
     chans[dst].keysSplitW1 = keepW1; chans[dst].keysSplitW2 = keepW2;
@@ -3264,6 +3268,7 @@ void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
                 ch.midiNote    = ref.midiNote;     ch.midiOut        = ref.midiOut;
                 ch.midiOutChannel = ref.midiOutChannel;
                 ch.outputBus   = ref.outputBus;    ch.chokeGroup     = ref.chokeGroup;
+                ch.liveChokeBy = ref.liveChokeBy;
                 ch.duckBy      = ref.duckBy;       ch.duckAmt        = ref.duckAmt;
                 ch.revBus      = ref.revBus;       ch.delBus         = ref.delBus;
             }

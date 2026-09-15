@@ -7265,7 +7265,7 @@ juce::int64 DrumSequencerEditor::stateHash() const
     juce::int64 h = 1125899906842597LL;
     const juce::ScopedLock drumLock(proc.getCallbackLock());
     const auto& d=s.drums; h=mix(h,d.enabled);
-    for(int ch=0;ch<16;++ch){h=mix(h,d.notes[(size_t)ch]);h=mix(h,d.midiChannels[(size_t)ch]);}
+    for(int ch=0;ch<16;++ch){h=mix(h,d.notes[(size_t)ch]);h=mix(h,d.alternateNotes[(size_t)ch]);h=mix(h,d.midiChannels[(size_t)ch]);}
     auto hashHit=[&](const LiveDrumming::Hit& hit){h=mix(h,(juce::int64)(hit.pos*1.0e12));h=mix(h,hit.channel);h=mix(h,f(hit.velocity));h=mix(h,f(hit.pan));};
     for(const auto& lane:d.patterns){h=mix(h,lane.count);for(int i=0;i<lane.count;++i)hashHit(lane.hits[(size_t)i]);}
     for(const auto& t:d.takes){h=mix(h,t.name.hashCode64());h=mix(h,t.head);h=mix(h,t.bars);for(const auto& hit:t.hits){h=mix(h,hit.pattern);hashHit(hit.hit);}}
@@ -7303,6 +7303,7 @@ juce::int64 DrumSequencerEditor::stateHash() const
             h = mix(h, ch.keysPolyMode ? 1 : 0);   // KEYS poly/mono toggle (undoable)
             h = mix(h, ch.keysLegato ? 1 : 0);
             h = mix(h, ch.keysLetRing ? 1 : 0); h = mix(h, ch.keysLetRingMs);   // [2026-07-19] Let Ring
+            h = mix(h, ch.liveChokeBy + 2); h = mix(h, ch.chokeGroup);
             h = mix(h, ch.duckBy + 2); h = mix(h, f(ch.duckAmt));   // sidechain duck (undoable)
             juce::int64 st = 0; for (int i = 0; i < DrumChannel::MAX_STEPS; ++i) st = (st << 1) | (ch.steps[i] ? 1 : 0);
             h = mix(h, st); h = mix(h, ch.mute ? 1 : 0); h = mix(h, ch.solo ? 2 : 0);
@@ -8042,7 +8043,7 @@ void DrumSequencerEditor::initPreset()
         {
             auto& ch = P.channels[c];
             resetChannelToDefault(ch, c);
-            ch.chokeGroup = 0; ch.outputBus = 0; ch.midiOut = false; ch.midiOutChannel = 1;   // routing is preset-level -> reset on Init too
+            ch.liveChokeBy = -1; ch.chokeGroup = 0; ch.outputBus = 0; ch.midiOut = false; ch.midiOutChannel = 1;   // routing is preset-level -> reset on Init too
             ch.revBus = 0; ch.delBus = 0;   // reverb/delay bus assignment is routing too
             ch.mute = false; ch.solo = false;   // mixer state resets with the preset too (audit)
             ch.duckBy = -1; ch.duckAmt = 0.5f;
@@ -8128,7 +8129,7 @@ void DrumSequencerEditor::fullRefresh()
         const auto& s0 = proc.sequencer.patterns[0].channels[c];
         for (int p = 1; p < Sequencer::NUM_PATTERNS; ++p) {
             auto& cc = proc.sequencer.patterns[p].channels[c];
-            cc.chokeGroup = s0.chokeGroup; cc.outputBus = s0.outputBus; cc.midiOut = s0.midiOut; cc.midiOutChannel = s0.midiOutChannel;
+            cc.liveChokeBy = s0.liveChokeBy; cc.chokeGroup = s0.chokeGroup; cc.outputBus = s0.outputBus; cc.midiOut = s0.midiOut; cc.midiOutChannel = s0.midiOutChannel;
             cc.duckBy = s0.duckBy; cc.duckAmt = s0.duckAmt;
         }
     }
@@ -8878,7 +8879,7 @@ int DrumSequencerEditor::currentSoundPickId(int ch) const
 void DrumSequencerEditor::applySelCC(int t, float v, bool& slotDirty, bool& keysDirty)
 {
     using P = DrumSequencerProcessor;
-    if(proc.sequencer.drums.enabled && (t==P::SelStrum||t==P::SelMinVel||t==P::SelMaxVel||t==P::SelGlide||t==P::SelSlotOfs
+    if(proc.sequencer.drums.enabled && (t==P::SelStrum||t==P::SelGlide
        ||t==P::SelScaleNotes||t==P::SelScaleType||t==P::SelScaleKey
        ||t==P::SelScaleTypeNext||t==P::SelScaleTypePrev||t==P::SelScaleKeyNext||t==P::SelScaleKeyPrev||t==P::SelScaleNotesNext||t==P::SelScaleNotesPrev|| (t>=P::SelStepBase&&t<P::SelStepBase+DrumChannel::MAX_STEPS))) return;
     auto& ch = proc.sequencer.channel(selectedChannel);
@@ -9861,7 +9862,8 @@ void DrumSequencerEditor::setupComponents()
     keysPanel.humanKnob.setTooltip("SLOT OFFSET (0-100 ms, needs 2 sound slots): fires SLOT 2 a fixed amount "
         "AFTER slot 1 on every hit - a consistent flam/layering delay (thicken a stack, add a soft doubling).\n\n"
         "- Slot 1 stays exactly on time; slot 2 trails by the set milliseconds.\n"
-        "- The SAME every hit (not random). 0 = both slots together. Faded when only one slot is used.");
+        "- The SAME every hit (not random). 0 = both slots together. Faded when only one slot is used. "
+        "Edits the selected channel in this pattern, including Live Drumming.");
     keysPanel.strumKnob.setTooltip("STRUM (needs a Scale on): spreads a chord's notes in time, low to high, "
         "like strumming - every hit (keys, steps or drawn) fans the chord out instead of a block. Stepped in fixed "
         "amounts (0/20/40/60/80/100%) so it matches the piano-roll right-click override exactly (no drift between "
@@ -9878,9 +9880,11 @@ void DrumSequencerEditor::setupComponents()
         if (ignoreKnobCallbacks) return;
         proc.sequencer.channel(selectedChannel).strumAmt = (float) keysPanel.strumKnob.getValue();
     };
-    keysPanel.minVelKnob.setTooltip("MIN VELOCITY: the softest a played key can sound. Your key velocity is remapped "
-        "so the quietest press = this level and the hardest = full. Turn up if soft playing (or a light "
-        "controller) gets too quiet or drops out. 0 = off (raw velocity).");
+    keysPanel.minVelKnob.setTooltip("MIN VELOCITY: raises the quiet end of incoming key/pad velocity. "
+        "Min and Max together set the playing range for the selected channel in this pattern. "
+        "Live Drumming uses each pad's routed channel, regardless of selection, and records the adjusted velocity. "
+        "Min 0 / Max 100% keeps incoming dynamics. Both 100% gives full velocity on every hit. "
+        "This changes new playing/recording; existing notes retain their velocities.");
     keysPanel.minVelKnob.setColour(juce::Slider::rotarySliderFillColourId, juce::Colour(0xff5ad17a));
     keysPanel.minVelKnob.onValueChange = [this] {
         if (ignoreKnobCallbacks) return;
@@ -9891,9 +9895,11 @@ void DrumSequencerEditor::setupComponents()
             keysPanel.maxVelKnob.setValue(ch.keysMaxVel, juce::dontSendNotification);
         }
     };
-    keysPanel.maxVelKnob.setTooltip("MAX VELOCITY: the loudest a played key can sound. Your key velocity is remapped "
-        "so the hardest press = this level. Turn down to tame a heavy hand or an aggressive controller. "
-        "1 = off (full). Min/Max together map [soft..hard] -> [min..max].");
+    keysPanel.maxVelKnob.setTooltip("MAX VELOCITY: caps the strong end of incoming key/pad velocity. "
+        "Min and Max together set the playing range for the selected channel in this pattern. "
+        "Live Drumming records the adjusted velocity once; playback does not apply the range again. "
+        "Equal Min/Max gives fixed velocity (lowest audible MIDI velocity is 1). "
+        "The knobs cannot cross: changing one pushes the other when needed.");
     keysPanel.maxVelKnob.setColour(juce::Slider::rotarySliderFillColourId, juce::Colour(0xff5ad17a));
     keysPanel.glideKnob.setTooltip(
         "GLIDE: pitch slide time between notes in milliseconds (up to 400 ms; Off = no slide). "
@@ -10891,6 +10897,8 @@ void DrumSequencerEditor::setupComponents()
                         "- Out N = its own aux output - route it to a separate DAW track.\n"
                         "- MIDI Out = no internal sound; the channel sequences another plugin on a note "
                         "('Change MIDI Out note' picks it for steps and channel-tuned drum hits; pitched roll notes use their own pitches). Live drum hits use a 10 ms MIDI gate.\n"
+                        "- Live Drumming: MIDI In includes an optional alternate note for the same sound. "
+                        "Choked by stops a sound from another pad, one-way; Choke group is mutual.\n"
                         "- Strip colours: purple = MIDI, teal = aux out.");
     btnRoute.onClick = [this] {
         const juce::ScopedLock drumLock(proc.getCallbackLock());
@@ -10901,17 +10909,29 @@ void DrumSequencerEditor::setupComponents()
             const auto& d=proc.sequencer.drums;
             juce::PopupMenu input;
             input.addSectionHeader("Active in LIVE DRUMMING; independent of channel selection");
-            input.addSectionHeader("Notes select sounds at their configured pitch; velocity follows your strike");
+            input.addSectionHeader("Notes select sounds at their configured pitch; Min/Max Velocity adjusts strike strength");
             input.addItem(800000+ch,d.learnChannel==ch?"Cancel learning":"Learn: strike a pad",!d.recording);
             input.addItem(810000+ch,"Off (unassign)",!d.recording,d.notes[(size_t)ch]<0);
             juce::PopupMenu inputNotes;
             for(int note=0;note<128;++note)inputNotes.addItem(820000+ch*200+note,"Note "+juce::String(note)+" ("+juce::MidiMessage::getMidiNoteName(note,true,true,4)+")",true,d.notes[(size_t)ch]==note);
-            input.addSubMenu("Input note",inputNotes,!d.recording);
+            input.addSubMenu("Primary input note (also used by export)",inputNotes,!d.recording);
+            juce::PopupMenu alternate;
+            alternate.addSectionHeader("A second pad message plays the SAME channel sound");
+            alternate.addSectionHeader("Same MIDI channel and velocity range; no extra hit in export");
+            alternate.addItem(920000 + ch * 200, "Off", true, d.alternateNotes[(size_t)ch] < 0);
+            for (int note = 0; note < 128; ++note)
+                alternate.addItem(920000 + ch * 200 + note + 1, "Note " + juce::String(note)
+                    + " (" + juce::MidiMessage::getMidiNoteName(note, true, true, 4) + ")",
+                    note != d.notes[(size_t)ch], d.alternateNotes[(size_t)ch] == note);
+            input.addSubMenu("Alternate input note", alternate, !d.recording && d.notes[(size_t)ch] >= 0);
             juce::PopupMenu inputChannels;
             for(int mc=0;mc<=16;++mc)inputChannels.addItem(900000+ch*100+mc,mc==0?"Any MIDI channel":"MIDI channel "+juce::String(mc),true,d.midiChannels[(size_t)ch]==mc);
             input.addSubMenu("Input MIDI channel",inputChannels,!d.recording);
-            input.addSectionHeader("Learning moves an overlapping assignment from its old channel");
-            sub.addSubMenu("MIDI In: "+(d.notes[(size_t)ch]<0?juce::String("Off"):juce::String(d.notes[(size_t)ch])+" / "+(d.midiChannels[(size_t)ch]==0?juce::String("Any"):"ch "+juce::String(d.midiChannels[(size_t)ch]))),input);
+            input.addSectionHeader("Learn replaces both input notes; overlapping assignments move to this channel");
+            juce::String inputLabel = d.notes[(size_t)ch] < 0 ? "Off" : juce::String(d.notes[(size_t)ch]);
+            if (d.alternateNotes[(size_t)ch] >= 0) inputLabel += " + " + juce::String(d.alternateNotes[(size_t)ch]);
+            inputLabel += d.midiChannels[(size_t)ch] == 0 ? " / Any" : " / ch " + juce::String(d.midiChannels[(size_t)ch]);
+            sub.addSubMenu("MIDI In: " + inputLabel, input);
             sub.addSeparator();
             sub.addItem(500000 + ch, "Sound -> Main out (ch 1/2)", true, !c.midiOut && c.outputBus == 0);   // 500000+ch (NOT 0 - id 0 = "no selection")
             for (int o = 1; o <= DrumSequencerProcessor::NUM_AUX_OUTS; ++o)
@@ -10945,10 +10965,22 @@ void DrumSequencerEditor::setupComponents()
             choke.addSectionHeader("Channels sharing a group cut each other off");
             choke.addSectionHeader("(e.g. open-hat channel + closed-hat channel)");
             choke.addSectionHeader("(excluding reverb/delay tails - already-sent wet finishes on the master bus)");
-            choke.addItem(300000 + ch * 100 + 0, "Off (no choke)", true, c.chokeGroup == 0);
+            choke.addItem(300000 + ch * 100 + 0, "Off (no group choke)", true, c.chokeGroup == 0);
             for (int g = 1; g <= 8; ++g)
                 choke.addItem(300000 + ch * 100 + g, "Group " + juce::String(g), true, c.chokeGroup == g);
             sub.addSubMenu("Choke group" + juce::String(c.chokeGroup > 0 ? " (" + juce::String(c.chokeGroup) + ")" : ""), choke);
+            juce::PopupMenu cut;
+            cut.addSectionHeader("LIVE DRUMMING: a hit on the chosen channel cuts this sound");
+            cut.addSectionHeader("One-way: this sound does not cut the chosen channel");
+            cut.addSectionHeader("Applies across patterns; already-sent reverb/delay continues");
+            cut.addItem(750000 + ch * 100, "Off (no one-way choke)", true, c.liveChokeBy < 0);
+            for (int source = 0; source < Sequencer::NUM_CHANNELS; ++source)
+                if (source != ch)
+                    cut.addItem(750000 + ch * 100 + source + 1,
+                        "Channel " + juce::String(source + 1) + " - " + proc.sequencer.channel(source).channelName,
+                        true, c.liveChokeBy == source);
+            sub.addSubMenu("Choked by" + (c.liveChokeBy < 0 ? juce::String(" (Off)")
+                : " (ch " + juce::String(c.liveChokeBy + 1) + ")"), cut, d.enabled);
             // SIDECHAIN DUCK: when the picked channel fires, THIS channel dips and recovers (~130 ms) -
             // the classic kick-ducks-bass pump. Unlike choke, nothing is cut - only the level dips.
             juce::PopupMenu duck;
@@ -10976,13 +11008,19 @@ void DrumSequencerEditor::setupComponents()
             if (r >= 800000) {
                 commitUndoNow();const juce::ScopedLock lock(proc.getCallbackLock());auto& d=proc.sequencer.drums;
                 if(d.recording)return;
-                if(r>=900000){int x=r-900000,ch=x/100;d.assign(ch,d.notes[(size_t)ch],x%100);}
+                if(r>=920000){int x=r-920000;d.assignAlternate(x/200,x%200-1);}
+                else if(r>=900000){int x=r-900000,ch=x/100;d.assign(ch,d.notes[(size_t)ch],x%100);}
                 else if(r>=820000){int x=r-820000,ch=x/200;d.assign(ch,x%200,d.midiChannels[(size_t)ch]);}
                 else if(r>=810000){int ch=r-810000;d.assign(ch,-1,0);d.learnChannel=-1;}
                 else {int ch=r-800000;d.learnChannel=d.learnChannel==ch?-1:ch;}
                 refreshLiveDrumming();return;
             }
-            if (r >= 700000) {                         // "Duck amount" -> channel-wide
+            if (r >= 750000) {
+                commitUndoNow();
+                const juce::ScopedLock lock(proc.getCallbackLock());
+                const int x = r - 750000, ch = x / 100, source = x % 100 - 1;
+                for (auto& pat : proc.sequencer.patterns) pat.channels[ch].liveChokeBy = source;
+            } else if (r >= 700000) {                         // "Duck amount" -> channel-wide
                 const int x = r - 700000, ch = x / 100, a = (x % 100) - 1;
                 static const float amts[4] = { 0.25f, 0.5f, 0.75f, 1.0f };
                 for (auto& pat : proc.sequencer.patterns) pat.channels[ch].duckAmt = amts[juce::jlimit(0, 3, a)];

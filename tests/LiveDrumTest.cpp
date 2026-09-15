@@ -262,6 +262,37 @@ int main(int argc, char **argv)
         const int padNotes[] = {49, 48, 45, 51, 36, 38, 43, 42};
         for (int ch = 0; ch < 8; ++ch) CHECK(d->target(padNotes[ch], 10) == ch);
         CHECK(d->target(127, 10) == -1);
+        CHECK(d->target(42, 10) == 7 && d->target(46, 10) == 7);
+        CHECK(d->target(-1, 10) == -1);
+        d->assign(12, 46, 10); // claiming an alternate removes it from the old row
+        CHECK(d->target(46, 10) == 12 && d->alternateNotes[7] == -1);
+        d->assignAlternate(7, 46);
+        CHECK(d->notes[12] == -1 && d->target(46, 10) == 7);
+        d->assign(12, 42, 10); // if primary moves, remaining alternate becomes the primary
+        CHECK(d->notes[7] == 46 && d->alternateNotes[7] == -1);
+        d->defaultMap();
+        auto aliases = d->save();
+        d->restore(aliases);
+        CHECK(d->target(42, 10) == 7 && d->target(46, 10) == 7);
+        for (auto child : aliases) if (child.hasType("Map"))
+        {
+            child.removeProperty("alternate", nullptr);
+            if ((int)child.getProperty("ch") == 8) child.setProperty("note", 46, nullptr);
+        }
+        d->restore(aliases); // legacy custom maps are unchanged, no implicit aliases
+        CHECK(d->target(42, 10) == 7 && d->target(46, 10) == 8);
+        d->defaultMap();
+        d->learnChannel = 7;
+        d->noteOn(70, 4, 95, 0);
+        CHECK(d->notes[7] == 70 && d->alternateNotes[7] == -1 && d->target(46, 10) == -1);
+        d->assignAlternate(7, 71);
+        d->assign(12, 71, 5); // same note, different MIDI channel, still unambiguous
+        CHECK(d->target(71, 4) == 7 && d->target(71, 5) == 12);
+        d->assign(7, 70, 0); // widening to Any claims BOTH inputs
+        CHECK(d->target(71, 5) == 7 && d->notes[12] == -1);
+        d->assign(7, -1, 0);
+        CHECK(d->target(70, 4) == -1 && d->target(71, 5) == -1);
+        d->defaultMap();
         d->assign(15, 36, 10);
         CHECK(d->target(36, 10) == 15);
         CHECK(d->target(36, 1) == -1);
@@ -291,6 +322,75 @@ int main(int argc, char **argv)
         CHECK(d->patterns[1].hits[0].channel == 15);
         d->restore({});
         CHECK(!d->enabled && d->takes.empty() && d->notes[0] == 49);
+    }
+    {
+        // Velocity range is applied once at input: stopped monitoring, recording and replay
+        // must agree, including very quiet MIDI and fixed full-velocity pads.
+        auto s = std::make_unique<Sequencer>();
+        s->drums.enabled = true;
+        s->drums.assign(0, 60, 10);
+        s->drums.assign(1, 61, 10);
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            tone(s->patterns[0].channels[ch], 160.0f + ch * 110);
+            s->patterns[0].channels[ch].prepareToPlay(48000, 512);
+        }
+        auto& c = s->patterns[0].channels[0];
+        juce::AudioBuffer<float> b(2, 512);
+        s->drums.noteOn(60, 10, 1, 23);
+        b.clear(); auto events = s->processBlock(b, 48000, 512, nullptr);
+        CHECK(events.size() == 1 && std::abs(events[0].drawVel - 1.0f / 127) < 1e-8f);
+        c.keysMinVel = 0.25f; c.keysMaxVel = 0.75f;
+        s->patterns[0].channels[1].keysMinVel = 1;
+        s->reset(); s->drums.beginBlock();
+        for (int ch = 0; ch < 2; ++ch) s->patterns[0].channels[ch].prepareToPlay(48000, 512);
+        s->drums.noteOn(60, 10, 20, 111);
+        s->drums.noteOn(61, 10, 1, 222);
+        b.clear(); events = s->processBlock(b, 48000, 512, nullptr);
+        const float adjusted = 0.25f + (20.0f / 127) * 0.5f;
+        CHECK(events.size() == 2 && std::abs(events[0].drawVel - adjusted) < 1e-7f && events[1].drawVel == 1);
+        juce::AudioBuffer<float> audition; audition.makeCopyOf(b);
+        s->reset(); s->drums.arm(0, 0, false); s->startStandalone();
+        for (int ch = 0; ch < 2; ++ch) s->patterns[0].channels[ch].prepareToPlay(48000, 512);
+        s->drums.beginBlock(); s->drums.noteOn(60, 10, 20, 111); s->drums.noteOn(61, 10, 1, 222);
+        b.clear(); s->processBlock(b, 48000, 512, nullptr);
+        float delta = 0;
+        for (int ch = 0; ch < 2; ++ch) for (int i = 0; i < 512; ++i)
+            delta = std::max(delta, std::abs(b.getSample(ch, i) - audition.getSample(ch, i)));
+        printf("[velocity] stopped vs recording maximum difference %.9f\n", delta);
+        CHECK(delta < 1e-6f);
+        s->drums.stopRecording(); s->drums.drainLog();
+        CHECK(s->drums.takes.size() == 1 && s->drums.takes[0].hits.size() == 2);
+        s->stopStandalone(); s->reset(); c.keysMinVel = c.keysMaxVel = 1;
+        s->startStandalone(); s->drums.beginBlock();
+        for (int ch = 0; ch < 2; ++ch) s->patterns[0].channels[ch].prepareToPlay(48000, 512);
+        b.clear(); events = s->processBlock(b, 48000, 512, nullptr);
+        CHECK(events.size() == 2 && std::abs(events[0].drawVel - adjusted) < 1e-7f);
+        delta = 0;
+        for (int ch = 0; ch < 2; ++ch) for (int i = 0; i < 512; ++i)
+            delta = std::max(delta, std::abs(b.getSample(ch, i) - audition.getSample(ch, i)));
+        printf("[velocity] stopped vs playback maximum difference %.9f\n", delta);
+        CHECK(delta < 1e-6f); // changing range afterwards must not rescale recorded hits
+    }
+    {
+        // Slot Offset delays only slot 2, by exactly 5 ms on an actual live MIDI hit.
+        auto s = std::make_unique<Sequencer>();
+        s->drums.enabled = true; s->drums.assign(0, 60, 10);
+        auto& c = s->patterns[0].channels[0];
+        tone(c, 220); c.slots[0].weight = 0.5f; c.slots[0].pan = -1;
+        c.slots[1] = c.slots[0]; c.slots[1].pan = 1; c.slots[1].oscFreq = 330;
+        c.humanizeAmt = 0.05f;
+        c.prepareToPlay(48000, 512);
+        juce::AudioBuffer<float> b(2, 512);
+        s->drums.noteOn(60, 10, 100, 100);
+        b.clear(); s->processBlock(b, 48000, 512, nullptr);
+        CHECK(b.getMagnitude(0, 101, 239) > 0.001f);
+        CHECK(b.getMagnitude(1, 0, 340) < 1e-7f);
+        CHECK(b.getMagnitude(1, 341, 171) > 0.001f);
+        c.humanizeAmt = 0; s->reset(); s->drums.beginBlock();
+        s->drums.noteOn(60, 10, 100, 100);
+        b.clear(); s->processBlock(b, 48000, 512, nullptr);
+        CHECK(b.getMagnitude(1, 101, 239) > 0.001f);
     }
     {
         auto s = std::make_unique<Sequencer>();
@@ -447,6 +547,9 @@ int main(int argc, char **argv)
         for (int ch = 0; ch < 8; ++ch)
             s.drums.assign(ch, 60 + ch, 10);
         p->lastSelectedChannel = 15;
+        s.patterns[0].channels[0].keysMinVel = 0.25f;
+        s.patterns[0].channels[0].keysMaxVel = 0.75f;
+        s.patterns[0].channels[1].keysMinVel = s.patterns[0].channels[1].keysMaxVel = 1.0f;
         p->prepareToPlay(48000, 512);
         s.drums.arm(0, 0, false);
         juce::AudioBuffer<float> a(2, 512);
@@ -461,14 +564,24 @@ int main(int argc, char **argv)
         s.drums.stopRecording();
         s.drums.drainLog();
         CHECK(s.drums.takes.size() == 1 && s.drums.takes[0].hits.size() == 8);
+        for (const auto& hit : s.drums.takes[0].hits)
+        {
+            const float expected = hit.hit.channel == 0 ? 0.25f + (20.0f / 127) * 0.5f
+                                 : hit.hit.channel == 1 ? 1.0f : (20.0f + 10 * hit.hit.channel) / 127;
+            CHECK(std::abs(hit.hit.velocity - expected) < 1e-7f);
+        }
         auto file = p->exportMidiFile(15);
         juce::FileInputStream in(file);
         juce::MidiFile mf;
         CHECK(mf.readFrom(in));
         int on = 0;
         for (int i = 0; i < mf.getTrack(0)->getNumEvents(); ++i)
-            if (mf.getTrack(0)->getEventPointer(i)->message.isNoteOn())
+            if (const auto& message = mf.getTrack(0)->getEventPointer(i)->message; message.isNoteOn())
+            {
                 ++on;
+                if (message.getNoteNumber() == 60) CHECK(message.getVelocity() == 42);
+                if (message.getNoteNumber() == 61) CHECK(message.getVelocity() == 127);
+            }
         CHECK(on == 8);
         file.deleteFile();
         // Note-offs, zero-velocity note-ons and unmatched notes never add drum hits.
@@ -581,6 +694,12 @@ int main(int argc, char **argv)
             {
                 CHECK(keys->comboRecMode.getSelectedId() == 1);
                 CHECK(keys->comboRecMode.getText().contains("pad"));
+                CHECK(keys->minVelKnob.isEnabled() && keys->maxVelKnob.isEnabled());
+                CHECK(!keys->strumKnob.isEnabled() && !keys->glideKnob.isEnabled());
+                keys->minVelKnob.setValue(0.8, juce::sendNotificationSync);
+                keys->maxVelKnob.setValue(0.6, juce::sendNotificationSync);
+                CHECK(s.channel(p->lastSelectedChannel).keysMinVel == 0.6f);
+                CHECK(s.channel(p->lastSelectedChannel).keysMaxVel == 0.6f);
             }
             snapshot(*ed, "basamak-live-drums");
             if (auto *b = button(*ed, "KEYS/RECORD"))
@@ -641,14 +760,20 @@ int main(int argc, char **argv)
         CHECK(kit >= 0);
         Factory::applyPreset(s, kit);
         CHECK(s.drums.enabled);
-        CHECK(s.patterns[0].channels[4].mixName == "Break Kick");
+        CHECK(s.patterns[0].channels[4].mixName == "Snap Kick");
         CHECK(s.patterns[0].channels[5].mixName == "Mod Snare");
+        CHECK(s.patterns[0].channels[2].liveChokeBy == 4);
+        juce::MemoryBlock savedKit; p->getStateInformation(savedKit);
+        p->setStateInformation(savedKit.getData(), (int)savedKit.getSize());
+        CHECK(s.patterns[63].channels[2].liveChokeBy == 4);
+        CHECK(s.drums.target(46, 10) == 7 && s.drums.target(42, 10) == 7);
+        CHECK(s.patterns[63].channels[4].keysMinVel == 1);
         p->lastSelectedChannel = 15;
         p->prepareToPlay(48000, 512);
         s.drums.arm(0, 0, false);
         juce::AudioBuffer<float> audio(2, 512);
         juce::MidiBuffer midi;
-        const int physicalNotes[] = {49, 48, 45, 51, 36, 38, 43, 42};
+        const int physicalNotes[] = {49, 48, 45, 51, 36, 38, 43, 46};
         for (int ch = 0; ch < 8; ++ch)
             midi.addEvent(juce::MidiMessage::noteOn(10, physicalNotes[ch], (juce::uint8)100), 10 + ch * 50);
         p->processBlock(audio, midi);
@@ -656,6 +781,20 @@ int main(int argc, char **argv)
         for (int ch = 0; ch < s.drums.patterns[0].count; ++ch)
             CHECK(s.drums.patterns[0].hits[(size_t)ch].channel == ch);
         CHECK(audio.getMagnitude(0, 512) > 0.001f);
+        midi.clear(); midi.addEvent(juce::MidiMessage::noteOn(10, 42, (juce::uint8)40), 77);
+        p->processBlock(audio, midi);
+        CHECK(s.drums.patterns[0].count == 9 && s.drums.patterns[0].hits[8].channel == 7);
+        auto exported = p->exportMidiFile(15);
+        juce::FileInputStream stream(exported); juce::MidiFile kitMidi;
+        CHECK(kitMidi.readFrom(stream));
+        int hats = 0, extra = 0;
+        for (int i = 0; i < kitMidi.getTrack(0)->getNumEvents(); ++i)
+        {
+            const auto& message = kitMidi.getTrack(0)->getEventPointer(i)->message;
+            if (message.isNoteOn()) { if (message.getNoteNumber() == 42) ++hats; if (message.getNoteNumber() == 46) ++extra; }
+        }
+        CHECK(hats == 2 && extra == 0);
+        exported.deleteFile();
         p->standaloneStop();
         p->releaseResources();
         if (argc > 1 && juce::String(argv[1]) == "--ui")
@@ -675,6 +814,46 @@ int main(int argc, char **argv)
             }
             snapshot(*ed, "basamak-okto-physical-kit");
         }
+    }
+    if (argc > 1 && juce::String(argv[1]) == "--ui")
+    {
+        auto p = std::make_unique<DrumSequencerProcessor>();
+        auto& s = p->sequencer; s.drums.enabled = true;
+        auto& c = s.channel(0); tone(c, 220); c.slots[1] = c.slots[0];
+        c.keysMinVel = 0.1f; c.keysMaxVel = 0.9f; c.humanizeAmt = 0.25f;
+        p->prepareToPlay(48000, 512);
+        std::unique_ptr<juce::AudioProcessorEditor> ed(p->createEditor());
+        auto* keys = keysPanel(*ed); CHECK(keys != nullptr);
+        if (keys)
+        {
+            CHECK(keys->humanKnob.isEnabled());
+            CHECK(std::abs(keys->humanKnob.getValue() - 0.25) < 1e-6);
+            keys->humanKnob.setValue(0.5, juce::sendNotificationSync);
+            CHECK(c.humanizeAmt == 0.5f);
+            p->midiLearn.assign("ui_sel_minVel", 20, 1);
+            p->midiLearn.assign("ui_sel_maxVel", 21, 1);
+            p->midiLearn.assign("ui_sel_slotOfs", 22, 1);
+            juce::AudioBuffer<float> a(2, 512); juce::MidiBuffer midi;
+            midi.addEvent(juce::MidiMessage::controllerEvent(1, 20, 50), 0);
+            midi.addEvent(juce::MidiMessage::controllerEvent(1, 21, 100), 1);
+            midi.addEvent(juce::MidiMessage::controllerEvent(1, 22, 90), 2);
+            p->processBlock(a, midi);
+            CHECK(p->selQHead.load() != p->selQTail.load());
+            auto* editor = dynamic_cast<DrumSequencerEditor*>(ed.get());
+            CHECK(editor != nullptr);
+            if (editor) editor->timerCallback();
+            CHECK(p->selQHead.load() == p->selQTail.load());
+            CHECK(std::abs(c.keysMinVel - 50.0f / 127) < 1e-6);
+            CHECK(std::abs(c.keysMaxVel - 100.0f / 127) < 1e-6);
+            CHECK(std::abs(c.humanizeAmt - 90.0f / 127) < 1e-6);
+            CHECK(s.patterns[0].channels[1].keysMinVel == 0); // CC remains per selected channel
+            CHECK(s.patterns[1].channels[0].keysMinVel == 0); // existing per-pattern scope
+            CHECK(std::abs(keys->minVelKnob.getValue() - 50.0 / 127) <= 0.005); // knob display has 1% steps
+            c.slots[1].engine = -1;
+            if (editor) editor->timerCallback();
+            CHECK(!keys->humanKnob.isEnabled());
+        }
+        p->releaseResources();
     }
     printf("LiveDrumTest: %s (%d failures)\n", fails ? "FAIL" : "PASS", fails);
     return fails ? 1 : 0;

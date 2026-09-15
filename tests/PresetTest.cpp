@@ -14,6 +14,7 @@ int main() {
     auto CHK = [&](bool ok){ if (!ok) ++fails; return ok; };
     const double SR = 48000.0; const int bs = 512;
 
+    juce::StringArray kickNames, accentNames, transitionNames;
     for (int preset = 0; preset < Factory::presetNames().size(); ++preset)
     {
         auto* s = new Sequencer();
@@ -37,12 +38,33 @@ int main() {
         if (s->drums.enabled)
         {
             CHK(!s->drums.hasNotes() && s->drums.takes.empty());
+            CHK(s->drums.target(46, 10) == 7);
+            kickNames.addIfNotAlreadyThere(s->patterns[0].channels[4].mixName);
+            accentNames.addIfNotAlreadyThere(s->patterns[0].channels[1].mixName);
+            transitionNames.addIfNotAlreadyThere(s->patterns[0].channels[2].mixName);
+            const auto names = Factory::mixNames(), cats = Factory::mixCategories();
+            for (const auto& pat : s->patterns)
+            {
+                int toms = 0;
+                for (int ch = 0; ch < 16; ++ch)
+                {
+                    const auto& c = pat.channels[ch];
+                    const int sound = names.indexOf(c.mixName);
+                    if (sound >= 0 && cats[sound] == "Toms") { ++toms; CHK(ch == 6); }
+                    CHK(c.keysMaxVel == 1);
+                    CHK(c.liveChokeBy == (ch == 2 ? 4 : -1));
+                }
+                CHK(toms == 1);
+                CHK(pat.channels[4].keysMinVel == 1); // all kick/bass pads are full velocity
+                CHK(pat.channels[6].keysMinVel == 1); // low toms stay audible too
+                CHK(pat.channels[5].keysMinVel == 0); // snares/slaps retain expression
+            }
             const int physicalNotes[] = {49, 48, 45, 51, 36, 38, 43, 42};
             for (int ch = 0; ch < 8; ++ch) CHK(s->drums.target(physicalNotes[ch], 10) == ch);
             // Check sound identity as well as note routing: moving just the map swaps the pads.
             if (Factory::presetNames()[preset] == "Live Drums - Room Session")
             {
-                CHK(s->patterns[0].channels[4].mixName == "Break Kick");
+                CHK(s->patterns[0].channels[4].mixName == "Snap Kick");
                 CHK(s->patterns[0].channels[5].mixName == "Mod Snare");
             }
             juce::AudioBuffer<float> hit(2, bs);
@@ -90,5 +112,7 @@ int main() {
         }
         delete s;
     }
+    printf("[kit variety] %d kick bodies, %d accents, %d transitions\n", kickNames.size(), accentNames.size(), transitionNames.size());
+    CHK(kickNames.size() == 10 && accentNames.size() >= 7 && transitionNames.size() >= 8);
     return fails;
 }

@@ -1,0 +1,300 @@
+BASAMAK 1.5.8 - Live controls and physical pad kit revision
+Date: 2026-09-15
+Native regression suite: all 22 programs passed.
+
+LiveDrumTest
+Live drumming: mapping, timestamps, takes, persistence, conversion and UI
+[velocity] stopped vs recording maximum difference 0.000000000
+[velocity] stopped vs playback maximum difference 0.000000000
+LiveDrumTest: PASS (0 failures)
+
+
+DuckTest
+[1] duck dips:      pre=0.4202 dip=0.1695 (dry dip=0.3827) -> level pushed down (DUCK OK)
+[2] duck recovers:  rec=0.2325 (dry=0.2338) -> level back up (RELEASE OK)
+[3] duck armed-but-silent = bit-identical to off: maxdiff=0.000000000 -> OK
+[regular] Live-only choke leaves regular playback unchanged: 0.000000000 -> OK
+[live same bar] duck dip=0.443 recovery=0.994 -> OK
+[live same bar] duck disabled/silent mode 2 delta=0.000000000 -> OK
+[live same bar] duck disabled/silent mode 3 delta=0.000000000 -> OK
+[live same bar] duck disabled/silent mode 4 delta=0.000000000 -> OK
+[live same bar] overlap=0 choke-mode=0 old-row voices=1 (want 1) -> OK
+[live same bar] overlap=0 choke-mode=1 old-row voices=0 (want 0) -> OK
+[live same bar] overlap=0 choke-mode=2 old-row voices=1 (want 1) -> OK
+[live same bar] overlap=0 choke-mode=3 old-row voices=0 (want 0) -> OK
+[live same bar] overlap=0 choke-mode=4 old-row voices=1 (want 1) -> OK
+[live same bar] overlap=0 choke-mode=5 old-row voices=1 (want 1) -> OK
+[live same bar] overlap=1 choke-mode=0 old-row voices=2 (want 2) -> OK
+[live same bar] overlap=1 choke-mode=1 old-row voices=0 (want 0) -> OK
+[live same bar] overlap=1 choke-mode=2 old-row voices=1 (want 1) -> OK
+[live same bar] overlap=1 choke-mode=3 old-row voices=0 (want 0) -> OK
+[live same bar] overlap=1 choke-mode=4 old-row voices=1 (want 1) -> OK
+[live same bar] overlap=1 choke-mode=5 old-row voices=1 (want 1) -> OK
+[live old-bar tails] duck dip=0.443 recovery=0.994 -> OK
+[live old-bar tails] duck disabled/silent mode 2 delta=0.000000000 -> OK
+[live old-bar tails] duck disabled/silent mode 3 delta=0.000000000 -> OK
+[live old-bar tails] duck disabled/silent mode 4 delta=0.000000000 -> OK
+[live old-bar tails] overlap=0 choke-mode=0 old-row voices=1 (want 1) -> OK
+[live old-bar tails] overlap=0 choke-mode=1 old-row voices=0 (want 0) -> OK
+[live old-bar tails] overlap=0 choke-mode=2 old-row voices=1 (want 1) -> OK
+[live old-bar tails] overlap=0 choke-mode=3 old-row voices=0 (want 0) -> OK
+[live old-bar tails] overlap=0 choke-mode=4 old-row voices=1 (want 1) -> OK
+[live old-bar tails] overlap=0 choke-mode=5 old-row voices=1 (want 1) -> OK
+[live old-bar tails] overlap=1 choke-mode=0 old-row voices=2 (want 2) -> OK
+[live old-bar tails] overlap=1 choke-mode=1 old-row voices=0 (want 0) -> OK
+[live old-bar tails] overlap=1 choke-mode=2 old-row voices=1 (want 1) -> OK
+[live old-bar tails] overlap=1 choke-mode=3 old-row voices=0 (want 0) -> OK
+[live old-bar tails] overlap=1 choke-mode=4 old-row voices=1 (want 1) -> OK
+[live old-bar tails] overlap=1 choke-mode=5 old-row voices=1 (want 1) -> OK
+
+
+PresetTest
+[1] preset 0 'Riser + Drop': 8 sound channels, all slot-authored -> OK
+[2] preset 0 renders: mean |x| = 0.11922 -> OK
+[1] preset 1 'Ode to Joy (Beethoven)': 20 sound channels, all slot-authored -> OK
+[2] preset 1 renders: mean |x| = 0.43093 -> OK
+[1] preset 2 'Fur Elise (Beethoven)': 6 sound channels, all slot-authored -> OK
+[2] preset 2 renders: mean |x| = 0.02433 -> OK
+[1] preset 3 'Canon (Pachelbel)': 24 sound channels, all slot-authored -> OK
+[2] preset 3 renders: mean |x| = 0.66356 -> OK
+[1] preset 4 'Twinkle Twinkle (trad.)': 32 sound channels, all slot-authored -> OK
+[2] preset 4 renders: mean |x| = 0.43426 -> OK
+[1] preset 5 'Amazing Grace (trad.)': 24 sound channels, all slot-authored -> OK
+[2] preset 5 renders: mean |x| = 0.70533 -> OK
+[1] preset 6 'When the Saints (trad.)': 36 sound channels, all slot-authored -> OK
+[2] preset 6 renders: mean |x| = 0.71841 -> OK
+[1] preset 7 'Prelude in C (Bach)': 4 sound channels, all slot-authored -> OK
+[2] preset 7 renders: mean |x| = 0.13717 -> OK
+[1] preset 8 'Lofi Chill (groove)': 20 sound channels, all slot-authored -> OK
+[2] preset 8 renders: mean |x| = 0.20598 -> OK
+[1] preset 9 'Live Drums - Room Session': 1024 sound channels, all slot-authored -> OK
+    pad  1 Crash              peak 1.1815
+    pad  2 Tambourine         peak 0.5192
+    pad  3 Flexatone          peak 0.5921
+    pad  4 Bell Ride          peak 0.4551
+    pad  5 Snap Kick          peak 2.1801
+    pad  6 Mod Snare          peak 0.5841
+    pad  7 Mod Tom            peak 0.7916
+    pad  8 Closed Hat         peak 1.1066
+    pad  9 Open Hat           peak 1.2902
+    pad 10 909 Rimshot        peak 0.3501
+    pad 11 Foot Hat           peak 1.0364
+    pad 12 Clap               peak 0.5539
+    pad 13 Wood Clave         peak 0.4372
+    pad 14 Mod Cowbell        peak 0.5744
+    pad 15 Woodblock          peak 0.5511
+    pad 16 Shaker             peak 1.5410
+[2] preset 9 renders: mean |x| = 0.26682 -> OK
+[1] preset 10 'Live Drums - Dry Funk': 1024 sound channels, all slot-authored -> OK
+    pad  1 Trash Stack        peak 0.3099
+    pad  2 808 Cowbell        peak 0.5742
+    pad  3 Tape Stop          peak 0.6000
+    pad  4 Bell Cymbal        peak 0.4399
+    pad  5 Punch Kick         peak 0.3957
+    pad  6 Snap Snare         peak 0.7835
+    pad  7 909 Low Tom        peak 0.6645
+    pad  8 606 CH             peak 1.1431
+    pad  9 909 OH             peak 0.4586
+    pad 10 Rimshot            peak 0.4267
+    pad 11 Foot Hat           peak 1.0364
+    pad 12 Snap Clap          peak 1.0375
+    pad 13 Cabasa             peak 0.8371
+    pad 14 Woodblock          peak 0.5511
+    pad 15 808 Clave          peak 0.5280
+    pad 16 Shaker             peak 1.5410
+[2] preset 10 renders: mean |x| = 0.14096 -> OK
+[1] preset 11 'Live Drums - Brush Lounge': 1024 sound channels, all slot-authored -> OK
+    pad  1 Sizzle             peak 0.3992
+    pad  2 Cabasa             peak 0.8371
+    pad  3 Mod Gong           peak 0.7865
+    pad  4 Bell Ride          peak 0.4551
+    pad  5 FM Kick            peak 0.4273
+    pad  6 Brush Snare        peak 0.8076
+    pad  7 808 Low Tom        peak 0.6606
+    pad  8 Foot Hat           peak 1.0364
+    pad  9 Open Hat           peak 1.2902
+    pad 10 808 Rimshot        peak 0.3200
+    pad 11 Closed Hat         peak 1.1066
+    pad 12 Cajon Slap         peak 0.6604
+    pad 13 Tambourine         peak 0.5192
+    pad 14 Mod Cowbell        peak 0.5744
+    pad 15 Wood Clave         peak 0.4372
+    pad 16 Woodblock          peak 0.5511
+[2] preset 11 renders: mean |x| = 0.25164 -> OK
+[1] preset 12 'Live Drums - 808 Circuit': 1024 sound channels, all slot-authored -> OK
+    pad  1 Cluster Cymbal     peak 0.6436
+    pad  2 808 Cowbell        peak 0.5742
+    pad  3 Dive               peak 0.4960
+    pad  4 Bell Cymbal        peak 0.4399
+    pad  5 808 Kick           peak 0.4852
+    pad  6 606 Snare          peak 0.9208
+    pad  7 808 Low Tom        peak 0.6606
+    pad  8 808 CH             peak 1.2381
+    pad  9 808 OH             peak 1.3220
+    pad 10 808 Rimshot        peak 0.3200
+    pad 11 Foot Hat           peak 1.0364
+    pad 12 808 Clap           peak 0.6370
+    pad 13 Shaker             peak 1.5410
+    pad 14 Glitch Tick        peak 0.5994
+    pad 15 808 Clave          peak 0.5280
+    pad 16 Mouth Pop          peak 0.5586
+[2] preset 12 renders: mean |x| = 0.45717 -> OK
+[1] preset 13 'Live Drums - Warehouse': 1024 sound channels, all slot-authored -> OK
+    pad  1 909 Crash          peak 0.8964
+    pad  2 Static Hit         peak 0.7163
+    pad  3 Jet Riser          peak 0.0204
+    pad  4 Bell Cymbal        peak 0.4399
+    pad  5 Rumble Kick        peak 0.3367
+    pad  6 Tight Snare        peak 1.9866
+    pad  7 909 Low Tom        peak 0.6645
+    pad  8 909 CH             peak 0.4618
+    pad  9 909 OH             peak 0.4586
+    pad 10 909 Rimshot        peak 0.3501
+    pad 11 Foot Hat           peak 1.0364
+    pad 12 Neon Clap          peak 1.0905
+    pad 13 Tambourine         peak 0.5192
+    pad 14 808 Cowbell        peak 0.5742
+    pad 15 Slam               peak 0.3315
+    pad 16 Crisp Hat          peak 2.0134
+[2] preset 13 renders: mean |x| = 0.15960 -> OK
+[1] preset 14 'Live Drums - Dusty Breaks': 1024 sound channels, all slot-authored -> OK
+    pad  1 Trash Stack        peak 0.3099
+    pad  2 Woodblock          peak 0.5511
+    pad  3 Sub Rise           peak 0.4050
+    pad  4 Sizzle             peak 0.3992
+    pad  5 Break Kick         peak 0.7188
+    pad  6 Room Snare         peak 0.7507
+    pad  7 FM Tom             peak 0.6485
+    pad  8 606 CH             peak 1.1431
+    pad  9 808 OH             peak 1.3220
+    pad 10 Rimshot            peak 0.4267
+    pad 11 Foot Hat           peak 1.0364
+    pad 12 Squash Clap        peak 0.8259
+    pad 13 Cabasa             peak 0.8371
+    pad 14 Mouth Pop          peak 0.5586
+    pad 15 808 Clave          peak 0.5280
+    pad 16 Shaker             peak 1.5410
+[2] preset 14 renders: mean |x| = 0.11441 -> OK
+[1] preset 15 'Live Drums - Cajon Circle': 1024 sound channels, all slot-authored -> OK
+    pad  1 Trash Stack        peak 0.3099
+    pad  2 Cabasa             peak 0.8371
+    pad  3 Flexatone          peak 0.5921
+    pad  4 Mod Cowbell        peak 0.5744
+    pad  5 Log Drum           peak 0.5822
+    pad  6 Cajon Slap         peak 0.6604
+    pad  7 Roto Tom           peak 0.4697
+    pad  8 Shaker             peak 1.5410
+    pad  9 Tambourine         peak 0.5192
+    pad 10 Wood Clave         peak 0.4372
+    pad 11 Foot Hat           peak 1.0364
+    pad 12 Clap               peak 0.5539
+    pad 13 Udu Pot            peak 0.5174
+    pad 14 808 Cowbell        peak 0.5742
+    pad 15 Woodblock          peak 0.5511
+    pad 16 Bongo              peak 0.4123
+[2] preset 15 renders: mean |x| = 0.11658 -> OK
+[1] preset 16 'Live Drums - Skin and Clay': 1024 sound channels, all slot-authored -> OK
+    pad  1 Mod Gong           peak 0.7865
+    pad  2 Wood Clave         peak 0.4372
+    pad  3 Braam              peak 0.2596
+    pad  4 Mod Cowbell        peak 0.5744
+    pad  5 Udu Pot            peak 0.5174
+    pad  6 Tabla              peak 0.5152
+    pad  7 Mod Tom            peak 0.7916
+    pad  8 Cabasa             peak 0.8371
+    pad  9 Tambourine         peak 0.5192
+    pad 10 Cajon Slap         peak 0.6604
+    pad 11 Foot Hat           peak 1.0364
+    pad 12 Clap               peak 0.5539
+    pad 13 Shaker             peak 1.5410
+    pad 14 808 Cowbell        peak 0.5742
+    pad 15 Bongo              peak 0.4123
+    pad 16 Woodblock          peak 0.5511
+[2] preset 16 renders: mean |x| = 0.23249 -> OK
+[1] preset 17 'Live Drums - Cinematic Ritual': 1024 sound channels, all slot-authored -> OK
+    pad  1 Mod Gong           peak 0.7865
+    pad  2 Spring Knock       peak 0.4748
+    pad  3 Grain Riser        peak 0.0216
+    pad  4 Mod Metal Plate    peak 0.8293
+    pad  5 Sub Kick           peak 0.5962
+    pad  6 Room Snare         peak 0.7507
+    pad  7 Comet Tom          peak 0.5749
+    pad  8 Cabasa             peak 0.8371
+    pad  9 Sizzle             peak 0.3992
+    pad 10 Cajon Slap         peak 0.6604
+    pad 11 Foot Hat           peak 1.0364
+    pad 12 Big Clap           peak 0.9223
+    pad 13 Tambourine         peak 0.5192
+    pad 14 Flexatone          peak 0.5921
+    pad 15 Woodblock          peak 0.5511
+    pad 16 Slam               peak 0.3315
+[2] preset 17 renders: mean |x| = 0.43695 -> OK
+[1] preset 18 'Live Drums - Scrap Yard': 1024 sound channels, all slot-authored -> OK
+    pad  1 Trash Stack        peak 0.3099
+    pad  2 Spring Knock       peak 0.4748
+    pad  3 Blast              peak 0.2524
+    pad  4 Mod Metal Plate    peak 0.8293
+    pad  5 Steel Kick         peak 0.2973
+    pad  6 Clack Snare        peak 0.5120
+    pad  7 Comet Tom          peak 0.5749
+    pad  8 Metal Hat          peak 0.4727
+    pad  9 Buzz Hit           peak 0.2655
+    pad 10 Glitch Tick        peak 0.5994
+    pad 11 Static Hit         peak 0.7163
+    pad 12 Squash Clap        peak 0.8259
+    pad 13 Tambourine         peak 0.5192
+    pad 14 Mod Cowbell        peak 0.5744
+    pad 15 Mouth Pop          peak 0.5586
+    pad 16 Particle Perc      peak 0.5271
+[2] preset 18 renders: mean |x| = 0.28260 -> OK
+[3] E-Piano onto preset kit keeps authored slots -> OK
+[kit variety] 10 kick bodies, 7 accents, 9 transitions
+
+
+Intel (x86_64/Rosetta) actual UI/processor:
+Live drumming: mapping, timestamps, takes, persistence, conversion and UI
+[velocity] stopped vs recording maximum difference 0.000000000
+[velocity] stopped vs playback maximum difference 0.000000000
+LiveDrumTest: PASS (0 failures)
+
+Intel dynamics:
+[1] duck dips:      pre=0.4202 dip=0.1695 (dry dip=0.3827) -> level pushed down (DUCK OK)
+[2] duck recovers:  rec=0.2325 (dry=0.2338) -> level back up (RELEASE OK)
+[3] duck armed-but-silent = bit-identical to off: maxdiff=0.000000000 -> OK
+[regular] Live-only choke leaves regular playback unchanged: 0.000000000 -> OK
+[live same bar] duck dip=0.443 recovery=0.994 -> OK
+[live same bar] duck disabled/silent mode 2 delta=0.000000000 -> OK
+[live same bar] duck disabled/silent mode 3 delta=0.000000000 -> OK
+[live same bar] duck disabled/silent mode 4 delta=0.000000000 -> OK
+[live same bar] overlap=0 choke-mode=0 old-row voices=1 (want 1) -> OK
+[live same bar] overlap=0 choke-mode=1 old-row voices=0 (want 0) -> OK
+[live same bar] overlap=0 choke-mode=2 old-row voices=1 (want 1) -> OK
+[live same bar] overlap=0 choke-mode=3 old-row voices=0 (want 0) -> OK
+[live same bar] overlap=0 choke-mode=4 old-row voices=1 (want 1) -> OK
+[live same bar] overlap=0 choke-mode=5 old-row voices=1 (want 1) -> OK
+[live same bar] overlap=1 choke-mode=0 old-row voices=2 (want 2) -> OK
+[live same bar] overlap=1 choke-mode=1 old-row voices=0 (want 0) -> OK
+[live same bar] overlap=1 choke-mode=2 old-row voices=1 (want 1) -> OK
+[live same bar] overlap=1 choke-mode=3 old-row voices=0 (want 0) -> OK
+[live same bar] overlap=1 choke-mode=4 old-row voices=1 (want 1) -> OK
+[live same bar] overlap=1 choke-mode=5 old-row voices=1 (want 1) -> OK
+[live old-bar tails] duck dip=0.443 recovery=0.994 -> OK
+[live old-bar tails] duck disabled/silent mode 2 delta=0.000000000 -> OK
+[live old-bar tails] duck disabled/silent mode 3 delta=0.000000000 -> OK
+[live old-bar tails] duck disabled/silent mode 4 delta=0.000000000 -> OK
+[live old-bar tails] overlap=0 choke-mode=0 old-row voices=1 (want 1) -> OK
+[live old-bar tails] overlap=0 choke-mode=1 old-row voices=0 (want 0) -> OK
+[live old-bar tails] overlap=0 choke-mode=2 old-row voices=1 (want 1) -> OK
+[live old-bar tails] overlap=0 choke-mode=3 old-row voices=0 (want 0) -> OK
+[live old-bar tails] overlap=0 choke-mode=4 old-row voices=1 (want 1) -> OK
+[live old-bar tails] overlap=0 choke-mode=5 old-row voices=1 (want 1) -> OK
+[live old-bar tails] overlap=1 choke-mode=0 old-row voices=2 (want 2) -> OK
+[live old-bar tails] overlap=1 choke-mode=1 old-row voices=0 (want 0) -> OK
+[live old-bar tails] overlap=1 choke-mode=2 old-row voices=1 (want 1) -> OK
+[live old-bar tails] overlap=1 choke-mode=3 old-row voices=0 (want 0) -> OK
+[live old-bar tails] overlap=1 choke-mode=4 old-row voices=1 (want 1) -> OK
+[live old-bar tails] overlap=1 choke-mode=5 old-row voices=1 (want 1) -> OK
+
+Installed universal VST3 / AU / Standalone: version 1.5.8, x86_64 + arm64.
+All three signatures verified with codesign --verify --deep --strict.
+Apple auval -v aumu Bsmk OZ95: AU VALIDATION SUCCEEDED.

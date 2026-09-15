@@ -55,7 +55,8 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
             auto& in = drums.input[(size_t)i]; if (in.consumed) continue;
             TriggerEvent e; e.channel = in.channel; e.offset = juce::jlimit(0,numSamples-1,in.offset);
             e.pattern = isCurrentlyPlaying ? playPattern : currentPattern;
-            e.drumHit = e.isDraw = e.drawOneShot = true; e.drawVel = in.velocity;
+            e.drumHit = e.isDraw = e.drawOneShot = true;
+            e.drawVel = patterns[e.pattern].channels[in.channel].liveInputVelocity(in.velocity);
             events.add(e); in.consumed = true;
         }
         if (!isCurrentlyPlaying && drums.recording && drums.passHead >= 0) drums.stopRecording();
@@ -94,6 +95,8 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
             // without leaving a duck pulse armed on an idle, unrendered future pattern.
             if (p != pat && !d.anyVoiceActive()) continue;
             if (o != e.channel && d.duckBy == e.channel && d.duckAmt > 0.001f) d.duckPulse();
+            if (drums.enabled && o != e.channel && d.liveChokeBy == e.channel)
+                d.fadeOutVoices(d.retrigFadeSec());
         }
         if (c.midiOut) return;   // MIDI-out channels make no internal sound (they emit notes in the processor)
         if (e.drumHit) {
@@ -523,7 +526,8 @@ void Sequencer::checkChannelTriggers(double oldPos, double newPos, int spanSampl
             auto& in = drums.input[(size_t)i];
             if (in.consumed || in.offset < baseOffset || in.offset >= baseOffset + spanSamples) continue;
             in.consumed = true;
-            LiveDrumming::Hit h {oldPos + (in.offset-baseOffset)/samplesPerBar, in.channel, in.velocity, 0};
+            const float velocity = patterns[playPattern].channels[in.channel].liveInputVelocity(in.velocity);
+            LiveDrumming::Hit h {oldPos + (in.offset-baseOffset)/samplesPerBar, in.channel, velocity, 0};
             h.pos = juce::jlimit(0.0,std::nextafter(1.0,0.0),h.pos);
             addHit(h,in.offset); drums.record(playPattern,h);
         }
