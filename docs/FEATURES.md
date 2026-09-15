@@ -134,3 +134,18 @@ Seven additional synthesized percussion sounds and ten empty, controller-ready L
 Live Drumming keeps Overlap, Duck and Choke user-controlled. OV Off cuts prior hits on the same row across bars; Duck reaches ringing tails from earlier bars; choke groups cut other grouped rows. Expanded audio tests cover on/off, zero duck amount, recovery, and tails crossing patterns.
 
 The Live Drumming kit revision enables per-channel/current-pattern Min/Max Velocity and Slot Offset in KEYS/RECORD, including MIDI CC control. Pads record adjusted velocities once. Factory pad 8 accepts both notes 42 and 46 on channel 8 through an editable alternate input; its primary note is used once in export. Ten revised kits keep kick/bass on 5, snare/slap on 6 and exactly one tom on 7, with accents and transitions on 2/3. Low bodies default to fixed full velocity. Routing adds an editable, Live-only one-way **Choked by** relationship; channel 5 stops channel 3 transitions. Existing saved maps remain intact; reload a factory kit to obtain the revised assignments. See [Live Drumming](LIVE-DRUMMING.md).
+
+
+## 1.5.9: sound-edit responsiveness
+
+Undo history reuses unchanged sounds and takes, and formats saved state outside the audio lock. Merged-pattern synchronization releases the lock between destination bars. Ordinary slot edits preserve existing samples, sound tables and active voices in those bars; changes that require new assets or tables still use the normal loading path. Step Nudge survives saved-state reload and undo; quick edits remain undoable before the automatic snapshot settles. Live Drumming's note context menu opens at the right-click position.
+
+- Channel step choices now include 17, 18, 19, 25, 26, 33, 34 and 35. Counts divide the existing bar duration; mixed-count merged bars retain their own timing and the 64-cell total limit.
+
+### Multisample tuning (1.5.9)
+
+Each multisample slot has a Base Freq fader under Amp/Cab. Click the readout for note names and semitone snapping; Shift allows free tuning, double-click returns to C4. Step pitch zero, TEST, Live Drumming and step Scale voicings use this base. KEYS and regular piano-roll notes stay absolute. Both slots can have different bases; sound/preset saving, Undo, copying, merged groups, MIDI recording/export and generator context preserve or use the setting. The original instrument folder is unchanged.
+
+Regular step Overlap Off now fades the same channel’s outgoing step voices when the next pattern hits, at the hit’s sample position. Overlap On retains tails; gaps and muted/solo-excluded hits do not cut them, and normal piano-roll note lengths/Poly remain independent.
+
+Step-count dropdown options show seconds per step on their right, calculated from current BPM and time signature (including host tempo in DAW Sync). The closed caption stays compact. Swing/Nudge can alter individual timing, as explained in the tooltip.

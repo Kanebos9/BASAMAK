@@ -1,8 +1,13 @@
 #include "PluginEditor.h"
 #include "FactoryContent.h"
+#include "MultisampleFixture.h"
+#include "GenContext.h"
 #include <cmath>
 #include <cstdio>
 #include <memory>
+#include <chrono>
+#include <ctime>
+#include <thread>
 
 static int fails = 0;
 #define CHECK(x)                                                                                             \
@@ -53,6 +58,21 @@ static KeysPanel *keysPanel(juce::Component &c)
             return p;
     return nullptr;
 }
+static juce::ComboBox* firstStepMenu(juce::Component& c)
+{
+    if (auto* combo = dynamic_cast<juce::ComboBox*>(&c))
+        if (combo->getTooltip().startsWith("Number of steps")) return combo;
+    for (int i = 0; i < c.getNumChildComponents(); ++i)
+        if (auto* combo = firstStepMenu(*c.getChildComponent(i))) return combo;
+    return nullptr;
+}
+static SlotEditor* firstSlotEditor(juce::Component& c, int index = 0)
+{
+    if (auto* slot = dynamic_cast<SlotEditor*>(&c)) if (slot->index == index) return slot;
+    for (int i = 0; i < c.getNumChildComponents(); ++i)
+        if (auto* slot = firstSlotEditor(*c.getChildComponent(i), index)) return slot;
+    return nullptr;
+}
 static void snapshot(juce::Component &c, const juce::String &name)
 {
     auto im = c.createComponentSnapshot(c.getLocalBounds());
@@ -76,10 +96,426 @@ struct TestPlayHead : juce::AudioPlayHead
         return p;
     }
 };
+class EditAudioThread : public juce::Thread
+{
+public:
+    explicit EditAudioThread(std::function<void()> work) : juce::Thread("BASAMAK edit audio test"), runWork(std::move(work)) {}
+    void run() override { runWork(); }
+private:
+    std::function<void()> runWork;
+};
 int main(int argc, char **argv)
 {
     juce::ScopedJuceInitialiser_GUI init;
+    if (argc > 1 && juce::String(argv[1]) == "--profile-edits")
+    {
+        auto hasArg = [&](const char* value) { for (int i = 2; i < argc; ++i) if (juce::String(argv[i]) == value) return true; return false; };
+        const bool multisample = hasArg("ms");
+        const bool live = hasArg("live"), merged = hasArg("merged"), dense = hasArg("dense"), direct = hasArg("direct");
+        auto p = std::make_unique<DrumSequencerProcessor>();
+        auto& song = p->sequencer;
+        if (live) Factory::applyPreset(song, Factory::presetNames().indexOf("Live Drums - Room Session"));
+        auto& c = song.patterns[0].channels[0];
+        tone(c, 220); c.allowOverlap = false;
+        if (merged) for (int i = 1; i < 8; ++i) song.patterns[i].mergeWithPrev = true;
+        if (dense)
+        {
+            for (int i = 0; i < 100; ++i)
+            {
+                LiveDrumming::Take take; take.name = "Kit " + juce::String(i); take.head = i % 64;
+                for (int n = 0; n < 256; ++n) take.hits.push_back({take.head, {(double)n / 256, n % 16, 0.8f, 0}});
+                song.drums.takes.push_back(std::move(take));
+                DrumSequencerProcessor::KeysTake keys; keys.name = "Keys " + juce::String(i); keys.isDraw = true;
+                for (int n = 0; n < 256; ++n) { DrumChannel::DrawNote note; note.start = n * 1.5; keys.drawNotes.push_back(note); }
+                p->keysTakes.push_back(std::move(keys));
+            }
+        }
+        p->prepareToPlay(48000, 128);
+        juce::File msFixture;
+        if (multisample) {
+            msFixture = makeMultisampleBaseFixture();
+            c.slots[0].engine = DrumChannel::SrcSample;
+            CHECK(c.loadMultisample(0, msFixture)); c.markDspDirty();
+        }
+        std::unique_ptr<juce::AudioProcessorEditor> base(p->createEditor());
+        auto& ed = *static_cast<DrumSequencerEditor*>(base.get());
+        for (int i = 0; i < 9; ++i) ed.timerCallback();
+        auto* slot = firstSlotEditor(ed);
+        CHECK(slot && slot->freqFader);
+        printf("Profile: %s, %s, %s, %s\n", live ? "live" : "regular", merged ? "8-bar merged" : "single bar",
+               dense ? "200 saved takes" : "empty takes", direct ? "direct processor" : "JUCE wrapper lock");
+        if (multisample) printf("Multisample Base Freq control\n");
+        auto start = juce::Time::getMillisecondCounterHiRes();
+        auto state = p->captureStateTree();
+        printf("Full state capture: %.3f ms\n", juce::Time::getMillisecondCounterHiRes() - start);
+        std::atomic<bool> running { true };
+        int blocks = 0, silent = 0, overBudget = 0;
+        double worstAudioMs = 0, worstLockMs = 0;
+        song.startStandalone();
+        EditAudioThread audio([&] {
+            juce::AudioBuffer<float> buffer(2, 128);
+            juce::MidiBuffer midi; midi.ensureSize(1024);
+            auto next = std::chrono::steady_clock::now();
+            while (running.load())
+            {
+                midi.clear();
+                if (blocks % 12 == 0) midi.addEvent(juce::MidiMessage::noteOn(1, live ? 49 : 60, (juce::uint8)100), 0);
+                if (!live && blocks % 12 == 1) midi.addEvent(juce::MidiMessage::noteOff(1, 60), 0);
+                const double begin = juce::Time::getMillisecondCounterHiRes();
+                if (!direct) p->getCallbackLock().enter(); // JUCE VST3/standalone wrapper does this
+                const double waited = juce::Time::getMillisecondCounterHiRes() - begin;
+                p->processBlock(buffer, midi);
+                if (!direct) p->getCallbackLock().exit();
+                const double elapsed = juce::Time::getMillisecondCounterHiRes() - begin;
+                worstLockMs = juce::jmax(worstLockMs, waited);
+                worstAudioMs = juce::jmax(worstAudioMs, elapsed);
+                if (elapsed > 128.0 / 48.0) ++overBudget;
+                ++blocks;
+                if (buffer.getMagnitude(0, 128) < 1.0e-10f) ++silent;
+                next += std::chrono::microseconds(2667);
+                std::this_thread::sleep_until(next);
+            }
+        });
+        const bool realtime = audio.startRealtimeThread(juce::Thread::RealtimeOptions()
+            .withPeriodHz(375).withProcessingTimeMs(0.3).withMaximumProcessingTimeMs(2.6));
+        if (!realtime) CHECK(audio.startThread(juce::Thread::Priority::highest));
+        printf("Realtime audio scheduling: %s\n", realtime ? "enabled" : "unavailable (priority fallback)");
+        double sum = 0, peak = 0, peakCpu = 0, peakEdit = 0;
+        for (int edit = 0; edit < 12; ++edit)
+        {
+            start = juce::Time::getMillisecondCounterHiRes();
+            if (slot && slot->freqFader)
+                slot->freqFader->setValue(230 + edit * 10, juce::sendNotificationSync); // actual sound-editor callback
+            peakEdit = juce::jmax(peakEdit, juce::Time::getMillisecondCounterHiRes() - start);
+            for (int tick = 0; tick < 9; ++tick)
+            {
+                const auto cpuStart = std::clock();
+                start = juce::Time::getMillisecondCounterHiRes(); ed.timerCallback();
+                double ms = juce::Time::getMillisecondCounterHiRes() - start;
+                const double cpuMs = 1000.0 * (std::clock() - cpuStart) / CLOCKS_PER_SEC;
+                sum += ms; peak = juce::jmax(peak, ms);
+                peakCpu = juce::jmax(peakCpu, cpuMs);
+                if (ms >= 16)
+                    printf("Slow timer: edit %d tick %d, wall %.3f ms, process CPU %.3f ms (includes audio)\n",
+                           edit, tick, ms, cpuMs);
+                std::this_thread::sleep_for(std::chrono::milliseconds(16));
+            }
+        }
+        running = false; CHECK(audio.waitForThreadToExit(5000));
+        printf("Sound edits: 12; UI timer mean %.3f ms, worst %.3f ms; audio silent blocks %d / %d\n",
+               sum / 108, peak, silent, blocks);
+        printf("Audio callback worst %.3f ms; lock wait worst %.3f ms; callbacks over 2.667 ms: %d\n",
+               worstAudioMs, worstLockMs, overBudget);
+        printf("Timer process CPU worst %.3f ms; sound control callback worst %.3f ms\n", peakCpu, peakEdit);
+        CHECK(peak < 50); // catch long UI stalls with ample margin above a normal frame
+        CHECK(blocks > 100);
+        if (!direct) CHECK(silent == 0);
+        if (multisample) msFixture.deleteRecursively();
+        return fails ? 1 : 0;
+    }
     printf("Live drumming: mapping, timestamps, takes, persistence, conversion and UI\n");
+    {
+        // A MIDI CC updates every pattern at once. Timer captures may interleave with
+        // audio, but must either return a coherent update or retain the previous one.
+        auto p = std::make_unique<DrumSequencerProcessor>();
+        p->midiLearn.assign("global_masterVol", 7, 1); p->prepareToPlay(48000, 128);
+        auto snapshot = p->captureSnapshot();
+        const auto initialHash = snapshot.hash();
+        std::atomic<bool> running { true };
+        std::thread midiThread([&] {
+            juce::AudioBuffer<float> audio(2, 128); juce::MidiBuffer midi;
+            for (int n = 0; running.load(); ++n)
+            {
+                midi.clear(); midi.addEvent(juce::MidiMessage::controllerEvent(1, 7, 20 + n % 100), 0);
+                { const juce::ScopedLock wrapper(p->getCallbackLock()); p->processBlock(audio, midi); }
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+        });
+        bool capturedMidi = false;
+        for (int i = 0; i < 12; ++i)
+        {
+            snapshot = p->captureSnapshot(snapshot, true);
+            capturedMidi = capturedMidi || snapshot.hash() != initialHash;
+            auto tree = snapshot.toTree();
+            const float volume = tree.getChildWithName("Pattern")["mVol"];
+            int patterns = 0;
+            for (auto pattern : tree) if (pattern.hasType("Pattern"))
+            {
+                CHECK(std::abs((float)pattern["mVol"] - volume) < 1.0e-6f); ++patterns;
+            }
+            CHECK(patterns == 64);
+        }
+        running = false; midiThread.join();
+        CHECK(capturedMidi);
+    }
+    {
+        // Incremental undo capture must equal a fresh full capture, including changes
+        // outside the selected pattern, both slots, routing, master bus B and saved takes.
+        auto p = std::make_unique<DrumSequencerProcessor>();
+        auto& song = p->sequencer;
+        auto& ch = song.patterns[63].channels[15];
+        auto initial = p->captureSnapshot();
+        CHECK(initial.changedChannels() == 64 * 16);
+        auto unchanged = p->captureSnapshot(initial);
+        CHECK(unchanged.changedChannels() == 0 && unchanged.hash() == initial.hash());
+        auto originalTree = initial.toTree();
+        ch.slots[1].fmEnvFollow = true; ch.slots[1].modalMorph = 0.37f;
+        ch.slots[1].lfoShape[2] = 7; ch.slots[1].lfoCurve[2][63] = 0.625f;
+        ch.slots[1].mod[11].curveOn = 1; ch.slots[1].mod[11].curve[63] = 213;
+        ch.slots[1].addH[3][31] = 0.375f; ch.slots[1].addPh[3][31] = 0.75f;
+        ch.stepVel[63] = 0.321f; ch.stepNudge[63] = -0.375f; ch.steps[63] = true;
+        ch.drawMode = true; ch.addDrawNote(0.0123456789, 0.003456789, 5, 200);
+        ch.liveChokeBy = 4; ch.chokeGroup = 2; ch.outputBus = 3;
+        ch.channelName = "Last lane"; ch.keysMinVel = 0.75f;
+        ch.chFxFile[2] = "/snapshot/test-model.nam";
+        auto changed = p->captureSnapshot(unchanged);
+        CHECK(changed.changedChannels() == 1 && changed.hash() != initial.hash());
+        auto changedTree = changed.toTree();
+        CHECK(changedTree.isEquivalentTo(p->captureStateTree()));
+        CHECK(initial.toTree().isEquivalentTo(originalTree));
+        // Caller mutations cannot corrupt either snapshot, or detach shared children.
+        changedTree.getChildWithName("Pattern").getChildWithName("Ch").setProperty("volume", 0, nullptr);
+        CHECK(changed.toTree().isEquivalentTo(p->captureStateTree()));
+        song.patterns[42].master.reverbWetB = 0.456f;
+        song.patterns[42].master.tilt = 0.25f;
+        song.drums.enabled = true; song.drums.assignAlternate(7, 54);
+        song.drums.patterns[63].add({0.123456789012, 15, 0.65f, -0.25f});
+        song.drums.takes.push_back({"Saved kit", 63, 1, {{63, {0.12, 15, 0.7f, 0.1f}}}});
+        DrumSequencerProcessor::KeysTake take;
+        take.name = "Saved roll"; take.channel = 15; take.drawPat = 63; take.isDraw = true;
+        take.drawNotes.assign(ch.drawNotes, ch.drawNotes + ch.drawNoteCount); p->keysTakes.push_back(take);
+        auto dataEdit = p->captureSnapshot(changed);
+        CHECK(dataEdit.changedChannels() == 0 && dataEdit.hash() != changed.hash());
+        CHECK(dataEdit.toTree().isEquivalentTo(p->captureStateTree()));
+        // Padding is not musical data. Copy construction may leave it different, so
+        // unchanged note/take values must still reuse their cached representation.
+        static_assert(offsetof(DrumChannel::DrawNote, drumHit) + 1 < sizeof(DrumChannel::DrawNote));
+        static_assert(offsetof(LiveDrumming::Hit, pan) + sizeof(float) < sizeof(LiveDrumming::Hit));
+        reinterpret_cast<unsigned char*>(&ch.drawNotes[0])[sizeof(DrumChannel::DrawNote) - 1] ^= 0x55;
+        reinterpret_cast<unsigned char*>(&p->keysTakes[0].drawNotes[0])[sizeof(DrumChannel::DrawNote) - 1] ^= 0x55;
+        reinterpret_cast<unsigned char*>(&song.drums.takes[0].hits[0].hit)[sizeof(LiveDrumming::Hit) - 1] ^= 0x55;
+        auto paddingOnly = p->captureSnapshot(dataEdit);
+        CHECK(paddingOnly.changedChannels() == 0 && paddingOnly.hash() == dataEdit.hash());
+        // View changes ride with the state but do not create an undo step during Follow.
+        song.currentPattern = 42; p->visibleChannels = 16; p->editorScale = 0.7;
+        auto view = p->captureSnapshot(dataEdit);
+        CHECK(view.hash() == dataEdit.hash() && view.changedChannels() == 0);
+        CHECK(view.toTree().isEquivalentTo(p->captureStateTree()));
+        p->applyStateTree(dataEdit.toTree());
+        CHECK(std::abs(ch.slots[1].addH[3][31] - 0.375f) < 1.0e-6f);
+        CHECK(ch.slots[1].fmEnvFollow && ch.slots[1].mod[11].curve[63] == 213);
+        CHECK(std::abs(ch.stepNudge[63] + 0.375f) < 1.0e-6f);
+        CHECK(ch.drawNoteCount == 1 && std::abs(ch.drawNotes[0].len - 0.003456789) < 1.0e-12);
+        CHECK(song.drums.takes.size() == 1 && p->keysTakes.size() == 1);
+        CHECK(std::abs(song.patterns[42].master.reverbWetB - 0.456f) < 1.0e-6f);
+        p->applyStateTree(initial.toTree());
+        CHECK(!song.drums.enabled && song.drums.takes.empty() && p->keysTakes.empty());
+        CHECK(ch.drawNoteCount == 0 && !ch.slots[1].fmEnvFollow);
+        CHECK(ch.stepNudge[63] == 0);
+    }
+    if (argc > 1 && juce::String(argv[1]) == "--ui")
+    {
+        auto p = std::make_unique<DrumSequencerProcessor>();
+        auto& ch = p->sequencer.patterns[0].channels[0];
+        std::unique_ptr<juce::AudioProcessorEditor> base(p->createEditor());
+        auto& ed = *static_cast<DrumSequencerEditor*>(base.get());
+        auto* undo = button(ed, "Undo"); auto* redo = button(ed, "Redo");
+        CHECK(undo && redo);
+        auto settle = [&] { for (int i = 0; i < 9; ++i) ed.timerCallback(); };
+        settle();
+        const float original = ch.slots[0].oscFreq;
+        ch.slots[0].oscFreq = 333; ch.markDspDirty(); settle();
+        ch.slots[0].oscFreq = 444; ch.markDspDirty();
+        // The timer observes this edit but it has not settled into an undo entry yet.
+        for (int i = 0; i < 3; ++i) ed.timerCallback();
+        if (undo && redo)
+        {
+            undo->onClick(); CHECK(std::abs(ch.slots[0].oscFreq - 333) < 0.001f);
+            undo->onClick(); CHECK(std::abs(ch.slots[0].oscFreq - original) < 0.001f);
+            redo->onClick(); CHECK(std::abs(ch.slots[0].oscFreq - 333) < 0.001f);
+            redo->onClick(); CHECK(std::abs(ch.slots[0].oscFreq - 444) < 0.001f);
+            undo->onClick(); ch.slots[0].oscFreq = 555; ch.markDspDirty(); settle();
+            CHECK(!redo->isEnabled());
+            undo->onClick(); CHECK(std::abs(ch.slots[0].oscFreq - 333) < 0.001f);
+            // An eight-bar merged edit is one undo action and restores every member.
+            for (int i = 1; i < 8; ++i) p->sequencer.patterns[i].mergeWithPrev = true;
+            settle(); ch.slots[0].oscFreq = 666; ch.markDspDirty(); settle();
+            for (int i = 0; i < 8; ++i) CHECK(std::abs(p->sequencer.patterns[i].channels[0].slots[0].oscFreq - 666) < 0.001f);
+            undo->onClick();
+            for (int i = 0; i < 8; ++i) CHECK(std::abs(p->sequencer.patterns[i].channels[0].slots[0].oscFreq - 333) < 0.001f);
+        }
+    }
+    {
+        const auto fixture = makeMultisampleBaseFixture();
+        auto p = std::make_unique<DrumSequencerProcessor>();
+        p->prepareToPlay(48000, 128);
+        auto& c = p->sequencer.channel(0);
+        tone(c, 220); c.drawMode = false; c.clearStepData();
+        c.slots[0].engine = DrumChannel::SrcSample;
+        CHECK(c.loadMultisample(0, fixture));
+        c.slots[0].msBaseFreq = 130.8127827f;
+        CHECK(GenContext::stepChannelBaseMidi(c) == 48);
+        // Keyboard recording stays absolute on input and stores the offset from the base.
+        p->lastSelectedChannel = 0; p->keysRecMode = 0; p->keysArmedPattern = 0; p->keysRecording = true;
+        juce::AudioBuffer<float> audio(2, 128); juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, (juce::uint8)100), 0);
+        p->processBlock(audio, midi);
+        CHECK(c.steps[0] && std::abs(c.stepPitch[0] - 12.0f) < 0.001f);
+        p->keysRecording = false; p->sequencer.stopStandalone();
+        c.clearStepData(); c.numSteps = 8; c.steps[0] = true; c.stepPitch[0] = 2;
+        auto saved = p->captureStateTree();
+        c.slots[0].msBaseFreq = 261.6255653f; p->applyStateTree(saved);
+        CHECK(std::abs(c.slots[0].msBaseFreq - 130.8127827f) < 0.001f);
+        auto exportNotes = [&] {
+            auto f = p->exportMidiFile(0); juce::FileInputStream in(f); juce::MidiFile mf;
+            CHECK(mf.readFrom(in)); std::vector<int> notes;
+            if (auto* t = mf.getTrack(0)) for (int i=0; i<t->getNumEvents(); ++i)
+                if (t->getEventPointer(i)->message.isNoteOn()) notes.push_back(t->getEventPointer(i)->message.getNoteNumber());
+            f.deleteFile(); return notes;
+        };
+        CHECK(exportNotes() == std::vector<int>{50}); // D3, relative to C3 base
+        c.slots[1] = c.slots[0]; c.slots[1].msBaseFreq = 523.2511306f;
+        CHECK(c.loadMultisample(1, fixture));
+        CHECK(exportNotes() == (std::vector<int>{50, 74})); // independent bases in the two slots
+        if (argc > 1 && juce::String(argv[1]) == "--ui") {
+            DrumSequencerEditor ed(*p); ed.setVisible(true);
+            for (int i=0; i<9; ++i) ed.timerCallback(); // capture the editor's initial undo baseline
+            auto* slot0 = firstSlotEditor(ed); auto* slot1 = firstSlotEditor(ed, 1);
+            CHECK(slot0 && slot1 && slot0->msFace && slot1->msFace);
+            if (slot0 && slot1) {
+                CHECK(slot0->freqFader->isVisible() && slot0->freqFader->isEnabled());
+                CHECK(slot0->getLocalBounds().contains(slot0->freqFader->getBounds()));
+                CHECK(slot1->getLocalBounds().contains(slot1->freqFader->getBounds()));
+                CHECK(slot0->freqFader->getTooltip().contains("Base Freq"));
+                slot0->freqFader->setValue(65.4063913, juce::sendNotificationSync);
+                CHECK(std::abs(c.slots[0].msBaseFreq - 65.4063913) < 0.001);
+                CHECK(std::abs(c.slots[1].msBaseFreq - 523.2511306) < 0.001);
+                for (int i=0; i<9; ++i) ed.timerCallback();
+                auto* undo = button(ed, "Undo"); CHECK(undo);
+                if (undo) undo->onClick();
+                CHECK(std::abs(c.slots[0].msBaseFreq - 130.8127827) < 0.001);
+                snapshot(ed, "basamak-multisample-base-frequency");
+                // The same base survives the real slot-copy action.
+                slot1->onCopyFromSlot(0);
+                CHECK(c.slots[1].msBaseFreq == c.slots[0].msBaseFreq);
+                // The visible frequency control's learned MIDI CC updates the same slot and readout.
+                const float previousOscHz = c.slots[0].oscFreq;
+                p->midiLearn.assign("ui_sel_slotFreq", 23, 1);
+                midi.clear(); midi.addEvent(juce::MidiMessage::controllerEvent(1, 23, 50), 0);
+                p->processBlock(audio, midi); ed.timerCallback();
+                const double ccHz = 20.0 * std::pow(4186.0 / 20.0, 50.0f / 127.0f);
+                CHECK(std::abs(c.slots[0].msBaseFreq - ccHz) < 0.001);
+                CHECK(std::abs(slot0->freqFader->getValue() - ccHz) < 0.001);
+                CHECK(c.slots[0].oscFreq == previousOscHz);
+                CHECK(std::abs(c.slots[1].msBaseFreq - 130.8127827) < 0.001);
+                // A merged slot edit preserves already-playing multisample voices
+                // and their buffers instead of reloading the instrument per knob tick.
+                p->sequencer.patterns[1].mergeWithPrev = true;
+                auto settle = [&] { for (int i=0; i<9; ++i) ed.timerCallback(); };
+                settle();
+                auto& next = p->sequencer.patterns[1].channels[0];
+                next.steps[3] = true;
+                const auto* samples = next.slotSample[0].buf.getReadPointer(0);
+                const auto zones = next.msSet[0];
+                next.trigger(1, 0); CHECK(next.anyVoiceActive());
+                slot0->freqFader->setValue(220, juce::sendNotificationSync);
+                c.slots[0].filterCutoff = 1500; c.markDspDirty(); settle();
+                CHECK(next.anyVoiceActive());
+                CHECK(next.slotSample[0].buf.getReadPointer(0) == samples && next.msSet[0] == zones);
+                CHECK(std::abs(next.slots[0].msBaseFreq - 220) < 0.001f);
+                CHECK(next.slots[0].filterCutoff == 1500 && next.steps[3]);
+                // Channel settings and engine/waveform changes still use the full
+                // load/bake path, including the granular source's actual table.
+                c.volume = 0.3f; settle(); CHECK(next.volume == c.volume);
+                c.slots[0].engine = DrumChannel::SrcGrain;
+                c.slots[0].oscShape = DrumChannel::WvSaw;
+                c.rebuildAddTables(); c.markDspDirty(); settle();
+                CHECK(!c.grainTbl[0].empty() && next.grainTbl[0] == c.grainTbl[0]);
+                c.slots[0].oscShape = DrumChannel::WvSquare;
+                c.rebuildAddTables(); c.markDspDirty(); settle();
+                CHECK(next.grainTbl[0] == c.grainTbl[0]);
+            }
+        }
+        fixture.deleteRecursively();
+    }
+    {
+        // New step choices survive menu selection, persistence and MIDI export. Each
+        // bar keeps its own duration even when a merged pair has different counts.
+        const int counts[] = {17, 18, 19, 25, 26, 33, 34, 35};
+        auto p = std::make_unique<DrumSequencerProcessor>();
+        auto& sq = p->sequencer;
+        if (argc > 1 && juce::String(argv[1]) == "--ui") {
+            DrumSequencerEditor ed(*p); ed.setVisible(true);
+            auto* combo = firstStepMenu(ed); CHECK(combo);
+            if (combo) {
+                auto duration = [&](int id) {
+                    juce::PopupMenu::MenuItemIterator it(*combo->getRootMenu(), true);
+                    while (it.next()) if (it.getItem().itemID == id) return it.getItem().shortcutKeyDescription;
+                    return juce::String();
+                };
+                auto refresh = [&] { for (int tick=0; tick<3; ++tick) ed.timerCallback(); };
+                refresh(); CHECK(duration(4) == "0.5 s/step");
+                CHECK(duration(35) == "0.057 s/step");
+                sq.standaloneBpm = 60; refresh(); CHECK(duration(4) == "1 s/step");
+                sq.timeSigNum = 3; refresh(); CHECK(duration(4) == "0.75 s/step");
+                sq.dawSync = true; p->currentBpm = 120; p->currentTimeSigNum = 7; p->currentTimeSigDen = 8;
+                refresh(); CHECK(duration(4) == "0.438 s/step");
+                sq.dawSync = false; sq.standaloneBpm = 120; sq.timeSigNum = 4;
+                p->currentTimeSigNum = p->currentTimeSigDen = 4; refresh();
+                for (int n : counts) {
+                    CHECK(combo->indexOfItemId(n) >= 0);
+                    combo->setSelectedId(n, juce::sendNotificationSync);
+                    CHECK(sq.channel(0).numSteps == n && !sq.channel(0).drawMode);
+                    ed.timerCallback(); CHECK(combo->getSelectedId() == n);
+                }
+                sq.patterns[1].mergeWithPrev = true;
+                sq.patterns[1].channels[0].numSteps = 17;
+                ed.timerCallback();
+                // Per-bar 35 + 17 fits; all-bars 35 + 35 must remain rejected.
+                combo->setSelectedId(2033, juce::sendNotificationSync);
+                CHECK(sq.channel(0).numSteps == 33 && sq.patterns[1].channels[0].numSteps == 17);
+                refresh(); CHECK(duration(2033) == "0.061 s/step");
+                combo->setSelectedId(35, juce::sendNotificationSync);
+                CHECK(sq.channel(0).numSteps == 33 && sq.patterns[1].channels[0].numSteps == 17);
+                combo->setSelectedId(26, juce::sendNotificationSync);
+                CHECK(sq.channel(0).numSteps == 26 && sq.patterns[1].channels[0].numSteps == 26);
+            }
+        }
+        sq.patterns[1].mergeWithPrev = true;
+        for (int b = 0; b < 2; ++b) for (int ch = 0; ch < 8; ++ch) {
+            auto& c = sq.patterns[b].channels[ch];
+            c.clearStepData(); c.drawMode = false;
+            c.numSteps = b == 0 ? counts[ch] : 17;
+            c.midiOut = true; c.midiOutChannel = ch + 1; c.midiNote = 36 + ch;
+            for (int st = 0; st < c.numSteps; ++st) c.steps[st] = true;
+        }
+        auto saved = p->captureStateTree();
+        for (int ch = 0; ch < 8; ++ch) sq.patterns[0].channels[ch].numSteps = 8;
+        p->applyStateTree(saved);
+        for (int ch = 0; ch < 8; ++ch) {
+            CHECK(sq.patterns[0].channels[ch].numSteps == counts[ch]);
+            CHECK(sq.patterns[1].channels[ch].numSteps == 17);
+            auto file = p->exportMidiFile(ch);
+            juce::FileInputStream stream(file); juce::MidiFile mf;
+            CHECK(mf.readFrom(stream)); CHECK(mf.getTimeFormat() == 9600);
+            int ons = 0;
+            if (auto* track = mf.getTrack(0)) {
+                for (int i = 0; i < track->getNumEvents(); ++i) {
+                    const auto& msg = track->getEventPointer(i)->message;
+                    if (!msg.isNoteOn()) continue;
+                    const bool second = ons >= counts[ch];
+                    const int step = second ? ons - counts[ch] : ons;
+                    const double expected = (second ? 38400.0 : 0.0)
+                        + step * 38400.0 / (second ? 17 : counts[ch]);
+                    CHECK(std::abs(msg.getTimeStamp() - expected) <= 1.0);
+                    CHECK(msg.getChannel() == ch + 1);
+                    ++ons;
+                }
+                CHECK(track->getEndTime() == 76800);
+            } else CHECK(false);
+            CHECK(ons == counts[ch] + 17); file.deleteFile();
+        }
+    }
     {
         // Fractional roll timing: sample-offset MIDI, short gates, close hits, persistence,
         // backward compatibility and both exports. No old 384-column quantization remains.

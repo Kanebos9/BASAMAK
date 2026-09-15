@@ -59,6 +59,15 @@ class LiveDrumming
         int head = 0, bars = 1;
         std::vector<RecordedHit> hits;
     };
+    struct State
+    {
+        bool enabled = false;
+        std::array<int, CHANNELS> notes, alternateNotes, midiChannels;
+        std::array<std::vector<Hit>, PATTERNS> patterns;
+        std::vector<Take> takes;
+    };
+    State captureState() const; // copy under the callback lock, format after releasing it
+    static juce::ValueTree saveState(const State&);
     struct LogEvent
     {
         int pattern = 0;

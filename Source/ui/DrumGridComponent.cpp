@@ -224,7 +224,7 @@ void DrumGridComponent::editMenu(int i)
                                : juce::String(x < 0 ? "Left " : "Right ") + juce::String(std::abs(x)) + "%");
     m.addSubMenu("Pan", p);
     juce::Component::SafePointer<DrumGridComponent> safe(this);
-    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this),
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withMousePosition(),
                     [safe, h](int r)
                     {
                         if (!safe || r == 0)

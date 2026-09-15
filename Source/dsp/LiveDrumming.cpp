@@ -20,30 +20,43 @@ bool unpack(const juce::String &text, LiveDrumming::Hit &h)
 } // namespace
 juce::ValueTree LiveDrumming::save() const
 {
+    return saveState(captureState());
+}
+LiveDrumming::State LiveDrumming::captureState() const
+{
+    State state;
+    state.enabled = enabled;
+    state.notes = notes; state.alternateNotes = alternateNotes; state.midiChannels = midiChannels;
+    for (size_t p = 0; p < patterns.size(); ++p)
+        state.patterns[p].assign(patterns[p].hits.begin(), patterns[p].hits.begin() + patterns[p].count);
+    state.takes = takes;
+    return state;
+}
+juce::ValueTree LiveDrumming::saveState(const State& state)
+{
     juce::ValueTree root("LiveDrumming");
-    root.setProperty("enabled", enabled, nullptr);
+    root.setProperty("enabled", state.enabled, nullptr);
     for (int c = 0; c < CHANNELS; ++c)
     {
         juce::ValueTree m("Map");
         m.setProperty("ch", c, nullptr);
-        m.setProperty("note", notes[(size_t)c], nullptr);
-        m.setProperty("alternate", alternateNotes[(size_t)c], nullptr);
-        m.setProperty("midiCh", midiChannels[(size_t)c], nullptr);
+        m.setProperty("note", state.notes[(size_t)c], nullptr);
+        m.setProperty("alternate", state.alternateNotes[(size_t)c], nullptr);
+        m.setProperty("midiCh", state.midiChannels[(size_t)c], nullptr);
         root.addChild(m, -1, nullptr);
     }
     for (int p = 0; p < PATTERNS; ++p)
-        if (patterns[(size_t)p].count)
+        if (!state.patterns[(size_t)p].empty())
         {
             juce::ValueTree b("Bar");
             b.setProperty("p", p, nullptr);
             juce::String hits;
-            const auto &lane = patterns[(size_t)p];
-            for (int i = 0; i < lane.count; ++i)
-                hits += pack(lane.hits[(size_t)i]) + ",";
+            for (const auto& hit : state.patterns[(size_t)p])
+                hits += pack(hit) + ",";
             b.setProperty("hits", hits, nullptr);
             root.addChild(b, -1, nullptr);
         }
-    for (const auto &take : takes)
+    for (const auto &take : state.takes)
     {
         juce::ValueTree t("Take");
         t.setProperty("name", take.name, nullptr);

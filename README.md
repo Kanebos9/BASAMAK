@@ -34,6 +34,8 @@ Go to the [Releases](https://github.com/Kanebos9/BASAMAK/releases) page, downloa
 
 Version 1.5.8 adds per-channel MIDI input assignments, a shared drum roll, whole-kit recording/takes, ten ready-to-play Live Drums kits, seven additional percussion sounds, and window size buttons. Both piano rolls retain fine timing, and MIDI export uses 9600 PPQ. See the [Live Drumming guide](docs/LIVE-DRUMMING.md) for OKTO B setup and mode conversion.
 
+Version 1.5.9 fixes sound-edit pauses caused by undo snapshots blocking audio, and opens the Live Drumming note menu at the right-click position. Step Nudge now survives saved-state reloads and undo. Step-mode Overlap Off now applies to previous-pattern tails when the next hit arrives. Channel step counts also include 17, 18, 19, 25, 26, 33, 34 and 35, with seconds per step shown beside each menu option. Multisample sound slots now have a Base Freq control for step pitches, TEST and Live Drumming; click its readout to choose notes instead of Hz.
+
 ## Building from source
 
 ### 1. Dependencies

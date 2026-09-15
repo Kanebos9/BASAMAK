@@ -70,8 +70,8 @@ inline int classifyDrumRole(const juce::String& category, const juce::String& mi
 }
 
 // The first PITCHED audible slot's base as a MIDI note, or -1 for an unpitched
-// (Sample/Noise-only) channel. Step mode = the Freq knob is the base (slotBaseHz's
-// !drawMode branch); Phys reads physFreq, the rest oscFreq.
+// (plain Sample/Noise-only) channel. Step mode = the Freq knob is the base;
+// Phys reads physFreq, multisamples msBaseFreq, the other pitched engines oscFreq.
 inline int stepChannelBaseMidi(const DrumChannel& cc)
 {
     for (int s = 0; s < DrumChannel::NUM_SLOTS; ++s)
@@ -79,6 +79,8 @@ inline int stepChannelBaseMidi(const DrumChannel& cc)
         const auto& sl = cc.slots[s];
         if (sl.weight <= 0.001f) continue;
         const int e = sl.engine;
+        if (e == DrumChannel::SrcSample && cc.msSet[s] != nullptr)
+            return juce::roundToInt(DrumChannel::multisampleBaseMidi(sl));
         const bool pitched = e == DrumChannel::SrcOsc || e == DrumChannel::SrcFM
                           || e == DrumChannel::SrcPhys || e == DrumChannel::SrcModal
                           || e == DrumChannel::SrcGrain;

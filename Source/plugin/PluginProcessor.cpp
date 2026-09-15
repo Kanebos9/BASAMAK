@@ -109,6 +109,7 @@ DrumSequencerProcessor::~DrumSequencerProcessor() {}
 
 void DrumSequencerProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
+    ++snapshotEditSerial;
     currentSampleRate = sampleRate;
     currentBlockSize  = samplesPerBlock;
     keySliceAudio.setSize(juce::jmax(getTotalNumInputChannels(), getTotalNumOutputChannels()), 1);
@@ -221,6 +222,7 @@ void DrumSequencerProcessor::processBlock(juce::AudioBuffer<float>& audio,
 {
     const juce::ScopedTryLock stateLock(getCallbackLock());
     if (!stateLock.isLocked()) { audio.clear(); midi.clear(); return; }
+    if (keysRecording.load() || sequencer.drums.recording) ++snapshotEditSerial;
     juce::AudioProcessLoadMeasurer::ScopedTimer cpuTimer(loadMeasurer, audio.getNumSamples());
     if (audio.getNumSamples() <= 0) return;
     // Keyboard notes must be played AND recorded at their host sample offsets. The
@@ -348,6 +350,7 @@ void DrumSequencerProcessor::processBlockSlice(juce::AudioBuffer<float>& audio,
             lastAtMs.store(juce::Time::getMillisecondCounter(), std::memory_order_relaxed);
         }
 
+        if (msg.isController() || (msg.isNoteOn() && sequencer.drums.learnChannel >= 0)) ++snapshotEditSerial;
         if ((sequencer.drums.enabled || (sequencer.drums.learnChannel >= 0 && msg.isNoteOn())) && msg.isNoteOnOrOff()) {
             if (msg.isNoteOn())
                 sequencer.drums.noteOn(msg.getNoteNumber(),msg.getChannel(),msg.getVelocity(),
@@ -860,9 +863,13 @@ void DrumSequencerProcessor::processBlockSlice(juce::AudioBuffer<float>& audio,
                     // playback ALWAYS reproduces the performance, even off-note knobs - no toggle
                     // needed. (Roll recording keeps note-60: the roll pins its sounds to C4.)
                     float baseMidi = 60.0f;
-                    for (const auto& sl : pch.slots)
+                    for (int slot = 0; slot < DrumChannel::NUM_SLOTS; ++slot)
                     {
+                        const auto& sl = pch.slots[slot];
                         if (sl.weight <= 0.001f) continue;
+                        if (sl.engine == DrumChannel::SrcSample && pch.msSet[slot] != nullptr) {
+                            baseMidi = (float)DrumChannel::multisampleBaseMidi(sl); break;
+                        }
                         float hz = 0.0f;
                         if (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal) hz = sl.oscFreq;
                         else if (sl.engine == DrumChannel::SrcPhys) hz = sl.physFreq;
@@ -2260,12 +2267,12 @@ juce::File DrumSequencerProcessor::exportMidiFile(int channel)
         const int midiCh = chn.midiOut ? juce::jlimit(1, 16, chn.midiOutChannel) : 1;
         const double stepTicks = barTicks / (double) juce::jmax(1, n);
 
-        // PER-SLOT VOICED export (v1.3.0): each PITCHED slot (Osc/Modal/Phys, audible) exports its
+        // PER-SLOT VOICED export: each audible PITCHED slot (including multisamples) exports its
         // OWN notes from its OWN Freq-knob base (rounded to the nearest MIDI note - the 0-point);
         // a slot in CHORD/SCALE mode exports its FULL voicing (every chord note), so slot 1 in a
         // 3-note chord + slot 2 in a 5-note scale = up to 8 notes stacked per hit (duplicates
-        // de-duped). Sample/Noise slots have NO Freq base, so they don't add per-slot notes; but a
-        // channel with NO pitched slot (pure Sample/Noise) still exports its step/draw PITCH contour
+        // de-duped). Plain Sample/Noise slots have NO Freq base, so don't add per-slot notes; a
+        // channel with NO pitched slot (plain Sample/Noise) still exports its step/draw PITCH contour
         // on the channel's own note (`midiNote` + pitch) - NO fixed C3 anchor.
         struct PSlot { int slotIdx; int base; bool scaleOn; int scaleType, scaleKey, scaleUni; };
         juce::Array<PSlot> pslots;
@@ -2278,14 +2285,17 @@ juce::File DrumSequencerProcessor::exportMidiFile(int channel)
                 if      (sl.engine == DrumChannel::SrcOsc || sl.engine == DrumChannel::SrcModal
                       || sl.engine == DrumChannel::SrcGrain) hz = sl.oscFreq;   // grain is pitched too [2026-07-16]
                 else if (sl.engine == DrumChannel::SrcPhys)                                      hz = sl.physFreq;
-                else continue;   // Sample / Noise: unpitched -> contributes no notes
+                else if (sl.engine == DrumChannel::SrcSample && chn.msSet[si] != nullptr) hz = sl.msBaseFreq;
+                else continue;   // Plain sample / Noise: contributes no pitched-slot notes
                 PSlot p; p.slotIdx = si;
                 p.base = juce::jlimit(0, 127, (int) std::lround(69.0 + 12.0 * std::log2(juce::jmax(20.0, hz) / 440.0)));
                 // [2026-08-01 r26 B4] PIANO ROLL is knob-INDEPENDENT (the slotBaseHz contract):
                 // roll playback pins every pitched slot to C4 + the Tune fader's cents (slot 2
                 // minus its transpose), so the export must use that base too - the Freq knob only
                 // names STEP mode's 0-point. (Step channels below keep the knob base unchanged.)
-                if (chn.drawMode)
+                if (chn.drawMode && sl.engine == DrumChannel::SrcSample)
+                    p.base = 60; // preserve the multisample roll's existing C4 reference
+                else if (chn.drawMode)
                     p.base = juce::jlimit(0, 127, 60 + juce::roundToInt(chn.drawTuneCents / 100.0f)
                                                      - (si == 1 ? chn.keysSlot2Down : 0));
                 p.scaleOn = sl.scaleOn; p.scaleType = sl.scaleType; p.scaleKey = sl.scaleKey;
@@ -2396,7 +2406,189 @@ juce::File DrumSequencerProcessor::exportMidiFile(int channel)
     return tmpFile;
 }
 
-static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
+namespace
+{
+// These are parameter copies only: no voices, sample buffers, FX delay lines or baked tables.
+// writeChannel is instantiated for both DrumChannel and SavedChannel, so adding a persisted
+// field without adding it here is a compile error, rather than a stale undo-cache bug.
+template <typename T> void copySavedField(T& dst, const T& src)
+{
+    if constexpr (std::is_trivially_copyable_v<T>) std::memcpy(&dst, &src, sizeof(T));
+    else dst = src;
+}
+template <typename T, size_t N> void copySavedField(T (&dst)[N], const T (&src)[N])
+{
+    if constexpr (std::is_trivially_copyable_v<T>) std::memcpy(dst, src, sizeof(dst));
+    else for (size_t i = 0; i < N; ++i) copySavedField(dst[i], src[i]);
+}
+template <typename T> bool sameSavedField(const T& a, const T& b)
+{
+    // Padding differences can only cause a redundant recapture. Hashes use the actual
+    // saved properties, never padding, so they cannot create spurious undo actions.
+    if constexpr (std::is_trivially_copyable_v<T>) return std::memcmp(&a, &b, sizeof(T)) == 0;
+    else return a == b;
+}
+template <typename T, size_t N> bool sameSavedField(const T (&a)[N], const T (&b)[N])
+{
+    if constexpr (std::is_trivially_copyable_v<T>) return std::memcmp(a, b, sizeof(a)) == 0;
+    else for (size_t i = 0; i < N; ++i) if (!sameSavedField(a[i], b[i])) return false;
+    return true;
+}
+bool sameSavedField(const DrumChannel::DrawNote& a, const DrumChannel::DrawNote& b)
+{
+    return std::tie(a.start, a.len, a.semi, a.vel, a.slot, a.glide, a.oneShot, a.strumUp,
+                    a.strumPct, a.pan, a.condLen, a.condMask, a.drumHit)
+        == std::tie(b.start, b.len, b.semi, b.vel, b.slot, b.glide, b.oneShot, b.strumUp,
+                    b.strumPct, b.pan, b.condLen, b.condMask, b.drumHit);
+}
+bool sameSavedField(const LiveDrumming::Hit& a, const LiveDrumming::Hit& b)
+{
+    return std::tie(a.pos, a.channel, a.velocity, a.pan) == std::tie(b.pos, b.channel, b.velocity, b.pan);
+}
+bool sameSavedField(const LiveDrumming::RecordedHit& a, const LiveDrumming::RecordedHit& b)
+{
+    return a.pattern == b.pattern && sameSavedField(a.hit, b.hit);
+}
+template <typename T> bool sameSavedVector(const std::vector<T>& a, const std::vector<T>& b)
+{
+    if (a.size() != b.size()) return false;
+    // Vector element copies need not preserve struct padding. Compare note fields,
+    // otherwise an unchanged take can be reformatted on every editor tick.
+    for (size_t i = 0; i < a.size(); ++i) if (!sameSavedField(a[i], b[i])) return false;
+    return true;
+}
+bool sameKeysTakes(const std::vector<DrumSequencerProcessor::KeysTake>& a,
+                   const std::vector<DrumSequencerProcessor::KeysTake>& b)
+{
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i)
+        if (a[i].name != b[i].name || a[i].channel != b[i].channel || a[i].isDraw != b[i].isDraw
+            || a[i].drawPat != b[i].drawPat || !sameSavedVector(a[i].evts, b[i].evts)
+            || !sameSavedVector(a[i].drawNotes, b[i].drawNotes)) return false;
+    return true;
+}
+bool sameDrumState(const LiveDrumming::State& a, const LiveDrumming& b)
+{
+    if (a.enabled != b.enabled || a.notes != b.notes || a.alternateNotes != b.alternateNotes
+        || a.midiChannels != b.midiChannels || a.takes.size() != b.takes.size()) return false;
+    for (size_t p = 0; p < a.patterns.size(); ++p)
+    {
+        if (a.patterns[p].size() != (size_t)b.patterns[p].count) return false;
+        for (size_t i = 0; i < a.patterns[p].size(); ++i)
+            if (!sameSavedField(a.patterns[p][i], b.patterns[p].hits[i])) return false;
+    }
+    for (size_t i = 0; i < a.takes.size(); ++i)
+        if (a.takes[i].name != b.takes[i].name || a.takes[i].head != b.takes[i].head
+            || a.takes[i].bars != b.takes[i].bars || !sameSavedVector(a.takes[i].hits, b.takes[i].hits)) return false;
+    return true;
+}
+uint64_t mixStateHash(uint64_t h, uint64_t v) { return h * 1000003ULL ^ v; }
+uint64_t savedTreeHash(const juce::ValueTree& tree)
+{
+    uint64_t h = (uint64_t)tree.getType().toString().hashCode64();
+    for (int i = 0; i < tree.getNumProperties(); ++i)
+    {
+        const auto key = tree.getPropertyName(i);
+        // Selection/display state and self-maintained labels ride with snapshots but
+        // must not generate edits (especially Follow changing curPattern during playback).
+        if (tree.hasType("DrumSeqState") && key != juce::Identifier("bpm")
+            && key != juce::Identifier("tsNum") && key != juce::Identifier("tsDen")) continue;
+        if (tree.hasType("Ch") && (key == juce::Identifier("mixName")
+            || key == juce::Identifier("mixMod") || key == juce::Identifier("envMode"))) continue;
+        const auto& v = tree.getProperty(key);
+        h = mixStateHash(h, (uint64_t)key.toString().hashCode64());
+        uint64_t value = 0;
+        if (v.isDouble()) { const double d = (double)v; std::memcpy(&value, &d, sizeof(d)); }
+        else if (v.isInt() || v.isInt64() || v.isBool()) value = (uint64_t)(juce::int64)v;
+        else value = (uint64_t)v.toString().hashCode64();
+        h = mixStateHash(h, value);
+    }
+    for (auto child : tree)
+        if (!child.hasType("MidiLearn")) h = mixStateHash(h, savedTreeHash(child));
+    return h;
+}
+#define BASAMAK_SAVED_CHANNEL_FIELDS(F) \
+    F(channelName) F(volume) F(pan) F(mute) F(solo) \
+    F(pitch) F(srcAtk) F(srcHold) F(srcDec) F(filterType) \
+    F(filterCutoff) F(filterReso) F(filterEnvAmt) F(driveType) F(driveAmount) \
+    F(pitchEnvAmt) F(pitchEnvTime) F(pitchOffset) F(sampleReverse) F(srcOn) \
+    F(srcWeight) F(padX) F(padY) F(padLayoutB) F(layerOscShape) \
+    F(layerSineFreq) F(layerSinePEnvAmt) F(layerSinePEnvTime) F(layerSinePOffset) F(oscUnison) \
+    F(oscDetune) F(oscSustain) F(oscVibrato) F(fmSustain) F(physSustain) \
+    F(physVibrato) F(noiseSustain) F(physFreq) F(physTone) F(physMaterial) \
+    F(physPitchEnvAmt) F(physPitchEnvTime) F(physPitchOffset) F(physPosition) F(noiseType) \
+    F(layerNoiseCenter) F(layerNoiseWidth) F(fmPitch) F(fmSpread) F(fmDepth) \
+    F(fmPitchEnvAmt) F(fmPitchEnvTime) F(fmPitchOffset) F(fmFeedback) F(fmSub) \
+    F(sampleCrush) F(reverbSend) F(delaySend) F(outputBus) F(midiOut) \
+    F(midiOutChannel) F(keysSlot2Down) F(humanizeAmt) F(strumAmt) F(chFxType) \
+    F(chFxAmt) F(chFxChar) F(chFxFile) F(msRigModel) F(msRigIr) \
+    F(chFiltType) F(chFiltCutoff) F(chFiltReso) F(chFiltGain) F(chFiltDrive) \
+    F(revBus) F(delBus) F(keysMinVel) F(keysMaxVel) F(keysGlide) \
+    F(mergeWith) F(keysSplitW1) F(keysSplitW2) F(arpOn) F(arpLen) \
+    F(arpSync) F(arpRate) F(arpAlign) F(arpHold) F(arpGate) \
+    F(arpAltStrum) F(arpOffset) F(keysPolyMode) F(keysLegato) F(keysLetRing) \
+    F(keysLetRingMs) F(liveChokeBy) F(chokeGroup) F(duckBy) F(duckAmt) \
+    F(numSteps) F(soundType) F(userSampleFile) F(useRegion) F(sampleStart) \
+    F(sampleEnd) F(sliceCount) F(stretchAmt) F(playSpeed) F(allowOverlap) \
+    F(mixName) F(mixModified) F(envEditMode) F(steps) F(stepVel) \
+    F(stepPitch) F(stepRoll) F(stepRollDecay) F(stepNoteLen) F(stepPan) \
+    F(stepNudge) F(stepCondLen) F(stepCondMask) F(stepModA) F(stepModB) \
+    F(stepSlide) F(stepMerge) F(drawMode) F(drawNoteCount) F(drawVel) \
+    F(drawPan) F(drawTuneCents) F(slots) F(usingUserSample)
+
+struct SavedChannel
+{
+#define DECLARE_SAVED_FIELD(name) decltype(DrumChannel::name) name;
+    BASAMAK_SAVED_CHANNEL_FIELDS(DECLARE_SAVED_FIELD)
+#undef DECLARE_SAVED_FIELD
+    std::vector<DrumChannel::DrawNote> drawNotes;
+    juce::String samplePaths[DrumChannel::NUM_SLOTS], msFolders[DrumChannel::NUM_SLOTS];
+    juce::ValueTree tree;
+    uint64_t hash = 0;
+
+    explicit SavedChannel(const DrumChannel& ch)
+    {
+#define COPY_SAVED_FIELD(name) copySavedField(name, ch.name);
+        BASAMAK_SAVED_CHANNEL_FIELDS(COPY_SAVED_FIELD)
+#undef COPY_SAVED_FIELD
+        drawNotes.assign(ch.drawNotes, ch.drawNotes + ch.drawNoteCount);
+        for (int i = 0; i < DrumChannel::NUM_SLOTS; ++i)
+        {
+            samplePaths[i] = ch.slotSample[i].file.getFullPathName();
+            msFolders[i] = ch.msSet[i] != nullptr ? ch.msSet[i]->folder : juce::String();
+        }
+    }
+    bool matches(const DrumChannel& ch) const
+    {
+#define CHECK_SAVED_FIELD(name) if (!sameSavedField(name, ch.name)) return false;
+        BASAMAK_SAVED_CHANNEL_FIELDS(CHECK_SAVED_FIELD)
+#undef CHECK_SAVED_FIELD
+        for (int i = 0; i < drawNoteCount; ++i)
+            if (!sameSavedField(drawNotes[(size_t)i], ch.drawNotes[i])) return false;
+        for (int i = 0; i < DrumChannel::NUM_SLOTS; ++i)
+            if (samplePaths[i] != ch.slotSample[i].file.getFullPathName()
+                || msFolders[i] != (ch.msSet[i] != nullptr ? ch.msSet[i]->folder : juce::String())) return false;
+        return true;
+    }
+    void writeSlots(juce::ValueTree& parent) const
+    {
+        DrumChannel::writeSlotSettings(parent, slots, samplePaths, msFolders);
+    }
+};
+#undef BASAMAK_SAVED_CHANNEL_FIELDS
+struct SavedPattern
+{
+    int playMode, repeatTarget, gotoPattern, chainLen;
+    int chainSeq[Sequencer::CHAIN_MAX], chainLoops[Sequencer::CHAIN_MAX];
+    float swing;
+    bool mergeWithPrev;
+    Sequencer::MasterFX master;
+    std::array<std::shared_ptr<const SavedChannel>, Sequencer::NUM_CHANNELS> channels;
+};
+} // namespace
+
+template <typename Channel>
+static void writeChannel(juce::ValueTree& chState, const Channel& ch)
 {
     chState.setProperty("name",     ch.channelName,    nullptr);
     chState.setProperty("volume",   ch.volume,         nullptr);
@@ -2551,6 +2743,9 @@ static void writeChannel(juce::ValueTree& chState, const DrumChannel& ch)
     chState.setProperty("stepNoteLen", noteLenStr, nullptr);
     chState.setProperty("lenV", 2, nullptr);   // v2 = Length is a 0..1 GATE (0 = off); v1 mapped 0..1 -> 0.1..4 steps
     chState.setProperty("stepPan", panStr, nullptr);
+    // Old saves omitted Nudge even though the editor treated it as an undoable edit.
+    if (std::any_of(std::begin(ch.stepNudge), std::end(ch.stepNudge), [](float n) { return n != 0.0f; }))
+        chState.setProperty("stepNudge", nudgeStr, nullptr);
     chState.setProperty("stepCondLen",  condLenStr,  nullptr);
     chState.setProperty("stepCondMask", condMaskStr, nullptr);
     { juce::String sl; for (int s = 0; s < DrumChannel::MAX_STEPS; ++s) sl += ch.stepSlide[s] ? "1" : "0";
@@ -2757,6 +2952,7 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
                                   : juce::jlimit(0.0f, 1.0f, 0.1f + 3.9f * v);
             }
         loadArr("stepPan", ch.stepPan, 0.0f);
+        loadArr("stepNudge", ch.stepNudge, 0.0f);
         loadArr("stepModA", ch.stepModA, 0.0f);   // step mod lanes (old files: 0 = no effect)
         loadArr("stepModB", ch.stepModB, 0.0f);
         {
@@ -2839,6 +3035,7 @@ static void readChannel(const juce::ValueTree& child, DrumChannel& ch)
 void DrumSequencerProcessor::copyPattern(int src, int dst)
 {
     const juce::ScopedLock lock(getCallbackLock());
+    ++snapshotEditSerial;
     if(sequencer.drums.recording)return;
     if (src == dst || src < 0 || dst < 0
         || src >= Sequencer::NUM_PATTERNS || dst >= Sequencer::NUM_PATTERNS) return;
@@ -2863,6 +3060,7 @@ void DrumSequencerProcessor::copyPattern(int src, int dst)
 void DrumSequencerProcessor::copyChannel(int pat, int src, int dst)
 {
     const juce::ScopedLock lock(getCallbackLock());
+    ++snapshotEditSerial;
     if(sequencer.drums.recording)return;
     if(sequencer.drums.enabled && src!=dst && pat>=0&&pat<64&&src>=0&&src<16&&dst>=0&&dst<16) {
         auto& lane=sequencer.drums.patterns[(size_t)pat];int nSrc=0,nDst=0;
@@ -2907,9 +3105,78 @@ void DrumSequencerProcessor::copyChannel(int pat, int src, int dst)
       for (auto& c : add) keysTakes.push_back(std::move(c)); }
 }
 
-juce::ValueTree DrumSequencerProcessor::captureStateTree()
+struct DrumSequencerProcessor::StateSnapshot::Data
 {
-    const juce::ScopedLock lock(getCallbackLock());
+    struct Song
+    {
+        bool dawSync;
+        float standaloneBpm;
+        int timeSigNum, timeSigDen, currentPattern;
+        std::array<SavedPattern, Sequencer::NUM_PATTERNS> patterns;
+    } sequencer;
+    bool followPlayback, auditionOnEdit;
+    int visibleChannels, visiblePatterns, kbGuideMode, kbGuideKey, kbGuideScale, keysSlot2Down;
+    double editorScale;
+    std::shared_ptr<const std::vector<KeysTake>> keysTakes;
+    std::shared_ptr<const LiveDrumming::State> drums;
+    juce::ValueTree midiLearn, keysTree, drumsTree, root;
+    uint64_t rootHash = 0, hash = 0;
+    int changedChannels = 0;
+
+    juce::ValueTree buildRoot() const;
+    juce::ValueTree buildKeysTree() const;
+    bool sameHeader(const Data& b) const
+    {
+        if (followPlayback != b.followPlayback || auditionOnEdit != b.auditionOnEdit
+            || visibleChannels != b.visibleChannels || visiblePatterns != b.visiblePatterns
+            || kbGuideMode != b.kbGuideMode || kbGuideKey != b.kbGuideKey || kbGuideScale != b.kbGuideScale
+            || keysSlot2Down != b.keysSlot2Down || editorScale != b.editorScale
+            || sequencer.dawSync != b.sequencer.dawSync || sequencer.standaloneBpm != b.sequencer.standaloneBpm
+            || sequencer.timeSigNum != b.sequencer.timeSigNum || sequencer.timeSigDen != b.sequencer.timeSigDen
+            || sequencer.currentPattern != b.sequencer.currentPattern) return false;
+        for (size_t p = 0; p < sequencer.patterns.size(); ++p)
+        {
+            const auto& x = sequencer.patterns[p]; const auto& y = b.sequencer.patterns[p];
+            if (x.playMode != y.playMode || x.repeatTarget != y.repeatTarget || x.gotoPattern != y.gotoPattern
+                || x.chainLen != y.chainLen || x.swing != y.swing || x.mergeWithPrev != y.mergeWithPrev
+                || !sameSavedField(x.chainSeq, y.chainSeq) || !sameSavedField(x.chainLoops, y.chainLoops)
+                || !sameSavedField(x.master, y.master)) return false;
+        }
+        return true;
+    }
+};
+
+juce::ValueTree DrumSequencerProcessor::StateSnapshot::Data::buildKeysTree() const
+{
+    juce::ValueTree kt("KeysTakes");
+    for (auto& t : *keysTakes)
+    {
+        juce::ValueTree tt("Take");
+        tt.setProperty("name", t.name, nullptr);
+        tt.setProperty("ch",   t.channel, nullptr);
+        if (t.isDraw)
+        {
+            tt.setProperty("draw", true, nullptr);
+            tt.setProperty("drawPat", t.drawPat, nullptr);
+            juce::String ns; ns.preallocateBytes(t.drawNotes.size() * 14);
+            for (const auto& nt : t.drawNotes) ns << nt.pack() << ',';
+            tt.setProperty("notes", ns, nullptr);   // piano-roll take = the note list
+        }
+        else
+        {
+            juce::String ev;
+            for (auto& e : t.evts)
+                ev << (int) e.pattern << ':' << (int) e.step << ':' << (int) e.semis << ':' << (int) e.flags << ',';
+            tt.setProperty("evts", ev, nullptr);
+        }
+        kt.addChild(tt, -1, nullptr);
+    }
+    return kt;
+}
+
+juce::ValueTree DrumSequencerProcessor::StateSnapshot::Data::buildRoot() const
+{
+    const auto& data = *this;
     juce::ValueTree state("DrumSeqState");
 
     state.setProperty("perBarModes", true, nullptr);   // [1.5.0] merged groups = per-bar play modes (migration stamp)
@@ -2918,41 +3185,15 @@ juce::ValueTree DrumSequencerProcessor::captureStateTree()
     state.setProperty("tsNum",    sequencer.timeSigNum,      nullptr);
     state.setProperty("tsDen",    sequencer.timeSigDen,      nullptr);
     state.setProperty("curPattern", sequencer.currentPattern, nullptr);
-    state.setProperty("followPlay", followPlayback, nullptr);
-    state.setProperty("visChans",   visibleChannels, nullptr);
-    state.setProperty("kbGuideMode",  kbGuideMode,  nullptr);
-    state.setProperty("kbGuideKey",   kbGuideKey,   nullptr);
-    state.setProperty("kbGuideScale", kbGuideScale, nullptr);
-    state.setProperty("visPats",    visiblePatterns, nullptr);
-    state.setProperty("audEdit",    auditionOnEdit.load(), nullptr);
-    state.setProperty("keys2Down",  keysSlot2Down.load(), nullptr);   // KEYS: slot-2 transpose (semitones down)
-    // KEYS takes ride with the state/preset: one child per take, events packed "pat:step:semis:flags,".
-    {
-        juce::ValueTree kt("KeysTakes");
-        for (auto& t : keysTakes)
-        {
-            juce::ValueTree tt("Take");
-            tt.setProperty("name", t.name, nullptr);
-            tt.setProperty("ch",   t.channel, nullptr);
-            if (t.isDraw)
-            {
-                tt.setProperty("draw", true, nullptr);
-                tt.setProperty("drawPat", t.drawPat, nullptr);
-                juce::String ns; ns.preallocateBytes(t.drawNotes.size() * 14);
-                for (const auto& nt : t.drawNotes) ns << nt.pack() << ',';
-                tt.setProperty("notes", ns, nullptr);   // piano-roll take = the note list
-            }
-            else
-            {
-                juce::String ev;
-                for (auto& e : t.evts)
-                    ev << (int) e.pattern << ':' << (int) e.step << ':' << (int) e.semis << ':' << (int) e.flags << ',';
-                tt.setProperty("evts", ev, nullptr);
-            }
-            kt.addChild(tt, -1, nullptr);
-        }
-        state.addChild(kt, -1, nullptr);
-    }
+    state.setProperty("followPlay", data.followPlayback, nullptr);
+    state.setProperty("visChans",   data.visibleChannels, nullptr);
+    state.setProperty("kbGuideMode",  data.kbGuideMode,  nullptr);
+    state.setProperty("kbGuideKey",   data.kbGuideKey,   nullptr);
+    state.setProperty("kbGuideScale", data.kbGuideScale, nullptr);
+    state.setProperty("visPats",    data.visiblePatterns, nullptr);
+    state.setProperty("audEdit",    data.auditionOnEdit, nullptr);
+    state.setProperty("keys2Down",  data.keysSlot2Down, nullptr);   // KEYS: slot-2 transpose (semitones down)
+    state.appendChild(keysTree.createCopy(), nullptr);
     // Master FX/Output are saved per-pattern inside the pattern loop below.
 
     for (int p = 0; p < Sequencer::NUM_PATTERNS; ++p)
@@ -3023,20 +3264,141 @@ juce::ValueTree DrumSequencerProcessor::captureStateTree()
         patState.setProperty("mTilt",   m.tilt,          nullptr);
         patState.setProperty("mSat",    m.sat,           nullptr);
 
-        for (int i = 0; i < Sequencer::NUM_CHANNELS; ++i)
-        {
-            juce::ValueTree chState("Ch");
-            writeChannel(chState, sequencer.patterns[p].channels[i]);
-            patState.appendChild(chState, nullptr);
-        }
         state.appendChild(patState, nullptr);
     }
 
-    state.appendChild(sequencer.drums.save(), nullptr);
-    state.setProperty("editorScale", editorScale, nullptr);
-    state.appendChild(midiLearn.saveState(), nullptr);
+    state.appendChild(drumsTree.createCopy(), nullptr);
+    state.setProperty("editorScale", data.editorScale, nullptr);
+    state.appendChild(data.midiLearn.createCopy(), nullptr);
 
     return state;
+}
+
+DrumSequencerProcessor::StateSnapshot DrumSequencerProcessor::captureSnapshot(const StateSnapshot& previous,
+                                                                            bool allowDeferral)
+{
+    auto data = std::make_shared<StateSnapshot::Data>();
+    const auto* old = previous.data.get();
+    std::vector<std::shared_ptr<SavedChannel>> changed;
+    auto copyHeader = [&]
+    {
+        auto& dest = data->sequencer;
+        dest.dawSync = sequencer.dawSync; dest.standaloneBpm = sequencer.standaloneBpm;
+        dest.timeSigNum = sequencer.timeSigNum; dest.timeSigDen = sequencer.timeSigDen;
+        dest.currentPattern = sequencer.currentPattern;
+        data->followPlayback = followPlayback; data->auditionOnEdit = auditionOnEdit.load();
+        data->visibleChannels = visibleChannels; data->visiblePatterns = visiblePatterns;
+        data->kbGuideMode = kbGuideMode; data->kbGuideKey = kbGuideKey; data->kbGuideScale = kbGuideScale;
+        data->keysSlot2Down = keysSlot2Down.load(); data->editorScale = editorScale;
+        data->midiLearn = midiLearn.saveState(); // short map lock; captured with the parameter state
+        data->keysTakes = old != nullptr && sameKeysTakes(*old->keysTakes, keysTakes)
+            ? old->keysTakes : std::make_shared<const std::vector<KeysTake>>(keysTakes);
+        data->drums = old != nullptr && sameDrumState(*old->drums, sequencer.drums)
+            ? old->drums : std::make_shared<const LiveDrumming::State>(sequencer.drums.captureState());
+    };
+    auto copyPattern = [&](int p)
+    {
+        const auto& src = sequencer.patterns[p];
+        auto& dst = data->sequencer.patterns[(size_t)p];
+        dst.playMode = src.playMode; dst.repeatTarget = src.repeatTarget; dst.gotoPattern = src.gotoPattern;
+        dst.chainLen = src.chainLen; copySavedField(dst.chainSeq, src.chainSeq);
+        copySavedField(dst.chainLoops, src.chainLoops); dst.swing = src.swing;
+        dst.mergeWithPrev = src.mergeWithPrev; copySavedField(dst.master, src.master);
+        for (int c = 0; c < Sequencer::NUM_CHANNELS; ++c)
+        {
+            const auto old = previous.data != nullptr
+                ? previous.data->sequencer.patterns[(size_t)p].channels[(size_t)c] : nullptr;
+            if (old != nullptr && old->matches(src.channels[c])) dst.channels[(size_t)c] = old;
+            else
+            {
+                auto channel = std::make_shared<SavedChannel>(src.channels[c]);
+                dst.channels[(size_t)c] = channel;
+                changed.push_back(std::move(channel));
+            }
+        }
+    };
+    // Explicit save/undo capture is atomic. The editor timer copies one pattern per
+    // lock so a 64-pattern scan cannot consume an entire low-latency audio buffer.
+    // MIDI/host mutations invalidate an interleaved scan; UI edits cannot interleave
+    // because the timer itself runs on the message thread.
+    if (!allowDeferral || old == nullptr)
+    {
+        const juce::ScopedLock lock(getCallbackLock());
+        copyHeader();
+        for (int p = 0; p < Sequencer::NUM_PATTERNS; ++p) copyPattern(p);
+    }
+    else
+    {
+        uint64_t serial;
+        {
+            const juce::ScopedLock lock(getCallbackLock());
+            if (keysRecording.load() || sequencer.drums.recording) return previous;
+            serial = snapshotEditSerial.load();
+            copyHeader();
+        }
+        for (int p = 0; p < Sequencer::NUM_PATTERNS; ++p)
+        {
+            {
+                const juce::ScopedTryLock lock(getCallbackLock());
+                if (!lock.isLocked() || snapshotEditSerial.load() != serial) return previous;
+                copyPattern(p);
+            }
+            juce::Thread::yield(); // give a waiting audio callback the next lock acquisition
+        }
+    }
+    for (auto& channel : changed)
+    {
+        channel->tree = juce::ValueTree("Ch");
+        writeChannel(channel->tree, *channel);
+        channel->hash = mixStateHash(savedTreeHash(channel->tree), channel->usingUserSample ? 1ULL : 0ULL);
+    }
+    data->changedChannels = (int)changed.size();
+    const bool sameKeys = old != nullptr && data->keysTakes == old->keysTakes;
+    const bool sameDrums = old != nullptr && data->drums == old->drums;
+    data->keysTree = sameKeys ? old->keysTree : data->buildKeysTree();
+    data->drumsTree = sameDrums ? old->drumsTree : LiveDrumming::saveState(*data->drums);
+    if (sameKeys && sameDrums && data->sameHeader(*old) && data->midiLearn.isEquivalentTo(old->midiLearn))
+    {
+        data->root = old->root;
+        data->rootHash = old->rootHash;
+    }
+    else
+    {
+        data->root = data->buildRoot();
+        data->rootHash = savedTreeHash(data->root);
+    }
+    data->hash = data->rootHash;
+    for (const auto& pattern : data->sequencer.patterns)
+        for (const auto& channel : pattern.channels)
+            data->hash = mixStateHash(data->hash, channel->hash);
+    StateSnapshot snapshot;
+    snapshot.data = std::move(data);
+    return snapshot;
+}
+
+juce::int64 DrumSequencerProcessor::StateSnapshot::hash() const
+{
+    return data != nullptr ? (juce::int64)data->hash : 0;
+}
+int DrumSequencerProcessor::StateSnapshot::changedChannels() const
+{
+    return data != nullptr ? data->changedChannels : 0;
+}
+juce::ValueTree DrumSequencerProcessor::StateSnapshot::toTree() const
+{
+    if (data == nullptr) return {};
+    auto state = data->root.createCopy();
+    for (auto pattern : state)
+        if (pattern.hasType("Pattern"))
+            for (const auto& channel : data->sequencer.patterns[(size_t)(int)pattern["index"]].channels)
+                pattern.appendChild(channel->tree.createCopy(), nullptr);
+    // Never attach shared cache nodes to a parent: ValueTree nodes can only have one parent.
+    // Copies here isolate both old history entries and callers that mutate exported state.
+    return state;
+}
+juce::ValueTree DrumSequencerProcessor::captureStateTree()
+{
+    return captureSnapshot().toTree();
 }
 
 void DrumSequencerProcessor::getStateInformation(juce::MemoryBlock& dest)
@@ -3061,6 +3423,7 @@ void DrumSequencerProcessor::setStateInformation(const void* data, int sizeInByt
 void DrumSequencerProcessor::applyStateTree(const juce::ValueTree& state)
 {
     const juce::ScopedLock lock(getCallbackLock());
+    ++snapshotEditSerial;
     sequencer.drums.restore(state.getChildWithName("LiveDrumming"));
     editorScale = juce::jlimit(0.4,2.0,(double)state.getProperty("editorScale",0.85));
     keysRecording.store(false); sequencer.recordLoopLock.store(false);

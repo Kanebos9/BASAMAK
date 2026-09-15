@@ -2130,7 +2130,8 @@ void SlotEditor::init(int idx, MidiLearnManager& mlm, juce::LookAndFeel* knobLNF
                 v = juce::jlimit(20.0, 4186.0, 440.0 * std::pow(2.0, (midi - 69.0) / 12.0));
                 freqFader->setValue(v, juce::dontSendNotification);
             }
-            s->oscFreq = (float) v; if (onEdit) onEdit(); morphView.repaint();
+            if (msFace) s->msBaseFreq = (float)v; else s->oscFreq = (float)v;
+            if (onEdit) onEdit(); morphView.repaint();
         }
     };
     freqFader->onDragEnd = [this] { if (onAudition) onAudition(); };
@@ -2303,6 +2304,9 @@ void SlotEditor::pushValues()
         knobs[i]->updateText();   // refresh the read-out: textFromValueFunction may have
                                   // changed when the engine switched even if the value didn't.
     }
+    if (msFace) {
+        freqFader->setValue(s->msBaseFreq, juce::dontSendNotification); freqFader->updateText();
+    }
     if (oscLayout) {              // Analog+FM faders (not in the params list)
         freqFader->setValue (s->oscFreq,  juce::dontSendNotification); freqFader->updateText();
         depthFader->setValue(s->fmDepth,  juce::dontSendNotification); depthFader->updateText();
@@ -2329,6 +2333,11 @@ void SlotEditor::place(int boxX, int yTop, int boxW, int boxH)
         // controls (dB Gain / Loop Xfade / Auto-Loop / note range / amp rig) over this area.
         for (int i = 0; i < MAXK; ++i) { knobs[(size_t) i]->setVisible(false); labels[(size_t) i]->setVisible(false); }
         oscLayout = false; fmLineY = resLineY = -1;
+        // The dedicated instrument controls occupy rows 0..70; use the spare bottom row.
+        freqFader->setVisible(true);
+        freqLabelR = {6, 76, 54, 18};
+        freqFader->setBounds(62, 76, boxW - 68, 18);
+        pushValues(); hookFreqReadouts();
         repaint();
         return;
     }
@@ -2389,7 +2398,13 @@ void SlotEditor::applyFreqLock()
         knobs[i]->setAlpha(lockThis ? 0.45f : 1.0f);
         knobs[i]->setTooltip(lockThis ? lockMsg : params[i].tooltip);
     }
-    if (freqFader != nullptr) apply(*freqFader, freqFaderTip);
+    static const juce::String msFreqTip =
+        "Base Freq: the note played by step pitch 0, TEST and Live Drumming. Each slot has its own base. "
+        "Changing it transposes the step pattern and selects the appropriate recorded sample zones.\n\n"
+        "CLICK the value for NOTE mode (semitone snapping; SHIFT = free). Click again for Hz. "
+        "Double-click = C4. KEYS and the regular piano roll keep their absolute notes. "
+        "Saved with the sound/preset; the original instrument recordings are unchanged.";
+    if (freqFader != nullptr) apply(*freqFader, msFace ? msFreqTip : freqFaderTip);
 }
 
 // Knobs in up to TWO balanced rows that FILL the box height (so the knobs are as big as fit, no empty
@@ -2567,6 +2582,10 @@ void SlotEditor::paint(juce::Graphics& g)
         g.setColour(juce::Colour(0xff9a9ac0));
         auto fb = fromFader->getBounds();
         g.drawText("Waves", 6, fb.getY(), juce::jmax(1, fb.getX() - 8), fb.getHeight(), juce::Justification::centredLeft, false);
+    }
+    if (msFace) {
+        g.setFont(juce::Font(10.0f, juce::Font::bold)); g.setColour(juce::Colour(0xff9a9ac0));
+        g.drawText("Base Freq", freqLabelR, juce::Justification::centredLeft, false);
     }
     if (! oscLayout) return;
     const float right = (float) getWidth() - 6.0f;
@@ -7163,7 +7182,7 @@ void DrumSequencerEditor::applySoundPickId(int ch, int id)
 
 //==============================================================================
 // Cheap rolling hashes used to detect "modified since saved" for the * marker.
-juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
+juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c, const DrumChannel::Slot* slotOverride) const
 {
     auto mix = [](juce::int64 h, juce::int64 v) { return h * 1000003LL ^ v; };
     auto f   = [](float x) { juce::int64 b = 0; std::memcpy(&b, &x, sizeof(float)); return b; };
@@ -7191,7 +7210,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
     h = mix(h, f(c.padX)); h = mix(h, f(c.padY)); h = mix(h, c.padLayoutB ? 1 : 0);
     // Slots are the runtime source of truth (incl. duplicate engines) - hash them too.
     for (int b = 0; b < DrumChannel::NUM_SLOTS; ++b) {
-        const auto& sl = c.slots[b];
+        const auto& sl = slotOverride != nullptr ? slotOverride[b] : c.slots[b];
         h = mix(h, sl.engine); h = mix(h, f(sl.weight));
         h = mix(h, f(sl.atk)); h = mix(h, f(sl.hold)); h = mix(h, f(sl.dec)); h = mix(h, f(sl.sustain)); h = mix(h, f(sl.release)); h = mix(h, f(sl.vibrato));
         h = mix(h, sl.oscShape); h = mix(h, sl.oscShapeB); h = mix(h, f(sl.oscFreq)); h = mix(h, f(sl.oscPEnvAmt)); h = mix(h, f(sl.oscPEnvTime)); h = mix(h, f(sl.oscPOffset));
@@ -7205,7 +7224,7 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
         h = mix(h, f(sl.smpStart)); h = mix(h, f(sl.smpEnd)); h = mix(h, sl.smpSlices); h = mix(h, f(sl.smpStretch)); h = mix(h, f(sl.smpGain));
         h = mix(h, sl.smpEnvOn ? 1 : 0); h = mix(h, sl.smpPreservePitch ? 1 : 0);
         h = mix(h, sl.smpLoopOn ? 1 : 0); h = mix(h, f(sl.smpLoopLo)); h = mix(h, f(sl.smpLoopHi));   // [2026-07-18] LOOP
-        h = mix(h, f(sl.msGainDb));   // [2026-07-19] MS gain h = mix(h, sl.fmEnvFollow ? 1 : 0); h = mix(h, f(sl.modalMorph));
+        h = mix(h, f(sl.msBaseFreq)); h = mix(h, f(sl.msGainDb));   // [2026-07-19] MS gain h = mix(h, sl.fmEnvFollow ? 1 : 0); h = mix(h, f(sl.modalMorph));
         h = mix(h, sl.smpRegN); for (int r = 0; r < DrumChannel::Slot::MAXREG; ++r) { h = mix(h, f(sl.smpRegLo[r])); h = mix(h, f(sl.smpRegHi[r])); }
         h = mix(h, (juce::int64) c.slotSample[b].file.getFullPathName().hashCode64());   // this slot's sample
         h = mix(h, f(sl.oscFold)); h = mix(h, f(sl.oscLevel)); h = mix(h, f(sl.noiseLevel));
@@ -7257,65 +7276,10 @@ juce::int64 DrumSequencerEditor::channelSoundHash(const DrumChannel& c) const
     return h;
 }
 
-juce::int64 DrumSequencerEditor::stateHash() const
+juce::int64 DrumSequencerEditor::stateHash(bool allowDeferral) const
 {
-    auto mix = [](juce::int64 h, juce::int64 v) { return h * 1000003LL ^ v; };
-    auto f   = [](float x) { juce::int64 b = 0; std::memcpy(&b, &x, sizeof(float)); return b; };
-    auto& s = proc.sequencer;
-    juce::int64 h = 1125899906842597LL;
-    const juce::ScopedLock drumLock(proc.getCallbackLock());
-    const auto& d=s.drums; h=mix(h,d.enabled);
-    for(int ch=0;ch<16;++ch){h=mix(h,d.notes[(size_t)ch]);h=mix(h,d.alternateNotes[(size_t)ch]);h=mix(h,d.midiChannels[(size_t)ch]);}
-    auto hashHit=[&](const LiveDrumming::Hit& hit){h=mix(h,(juce::int64)(hit.pos*1.0e12));h=mix(h,hit.channel);h=mix(h,f(hit.velocity));h=mix(h,f(hit.pan));};
-    for(const auto& lane:d.patterns){h=mix(h,lane.count);for(int i=0;i<lane.count;++i)hashHit(lane.hits[(size_t)i]);}
-    for(const auto& t:d.takes){h=mix(h,t.name.hashCode64());h=mix(h,t.head);h=mix(h,t.bars);for(const auto& hit:t.hits){h=mix(h,hit.pattern);hashHit(hit.hit);}}
-    for (int p = 0; p < Sequencer::NUM_PATTERNS; ++p)
-    {
-        auto& P = s.patterns[p];
-        h = mix(h, P.playMode); h = mix(h, P.repeatTarget); h = mix(h, P.gotoPattern); h = mix(h, f(P.swing));
-        h = mix(h, P.mergeWithPrev ? 1 : 0);   // merged-group glue (undoable)
-        h = mix(h, P.chainLen); for (int k = 0; k < P.chainLen; ++k) { h = mix(h, P.chainSeq[k]); h = mix(h, P.chainLoops[k]); }
-        const auto& m = P.master;        // per-pattern master FX + output
-        h = mix(h, f(m.reverbRoom)); h = mix(h, f(m.reverbDamp)); h = mix(h, f(m.reverbWet));
-        h = mix(h, f(m.reverbPreDelay)); h = mix(h, f(m.reverbWidth));
-        h = mix(h, f(m.delayTime)); h = mix(h, f(m.delayFeedback)); h = mix(h, f(m.delayWet)); h = mix(h, m.delaySync ? 1 : 0); h = mix(h, m.delayDivision); h = mix(h, m.delayPingPong ? 1 : 0);
-        h = mix(h, m.reverbMode); h = mix(h, m.delayMode); h = mix(h, m.delayModeB);   // [2026-07-15] delay loop character (undoable)
-        h = mix(h, f(m.delayBarN)); h = mix(h, m.delayTrail); h = mix(h, f(m.delayDuck)); h = mix(h, f(m.delayChar));       // [2026-07-15 02:30]
-        h = mix(h, f(m.delayBarNB)); h = mix(h, m.delayTrailB); h = mix(h, f(m.delayDuckB)); h = mix(h, f(m.delayCharB));
-        h = mix(h, m.reverbSync ? 1 : 0); h = mix(h, f(m.reverbDecBars)); h = mix(h, f(m.reverbPreBars)); h = mix(h, f(m.reverbGate));
-        h = mix(h, m.reverbSyncB ? 1 : 0); h = mix(h, f(m.reverbDecBarsB)); h = mix(h, f(m.reverbPreBarsB)); h = mix(h, f(m.reverbGateB));
-        h = mix(h, f(m.reverbGateMs)); h = mix(h, f(m.reverbGateMsB)); h = mix(h, f(m.masterWidth));   // [2026-07-15 12:10]
-        h = mix(h, f(m.volume)); h = mix(h, m.mono ? 1 : 0); h = mix(h, f(m.limit)); h = mix(h, f(m.glue));
-        for (int c = 0; c < Sequencer::NUM_CHANNELS; ++c)
-        {
-            auto& ch = P.channels[c];
-            h = mix(h, channelSoundHash(ch));
-            h = mix(h, ch.numSteps);
-            h = mix(h, f(ch.humanizeAmt)); h = mix(h, f(ch.strumAmt)); h = mix(h, f(ch.keysMinVel)); h = mix(h, f(ch.keysMaxVel)); h = mix(h, f(ch.keysGlide));   // HUMANIZE / STRUM / min+max-vel / GLIDE (undoable)
-            for (int fx = 0; fx < 3; ++fx) { h = mix(h, ch.chFxType[fx]); h = mix(h, f(ch.chFxAmt[fx])); h = mix(h, f(ch.chFxChar[fx])); h = mix(h, (juce::int64) ch.chFxFile[fx].hashCode64()); }   // CHANNEL FX (undoable)
-            for (int cf = 0; cf < 2; ++cf) { h = mix(h, ch.chFiltType[cf]); h = mix(h, f(ch.chFiltCutoff[cf])); h = mix(h, f(ch.chFiltReso[cf])); h = mix(h, f(ch.chFiltGain[cf])); }
-            h = mix(h, f(ch.chFiltDrive));   // CHANNEL FILTER/EQ (undoable) [2026-07-16]
-            h = mix(h, f(ch.reverbSend)); h = mix(h, f(ch.delaySend)); h = mix(h, ch.revBus); h = mix(h, ch.delBus);
-            h = mix(h, ch.mergeWith + 1); h = mix(h, ch.keysSplitW1); h = mix(h, ch.keysSplitW2);   // MERGE&SPLIT pair + windows
-            h = mix(h, ch.arpOn ? 1 : 0); h = mix(h, ch.arpLen); h = mix(h, ch.arpSync); h = mix(h, ch.arpRate);
-            h = mix(h, ch.arpAlign ? 1 : 0); h = mix(h, ch.arpHold ? 1 : 0); h = mix(h, f(ch.arpGate));
-            for (int ai = 0; ai < DrumChannel::ARP_ROWS; ++ai) h = mix(h, (int) ch.arpOffset[ai] + 128);   // ARP (undoable)
-            h = mix(h, ch.keysPolyMode ? 1 : 0);   // KEYS poly/mono toggle (undoable)
-            h = mix(h, ch.keysLegato ? 1 : 0);
-            h = mix(h, ch.keysLetRing ? 1 : 0); h = mix(h, ch.keysLetRingMs);   // [2026-07-19] Let Ring
-            h = mix(h, ch.liveChokeBy + 2); h = mix(h, ch.chokeGroup);
-            h = mix(h, ch.duckBy + 2); h = mix(h, f(ch.duckAmt));   // sidechain duck (undoable)
-            juce::int64 st = 0; for (int i = 0; i < DrumChannel::MAX_STEPS; ++i) st = (st << 1) | (ch.steps[i] ? 1 : 0);
-            h = mix(h, st); h = mix(h, ch.mute ? 1 : 0); h = mix(h, ch.solo ? 2 : 0);
-            for (int i = 0; i < ch.numSteps; ++i) { h = mix(h, f(ch.stepVel[i])); h = mix(h, f(ch.stepPitch[i])); h = mix(h, f(ch.stepNoteLen[i])); h = mix(h, ch.stepSlide[i] ? 1 : 0); h = mix(h, ch.stepMerge[i] ? 1 : 0); h = mix(h, ch.stepRoll[i]); h = mix(h, f(ch.stepRollDecay[i])); h = mix(h, f(ch.stepPan[i])); h = mix(h, f(ch.stepNudge[i])); h = mix(h, f(ch.stepModA[i])); h = mix(h, f(ch.stepModB[i])); h = mix(h, ch.stepCondLen[i]); h = mix(h, ch.stepCondMask[i]); }
-            h = mix(h, ch.drawMode ? 1 : 0);
-            if (ch.drawMode) { h = mix(h, f(ch.drawVel)); h = mix(h, f(ch.drawPan)); h = mix(h, f(ch.drawTuneCents));
-                for (int i = 0; i < ch.drawNoteCount; ++i) { const auto& nt = ch.drawNotes[i];
-                    h = mix(h, (uint64_t)std::llround(nt.start * 1.0e9)); h = mix(h, (uint64_t)std::llround(nt.len * 1.0e9)); h = mix(h, (int) nt.semi + 128); h = mix(h, (int) nt.vel); h = mix(h, (int) nt.slot); h = mix(h, (int) nt.glide); h = mix(h, (int) nt.oneShot); h = mix(h, (int) nt.drumHit); h = mix(h, (int) nt.strumUp); h = mix(h, (int) nt.strumPct); h = mix(h, (int) nt.pan); h = mix(h, (int) nt.condLen); h = mix(h, (int) nt.condMask); } }
-        }
-    }
-    h = mix(h, f(s.standaloneBpm)); h = mix(h, s.timeSigNum); h = mix(h, s.timeSigDen);
-    return h;
+    cachedSnapshot = proc.captureSnapshot(cachedSnapshot, allowDeferral);
+    return cachedSnapshot.hash();
 }
 
 void DrumSequencerEditor::updateStripMixLabel(int ch)
@@ -8144,7 +8108,7 @@ void DrumSequencerEditor::fullRefresh()
 void DrumSequencerEditor::pushUndoSnapshot()
 {
     UndoEntry e;
-    e.state = proc.captureStateTree();          // the TREE directly - no binary roundtrip (fast)
+    e.state = cachedSnapshot;                  // immutable; stateHash captured the latest edit
     e.presetName         = presetName;          // remember the preset label as it is now
     e.presetBaselineHash = presetBaselineHash;
     e.presetModified     = presetModified;
@@ -8163,7 +8127,10 @@ void DrumSequencerEditor::commitUndoNow()
     if (applyingUndo) return;
     const juce::int64 h = stateHash();
     if (undoStack.empty()) { pushUndoSnapshot(); lastUndoHash = h; return; }
-    if (h != lastUndoHash) { pushUndoSnapshot(); lastUndoHash = h; undoDirty = false; undoStableTicks = 0; }
+    if (h != undoStack.back().state.hash()) pushUndoSnapshot();
+    lastUndoHash = h;
+    undoDirty = false;
+    undoStableTicks = 0;
 }
 
 //==============================================================================
@@ -8820,7 +8787,7 @@ void DrumSequencerEditor::genAllAction(bool varyAll)
 void DrumSequencerEditor::applyUndoState(const UndoEntry& e)
 {
     applyingUndo = true;
-    proc.applyStateTree(e.state);               // apply the TREE directly (no deserialize)
+    proc.applyStateTree(e.state.toTree());       // materialize only for restore, never for a knob edit
     fullRefresh();
     presetName         = e.presetName;          // restore the preset label too
     presetBaselineHash = e.presetBaselineHash;
@@ -9059,7 +9026,13 @@ void DrumSequencerEditor::applySelCC(int t, float v, bool& slotDirty, bool& keys
                               juce::sendNotificationSync); return;
         case P::SelUndo:    doUndo(); return;
         case P::SelRedo:    doRedo(); return;
-        case P::SelSlotFreq:  sl.oscFreq = (float)(20.0 * std::pow(4186.0 / 20.0, (double) v)); break;   // log 20..4186 Hz
+        case P::SelSlotFreq:
+            if (sl.engine == DrumChannel::SrcSample && ch.msSet[envTargetSlot()] != nullptr)
+                sl.msBaseFreq = (float)(20.0 * std::pow(4186.0 / 20.0, (double)v));
+            else sl.oscFreq = (float)(20.0 * std::pow(4186.0 / 20.0, (double)v));
+            slotEd[envTargetSlot()].pushValues();
+            slotDirty = true;
+            break;   // log 20..4186 Hz
         case P::SelSlotFmAmt: sl.fmDepth = v; break;
         case P::SelSlotWarp:  sl.oscWarp = v; break;
         case P::SelSlotSync:  sl.oscSync = v; break;   // [2026-07-18] shape trio
@@ -9334,7 +9307,7 @@ void DrumSequencerEditor::setupComponents()
                             "the step into the NEXT step's pitch (303 portamento).\n"
                             "- Slide is only audible when the two steps have DIFFERENT pitches - draw the pitch "
                             "line first, then slide the notes that should flow together.\n"
-                            "- On a multisample channel, pitch 0 plays C4 (middle C) and each step offsets in "
+                            "- On a multisample slot, pitch 0 plays its Base Freq (C4 by default); steps offset in "
                             "semitones from there - the instrument picks its nearest recorded note; the Base Freq "
                             "knob is not used.\n\n"
                             "TIP: the glide is clearest with FEW steps + a long Gate (a slow bass line).");
@@ -10477,6 +10450,7 @@ void DrumSequencerEditor::setupComponents()
         strip.btnPoly.setTooltip(
             "Overlap: On lets successive hits on this channel ring together. Off makes each new hit fade "
             "the previous tail and restart the sound. Short sounds still end on their own.\n\n"
+            "The next step/pad hit also applies this rule to this channel's tails from previous patterns.\n\n"
             "Works in Steps and LIVE DRUMMING. Applies to the current pattern, or every bar of a merged "
             "group. In the regular Piano Roll, note lengths and the keyboard Poly control handle overlap.\n\n"
             "Choke groups can still cut tails on other channels. Already-sent REVERB/DELAY tails finish "
@@ -10620,6 +10594,10 @@ void DrumSequencerEditor::setupComponents()
         strip.btnSolo->setTooltip("Solo: play only this channel (and other soloed ones), muting the rest. In a MERGED group it applies to every bar of the group.");
         strip.comboSteps.setTooltip("Number of steps in this channel's pattern, or PIANO ROLL for a free note lane "
                                     "(draw/record melodies and chords; the lens opens the full editor).\n\n"
+                                    "- The chosen count divides one full bar evenly before Swing/Nudge; changing it "
+                                    "does not change the bar length or tempo.\n"
+                                    "- The time beside each count is seconds per step at the current tempo/time signature. "
+                                    "Swing makes paired steps unequal; Nudge moves individual hits.\n"
                                     "- Steps and Piano Roll are SEPARATE: switching CLEARS this channel's content and "
                                     "starts the other side fresh (it warns first; Undo restores).\n"
                                     "- MERGED patterns: each bar can have its OWN step count - \"All bars\" sets them "
@@ -13853,10 +13831,29 @@ void DrumSequencerEditor::copyChannelSound(int srcPat, int dstPat, int ch)
     if (srcPat == dstPat) return;
     auto& src = proc.sequencer.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, srcPat)].channels[ch];
     auto& dst = proc.sequencer.patterns[juce::jlimit(0, Sequencer::NUM_PATTERNS - 1, dstPat)].channels[ch];
-    juce::ValueTree t("Mix");
-    juce::String missing;
-    writeChannelMix(t, src);
-    readChannelMix(t, dst, missing);   // sample reloads hit the SampleFileCache (no re-decode)
+    // Ordinary slot edits need no serializer, sample reload or waveform bake. In
+    // merged bars those operations also killed held sample voices on every edit.
+    // Keep the full load path for channel/asset/engine/table changes.
+    bool parametersOnly = channelSoundHash(dst, src.slots) == channelSoundHash(src);
+    for (int b = 0; b < DrumChannel::NUM_SLOTS && parametersOnly; ++b) {
+        const auto& a = src.slots[b]; const auto& z = dst.slots[b];
+        parametersOnly = a.engine == z.engine && a.oscShape == z.oscShape
+            && a.smpStretch == z.smpStretch && a.smpPitch == z.smpPitch && a.msLoopOn == z.msLoopOn
+            && std::memcmp(a.addH, z.addH, sizeof(a.addH)) == 0
+            && std::memcmp(a.addPh, z.addPh, sizeof(a.addPh)) == 0
+            && src.msSet[b] == dst.msSet[b]
+            && src.slotSample[b].file == dst.slotSample[b].file
+            && src.slotSample[b].usingUser == dst.slotSample[b].usingUser
+            && src.slotSample[b].loadedAtRate == dst.slotSample[b].loadedAtRate;
+    }
+    if (parametersOnly)
+        std::memcpy(dst.slots, src.slots, sizeof(dst.slots));
+    else {
+        juce::ValueTree t("Mix");
+        juce::String missing;
+        writeChannelMix(t, src);
+        readChannelMix(t, dst, missing);   // changed assets retain the normal loading path
+    }
     dst.mixName = src.mixName; dst.mixModified = src.mixModified; dst.mixHash = src.mixHash;
     dst.markDspDirty();
 }
@@ -13882,17 +13879,32 @@ DrumChannel& DrumSequencerEditor::groupStepChannel(int ch, int& step)
 // nothing is edited. Edits always happen on the CURRENT pattern -> sync flows current -> members.
 void DrumSequencerEditor::syncMergedGroupSounds()
 {
-    const juce::ScopedLock lock(proc.getCallbackLock());
     auto& sq = proc.sequencer;
-    const int cp = currentPattern();
-    const int head = sq.groupHead(cp), end = sq.groupEnd(cp);
+    int cp, head, end;
+    {
+        const juce::ScopedLock lock(proc.getCallbackLock());
+        cp = currentPattern(); head = sq.groupHead(cp); end = sq.groupEnd(cp);
+    }
     if (end <= head) return;   // not in a group
     for (int c = 0; c < Sequencer::NUM_CHANNELS; ++c)
     {
-        const auto hsrc = channelSoundHash(sq.patterns[cp].channels[c]);
+        juce::int64 hsrc;
+        {
+            const juce::ScopedLock lock(proc.getCallbackLock());
+            hsrc = channelSoundHash(sq.patterns[cp].channels[c]);
+        }
         for (int m = head; m <= end; ++m)
-            if (m != cp && channelSoundHash(sq.patterns[m].channels[c]) != hsrc)
-                copyChannelSound(cp, m, c);
+            if (m != cp)
+            {
+                // Let audio run between destination bars; never hold its lock through
+                // a whole merged group's serialization, asset reloads and table rebuilds.
+                {
+                    const juce::ScopedLock lock(proc.getCallbackLock());
+                    if (channelSoundHash(sq.patterns[m].channels[c]) != hsrc)
+                        copyChannelSound(cp, m, c);
+                }
+                juce::Thread::yield();
+            }
     }
 }
 
@@ -14260,6 +14272,15 @@ void DrumSequencerEditor::refreshRouting()
 // dropdown, user design): a bar's count is set alone; counts that would overflow the 64-cell concat
 // row are disabled. Id scheme: flat/all-bars = the count itself; per-bar = 2000 + bar*100 + count;
 // 999 = the "Mixed" face row (shown when bars differ; picking it is a no-op).
+static double stepMenuBarSeconds(const DrumSequencerProcessor& proc)
+{
+    const auto& sq = proc.sequencer;
+    const double bpm = sq.dawSync ? proc.currentBpm : sq.standaloneBpm;
+    const int num = sq.dawSync ? proc.currentTimeSigNum : sq.timeSigNum;
+    const int den = sq.dawSync ? proc.currentTimeSigDen : sq.timeSigDen;
+    return 60.0 / juce::jmax(1.0, bpm) * juce::jmax(1, num) * 4.0 / juce::jmax(1, den);
+}
+
 void DrumSequencerEditor::rebuildStepMenu(int i)
 {
     auto& sq = proc.sequencer;
@@ -14269,6 +14290,16 @@ void DrumSequencerEditor::rebuildStepMenu(int i)
     auto* root = combo.getRootMenu();
     root->clear();
     root->addItem(StepGridComponent::DRAW_ITEM_ID, "Piano Roll");
+    const double barSeconds = stepMenuBarSeconds(proc);
+    auto addCount = [barSeconds](juce::PopupMenu& menu, int id, int count, bool enabled = true, bool ticked = false) {
+        juce::PopupMenu::Item item(juce::String(count) + (count == 1 ? " step" : " steps"));
+        item.itemID = id; item.isEnabled = enabled; item.isTicked = ticked;
+        // JUCE draws this separate description at the right edge; the closed ComboBox
+        // keeps its compact count-only caption. It is display text, not a key binding.
+        item.shortcutKeyDescription = juce::String(barSeconds / count, 3)
+            .trimCharactersAtEnd("0").trimCharactersAtEnd(".") + " s/step";
+        menu.addItem(std::move(item));
+    };
     if (end > head)
     {
         root->addItem(999, "Mixed (bars differ)");   // face row; onChange ignores it
@@ -14276,9 +14307,7 @@ void DrumSequencerEditor::rebuildStepMenu(int i)
         juce::PopupMenu all;
         for (int si = 0; si < DrumChannel::NUM_VALID_STEP_COUNTS; ++si)
         {   const int sc = DrumChannel::VALID_STEP_COUNTS[si];
-            all.addItem(sc, juce::String(sc) + (sc == 1 ? " step" : " steps"),
-                        sc * bars <= DrumChannel::MAX_STEPS,
-                        false); }
+            addCount(all, sc, sc, sc * bars <= DrumChannel::MAX_STEPS); }
         root->addSubMenu("All bars", all);
         for (int b = head; b <= end; ++b)
         {
@@ -14288,16 +14317,15 @@ void DrumSequencerEditor::rebuildStepMenu(int i)
             juce::PopupMenu bm;
             for (int si = 0; si < DrumChannel::NUM_VALID_STEP_COUNTS; ++si)
             {   const int sc = DrumChannel::VALID_STEP_COUNTS[si];
-                bm.addItem(2000 + b * 100 + sc, juce::String(sc) + (sc == 1 ? " step" : " steps"),
-                           sumOthers + sc <= DrumChannel::MAX_STEPS,
-                           sq.patterns[b].channels[i].numSteps == sc); }
+                addCount(bm, 2000 + b * 100 + sc, sc, sumOthers + sc <= DrumChannel::MAX_STEPS,
+                         sq.patterns[b].channels[i].numSteps == sc); }
             root->addSubMenu("Pattern " + juce::String(b + 1), bm);
         }
     }
     else
         for (int si = 0; si < DrumChannel::NUM_VALID_STEP_COUNTS; ++si)
         {   const int sc = DrumChannel::VALID_STEP_COUNTS[si];
-            root->addItem(sc, juce::String(sc) + (sc == 1 ? " step" : " steps")); }
+            addCount(*root, sc, sc); }
     if (keep > 0) combo.setSelectedId(keep, juce::dontSendNotification);   // menu rebuild must not fire onChange
 }
 
@@ -14314,6 +14342,7 @@ void DrumSequencerEditor::refreshChannelStrips()
             for (int b = head; b <= end; ++b)
                 key = key * 31 + juce::jmax(1, sq.patterns[b].channels[i].numSteps);
             key ^= sq.patterns[head].channels[i].drawMode ? (1 << 27) : 0;
+            key ^= juce::roundToInt(stepMenuBarSeconds(proc) * 1000.0); // refresh time labels as tempo/meter changes
             if (key != lastStepMenuKey[i] && ! strips[i].comboSteps.isPopupActive())
             { lastStepMenuKey[i] = key; rebuildStepMenu(i); }
         }
@@ -14794,22 +14823,26 @@ void DrumSequencerEditor::timerCallback()
         if (midiFlash > 0) --midiFlash;
     }
 
-    // Undo history + "modified" detection hash the WHOLE project, so run them at ~20 Hz (every 3rd
-    // of the 60 Hz ticks), not on every frame - the heavy per-tick hashing was dropping the playhead
-    // to a stutter while recording. The playhead/grid/meters still update at the full 60 Hz below.
+    // Check for edits at ~20 Hz. Immutable snapshots reuse unchanged channels/takes;
+    // the timer scan yields the audio lock between patterns and may defer a busy scan.
+    // The playhead/grid/meters still update at the full 60 Hz below.
     // (per-action snapshots: settled + no mouse button held -> one undo step; a drag = one step.)
     if (proc.sequencer.drums.enabled && proc.sequencer.drums.recording && timerCounter % 3 == 0) syncMergedGroupSounds();
     if (! applyingUndo && ! proc.keysRecording.load() && !proc.sequencer.drums.recording && drumCountdown == 0 && timerCounter % 3 == 0)
     {
         syncMergedGroupSounds();   // merged patterns mirror the edited pattern's sounds (change-only)
-        juce::int64 h = stateHash();
+        juce::int64 h = stateHash(true);
         undoTickHash = h;   // reuse for the "modified since saved" check below (avoid a 2nd full hash)
         const bool mouseHeld = juce::ModifierKeys::getCurrentModifiers().isAnyMouseButtonDown();
         if (undoStack.empty()) { pushUndoSnapshot(); lastUndoHash = h; }   // baseline
         else
         {
             if (h != lastUndoHash) { lastUndoHash = h; undoDirty = true; undoStableTicks = 0; }
-            if (undoDirty && ! mouseHeld && ++undoStableTicks >= 2) { pushUndoSnapshot(); undoDirty = false; }
+            if (undoDirty && ! mouseHeld && ++undoStableTicks >= 2)
+            {
+                if (h != undoStack.back().state.hash()) pushUndoSnapshot();
+                undoDirty = false;
+            }
         }
         // Detect "modified since saved" for the * markers (same throttle - it reuses undoTickHash).
         auto& sc = proc.sequencer.channel(selectedChannel);

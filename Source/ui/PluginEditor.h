@@ -3670,13 +3670,14 @@ private:
     // restores the previous preset name (not just the underlying parameters).
     struct UndoEntry
     {
-        juce::ValueTree   state;   // the state TREE (no serialize/deserialize - fast undo/redo)
+        DrumSequencerProcessor::StateSnapshot state;
         juce::String      presetName;
         juce::int64       presetBaselineHash = 0;
         bool              presetModified = false;
     };
     juce::TextButton btnUndo { "Undo" }, btnRedo { "Redo" };
     std::vector<UndoEntry> undoStack, redoStack;
+    mutable DrumSequencerProcessor::StateSnapshot cachedSnapshot;
     static constexpr int kUndoMax = 24;
     juce::int64 lastUndoHash = 0;
     juce::int64 undoTickHash = 0;   // this tick's stateHash, reused by the modified-marker check
@@ -4319,8 +4320,8 @@ private:
     //-- Sound-mix / preset "modified (*)" tracking + per-pattern dropdown text
     void        updateStripMixLabel(int ch);    // show this pattern/channel's mix name (+ * if edited)
     void        updatePresetLabel();             // show the loaded preset's name (+ * if edited)
-    juce::int64 channelSoundHash(const DrumChannel&) const;
-    juce::int64 stateHash() const;               // whole-instrument hash (all patterns + master)
+    juce::int64 channelSoundHash(const DrumChannel&, const DrumChannel::Slot* slotOverride = nullptr) const;
+    juce::int64 stateHash(bool allowDeferral = false) const;
     void        rebaselinePreset(const juce::String& name); // mark current state as the saved baseline
     juce::int64 presetBaselineHash = 0;
     bool        presetModified = false;

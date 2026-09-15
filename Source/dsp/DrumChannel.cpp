@@ -26,7 +26,9 @@
 #endif
 
 const int DrumChannel::VALID_STEP_COUNTS[] =
-    { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 20, 21, 24, 32 };   // 48/64 removed (overkill; Draw mode covers fine timing)
+    { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 24, 25, 26, 32, 33, 34, 35 };
+static_assert(sizeof(DrumChannel::VALID_STEP_COUNTS) / sizeof(int) == DrumChannel::NUM_VALID_STEP_COUNTS,
+              "Step menu count must match the supported choices");
 
 //==============================================================================
 // WAVETABLE BANK (SrcWave engine). A set of named tables, each = WT_FRAMES single-cycle waveforms
@@ -688,9 +690,21 @@ void DrumChannel::buildSlotsFromLegacy()
 
 void DrumChannel::writeSlots(juce::ValueTree& parent) const
 {
+    juce::String paths[NUM_SLOTS], folders[NUM_SLOTS];
     for (int b = 0; b < NUM_SLOTS; ++b)
     {
-        const Slot& s = slots[b];
+        paths[b] = slotSample[b].file.getFullPathName();
+        folders[b] = msSet[b] != nullptr ? msSet[b]->folder : juce::String();
+    }
+    writeSlotSettings(parent, slots, paths, folders);
+}
+
+void DrumChannel::writeSlotSettings(juce::ValueTree& parent, const Slot* settings,
+                                    const juce::String* samplePaths, const juce::String* msFolders)
+{
+    for (int b = 0; b < NUM_SLOTS; ++b)
+    {
+        const Slot& s = settings[b];
         juce::ValueTree st("Slot");
         st.setProperty("eng", s.engine, nullptr); st.setProperty("w", s.weight, nullptr);
         st.setProperty("v2", 1, nullptr);   // merged-engine era marker (Analog now carries an FM section)
@@ -735,9 +749,10 @@ void DrumChannel::writeSlots(juce::ValueTree& parent) const
         st.setProperty("sPP", s.smpPreservePitch, nullptr);   // preserve pitch (ignore step/draw/key pitch)
         st.setProperty("sLp", s.smpLoopOn ? 1 : 0, nullptr);   // [2026-07-18] sample LOOP
         st.setProperty("sLl", s.smpLoopLo, nullptr); st.setProperty("sLh", s.smpLoopHi, nullptr);
+        if (s.msBaseFreq != 261.6255653f) st.setProperty("msBf", s.msBaseFreq, nullptr);
         st.setProperty("msGn", s.msGainDb, nullptr);     // [2026-07-19] multisample gain dB ("sLx" retired - fixed 25 ms xfade again)
-        st.setProperty("sFile", slotSample[b].file.getFullPathName(), nullptr);   // per-slot sample (reloaded)
-        st.setProperty("msDir", msSet[b] != nullptr ? msSet[b]->folder : juce::String(), nullptr);   // [2026-07-18] multisample folder
+        st.setProperty("sFile", samplePaths[b], nullptr);   // per-slot sample (reloaded)
+        st.setProperty("msDir", msFolders[b], nullptr);   // multisample folder
         st.setProperty("yFo", s.oscFold, nullptr); st.setProperty("yOL", s.oscLevel, nullptr);
         st.setProperty("yNL", s.noiseLevel, nullptr);
         st.setProperty("wTb", s.waveTable, nullptr); st.setProperty("wPs", s.wavePos, nullptr);  // wavetable
@@ -887,6 +902,7 @@ bool DrumChannel::readSlots(const juce::ValueTree& parent)
                                                                   // (the STRUCT default is false now - fresh slots pitch with the note [2026-07-19])
         s.smpLoopOn = (int)st.getProperty("sLp", 0) != 0;   // [2026-07-18] sample LOOP
         s.smpLoopLo = (float)st.getProperty("sLl", d.smpLoopLo); s.smpLoopHi = (float)st.getProperty("sLh", d.smpLoopHi);
+        s.msBaseFreq = juce::jlimit(20.0f, 4186.0f, (float)st.getProperty("msBf", d.msBaseFreq));
         s.msGainDb    = juce::jlimit(-24.0f, 24.0f, (float)st.getProperty("msGn", 0.0f));   // ("sLx" ignored - xfade is the fixed 25 ms again)
         s.oscFold = (float)st.getProperty("yFo", d.oscFold); s.oscLevel = (float)st.getProperty("yOL", d.oscLevel);
         s.noiseLevel = (float)st.getProperty("yNL", d.noiseLevel);
@@ -1101,7 +1117,7 @@ void DrumChannel::prepareToPlay(double sampleRate, int maxBlockSize)
     for (auto& v : voices)
     {
         v.playHead = -1.0;
-        v.killing = false; v.killGain = 1.0f;
+        v.killing = false; v.killGain = 1.0f; v.killDelay = 0;
         for (auto& sv : v.sv) sv.noiseBP.reset();
     }
 
@@ -1364,7 +1380,7 @@ static void msPickLayer(const DrumChannel::MsZone& z, float vel,
 // its OWN nearest zone at natural pitch (no varispeed artefacts). Fills the voice's per-tone arrays
 // from sv.uniSemis[] (the diatonic offsets computed by the caller). nv==1 leaves them unused (the
 // single-note path). Multisample only (a plain sample has no zones - scale stays a synth feature).
-void DrumChannel::fillMsScaleVoices(SlotVoice& sv, int s, int playedMidi, float velocity)
+void DrumChannel::fillMsScaleVoices(SlotVoice& sv, int s, double playedMidi, float velocity)
 {
     for (int k = 0; k < SMP_UNI; ++k)
     { sv.msBufN[k] = nullptr; sv.smpHeadN[k] = 0.0; sv.msLoopLoN[k] = sv.msLoopHiN[k] = 0.0f;
@@ -1376,13 +1392,14 @@ void DrumChannel::fillMsScaleVoices(SlotVoice& sv, int s, int playedMidi, float 
     const int nv = juce::jlimit(1, SMP_UNI, sl.scaleUnison);
     for (int k = 0; k < nv; ++k)
     {
-        const int tgt = juce::jlimit(0, 127, playedMidi + (int) std::lround((double) sv.uniSemis[k]));
+        const double target = juce::jlimit(0.0, 127.0, playedMidi + (double)sv.uniSemis[k]);
+        const int tgt = juce::roundToInt(target);
         const int best = msZoneNearest(zs, msLocal->nVoices, tgt);   // this tone picks its OWN zone (voice-aware)
         const juce::AudioBuffer<float>* buf = nullptr; float g1 = 1.0f;
         msPickLayer(zs[(size_t) best], velocity, buf, g1);       // velocity layer (same as the single-note path)
         sv.msBufN[k] = buf; sv.msG1N[k] = g1;
         sv.msPitchN[k] = sl.smpPreservePitch ? 1.0f              // varispeed the zone from its root to this tone
-                       : (float) std::pow(2.0, ((double) tgt - zs[(size_t) best].root - zs[(size_t) best].cents * 0.01) / 12.0);
+                       : (float) std::pow(2.0, (target - zs[(size_t) best].root - zs[(size_t) best].cents * 0.01) / 12.0);
         if (sl.msLoopOn && zs[(size_t) best].hasLoop && buf != nullptr)
         { const int L = buf->getNumSamples();
           sv.msLoopLoN[k] = zs[(size_t) best].loopLo * (float) L; sv.msLoopHiN[k] = zs[(size_t) best].loopHi * (float) L; }
@@ -2082,7 +2099,7 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
     v.voicePan   = juce::jlimit(-1.0f, 1.0f, pan);
     v.playHead = 0.0;          // alive (per-slot sample heads do the reading)
     v.voiceSamples = 0;
-    v.killing = false; v.killGain = 1.0f; v.killStep = 0.0f;   // fresh hit cancels any choke fade on this voice
+    v.killing = false; v.killGain = 1.0f; v.killStep = 0.0f; v.killDelay = 0; // fresh hit cancels any fade
     v.gateLen = gateSamples;                // per-step Length gate (0 = play naturally)
     v.isKey = false; v.keyOff = -1;         // sequencer hit by default (keyDown() patches these after)
     if (keyGate && gateSamples > 0)
@@ -2135,12 +2152,14 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         sv.msBuf = nullptr; sv.msG1 = 1.0f; sv.msSemiAdj = 0.0f; sv.msLoopLo = sv.msLoopHi = 0.0f;   // multisample zone re-picked per hit
         const auto msLocal = msSet[s];   // [2026-07-21 r15] ONE snapshot per hit (message thread can swap mid-read)
         if (sl.engine == SrcSample && msLocal != nullptr && ! msLocal->zones.empty())
-        {   // nearest zone to the played note (steps/roll: C4 + step pitch; keyDown re-picks below)
+        {   // Steps/TEST/Live use the slot's base; regular rolls stay C4-absolute.
+            // keyDown re-picks below from the actual pressed note, independent of this base.
+            const double baseMidi = (!drawMode || knobBase) ? multisampleBaseMidi(sl) : 60.0;
             const auto& zs = msLocal->zones;
-            const int want = juce::jlimit(0, 127, 60 + juce::roundToInt(pitchSemis));
+            const int want = juce::jlimit(0, 127, juce::roundToInt(baseMidi + pitchSemis));
             const int best = msZoneNearest(zs, msLocal->nVoices, want);
             msPickLayer(zs[(size_t) best], velocityGain, sv.msBuf, sv.msG1);
-            sv.msSemiAdj = (float)(60 - zs[(size_t) best].root) - zs[(size_t) best].cents * 0.01f;
+            sv.msSemiAdj = (float)(baseMidi - zs[(size_t) best].root) - zs[(size_t) best].cents * 0.01f;
             if (sl.msLoopOn && zs[(size_t) best].hasLoop && sv.msBuf != nullptr)
             { const int L = sv.msBuf->getNumSamples();
               sv.msLoopLo = zs[(size_t) best].loopLo * (float) L; sv.msLoopHi = zs[(size_t) best].loopHi * (float) L; }
@@ -2223,12 +2242,15 @@ int DrumChannel::trigger(float velocityGain, float pitchSemis, float pan, long g
         if (sl.scaleOn && (sl.engine == SrcOsc || sl.engine == SrcModal || sl.engine == SrcPhys
                            || sl.engine == SrcGrain || sl.engine == SrcSample))
         {
+            const bool ms = sl.engine == SrcSample && msLocal != nullptr;
             const double baseF = slotBaseHz(s, sl);
-            const int playedMidi = (int) std::lround(69.0 + 12.0 * std::log2(juce::jmax(1.0, baseF) / 440.0) + (double) pitchSemis);
+            const double played = (ms ? ((!drawMode || knobBase) ? multisampleBaseMidi(sl) : 60.0)
+                                      : 69.0 + 12.0 * std::log2(juce::jmax(1.0, baseF) / 440.0)) + pitchSemis;
+            const int playedMidi = (int)std::lround(played);
             const int nv = juce::jlimit(1, UNI_MAX, sl.scaleUnison);
             for (int u = 0; u < nv; ++u) sv.uniSemis[u] = (float) scaleSemis(sl.scaleType, sl.scaleKey, playedMidi, u);
             // MULTISAMPLE: each chord tone picks its OWN zone (option B) - fill per-tone read state.
-            if (sl.engine == SrcSample) fillMsScaleVoices(sv, s, playedMidi, velocityGain);
+            if (ms) fillMsScaleVoices(sv, s, played, velocityGain);
         }
 
         // SLOT OFFSET: slot 2 fires slotOffsetSamples (0..100 ms) after slot 1, the same every hit
@@ -4835,7 +4857,8 @@ void DrumChannel::renderInto(juce::AudioBuffer<float>& dest, int startSample, in
             //  sustains until the gate, then the env decays as the release. Only CHOKES set v.killing now.)
             if (v.killing)
             {
-                v.killGain -= (v.killStep > 0.0f ? v.killStep : killStep);   // choke fade advances per sample
+                if (v.killDelay > 0) --v.killDelay;
+                else v.killGain -= (v.killStep > 0.0f ? v.killStep : killStep); // fade advances per sample
                 if (v.killGain <= 0.0f) { finished = true; break; }       // fade complete -> voice ends
             }
             if (++v.voiceSamples >= veEnd) { finished = true; break; }

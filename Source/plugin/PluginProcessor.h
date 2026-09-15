@@ -39,8 +39,23 @@ public:
 
     void getStateInformation(juce::MemoryBlock& dest) override;
     void setStateInformation(const void* data, int sizeInBytes) override;
-    // Undo/redo capture + restore the state as a ValueTree DIRECTLY (no binary serialize/deserialize
-    // roundtrip - that made the undo/redo buttons feel laggy). getStateInformation just wraps these.
+    // Immutable undo snapshots share unchanged channels. Formatting saved state happens
+    // after releasing the audio lock; ordinary edits never rebuild all 1024 channel trees.
+    class StateSnapshot
+    {
+    public:
+        StateSnapshot() = default;
+        juce::int64 hash() const;
+        juce::ValueTree toTree() const;
+        int changedChannels() const;
+    private:
+        struct Data;
+        std::shared_ptr<const Data> data;
+        friend class DrumSequencerProcessor;
+    };
+    // Timer polls may yield the lock between patterns. If MIDI edits state mid-scan,
+    // they retain the previous snapshot and retry next tick. Explicit captures are atomic.
+    StateSnapshot captureSnapshot(const StateSnapshot& previous = {}, bool allowDeferral = false);
     juce::ValueTree captureStateTree();
     void applyStateTree(const juce::ValueTree& state);
 
@@ -397,6 +412,8 @@ public:
     bool hasDrummingSwitchData();            // Notes/takes anywhere that need a conversion choice.
 
 private:
+    // Invalidates an editor snapshot if a MIDI/host edit lands between pattern copies.
+    std::atomic<uint64_t> snapshotEditSerial { 0 };
     void processBlockSlice(juce::AudioBuffer<float>&, juce::MidiBuffer&, juce::AudioPlayHead*);
     juce::AudioBuffer<float> keySliceAudio;
     juce::MidiBuffer keySliceMidi, keySliceOutput;

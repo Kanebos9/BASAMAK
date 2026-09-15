@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cmath>
 #include <vector>
+#include <memory>
 
 static double rms(const std::vector<float>& x, size_t a, size_t b) {
     double acc = 0; size_t n = 0;
@@ -106,9 +107,57 @@ static int liveTailCount(bool overlap, int mode, bool otherPattern, bool& audibl
     return tails;
 }
 
+// Regular step handover: the next pattern's Overlap setting governs old step tails.
+static bool stepTailAfterSwitch(bool overlap, int mode)
+{
+    auto seq = std::make_unique<Sequencer>();
+    auto& old = seq->patterns[0].channels[0]; auto& next = seq->patterns[1].channels[0];
+    mkTone(old, 110, 4); mkTone(next, 220, 4);
+    old.clearStepData(); next.clearStepData();
+    old.numSteps = next.numSteps = 8; old.steps[7] = true; next.steps[0] = mode != 1;
+    next.allowOverlap = overlap; next.mute = mode == 2;
+    if (mode == 3 || mode == 4) {
+        auto& roll = mode == 3 ? next : old; roll.drawMode = true; roll.drawNoteCount = 1;
+        roll.drawNotes[0].start = mode == 3 ? 0 : 336; roll.drawNotes[0].len = 96;
+    }
+    seq->patterns[0].playMode = Sequencer::Chain;
+    seq->patterns[0].chainLen = 1; seq->patterns[0].chainSeq[0] = 1; seq->patterns[0].chainLoops[0] = 1;
+    seq->patterns[1].mergeWithPrev = mode == 5;
+    if (mode == 6) seq->patterns[1].channels[1].solo = true;
+    for (auto& p : seq->patterns) for (auto& c : p.channels) c.prepareToPlay(44100, 257);
+    seq->standaloneBpm = 120; seq->startStandalone();
+    juce::AudioBuffer<float> b(2, 257);
+    for (int frame = 0; frame < 100000; frame += 257) {
+        b.clear(); seq->processBlock(b, 44100, 257, nullptr);
+        // Following the playing pattern must not alter the Overlap result.
+        if (mode == 7) seq->currentPattern = seq->playPattern;
+    }
+    return old.anyVoiceActive();
+}
+
 int main() {
     int fails = 0;
     auto CHK = [&](bool ok){ if (!ok) ++fails; return ok; };
+    for (bool overlap : {false, true}) for (int mode = 0; mode < 8; ++mode) {
+        const bool tail = stepTailAfterSwitch(overlap, mode);
+        const bool expected = overlap || (mode >= 1 && mode <= 4) || mode == 6;
+        printf("[step transition] OV=%d case=%d old tail=%d -> %s\n", overlap, mode, tail,
+               CHK(tail == expected) ? "OK" : "FAIL");
+    }
+    {   // Scheduled fades preserve every sample before the hit, and cannot postpone an earlier fade.
+        auto a = std::make_unique<DrumChannel>(), b = std::make_unique<DrumChannel>();
+        mkTone(*a, 330, 4); mkTone(*b, 330, 4);
+        a->prepareToPlay(48000, 512); b->prepareToPlay(48000, 512);
+        a->trigger(); b->trigger();
+        juce::AudioBuffer<float> x(2, 512), y(2, 512);
+        x.clear(); y.clear(); a->renderInto(x, 0, 512, false); b->renderInto(y, 0, 512, false);
+        a->fadeOutVoices(0.003f, 203); a->fadeOutVoices(0.003f, 401);
+        x.clear(); y.clear(); a->renderInto(x, 0, 512, false); b->renderInto(y, 0, 512, false);
+        float before = 0; for (int i=0; i<203; ++i) before = std::max(before, std::abs(x.getSample(0,i)-y.getSample(0,i)));
+        CHK(before == 0 && !a->anyVoiceActive() && b->anyVoiceActive());
+        CHK(x.getMagnitude(350, 162) < 1e-7f && y.getMagnitude(350, 162) > 0.01f);
+        printf("[step transition] exact delayed fade: pre-hit difference %.9f, ended=%d\n", before, !a->anyVoiceActive());
+    }
     const double SR = 48000.0;
     auto dry = render(0), wet = render(1);
     auto R = [&](const std::vector<float>& x, double t0, double t1){ return rms(x, (size_t)(t0*SR), (size_t)(t1*SR)); };

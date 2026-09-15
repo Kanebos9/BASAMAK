@@ -119,7 +119,7 @@ public:
     // (same distance up/down, user rule) and fully containing an 88-key piano (A0..C8). MIDI 60 = pitch 0.
     static constexpr int PITCH_RANGE = 48;
     static const int VALID_STEP_COUNTS[];
-    static constexpr int NUM_VALID_STEP_COUNTS = 20;
+    static constexpr int NUM_VALID_STEP_COUNTS = 28;
 
     DrumChannel() { clearStepData(); }
 
@@ -590,6 +590,7 @@ public:
         // cycles the loop region with a fixed 25 ms equal-power crossfade - the attack before
         // the loop plays ONCE, then the sound sustains for as long as the gate is open and the
         // envelope allows (raise Sustain!). One-shot steps play through unchanged.
+        float msBaseFreq = 261.6255653f;      // step/TEST/Live base; keys and roll keep absolute notes
         float msGainDb = 0.0f;                  // [2026-07-19] Multisample Instruments GAIN in dB (+-24;
                                                 //   folded into the per-sample-smoothed weight = zipper-free)
         bool  smpLoopOn = false;
@@ -771,6 +772,12 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
         const double c4 = 261.6255653 * std::pow(2.0, (double) juce::jlimit(-50.0f, 50.0f, drawTuneCents) / 1200.0);
         return (s == 1 && keysSlot2Down != 0) ? c4 * std::pow(2.0, -(double) keysSlot2Down / 12.0) : c4;
     }
+    static double multisampleBaseMidi(const Slot& sl)
+    {
+        // Exact C4 preserves existing projects sample-for-sample at the default.
+        if (sl.msBaseFreq == 261.6255653f) return 60.0;
+        return 69.0 + 12.0 * std::log2(juce::jlimit(20.0, 4186.0, (double)sl.msBaseFreq) / 440.0);
+    }
     float slotFiltEnv[NUM_SLOTS] = {}; // runtime: per-slot amp-env level from the PREVIOUS block, feeds the per-slot filter's env-follow sweep
     // LIVE modulation snapshot for the editor's RINGS (per slot): the modulated value of each ring-able
     // target this block (0-6 = Rev/Del/Chorus/Tone/Punch/Comp/Drive; 7-8 = Filter1/Filter2 cutoff Hz).
@@ -865,7 +872,7 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     // [2026-07-19] MULTISAMPLE SCALE/CHORD (option B): at note-on, pick each diatonic chord tone's
     // OWN nearest zone (buffer/loop/normalize/varispeed) into the voice's per-tone arrays. Called
     // from trigger() (steps/draw) + keyDown() (keys) when a multisample slot has scaleOn.
-    void fillMsScaleVoices(SlotVoice& sv, int s, int playedMidi, float velocity);
+    void fillMsScaleVoices(SlotVoice& sv, int s, double playedMidi, float velocity);
 
     float  chSendHpZ[2] = {};                        // reverb-send high-pass state (~150 Hz; subs stay out of the verb)
     float  chSendSmR = -1.0f, chSendSmD = -1.0f;     // per-sample smoothed send gains (de-zipper; -1 = snap)
@@ -976,6 +983,9 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     // survive save/load + undo). readSlots returns true if any Slot child existed;
     // when false the caller should fall back to buildSlotsFromLegacy().
     void writeSlots(juce::ValueTree& parent) const;
+    // Also used by immutable state snapshots, without touching live DSP or sample buffers.
+    static void writeSlotSettings(juce::ValueTree& parent, const Slot* settings,
+                                  const juce::String* samplePaths, const juce::String* msFolders);
     bool readSlots(const juce::ValueTree& parent);
     bool restoredSlots = false;   // transient: set by readSlots, consumed after load
 
@@ -1317,8 +1327,14 @@ private: struct Voice; struct SlotVoice; public:   // forward decls (defined pri
     // (a mid-sample discontinuity clicks when the choking hit is quieter than the tail).
     // Fade every active voice out. Chokes keep the default 3 ms; the KEYS mono handover uses
     // ~15 ms (a loud sustained tone cut in 3 ms reads as a CRACKLE when sliding across keys).
-    void fadeOutVoices(float sec = 0.0f)
-    { for (auto& v : voices) if (v.active()) { v.killing = true; if (sec > 0.0f) v.killStep = 1.0f / juce::jmax(1.0f, sec * (float) sr); } }
+    void fadeOutVoices(float sec = 0.0f, int delaySamples = 0)
+    { for (auto& v : voices) if (v.active()) {
+        // Previous-pattern tails render after the event scan: preserve their audio up
+        // to the new hit's sample offset. An existing fade must never be postponed.
+        v.killDelay = v.killing ? juce::jmin(v.killDelay, delaySamples) : delaySamples;
+        v.killing = true;
+        if (sec > 0.0f) v.killStep = 1.0f / juce::jmax(1.0f, sec * (float) sr);
+    } }
     // [2026-07-14 10:05] PITCH-AWARE fade time for retriggers/chokes: >= ~1.2 cycles of the sound's
     // lowest pitched base (3..30 ms). A fixed 3 ms is 1/8th of a 40 Hz cycle - cutting a still-loud
     // sub tail that fast IS a click (the user's bass-roll crackle, DT770-verified). Bright sounds
@@ -1483,6 +1499,7 @@ private:
         bool     killing  = false;  // choke/gate: fade this voice out (~3 ms) then stop - no hard-cut click
         float    killGain = 1.0f;   // current fade gain while killing
         float    killStep = 0.0f;   // per-sample fade rate override (0 = the default 3 ms choke)
+        int      killDelay = 0;    // samples before a scheduled cross-pattern retrigger fade
         long     gateLen  = 0;      // per-step Length: the note's length in samples (0 = off). The audible shaping
                                     // lives in SlotVoice::gateDec (rescaled decay); this also keeps a tied voice alive.
         float    glideStep  = 0.0f; // 303 slide: semitones added to voicePitch per sample while gliding

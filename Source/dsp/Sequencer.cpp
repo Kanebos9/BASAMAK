@@ -69,7 +69,8 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
     std::sort(events.begin(), events.end(),
               [](const TriggerEvent& a, const TriggerEvent& b) { return a.offset < b.offset; });
 
-    auto fireEvent = [this, sampleRate](const TriggerEvent& e)
+    const int playingGroupHead = groupHead(playPattern), playingGroupEnd = groupEnd(playPattern);
+    auto fireEvent = [this, sampleRate, playingGroupHead, playingGroupEnd](const TriggerEvent& e)
     {
         // [2026-08-01 r26] BAR-BOUNDARY EVENTS fire on the pattern they were SCANNED from: the
         // tail-of-bar scan runs BEFORE onBarComplete() but the events fire AFTER it moved
@@ -140,6 +141,19 @@ juce::Array<Sequencer::TriggerEvent> Sequencer::processBlock(
                 // they do live (mono channels keep the classic mono-cut - also like live).
                 c.trigger(e.drawVel, e.drawPitch, e.drawNotePan, g, 0.0f, 0, e.drawOverlap || c.keysPolyMode, mask, kg);
             return; }
+        // Steps share their Overlap rule across bar changes. Otherwise a new bar
+        // restarts this channel while the outgoing bar's last note keeps ringing
+        // at full level (audible as an extra bass note at a pattern transition).
+        // Normal piano-roll voices retain their note-length/Poly behavior. Only
+        // inspect patterns that the tail/view/group render paths actually render.
+        if (!c.allowOverlap)
+            for (int p = 0; p < NUM_PATTERNS; ++p)
+                if (p != pat && (p == fadeOutPattern || p == currentPattern
+                                 || (p >= playingGroupHead && p <= playingGroupEnd))) {
+                    auto& old = patterns[p].channels[e.channel];
+                    if (!old.drawMode && old.anyVoiceActive())
+                        old.fadeOutVoices(old.retrigFadeSec(), p == playPattern ? 0 : e.offset);
+                }
         // Choke groups: a hit FADES OUT (~3 ms) the ringing tails of other channels in the same
         // group (e.g. a closed hi-hat silencing an open one). A hard cut clicked whenever the
         // choking hit was quieter than the tail it cut.

@@ -14,6 +14,7 @@
 //      PluginEditor.cpp (MS_ID_BASE branch) + checked manually: pick a multisample on a channel
 //      with roll notes / steps -> the sequence must remain.
 #include "Sequencer.h"
+#include "MultisampleFixture.h"
 #include <cstdio>
 #include <cmath>
 #include <vector>
@@ -181,6 +182,54 @@ int main()
                    && ch4.steps[0] && ch4.steps[5] && std::abs(ch4.stepVel[5] - 0.4f) < 1e-6f
                    && ch4.numSteps == 12 && ch4.drawMode)
                    ? "sequence data survives the load (OK)" : "FAIL (load wiped sequence data)");
+    }
+
+    // [8] Base Freq affects step/TEST/Live notes and their zone selection, while
+    // keyboard and regular-roll notes remain absolute. Scale voices use the same base.
+    {
+        const auto fixture = makeMultisampleBaseFixture();
+        auto& c = s->patterns[0].channels[4];
+        for (auto& sl : c.slots) sl = DrumChannel::Slot();
+        c.slots[0].engine = DrumChannel::SrcSample; c.slots[0].weight = 1;
+        CHK(fixture.isDirectory() && c.loadMultisample(0, fixture));
+        c.slots[0].msBaseFreq = 130.8127827f;
+        c.slots[0].scaleKey = 0; c.slots[0].scaleType = 0; c.slots[0].scaleUnison = 3;
+        auto renderBase = [&](bool roll, bool keys, bool test, float pitch, bool scale) {
+            c.silenceAllVoices(); c.drawMode = roll; c.slots[0].scaleOn = scale; c.markDspDirty();
+            if (keys) c.keyDown(60, 1.0f, 0, true);
+            else c.trigger(1, pitch, 0, 0, 0, 0, false, 1, false, test);
+            std::vector<float> audio;
+            for (int i = 0; i < 40; ++i) {
+                buf.clear(); c.renderInto(buf, 0, bs, false);
+                for (int n = 0; n < bs; ++n) audio.push_back(buf.getSample(0, n));
+            }
+            return audio;
+        };
+        for (int mode = 0; mode < 5; ++mode) {
+            auto audio = renderBase(mode == 2 || mode == 3, mode == 1, mode == 3,
+                                    mode == 4 ? 2.0f : 0.0f, false);
+            const double hz = mode == 1 || mode == 2 ? C4 : mode == 4 ? 146.832384 : C4 * 0.5;
+            const double amp = goertzel(audio, (size_t)(0.1*SR), (size_t)(0.35*SR), hz, SR);
+            const double harmonic = goertzel(audio, (size_t)(0.1*SR), (size_t)(0.35*SR), hz*2, SR);
+            const bool lowZone = mode == 0 || mode == 3 || mode == 4;
+            printf("[8/%d] expected %.3f Hz: fundamental %.3f harmonic %.3f -> %s\n", mode, hz, amp, harmonic,
+                CHK(amp > 0.05 && (lowZone ? harmonic > amp*0.2 : harmonic < amp*0.1)) ? "PASS" : "FAIL");
+        }
+        auto chord = renderBase(false, false, false, 0, true);
+        for (double hz : {130.8127827, 164.8137785, 195.997718}) {
+            const double amp = goertzel(chord, (size_t)(0.1*SR), (size_t)(0.35*SR), hz, SR);
+            printf("[8/scale] C3-major tone %.3f Hz: %.3f -> %s\n", hz, amp, CHK(amp > 0.04) ? "PASS" : "FAIL");
+        }
+        c.slots[0].msBaseFreq = 130.8127827f * std::pow(2.0f, 0.3f/12.0f);
+        auto fine = renderBase(false, false, false, 0, false);
+        const double fineHz = c.slots[0].msBaseFreq;
+        CHK(goertzel(fine, (size_t)(0.1*SR), (size_t)(0.35*SR), fineHz, SR) > 0.05);
+        juce::ValueTree saved("sound"); c.writeSlots(saved);
+        c.slots[0].msBaseFreq = 261.6255653f;
+        CHK(c.readSlots(saved) && std::abs(c.slots[0].msBaseFreq - fineHz) < 0.001);
+        saved.getChild(0).removeProperty("msBf", nullptr);
+        CHK(c.readSlots(saved) && DrumChannel::multisampleBaseMidi(c.slots[0]) == 60.0);
+        fixture.deleteRecursively();
     }
 
     dir.deleteRecursively();
