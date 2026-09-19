@@ -96,6 +96,124 @@ struct TestPlayHead : juce::AudioPlayHead
         return p;
     }
 };
+// Exercise the actual keyboard listener without depending on OS window hit-testing.
+struct KeysPanelInputTest
+{
+    static void down(KeysPanel& panel, int note, float velocity) { panel.handleNoteOn(nullptr, 1, note, velocity); }
+    static void up(KeysPanel& panel, int note) { panel.handleNoteOff(nullptr, 1, note, 0); }
+};
+// Test both input paths through the real processor, including audible voices.
+static void monoKeyReturnChecks()
+{
+    constexpr int blockSize = 128;
+    constexpr float blockSeconds = blockSize / 48000.0f;
+    for (bool gui : {false, true})
+        for (bool poly : {false, true})
+            for (bool legato : {false, true})
+            {
+                const int before = fails;
+                auto p = std::make_unique<DrumSequencerProcessor>();
+                auto& c = p->sequencer.channel(0);
+                tone(c, 261.6256f);
+                c.slots[0].atk = 0.2f; c.slots[0].sustain = 0.8f; c.slots[0].release = 0.02f;
+                c.keysPolyMode = poly; c.keysLegato = legato;
+                c.keysMinVel = 0.2f; c.keysMaxVel = 0.8f;
+                p->prepareToPlay(48000, blockSize);
+                std::unique_ptr<KeysPanel> panel;
+                if (gui) {
+                    panel = std::make_unique<KeysPanel>(p->midiLearn);
+                    panel->polyMode = poly;
+                    panel->onKeyDown = [&](int n, float v) { p->pushKeyDown(n, v); };
+                    panel->onKeyUp = [&](int n) { p->pushKeyUp(n); };
+                }
+                juce::AudioBuffer<float> audio(2, blockSize);
+                juce::MidiBuffer midi;
+                auto render = [&](int blocks) {
+                    for (int b = 0; b < blocks; ++b) { p->processBlock(audio, midi); midi.clear(); }
+                };
+                auto event = [&](int note, int velocity) {
+                    if (gui) {
+                        if (velocity) KeysPanelInputTest::down(*panel, note, velocity / 127.0f);
+                        else KeysPanelInputTest::up(*panel, note);
+                    } else {
+                        midi.addEvent(velocity ? juce::MidiMessage::noteOn(3, note, (juce::uint8)velocity)
+                                               : juce::MidiMessage::noteOff(3, note), 0);
+                    }
+                    render(32); // allow the existing 15 ms handover/release to finish
+                };
+                auto oldestVoiceAge = [&] {
+                    float ages[DrumChannel::POLY] = {};
+                    const int count = c.activeVoiceTimes(ages, DrumChannel::POLY);
+                    CHECK(count >= 1 && (poly || count == 1));
+                    return *std::max_element(ages, ages + juce::jmax(1, count));
+                };
+                event(60, 32); event(71, 111); event(71, 0);
+                CHECK(c.keyNoteAudible(60)); CHECK(!c.keyNoteAudible(71));
+                CHECK(audio.getMagnitude(0, audio.getNumSamples()) > 0.001f);
+                CHECK(p->keysHeldCount == 1 && p->keysHeldNote.load() == 60);
+                CHECK(std::abs(p->keysHeldVel.load() - (0.2f + 0.6f * 32.0f / 127)) < 1e-6f);
+                // Mono attacks again; Mono Legato continues the connected phrase.
+                // Poly's original C continues, without an extra return trigger.
+                const float age = oldestVoiceAge();
+                CHECK(std::abs(age - (poly || legato ? 96 : 32) * blockSeconds) < 1e-5f);
+                event(71, 0); // stale release must not retrigger the returned note
+                CHECK(std::abs(oldestVoiceAge() - age - 32 * blockSeconds) < 1e-5f);
+                event(60, 0); render(512);
+                CHECK(!c.keyNoteAudible(60)); CHECK(p->keysHeldCount == 0);
+                CHECK(audio.getMagnitude(0, audio.getNumSamples()) < 1e-5f);
+
+                // Three keys: remove a silent middle key; return to the most recent survivor.
+                event(60, 32); event(64, 80); event(67, 111); event(64, 0);
+                CHECK(c.keyNoteAudible(67)); CHECK(p->keysHeldCount == 2);
+                event(67, 0); CHECK(c.keyNoteAudible(60)); CHECK(!c.keyNoteAudible(64));
+                event(60, 0); render(512); CHECK(!c.isPlaying());
+                // Releasing the oldest key must never resurrect it on the final release.
+                event(60, 32); event(71, 111); event(60, 0);
+                CHECK(c.keyNoteAudible(71)); CHECK(p->keysHeldCount == 1);
+                event(71, 0); render(512); CHECK(!c.isPlaying());
+                printf("[keys] %s %s%s: %s\n", gui ? "keyboard listener" : "MIDI", poly ? "Poly" : "Mono",
+                       legato ? " Legato" : "", fails == before ? "PASS" : "FAIL");
+            }
+    {
+        // A split partner can remain Poly even when the selected channel is Mono.
+        // Its still-playing C must not gain another voice when B is released.
+        auto p = std::make_unique<DrumSequencerProcessor>();
+        auto& first = p->sequencer.channel(0); tone(first, 261.6256f);
+        auto& second = p->sequencer.channel(1); tone(second, 261.6256f);
+        first.mergeWith = 1; second.mergeWith = 0; first.keysSplitW1 = 60;
+        first.keysPolyMode = true; second.keysPolyMode = false;
+        first.slots[0].sustain = 0.8f;
+        p->lastSelectedChannel = 1; p->prepareToPlay(48000, blockSize);
+        juce::AudioBuffer<float> audio(2, blockSize); juce::MidiBuffer midi;
+        auto render = [&] { for (int i = 0; i < 32; ++i) { p->processBlock(audio, midi); midi.clear(); } };
+        p->pushKeyDown(60, 0.4f); render(); p->pushKeyDown(71, 0.8f); render();
+        float ages[DrumChannel::POLY] = {};
+        CHECK(first.activeVoiceTimes(ages, DrumChannel::POLY) == 2);
+        p->pushKeyUp(71); render();
+        CHECK(first.keyNoteAudible(60));
+        CHECK(first.activeVoiceTimes(ages, DrumChannel::POLY) == 2);
+        CHECK(std::abs(*std::max_element(ages, ages + 2) - 96 * blockSeconds) < 1e-5f);
+    }
+    {
+        // Returning a live note must not inject synthetic note-ons into the recorded roll.
+        auto p = std::make_unique<DrumSequencerProcessor>();
+        auto& c = p->sequencer.channel(0); tone(c, 261.6256f);
+        c.keysPolyMode = false; c.drawMode = true;
+        p->prepareToPlay(48000, blockSize);
+        p->keysArmedPattern = 0; p->keysRecording = true;
+        juce::AudioBuffer<float> audio(2, blockSize); juce::MidiBuffer midi;
+        auto render = [&] { for (int i = 0; i < 32; ++i) { p->processBlock(audio, midi); midi.clear(); } };
+        p->pushKeyDown(60, 0.4f); render();
+        p->pushKeyDown(71, 0.8f); render();
+        p->pushKeyUp(71); render();
+        CHECK(c.drawNoteCount == 2);
+        CHECK(c.drawNotes[0].semi == 0 && c.drawNotes[1].semi == 11);
+        CHECK(c.drawNotes[0].start + c.drawNotes[0].len > c.drawNotes[1].start);
+        p->pushKeyUp(60); render(); CHECK(c.drawNoteCount == 2);
+    }
+
+}
+
 class EditAudioThread : public juce::Thread
 {
 public:
@@ -213,6 +331,8 @@ int main(int argc, char **argv)
         if (multisample) msFixture.deleteRecursively();
         return fails ? 1 : 0;
     }
+    monoKeyReturnChecks();
+    if (argc > 1 && juce::String(argv[1]) == "--mono-keys") return fails ? 1 : 0;
     printf("Live drumming: mapping, timestamps, takes, persistence, conversion and UI\n");
     {
         // A MIDI CC updates every pattern at once. Timer captures may interleave with
@@ -323,6 +443,13 @@ int main(int argc, char **argv)
         CHECK(undo && redo);
         auto settle = [&] { for (int i = 0; i < 9; ++i) ed.timerCallback(); };
         settle();
+        if (auto* keyboardPanel = keysPanel(ed)) {
+            CHECK(!keyboardPanel->arpOrLetRing);
+            keyboardPanel->arpEditor.on = true; keyboardPanel->arpEditor.onChange();
+            CHECK(keyboardPanel->arpOrLetRing); // update immediately, before the next key/timer refresh
+            keyboardPanel->arpEditor.on = false; keyboardPanel->arpEditor.onChange();
+            CHECK(!keyboardPanel->arpOrLetRing);
+        } else CHECK(false);
         const float original = ch.slots[0].oscFreq;
         ch.slots[0].oscFreq = 333; ch.markDspDirty(); settle();
         ch.slots[0].oscFreq = 444; ch.markDspDirty();

@@ -897,7 +897,7 @@ void DrumSequencerProcessor::processBlockSlice(juce::AudioBuffer<float>& audio,
             // Held stack: a re-press moves the note to the top (most recent). openIdx/Pat ride along.
             for (int i = 0; i < keysHeldCount; ++i)
                 if (keysHeldStack[i] == note)
-                { for (int j = i; j < keysHeldCount - 1; ++j) { keysHeldStack[j] = keysHeldStack[j + 1]; keysHeldStackVel[j] = keysHeldStackVel[j + 1]; keysHeldOpenIdx[j] = keysHeldOpenIdx[j + 1]; keysHeldOpenPat[j] = keysHeldOpenPat[j + 1]; keysHeldOpenChan[j] = keysHeldOpenChan[j + 1]; }
+                { for (int j = i; j < keysHeldCount - 1; ++j) { keysHeldStack[j] = keysHeldStack[j + 1]; keysHeldStackVel[j] = keysHeldStackVel[j + 1]; keysHeldMidiChan[j] = keysHeldMidiChan[j + 1]; keysHeldOpenIdx[j] = keysHeldOpenIdx[j + 1]; keysHeldOpenPat[j] = keysHeldOpenPat[j + 1]; keysHeldOpenChan[j] = keysHeldOpenChan[j + 1]; }
                   --keysHeldCount; break; }
             // [2026-08-01 r26 B1d] capacity check BEFORE the trigger: the stack IS the release
             // bookkeeping, so an untrackable note (full stack) must never sound at all - the old
@@ -907,6 +907,7 @@ void DrumSequencerProcessor::processBlockSlice(juce::AudioBuffer<float>& audio,
             if (keysHeldCount < (int) (sizeof(keysHeldStack) / sizeof(keysHeldStack[0])))
             {
                 keysHeldStack[keysHeldCount] = note; keysHeldStackVel[keysHeldCount] = kvel;
+                keysHeldMidiChan[keysHeldCount] = keyChanNow;
                 // PIANO-ROLL recording: this press OPENS a note at the current column (grown per
                 // block below, closed at release) - POLY records real chords now. `kicked` = this key
                 // just started the transport, so it opens at column 0 (the bar is about to begin).
@@ -943,7 +944,7 @@ void DrumSequencerProcessor::processBlockSlice(juce::AudioBuffer<float>& audio,
                 // stays with the arp (it owns the highlight while running).
                 for (int i = 0; i < keysHeldCount; ++i)
                     if (keysHeldStack[i] == note)
-                    { for (int j = i; j < keysHeldCount - 1; ++j) { keysHeldStack[j] = keysHeldStack[j + 1]; keysHeldStackVel[j] = keysHeldStackVel[j + 1]; keysHeldOpenIdx[j] = keysHeldOpenIdx[j + 1]; keysHeldOpenPat[j] = keysHeldOpenPat[j + 1]; keysHeldOpenChan[j] = keysHeldOpenChan[j + 1]; }
+                    { for (int j = i; j < keysHeldCount - 1; ++j) { keysHeldStack[j] = keysHeldStack[j + 1]; keysHeldStackVel[j] = keysHeldStackVel[j + 1]; keysHeldMidiChan[j] = keysHeldMidiChan[j + 1]; keysHeldOpenIdx[j] = keysHeldOpenIdx[j + 1]; keysHeldOpenPat[j] = keysHeldOpenPat[j + 1]; keysHeldOpenChan[j] = keysHeldOpenChan[j + 1]; }
                       --keysHeldCount; break; }
                 { int uTgt = chIdx; const int mapped = splitMap(note, uTgt);
                   for (auto& patU : sequencer.patterns)
@@ -966,7 +967,7 @@ void DrumSequencerProcessor::processBlockSlice(juce::AudioBuffer<float>& audio,
             for (int i = 0; i < keysHeldCount; ++i)
                 if (keysHeldStack[i] == note)
                 { wasHeld = true; openIdx = keysHeldOpenIdx[i]; openPat = keysHeldOpenPat[i]; openChan = keysHeldOpenChan[i];
-                  for (int j = i; j < keysHeldCount - 1; ++j) { keysHeldStack[j] = keysHeldStack[j + 1]; keysHeldStackVel[j] = keysHeldStackVel[j + 1]; keysHeldOpenIdx[j] = keysHeldOpenIdx[j + 1]; keysHeldOpenPat[j] = keysHeldOpenPat[j + 1]; keysHeldOpenChan[j] = keysHeldOpenChan[j + 1]; }
+                  for (int j = i; j < keysHeldCount - 1; ++j) { keysHeldStack[j] = keysHeldStack[j + 1]; keysHeldStackVel[j] = keysHeldStackVel[j + 1]; keysHeldMidiChan[j] = keysHeldMidiChan[j + 1]; keysHeldOpenIdx[j] = keysHeldOpenIdx[j + 1]; keysHeldOpenPat[j] = keysHeldOpenPat[j + 1]; keysHeldOpenChan[j] = keysHeldOpenChan[j + 1]; }
                   --keysHeldCount; break; }
             updateHeldMask();
             // CLOSE the released key's recorded note: final length = up to the current column. In a
@@ -984,10 +985,10 @@ void DrumSequencerProcessor::processBlockSlice(juce::AudioBuffer<float>& audio,
                     if (cur >= nt.start) nt.len = juce::jlimit(DrumChannel::DRAW_MIN_LEN, DrumChannel::DRAW_RES * 8.0, cur - nt.start);
                 }
             }
-            // MONO slide safety (unchanged rule): a stale up (released note != the held one) does
-            // nothing - the panel emits up(old) before down(new) and the block processes down first.
+            // Releasing an older, silent mono key only removes it from the held stack.
             if (! kc.keysPolyMode && note != keysHeldNote.load(std::memory_order_relaxed)) return;
-            if (kc.keysPolyMode && ! wasHeld) return;   // stale poly up: nothing to release
+            if (! wasHeld) return;   // stale up: nothing to release or retrigger
+            int resumedCh = -1, resumedNote = -1;
             if (note == keysHeldNote.load(std::memory_order_relaxed))
             {
                 // RELEASE captures the exact HOLD into the step data: the chain head's Note Length =
@@ -1011,12 +1012,32 @@ void DrumSequencerProcessor::processBlockSlice(juce::AudioBuffer<float>& audio,
                         logEvt(pat, head, (int) std::lround(len * 100.0f), 2);   // flags bit1 = LENGTH event
                     }
                 }
-                // Mono projection falls back to the most recent STILL-HELD note (poly), else clears.
+                // Fall back to the most recent key that is still physically held.
                 const int nh = keysHeldCount > 0 ? keysHeldStack[keysHeldCount - 1] : -1;
                 keysHeldNote.store(nh, std::memory_order_relaxed);
                 if (nh >= 0) keysHeldVel.store(keysHeldStackVel[keysHeldCount - 1], std::memory_order_relaxed);
                 keysLastStampStep.store(-1, std::memory_order_relaxed);
+                if (! kc.keysPolyMode && nh >= 0)
+                {
+                    resumedNote = splitMap(nh, resumedCh);
+                    auto& target = sequencer.patterns[keyPat].channels[resumedCh];
+                    // Start before releasing the outgoing voice: Mono Legato needs its
+                    // held envelope; plain Mono uses the existing fresh-attack path.
+                    // This is only a voice return, not another press/recording event.
+                    // A paired half can have its own Poly mode; its old voice is
+                    // still sounding, so it must not receive a duplicate trigger.
+                    if (! target.keysPolyMode)
+                        target.keyDown(resumedNote, keysHeldStackVel[keysHeldCount - 1],
+                                       target.keysSlot2Down, false, 0,
+                                       keysHeldMidiChan[keysHeldCount - 1]);
+                }
             }
+            auto releaseVoice = [&](int pat, int channel, int pitch) {
+                // Split windows can map different physical keys to the same pitch.
+                // Keep the new return voice held; its predecessor already has a mono fade.
+                if (pat == keyPat && channel == resumedCh && pitch == resumedNote) return;
+                sequencer.patterns[pat].channels[channel].keyUp(pitch);
+            };
             // Release this note's voices WHEREVER they live: the voice was created on the channel of
             // the bar that was playing AT PRESS TIME - if the bar advanced mid-hold, releasing only
             // the current bar's channel left the old voice keyed-on forever ("sound after I lift").
@@ -1024,13 +1045,13 @@ void DrumSequencerProcessor::processBlockSlice(juce::AudioBuffer<float>& audio,
             // voice was created under the MAPPED note - release that one (the raw sweep stays as a
             // fallback for a split toggled mid-hold).
             { int uTgt = chIdx; const int mapped = splitMap(note, uTgt);
-              for (auto& patU : sequencer.patterns)
+              for (int pat = 0; pat < Sequencer::NUM_PATTERNS; ++pat)
               {
-                  patU.channels[uTgt].keyUp(mapped);                   // the mapped note on ITS half's channel
-                  if (paired && mapped != note) patU.channels[mergedP].keyUp(note);   // toggle-mid-hold fallback
+                  releaseVoice(pat, uTgt, mapped);                   // the mapped note on ITS half's channel
+                  if (paired && mapped != note) releaseVoice(pat, mergedP, note);   // toggle-mid-hold fallback
               } }
-            for (auto& pat2 : sequencer.patterns)
-                pat2.channels[chIdx].keyUp(note);
+            for (int pat = 0; pat < Sequencer::NUM_PATTERNS; ++pat)
+                releaseVoice(pat, chIdx, note);
         };
         // Drain the message-thread ring (SPSC: panel presses), then this block's incoming-MIDI notes.
         for (uint32_t t = keyQTail.load(std::memory_order_relaxed);

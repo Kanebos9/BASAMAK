@@ -36,6 +36,8 @@ Version 1.5.8 adds per-channel MIDI input assignments, a shared drum roll, whole
 
 Version 1.5.9 fixes sound-edit pauses caused by undo snapshots blocking audio, and opens the Live Drumming note menu at the right-click position. Step Nudge now survives saved-state reloads and undo. Step-mode Overlap Off now applies to previous-pattern tails when the next hit arrives. Channel step counts also include 17, 18, 19, 25, 26, 33, 34 and 35, with seconds per step shown beside each menu option. Multisample sound slots now have a Base Freq control for step pitches, TEST and Live Drumming; click its readout to choose notes instead of Hz.
 
+Version 1.5.10 fixes held-key return in Mono and Mono Legato for MIDI and the on-screen keyboard: releasing the newest key returns to the most recently pressed key still held, using its original velocity. Mono restarts the attack; Mono Legato continues the envelope.
+
 ## Building from source
 
 ### 1. Dependencies

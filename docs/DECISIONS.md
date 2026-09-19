@@ -442,3 +442,9 @@
 | 284 | Step-count menus show nominal seconds per step in a right-aligned description, calculated from current standalone or host tempo/meter. Keep the closed caption count-only; refresh change-gated, never rebuild an open menu. All-bars/per-bar merged choices use one bar’s duration, with existing cap guards. Tooltip explains Swing/Nudge. | User requested the duration beside every count (2-second bar / 4 steps = 0.5 s). | USER REQUESTED |
 
 | 285 | Merged sound propagation directly copies slot parameters when the channel settings, engine, sample assets, stretch/pitch bake settings and waveform tables are unchanged. Retain the full mix-load path for other changes. Keep existing destination samples, tables and active voices during ordinary slot edits. | Profiling found needless instrument reloads and sample-voice resets on merged-bar knob edits, with audio lock waits over a 128-frame deadline. | BUG FIX |
+
+## Mono held-key return (1.5.10)
+
+| # | Decision | Reason | Status |
+|---|---|---|---|
+| 286 | MIDI and ordinary on-screen Mono/Mono Legato return to the most recently pressed key still held, with its original adjusted velocity and MIDI channel. Mono retriggers; Mono Legato inherits the held envelope. Older-key releases only remove that key from the stack. The processor handles the return as a voice trigger, without synthesizing a new recording event. Preserve piano-roll playback, glide algorithms, Poly, Arp and Let Ring behavior. | User authorized only item 1 of the playing-mode review, explicitly excluded other changes, and requested a patch version bump and local commit. | USER REQUESTED |

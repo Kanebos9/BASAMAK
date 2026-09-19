@@ -2460,7 +2460,7 @@ class KeysPanel : public juce::Component, private juce::MidiKeyboardState::Liste
 public:
     explicit KeysPanel(MidiLearnManager& mlm);            // knobs + REC are MIDI-learnable (ui_sel_*)
     ~KeysPanel() override { kbState.removeListener(this); }
-    std::function<void(int note, float vel)> onKeyDown;   // -> processor (mono handled here)
+    std::function<void(int note, float vel)> onKeyDown;   // -> processor (owns ordinary Mono key return)
     std::function<void(int)> onKeyUp;   // which note was released (slide-safe mono pairing)
 
     LearnableButton  btnRec   { "REC" };                  // paramId "ui_sel_rec" (set in ctor)
@@ -2481,6 +2481,7 @@ public:
     ArpEditor        arpEditor;                            // hold one key -> programmed riff (per-step); hidden until btnArp
     juce::Label      lblRecMode, lblSlot2, lblHuman, lblStrum, lblMinVel, lblMaxVel, lblPoly, lblGlide;
     bool             polyMode = false;                    // mirror of the channel's keysPolyMode (routes note-offs)
+    bool             arpOrLetRing = false;                // preserve these modes' existing keyboard gestures
     int countdown = 0;                                    // count-in ticks left (drawn as a big 3-2-1)
 
     // Keyboard highlight (driven by the editor timer from the currently held key + selected channel):
@@ -2496,6 +2497,7 @@ public:
     void paint(juce::Graphics&) override;
     void resized() override;
 private:
+    friend struct KeysPanelInputTest; // exercise listener events without native mouse/focus dependencies
     juce::MidiKeyboardState     kbState;
     TintKeyboard                kb { kbState, juce::MidiKeyboardComponent::horizontalKeyboard };
     juce::Array<int> held;                                // mono note stack (message thread only)

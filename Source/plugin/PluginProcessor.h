@@ -348,6 +348,7 @@ public:
     // mirrors it for the UI (keyboard highlight unions every held note). keysHeldNote stays the
     // MOST RECENT still-held note = the mono projection recording follows.
     int   keysHeldStack[DrumChannel::POLY * 2] = {}; float keysHeldStackVel[DrumChannel::POLY * 2] = {};
+    int   keysHeldMidiChan[DrumChannel::POLY * 2] = {}; // retain the returning key's expression channel
     int   keysHeldCount = 0;
     // [2026-07-19] LET RING: a coarse (per-block) sample clock times the strum window; a group
     // starts at letRingGroupStart and holds (ringing, keyUp suppressed) until a note lands past the

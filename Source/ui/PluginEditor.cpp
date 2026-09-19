@@ -5738,7 +5738,9 @@ void KeysPanel::handleNoteOff(juce::MidiKeyboardState*, int, int note, float)
 {
     const bool wasTop = ! held.isEmpty() && held.getLast() == note;
     held.removeFirstMatchingValue(note);
-    if (polyMode)                                                  // POLY: every release is its own note-off
+    // Ordinary modes forward physical releases; the processor owns the held stack
+    // for both MIDI and this keyboard. Arp/Let Ring retain their existing gestures.
+    if (polyMode || ! arpOrLetRing)
     {
         if (onKeyUp) onKeyUp(note);
         return;
@@ -13273,6 +13275,7 @@ void DrumSequencerEditor::refreshKeysPanel()
         if (ignoreKnobCallbacks) return;
         auto& c = proc.sequencer.channel(selectedChannel);
         c.arpOn = keysPanel.arpEditor.on; c.arpLen = keysPanel.arpEditor.len;
+        keysPanel.arpOrLetRing = c.arpOn || c.keysLetRing;
         c.arpSync = keysPanel.arpEditor.sync; c.arpRate = keysPanel.arpEditor.rate;
         c.arpAlign = keysPanel.arpEditor.align; c.arpHold = keysPanel.arpEditor.hold; c.arpGate = keysPanel.arpEditor.gate;
         c.arpAltStrum = keysPanel.arpEditor.altStrum;
@@ -13287,6 +13290,7 @@ void DrumSequencerEditor::refreshKeysPanel()
                                         : kch.keysPolyMode ? (kch.keysLegato ? "Poly Legato" : "Poly")
                                                            : (kch.keysLegato ? "Mono Legato" : "Mono"));
     keysPanel.polyMode = kch.keysPolyMode;
+    keysPanel.arpOrLetRing = kch.arpOn || kch.keysLetRing;
     ignoreKnobCallbacks = prevIgnore;
     // SLOT OFFSET needs BOTH slots (it delays slot 2 behind slot 1); STRUM only when a slot is in Scale.
     auto slotAudible = [&](int s){ return kch.slots[s].engine >= 0 && kch.slots[s].weight > 0.001f; };
