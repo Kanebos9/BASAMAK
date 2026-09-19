@@ -443,7 +443,7 @@
 
 | 285 | Merged sound propagation directly copies slot parameters when the channel settings, engine, sample assets, stretch/pitch bake settings and waveform tables are unchanged. Retain the full mix-load path for other changes. Keep existing destination samples, tables and active voices during ordinary slot edits. | Profiling found needless instrument reloads and sample-voice resets on merged-bar knob edits, with audio lock waits over a 128-frame deadline. | BUG FIX |
 
-## Mono held-key return (1.5.10)
+## Mono held-key return (1.6.0)
 
 | # | Decision | Reason | Status |
 |---|---|---|---|
